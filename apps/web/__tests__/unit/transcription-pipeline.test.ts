@@ -14,7 +14,10 @@ describe("transcription prompt", () => {
 
 		expect(prompt).toContain("Uzbek Latin");
 		expect(prompt).toContain("STANDARD WebVTT");
-		expect(prompt).toContain("<v Speaker 1>spoken text</v>");
+		// Task 7 (speaker naming): the voice-tag example now shows a real name
+		// with the numbered "Spiker N" fallback — same WebVTT voice-tag rule.
+		expect(prompt).toContain("<v Alisher>spoken text</v>");
+		expect(prompt).toContain("<v Spiker 1>spoken text</v>");
 		expect(prompt).toContain("For one-speaker recordings");
 		expect(prompt).toContain("Do NOT wrap timestamps in markdown brackets");
 		expect(prompt).toContain("Wrong: dedlayn. Correct: **deadline**.");
