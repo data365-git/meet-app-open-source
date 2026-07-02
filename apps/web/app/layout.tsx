@@ -42,14 +42,14 @@ const defaultFont = localFont({
 });
 
 export const metadata: Metadata = {
-	metadataBase: new URL(process.env.NEXT_PUBLIC_WEB_URL ?? process.env.WEB_URL ?? "https://cap.so"),
+	metadataBase: new URL(process.env.NEXT_PUBLIC_WEB_URL ?? process.env.WEB_URL ?? "https://capweb-production-dd85.up.railway.app"),
 	title: "data365",
-	description: "data365 — internal screen recording platform",
+	description: "data365 — uchrashuv yozuvlari va AI tahlil platformasi",
 	openGraph: {
 		title: "data365",
-		description: "data365 — internal screen recording platform",
+		description: "data365 — uchrashuv yozuvlari va AI tahlil platformasi",
 		type: "website",
-		url: "https://cap-web-production-3166.up.railway.app",
+		url: process.env.NEXT_PUBLIC_WEB_URL ?? "https://capweb-production-dd85.up.railway.app",
 		siteName: "data365",
 	},
 };

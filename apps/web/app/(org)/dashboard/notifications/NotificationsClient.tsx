@@ -60,7 +60,7 @@ export const NotificationsClient = ({
 						type="button"
 						onClick={() => markAllMutation.mutate()}
 						disabled={markAllMutation.isPending}
-						className="flex gap-1.5 items-center text-[13px] text-blue-9 transition-opacity hover:opacity-70 disabled:opacity-50"
+						className="flex gap-1.5 items-center text-[13px] text-[var(--brand)] transition-opacity hover:opacity-70 disabled:opacity-50"
 					>
 						<FontAwesomeIcon icon={faCheckDouble} className="size-3" />
 						Mark all as read

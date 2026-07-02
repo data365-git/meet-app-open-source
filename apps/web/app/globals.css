@@ -15,10 +15,13 @@
 @tailwind utilities;
 
 :root {
-	--primary: #005cb1;
+	--brand: #005cb1;
+	--brand-fg: #ffffff;
+	--brand-wash: #e0edff;
+	--primary: var(--brand);
 	--primary-2: #004c93;
 	--primary-3: #003b73;
-	--secondary: #2eb4ff;
+	--secondary: var(--brand);
 	--secondary-2: #1696e0;
 	--secondary-3: #117ebd;
 	--tertiary: #c5eaff;
@@ -47,12 +50,10 @@
 	}
 }
 
-/* --text-primary is used ONLY by the in-browser recorder dialog. In :root it is
-   a fixed dark navy (#0d1b2a) with no dark-mode override, so its labels (e.g.
-   the "System Audio" toggle) rendered dark-on-dark and became unreadable in
-   dark mode. The app toggles dark via the `.dark` class, so flip the token here
-   to the Radix dark gray-12 (near-white). Light mode keeps the :root value. */
 .dark {
+	--brand: #2e9dff;
+	--brand-wash: rgba(46, 157, 255, 0.15);
+	/* Semantic text token for recorder dialog labels in dark mode. */
 	--text-primary: var(--gray-12);
 }
 
@@ -139,13 +140,13 @@ html {
 }
 
 .dark ::selection {
-	background: #ffffff;
-	color: #000000;
+	background: var(--brand-wash);
+	color: inherit;
 }
 
 ::selection {
-	background: #000000;
-	color: #ffffff;
+	background: var(--brand-wash);
+	color: inherit;
 }
 
 .wrapper {

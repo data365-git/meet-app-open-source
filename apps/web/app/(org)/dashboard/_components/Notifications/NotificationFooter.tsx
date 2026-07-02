@@ -8,7 +8,7 @@ export const NotificationFooter = ({ onClose }: { onClose?: () => void }) => {
 			<Link
 				href="/dashboard/notifications"
 				onClick={onClose}
-				className="text-[13px] font-medium text-blue-9 transition-opacity hover:opacity-70"
+				className="text-[13px] font-medium text-[var(--brand)] transition-opacity hover:opacity-70"
 			>
 				View all notifications
 			</Link>

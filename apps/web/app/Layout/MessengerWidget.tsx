@@ -757,7 +757,7 @@ export function MessengerWidget() {
 					--msngr-human-text: #047857;
 					--msngr-human-dot: #10b981;
 					--msngr-human-ping: rgba(52,211,153,0.75);
-					--msngr-link: #2563eb;
+					--msngr-link: var(--brand);
 					--msngr-link-hover: #3b82f6;
 				}
 				.dark .cap-messenger-panel {

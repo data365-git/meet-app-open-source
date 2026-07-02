@@ -84,13 +84,13 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
                     className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
                     style={{
                         width: `${pct}%`,
-                        background: "var(--blue-9)",
+                        background: "var(--brand)",
                     }}
                 />
             </div>
             <span
                 className="w-10 shrink-0 text-right text-xs font-semibold"
-                style={{ color: "var(--blue-11)", fontVariantNumeric: "tabular-nums" }}
+                style={{ color: "var(--brand)", fontVariantNumeric: "tabular-nums" }}
             >
                 {pct}%
             </span>
@@ -166,7 +166,7 @@ export function TasksPanel({
                             checked={task.done}
                             onChange={() => toggle(i)}
                             disabled={!canEdit}
-                            className={`size-4 shrink-0 ${canEdit ? "cursor-pointer" : "cursor-default"} accent-[var(--blue-9)]`}
+                            className={`size-4 shrink-0 ${canEdit ? "cursor-pointer" : "cursor-default"} accent-[var(--brand)]`}
                         />
                         <span
                             className="flex-1 text-sm"

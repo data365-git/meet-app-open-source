@@ -651,7 +651,7 @@ export const ShareHeader = ({
 									type="button"
 									onClick={() => setShowShareOptions((v) => !v)}
 									aria-label={t("share")} title={t("share")}
-									className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-blue-9 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-10 sm:hidden"
+									className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[var(--brand)] px-4 text-sm font-medium text-[var(--brand-fg)] shadow-sm transition-colors hover:brightness-95 sm:hidden"
 								>
 									<Share2 className="size-4 shrink-0" />
 									<span>{t("share")}</span>
@@ -817,7 +817,7 @@ export const ShareHeader = ({
 							{userIsOwnerAndNotPro && (
 								<button
 									type="button"
-									className="flex items-center text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
+									className="flex items-center text-sm text-gray-400 duration-200 cursor-pointer hover:text-[var(--brand)]"
 									onClick={() => setUpgradeModalOpen(true)}
 								>
 									<Globe2 className="mr-1 w-4 h-4" />

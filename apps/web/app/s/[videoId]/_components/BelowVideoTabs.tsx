@@ -84,8 +84,6 @@ export function BelowVideoTabs({
 				role="tablist"
 				aria-label={t("tabsAriaLabel")}
 				style={{
-					fontFamily:
-						"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
 					display: "flex",
 					gap: "4px",
 					background: "transparent",
@@ -128,7 +126,7 @@ export function BelowVideoTabs({
 								color: isActive ? "var(--gray-12)" : "var(--gray-11)",
 								border: "none",
 								borderBottom: isActive
-									? "2px solid var(--blue-9)"
+									? "2px solid var(--brand)"
 									: "2px solid transparent",
 								borderRadius: 0,
 								background: "transparent",

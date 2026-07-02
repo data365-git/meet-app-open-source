@@ -15,7 +15,7 @@ const recordingModes = [
 		name: "Studio Mode",
 		icon: (
 			<Clapperboard
-				fill="var(--blue-9)"
+				fill="var(--brand)"
 				className="mb-4 size-8"
 				strokeWidth={1.5}
 			/>

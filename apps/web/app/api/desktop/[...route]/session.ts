@@ -31,6 +31,7 @@ function createDesktopRedirectPage(primaryUrl: string, fallbackUrl: string) {
 		<title>Open data365</title>
 		<style>
 			:root {
+				--brand: #005cb1;
 				color-scheme: light;
 				font-family: Inter, "Segoe UI", sans-serif;
 			}
@@ -86,7 +87,7 @@ function createDesktopRedirectPage(primaryUrl: string, fallbackUrl: string) {
 			}
 
 			button {
-				background: #2563eb;
+				background: var(--brand);
 				color: white;
 			}
 

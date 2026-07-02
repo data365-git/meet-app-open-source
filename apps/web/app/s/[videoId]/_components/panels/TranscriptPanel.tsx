@@ -789,7 +789,7 @@ export function TranscriptPanel({
 					borderRadius: "8px",
 					background: active ? "var(--blue-3)" : "transparent",
 					borderLeft: active
-						? "3px solid var(--blue-9)"
+						? "3px solid var(--brand)"
 						: "3px solid transparent",
 					position: "relative",
 					cursor: "default",

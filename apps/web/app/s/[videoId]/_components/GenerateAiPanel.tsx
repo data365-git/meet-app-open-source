@@ -225,9 +225,9 @@ export function GenerateAiPanel({
               key={step.key}
               className={`flex-1 rounded-full px-3 py-1.5 text-center text-xs font-medium ${
                 step.state === "done"
-                  ? "bg-blue-9 text-white"
+                  ? "bg-[var(--brand)] text-[var(--brand-fg)]"
                   : step.state === "current"
-                    ? "bg-blue-9 text-white ring-2 ring-blue-6 animate-pulse"
+                    ? "bg-[var(--brand)] text-[var(--brand-fg)] ring-2 ring-blue-6 animate-pulse"
                     : "bg-blue-3 text-blue-10 ring-1 ring-blue-5"
               }`}
             >
@@ -337,7 +337,7 @@ export function GenerateAiPanel({
           type="button"
           disabled={loading}
           onClick={() => requestStart(false)}
-          className="self-start rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+          className="self-start rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-[var(--brand-fg)] transition-colors hover:brightness-95 disabled:opacity-60"
         >
           {loading ? tShare("aiStarting") : tShare("aiStartAnalysis")}
         </button>
@@ -360,7 +360,7 @@ export function GenerateAiPanel({
 function SpinnerIcon() {
   return (
     <svg
-      className="size-4 animate-spin text-blue-10"
+      className="size-4 animate-spin text-[var(--brand)]"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

@@ -107,7 +107,7 @@ export function RefinedTranscriptPanel({
 						style={
 							isActive
 								? {
-										borderLeft: "3px solid var(--blue-9)",
+										borderLeft: "3px solid var(--brand)",
 										background: "var(--blue-2)",
 									}
 								: undefined

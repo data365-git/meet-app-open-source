@@ -416,10 +416,10 @@ export const CapCard = ({
 				className={clsx(
 					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10",
 					isSelected
-						? "!border-blue-10"
+						? "!border-[var(--brand)]"
 						: anyCapSelected
-							? "border-blue-10 hover:border-blue-10"
-							: "hover:border-blue-10",
+							? "border-[var(--brand)] hover:border-[var(--brand)]"
+							: "hover:border-[var(--brand)]",
 					isDragging && "opacity-50",
 					isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing",
 				)}
@@ -642,7 +642,7 @@ export const CapCard = ({
 							className={clsx(
 								"flex justify-center items-center w-6 h-6 rounded-md border transition-colors cursor-pointer hover:bg-gray-3/60",
 								isSelected
-									? "bg-blue-10 border-blue-10"
+									? "bg-[var(--brand)] border-[var(--brand)]"
 									: "border-white-95 bg-gray-1/80",
 							)}
 						>

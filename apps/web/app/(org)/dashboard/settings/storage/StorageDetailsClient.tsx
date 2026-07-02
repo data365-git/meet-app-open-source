@@ -254,7 +254,7 @@ function QuotaSettingsForm({
 					type="button"
 					onClick={handleSave}
 					disabled={pending}
-					className="px-4 py-2 rounded-md bg-blue-9 text-white text-sm font-medium hover:bg-blue-10 disabled:opacity-50"
+					className="px-4 py-2 rounded-md bg-[var(--brand)] text-[var(--brand-fg)] text-sm font-medium hover:brightness-95 disabled:opacity-50"
 				>
 					{pending ? "Saving…" : "Save"}
 				</button>

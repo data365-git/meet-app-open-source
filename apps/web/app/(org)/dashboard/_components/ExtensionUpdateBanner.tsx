@@ -48,7 +48,7 @@ export default function ExtensionUpdateBanner() {
 			<div className="flex shrink-0 items-center gap-1.5">
 				<Link
 					href="/dashboard/extension"
-					className="inline-flex min-h-9 items-center rounded-full bg-blue-9 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-10 sm:min-h-0 sm:bg-transparent sm:p-0 sm:text-sm sm:text-blue-11 sm:underline sm:underline-offset-2 sm:hover:bg-transparent sm:hover:text-blue-9"
+					className="inline-flex min-h-9 items-center rounded-full bg-[var(--brand)] px-3 text-xs font-medium text-[var(--brand-fg)] transition-colors hover:brightness-95 sm:min-h-0 sm:bg-transparent sm:p-0 sm:text-sm sm:text-[var(--brand)] sm:underline sm:underline-offset-2 sm:hover:bg-transparent sm:hover:text-[var(--brand)]"
 				>
 					Update<span className="hidden sm:inline">&nbsp;extension</span>
 				</Link>

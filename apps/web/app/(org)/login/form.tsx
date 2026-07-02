@@ -184,7 +184,7 @@ export function LoginForm() {
 							{t("forgotPassword")}{" "}
 							<a
 								href="mailto:mirkomilovabrorwork@gmail.com"
-								className="font-semibold text-gray-12 hover:text-blue-9"
+								className="font-semibold text-gray-12 hover:text-[var(--brand)]"
 							>
 								mirkomilovabrorwork@gmail.com
 							</a>
@@ -197,7 +197,7 @@ export function LoginForm() {
 						{t("noAccount")}{" "}
 						<Link
 							href="/signup"
-							className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+							className="text-xs font-semibold text-[var(--brand)] hover:brightness-95"
 						>
 							{t("signupHere")}
 						</Link>

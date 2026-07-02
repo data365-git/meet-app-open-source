@@ -41,7 +41,7 @@ export const Stepper = ({ steps, onStepClick }: StepperProps) => {
 								step.hasError
 									? "border-red-500 bg-red-500"
 									: step.status !== StepStatus.PENDING
-										? "border-transparent bg-blue-9"
+										? "border-transparent bg-[var(--brand)]"
 										: "bg-transparent border-gray-5",
 							)}
 						>

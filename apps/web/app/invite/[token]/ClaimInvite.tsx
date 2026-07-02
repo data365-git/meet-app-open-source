@@ -111,7 +111,7 @@ export function ClaimInvite({ token }: { token: string }) {
 				<p className="text-gray-10">{errorMessage}</p>
 				<Link
 					href="/login"
-					className="text-sm font-semibold text-blue-9 hover:text-blue-8 mt-4 inline-block"
+					className="text-sm font-semibold text-[var(--brand)] hover:brightness-95 mt-4 inline-block"
 				>
 					Go to login
 				</Link>
@@ -197,7 +197,7 @@ export function ClaimInvite({ token }: { token: string }) {
 					Already have an account?{" "}
 					<Link
 						href="/login"
-						className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+						className="text-xs font-semibold text-[var(--brand)] hover:brightness-95"
 					>
 						Sign in here
 					</Link>

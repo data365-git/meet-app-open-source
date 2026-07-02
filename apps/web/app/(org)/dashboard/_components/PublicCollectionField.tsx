@@ -44,7 +44,7 @@ export const PublicCollectionField = ({
 					<div
 						className={clsx(
 							"flex justify-center items-center rounded-full transition-colors size-9 shrink-0",
-							enabled ? "text-blue-9 bg-blue-3" : "text-gray-11 bg-gray-3",
+							enabled ? "text-[var(--brand)] bg-[var(--brand-wash)]" : "text-gray-11 bg-gray-3",
 						)}
 					>
 						<FontAwesomeIcon
