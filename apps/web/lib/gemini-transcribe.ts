@@ -406,6 +406,27 @@ export function mergeChunkedWebVtt(
 	return collapseRepeatedVttCues(output);
 }
 
+// Generic numbered fallback labels and the background-voice marker carry no
+// cross-chunk identity — only REAL names go into the roster.
+const GENERIC_SPEAKER_LABEL = /^(?:speaker|spiker|спикер)\s*\d+$/i;
+
+/** Harvest real speaker names (<v Name> voice tags) from a chunk's VTT so
+ * later chunks of the same recording can reuse the exact same labels. */
+export function extractSpeakerLabels(vtt: string): string[] {
+	const labels = new Set<string>();
+	const re = /<v\s+([^>]+)>/gi;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(vtt)) !== null) {
+		const label = (m[1] ?? "").trim();
+		if (!label) continue;
+		if (GENERIC_SPEAKER_LABEL.test(label)) continue;
+		if (/^boshqa ovoz$/i.test(label)) continue;
+		labels.add(label);
+		if (labels.size >= 6) break;
+	}
+	return [...labels];
+}
+
 import { isTransientGeminiError, withGeminiRetry } from "@/lib/gemini-retry";
 
 const GEMINI_TRANSCRIBE_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"] as const;
@@ -432,7 +453,13 @@ async function pollUntilActive(
 	throw new Error("Gemini file never reached ACTIVE state");
 }
 
-export function buildTranscriptionPrompt(): string {
+export function buildTranscriptionPrompt(
+	opts: { knownSpeakers?: string[] } = {},
+): string {
+	const rosterBlock =
+		opts.knownSpeakers && opts.knownSpeakers.length > 0
+			? `\n\nKnown speakers identified earlier in this same recording: ${opts.knownSpeakers.join(", ")}.\nThis audio is a LATER segment of that same recording. When a voice clearly belongs to one of these people (they are named, addressed, or obvious from context), use exactly that label with the same spelling. Otherwise use the numbered fallback labels.`
+			: "";
 	return `You are a professional transcription editor for meeting, instruction video, and voice-note recordings.
 
 Detect the dominant spoken language from the audio (Uzbek, Russian, or English) and transcribe the attached audio/video fully and accurately in that same language, exactly as spoken. Do not translate the recording into another language just because the app UI or these instructions are in English. A Russian recording must produce a Russian transcript, an English recording an English transcript, and an Uzbek recording an Uzbek transcript.
@@ -445,8 +472,9 @@ Rules:
 
 3. Detect the content type from the recording:
 - If it is a multi-speaker online/offline meeting, identify speakers by voice, context, and conversation flow.
-- If speaker names are known from the audio, use their names.
-- If names are not clear, use Speaker 1, Speaker 2, Speaker 3, and keep labels consistent.
+- ACTIVELY listen for speaker NAMES throughout the whole recording: self-introductions ("Men Alisherman", "Меня зовут Дмитрий", "This is John"), people addressing each other ("Alisher aka, siz nima deysiz?", "Спасибо, Дмитрий", "Thanks, Sarah"), and names used in conversation. When you can confidently attach a name to a voice, use that NAME as the voice label for EVERY cue of that voice, e.g. <v Alisher>.
+- If a voice's name is never revealed, use a numbered label in the dominant language — Uzbek: Spiker 1, Spiker 2; Russian: Спикер 1, Спикер 2; English: Speaker 1, Speaker 2 — and keep the SAME label for the same voice throughout.
+- Never use both a name and a number for the same voice; once the name is known, use only the name.
 - If two people talk over each other and both cannot be clearly separated, write [ustma-ust gaplashildi].
 - If it is a one-speaker instruction, YouTube-style video, or voice note, do not invent speaker labels.
 - If another person clearly speaks in the background and their words are important, use Boshqa ovoz.
@@ -494,9 +522,9 @@ IMPORTANT OUTPUT FORMAT:
 - Put cue text on the next line(s), then a blank line before the next cue.
 - Do NOT put timestamp and text on the same line.
 - Do NOT wrap timestamps in markdown brackets like **[HH:MM:SS]**.
-- For multi-speaker cues, use standard WebVTT voice tags: <v Speaker 1>spoken text</v>.
+- For multi-speaker cues, use standard WebVTT voice tags with the speaker's name when identified, else the numbered label: <v Alisher>spoken text</v> or <v Spiker 1>spoken text</v>.
 - For one-speaker recordings, write only the spoken text without a speaker label.
-- The bold foreign-word rules still apply inside cue text.`;
+- The bold foreign-word rules still apply inside cue text.${rosterBlock}`;
 }
 
 export async function transcribeWithGemini(
@@ -504,9 +532,10 @@ export async function transcribeWithGemini(
 	options: {
 		apiKey: string;
 		audioDurationSec?: number;
+		knownSpeakers?: string[];
 	},
 ): Promise<GeminiTranscribeResult> {
-	const { apiKey, audioDurationSec = 300 } = options;
+	const { apiKey, audioDurationSec = 300, knownSpeakers } = options;
 
 	const audioResponse = await fetch(audioUrl);
 	if (!audioResponse.ok) {
@@ -608,7 +637,7 @@ export async function transcribeWithGemini(
 												fileUri,
 											},
 										},
-										{ text: buildTranscriptionPrompt() },
+										{ text: buildTranscriptionPrompt({ knownSpeakers }) },
 									],
 								},
 							],

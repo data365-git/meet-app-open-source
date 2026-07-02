@@ -28,6 +28,7 @@ import {
 	extractAudioSpanFromUrl,
 } from "@/lib/audio-extract";
 import {
+	extractSpeakerLabels,
 	mergeChunkedWebVtt,
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
@@ -396,6 +397,7 @@ async function transcribeAudio(
 	audioDurationSec: number | null,
 	ownerEncryptedGeminiKey: string | null,
 	context: { userId: string; orgId: string; videoId: string },
+	knownSpeakers: string[] = [],
 ): Promise<string> {
 	"use step";
 
@@ -433,6 +435,7 @@ async function transcribeAudio(
 			const res = await transcribeWithGemini(audioUrl, {
 				apiKey: resolvedApiKey,
 				audioDurationSec: audioDurationSec ?? undefined,
+				knownSpeakers,
 			});
 			return {
 				transcriptVtt: res.transcriptVtt,
@@ -471,50 +474,78 @@ export async function transcribeAudioChunks(
 		audio.chunks.length,
 	);
 
-	const results = await mapWithConcurrency(
-		audio.chunks,
-		AI_CHUNK_CONCURRENCY,
-		async (chunk, i) => {
-			let result: { vtt: string; offsetSec: number };
+	// Worker shared by the serial first chunk and the concurrent rest — keeps
+	// the fault-tolerance, progress-callback and result-indexing behavior
+	// identical for every chunk.
+	const processChunk = async (
+		chunk: ExtractedAudioChunk,
+		i: number,
+		knownSpeakers: string[],
+	): Promise<{ vtt: string; offsetSec: number }> => {
+		let result: { vtt: string; offsetSec: number };
+		try {
+			const vtt = await transcribeChunk({
+				chunk,
+				ownerEncryptedGeminiKey,
+				context,
+				knownSpeakers,
+			});
+			result = { vtt, offsetSec: chunk.startSec };
+		} catch (error) {
+			// FAULT TOLERANCE (long-video fix): a single bad chunk must NOT discard the
+			// whole transcript. Previously one failed chunk threw -> the outer catch marked
+			// the ENTIRE video ERROR and dropped every successful chunk (root cause of
+			// long-video AI failures). Now: log, keep a gap at this offset, and continue.
+			failedChunkCount++;
+			console.error(
+				`[transcribe] Chunk at ${chunk.startSec}s FAILED for ${context.videoId} after retries; continuing with a gap:`,
+				error,
+			);
+			result = { vtt: "WEBVTT\n\n", offsetSec: chunk.startSec };
+		}
+		completedResults[i] = result;
+		completedCount++;
+		if (onProgress) {
 			try {
-				const vtt = await transcribeChunk({
-					chunk,
-					ownerEncryptedGeminiKey,
-					context,
+				await onProgress({
+					transcribedChunks: completedResults.filter(
+						(r): r is { vtt: string; offsetSec: number } => r !== undefined,
+					),
+					completed: completedCount,
+					total: audio.chunks.length,
 				});
-				result = { vtt, offsetSec: chunk.startSec };
-			} catch (error) {
-				// FAULT TOLERANCE (long-video fix): a single bad chunk must NOT discard the
-				// whole transcript. Previously one failed chunk threw -> the outer catch marked
-				// the ENTIRE video ERROR and dropped every successful chunk (root cause of
-				// long-video AI failures). Now: log, keep a gap at this offset, and continue.
-				failedChunkCount++;
-				console.error(
-					`[transcribe] Chunk at ${chunk.startSec}s FAILED for ${context.videoId} after retries; continuing with a gap:`,
-					error,
-				);
-				result = { vtt: "WEBVTT\n\n", offsetSec: chunk.startSec };
+			} catch (e) {
+				console.error("[transcribe] partial-save progress callback failed (non-fatal):", e);
 			}
-			completedResults[i] = result;
-			completedCount++;
-			if (onProgress) {
-				try {
-					await onProgress({
-						transcribedChunks: completedResults.filter(
-							(r): r is { vtt: string; offsetSec: number } => r !== undefined,
-						),
-						completed: completedCount,
-						total: audio.chunks.length,
-					});
-				} catch (e) {
-					console.error("[transcribe] partial-save progress callback failed (non-fatal):", e);
-				}
-			}
-			return result;
-		},
+		}
+		return result;
+	};
+
+	// SPEAKER ROSTER CARRY: transcribe the FIRST chunk alone and harvest any
+	// real speaker names it identified; every later chunk gets that roster so
+	// labels stay consistent across independently-transcribed chunks.
+	const firstChunk = audio.chunks[0];
+	let knownSpeakers: string[] = [];
+	if (firstChunk) {
+		const firstResult = await processChunk(firstChunk, 0, []);
+		knownSpeakers = extractSpeakerLabels(firstResult.vtt);
+		if (knownSpeakers.length > 0) {
+			console.log(
+				`[transcribe] speaker roster for ${context.videoId}: ${knownSpeakers.join(", ")}`,
+			);
+		}
+	}
+
+	await mapWithConcurrency(
+		audio.chunks.slice(1),
+		AI_CHUNK_CONCURRENCY,
+		(chunk, sliceIndex) => processChunk(chunk, sliceIndex + 1, knownSpeakers),
 	);
 
-	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> = results;
+	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> =
+		completedResults.filter(
+			(r): r is { vtt: string; offsetSec: number } => r !== undefined,
+		);
 
 	// Only fail the whole job if EVERY chunk failed (nothing usable to save).
 	if (failedChunkCount === audio.chunks.length) {
@@ -825,10 +856,12 @@ export async function transcribeAudioChunkWithRetry(
 		chunk,
 		ownerEncryptedGeminiKey,
 		context,
+		knownSpeakers,
 	}: {
 		chunk: ExtractedAudioChunk;
 		ownerEncryptedGeminiKey: string | null;
 		context: { userId: string; orgId: string; videoId: string };
+		knownSpeakers?: string[];
 	},
 	transcribeFn: typeof transcribeAudio = transcribeAudio,
 ): Promise<string> {
@@ -851,6 +884,7 @@ export async function transcribeAudioChunkWithRetry(
 				chunk.durationSec,
 				ownerEncryptedGeminiKey,
 				context,
+				knownSpeakers ?? [],
 			);
 			const coverage = webVttCoverageSec(vtt);
 			const largestGap = webVttLargestGapSec(vtt, chunkDurationSec);
