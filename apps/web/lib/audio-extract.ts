@@ -224,6 +224,77 @@ export async function extractAudioChunksFromUrl(
 	}
 }
 
+/**
+ * Extract ONE audio span [startSec, startSec+durationSec) from a video URL as
+ * mono mp3 — used by the transcript gap-fill pass to re-transcribe just the
+ * missing stretch. `-ss` before `-i` = fast keyframe seek; the ± keyframe
+ * imprecision is irrelevant for ASR.
+ */
+export async function extractAudioSpanFromUrl(
+	videoUrl: string,
+	startSec: number,
+	durationSec: number,
+): Promise<AudioExtractionResult> {
+	const ffmpeg = getFfmpegPath();
+	const outputPath = join(tmpdir(), `audio-span-${randomUUID()}.mp3`);
+
+	const ffmpegArgs = [
+		"-ss",
+		String(Math.max(0, startSec)),
+		"-t",
+		String(durationSec),
+		"-i",
+		videoUrl,
+		"-vn",
+		"-ac",
+		"1",
+		"-ar",
+		"24000",
+		"-acodec",
+		"libmp3lame",
+		"-b:a",
+		DEFAULT_AUDIO_BITRATE,
+		"-f",
+		"mp3",
+		"-y",
+		outputPath,
+	];
+
+	return new Promise((resolve, reject) => {
+		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+
+		let stderr = "";
+
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err: Error) => {
+			fs.unlink(outputPath).catch(() => {});
+			reject(new Error(`Audio span extraction failed: ${err.message}`));
+		});
+
+		proc.on("close", (code: number | null) => {
+			if (code === 0) {
+				resolve({
+					filePath: outputPath,
+					mimeType: "audio/mpeg",
+					cleanup: async () => {
+						try {
+							await fs.unlink(outputPath);
+						} catch {}
+					},
+				});
+			} else {
+				fs.unlink(outputPath).catch(() => {});
+				reject(
+					new Error(`Audio span extraction failed with code ${code}: ${stderr}`),
+				);
+			}
+		});
+	});
+}
+
 export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 	const ffmpeg = getFfmpegPath();
 	const ffmpegArgs = [
