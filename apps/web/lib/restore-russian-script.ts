@@ -87,3 +87,26 @@ export function restoreRussianScript(text: string): string {
 		return target ? matchCase(match, target) : match;
 	});
 }
+
+/**
+ * Apply restoreRussianScript to EVERY string inside an arbitrary JSON-like
+ * value (AI summary objects, translated summaries...). Non-strings pass through
+ * untouched; the input is never mutated. This is how the guard covers the
+ * summary/refined/translation surfaces, not just the transcript VTT.
+ */
+export function restoreRussianScriptDeep<T>(value: T): T {
+	if (typeof value === "string") {
+		return restoreRussianScript(value) as unknown as T;
+	}
+	if (Array.isArray(value)) {
+		return value.map((item) => restoreRussianScriptDeep(item)) as unknown as T;
+	}
+	if (value !== null && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [key, inner] of Object.entries(value)) {
+			out[key] = restoreRussianScriptDeep(inner);
+		}
+		return out as unknown as T;
+	}
+	return value;
+}

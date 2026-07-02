@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { restoreRussianScript } from "@/lib/restore-russian-script";
+import {
+	restoreRussianScript,
+	restoreRussianScriptDeep,
+} from "@/lib/restore-russian-script";
 
 describe("restoreRussianScript", () => {
 	it("converts romanized Russian words in a real-world mixed sentence", () => {
@@ -79,5 +82,34 @@ describe("restoreRussianScript", () => {
 
 	it("returns an empty string for an empty string", () => {
 		expect(restoreRussianScript("")).toBe("");
+	});
+});
+
+describe("restoreRussianScriptDeep", () => {
+	it("restores romanized Russian in every nested string field", () => {
+		const input = {
+			title: "Lyuboy plan",
+			topics: [{ title: "Srazu boshladik", body: "U **vapshe** kelmadi" }],
+			nextSteps: ["Konechno qilamiz"],
+			nested: { deep: { list: ["znachit shunday"] } },
+		};
+		const out = restoreRussianScriptDeep(input);
+		expect(out.title).toBe("Любой plan");
+		expect(out.topics[0]?.title).toBe("Сразу boshladik");
+		expect(out.topics[0]?.body).toBe("U **вообще** kelmadi");
+		expect(out.nextSteps[0]).toBe("Конечно qilamiz");
+		expect(out.nested.deep.list[0]).toBe("значит shunday");
+	});
+
+	it("leaves numbers, booleans, null and undefined untouched", () => {
+		const input = { startSec: 120, done: false, missing: null, u: undefined };
+		expect(restoreRussianScriptDeep(input)).toEqual(input);
+	});
+
+	it("does not mutate the input object", () => {
+		const input = { s: "lyuboy" };
+		const out = restoreRussianScriptDeep(input);
+		expect(input.s).toBe("lyuboy");
+		expect(out.s).toBe("любой");
 	});
 });

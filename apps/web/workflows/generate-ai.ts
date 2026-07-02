@@ -21,6 +21,7 @@ import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
+import { restoreRussianScriptDeep } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { normalizeWebVttVoiceText } from "@/lib/transcript-vtt";
 import { patchVideoMetadata } from "@/lib/video-metadata";
@@ -409,7 +410,10 @@ async function generateWithAi(
 		}
 	}
 
-	return result;
+	// Deterministic script guard on EVERY AI output surface (title, summary,
+	// chapters, aiSummary incl. refined paragraphs) - the prompt asks, this
+	// guarantees. _usage contains only numbers and passes through untouched.
+	return restoreRussianScriptDeep(result);
 }
 
 export function getAiLanguageInstruction(

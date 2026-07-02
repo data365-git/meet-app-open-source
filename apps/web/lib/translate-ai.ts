@@ -13,6 +13,10 @@ import { z } from "zod";
 import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import { withGeminiRetry } from "@/lib/gemini-retry";
+import {
+	restoreRussianScript,
+	restoreRussianScriptDeep,
+} from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { patchVideoMetadata } from "@/lib/video-metadata";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
@@ -546,10 +550,8 @@ export async function translateAiContent({
 	const context: AiCallContext = { orgId: video.orgId, userId, videoId };
 
 	try {
-		const translatedSummary = await translateAiSummary(
-			baseSummary,
-			language,
-			context,
+		const translatedSummary = restoreRussianScriptDeep(
+			await translateAiSummary(baseSummary, language, context),
 		);
 
 		const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
@@ -560,11 +562,9 @@ export async function translateAiContent({
 		if (Option.isSome(vtt)) {
 			const cues = parseVttCues(vtt.value);
 			if (cues.length > 0) {
-				const translatedTexts = await translateVttCueTexts(
-					cues,
-					language,
-					context,
-				);
+				const translatedTexts = (
+					await translateVttCueTexts(cues, language, context)
+				).map(restoreRussianScript);
 				const translatedVtt = buildVttFromCues(cues, translatedTexts);
 
 				await bucket
