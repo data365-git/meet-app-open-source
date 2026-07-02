@@ -113,7 +113,8 @@
   "auth": {
     "signingIn": "Signing you in…",
     "signinTitle": "Sign in to data365",
-    "signinSubtitle": "Record lessons and share them instantly.",
+    "signinSubtitle": "Sign in to your account for team recordings and AI analytics.",
+    "emailPlaceholder": "you@company.com",
     "signupTitle": "Sign up to data365",
     "signupSubtitle": "Create your account to start watching lessons.",
     "namePlaceholder": "Your name",
@@ -134,7 +135,7 @@
     "signupHere": "Sign up here",
     "haveAccount": "Already have an account?",
     "loginHere": "Log in here",
-    "forgotPassword": "Forgot your password? Contact the admin:",
+    "forgotPassword": "Forgot your password?",
     "termsNoticeSignin": "By signing in, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
     "termsNoticeSignup": "By creating an account, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>."
   },

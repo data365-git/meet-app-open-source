@@ -113,7 +113,8 @@
   "auth": {
     "signingIn": "Выполняется вход…",
     "signinTitle": "Вход в data365",
-    "signinSubtitle": "Записывайте уроки и делитесь ими мгновенно.",
+    "signinSubtitle": "Войдите в аккаунт для командных записей и AI-аналитики.",
+    "emailPlaceholder": "you@company.com",
     "signupTitle": "Регистрация в data365",
     "signupSubtitle": "Создайте аккаунт, чтобы начать смотреть уроки.",
     "namePlaceholder": "Ваше имя",
@@ -134,7 +135,7 @@
     "signupHere": "Зарегистрируйтесь здесь",
     "haveAccount": "Уже есть аккаунт?",
     "loginHere": "Войдите здесь",
-    "forgotPassword": "Забыли пароль? Свяжитесь с администратором:",
+    "forgotPassword": "Забыли пароль?",
     "termsNoticeSignin": "Выполняя вход, вы подтверждаете, что прочитали и согласны с <terms>Условиями использования</terms> и <privacy>Политикой конфиденциальности</privacy> data365.",
     "termsNoticeSignup": "Создавая аккаунт, вы подтверждаете, что прочитали и согласны с <terms>Условиями использования</terms> и <privacy>Политикой конфиденциальности</privacy> data365."
   },

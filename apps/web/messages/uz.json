@@ -112,8 +112,9 @@
   },
   "auth": {
     "signingIn": "Tizimga kiritilmoqda…",
-    "signinTitle": "data365'ga kirish",
-    "signinSubtitle": "Darslarni yozib oling va bir zumda ulashing.",
+    "signinTitle": "data365 ga kirish",
+    "signinSubtitle": "Jamoa yozuvlari va AI tahlillar uchun hisobingizga kiring",
+    "emailPlaceholder": "siz@kompaniya.uz",
     "signupTitle": "data365'da ro'yxatdan o'tish",
     "signupSubtitle": "Darslarni ko'rishni boshlash uchun hisob yarating.",
     "namePlaceholder": "Ismingiz",
@@ -134,7 +135,7 @@
     "signupHere": "Bu yerda ro'yxatdan o'ting",
     "haveAccount": "Hisobingiz bormi?",
     "loginHere": "Bu yerda kiring",
-    "forgotPassword": "Parolni unutdingizmi? Admin bilan bog'laning:",
+    "forgotPassword": "Parolni unutdingizmi?",
     "termsNoticeSignin": "Tizimga kirish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz.",
     "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz."
   },
