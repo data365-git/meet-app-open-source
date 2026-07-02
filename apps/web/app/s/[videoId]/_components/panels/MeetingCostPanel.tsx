@@ -3,13 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { getMonthlySpend } from "@/actions/billing/get-monthly-spend";
+import { formatUzs } from "@/lib/format-uzs";
 
 interface MeetingCostPanelProps {
 	videoId: string;
-}
-
-function formatUsd(cents: number): string {
-	return `$${(cents / 100).toFixed(4)}`;
 }
 
 export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
@@ -54,7 +51,7 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 					{t("meetingCost")}
 				</span>
 				<span className="text-3xl font-bold" style={{ color: "var(--gray-12)" }}>
-					{formatUsd(data.totalUsdCents)}
+					{formatUzs(data.totalUsdCents)}
 				</span>
 			</div>
 
@@ -70,7 +67,7 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 							>
 								<span className="text-xs font-medium" style={{ color: "var(--gray-11)" }}>{label}</span>
 								<span className="text-sm font-semibold" style={{ color: "var(--gray-12)" }}>
-									{formatUsd(cents)}
+									{formatUzs(cents)}
 								</span>
 							</div>
 						);
