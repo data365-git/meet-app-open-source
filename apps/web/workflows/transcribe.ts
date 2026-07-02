@@ -31,6 +31,7 @@ import {
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { restoreRussianScript } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
@@ -436,11 +437,13 @@ export async function transcribeAudioChunks(
 	if (audio.chunks.length === 1) {
 		const chunk = audio.chunks[0];
 		if (!chunk) return "WEBVTT\n\n";
-		return await transcribeAudio(
-			chunk.url,
-			chunk.durationSec ?? audio.totalDurationSec,
-			ownerEncryptedGeminiKey,
-			context,
+		return restoreRussianScript(
+			await transcribeAudio(
+				chunk.url,
+				chunk.durationSec ?? audio.totalDurationSec,
+				ownerEncryptedGeminiKey,
+				context,
+			),
 		);
 	}
 
@@ -507,7 +510,7 @@ export async function transcribeAudioChunks(
 		);
 	}
 
-	return mergeChunkedWebVtt(transcribedChunks);
+	return restoreRussianScript(mergeChunkedWebVtt(transcribedChunks));
 }
 
 /**
