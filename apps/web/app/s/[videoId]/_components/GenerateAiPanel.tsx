@@ -227,8 +227,8 @@ export function GenerateAiPanel({
                 step.state === "done"
                   ? "bg-blue-9 text-white"
                   : step.state === "current"
-                    ? "bg-blue-4 text-blue-11 ring-1 ring-blue-7"
-                    : "bg-blue-4/60 text-blue-9"
+                    ? "bg-blue-9 text-white ring-2 ring-blue-6 animate-pulse"
+                    : "bg-blue-3 text-blue-10 ring-1 ring-blue-5"
               }`}
             >
               {step.label}
