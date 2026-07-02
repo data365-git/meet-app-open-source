@@ -14,13 +14,29 @@ import {
 	webVttCoverageSec,
 } from "@/workflows/transcribe";
 
+function formatVttTime(sec: number): string {
+	const whole = Math.floor(sec);
+	const hh = String(Math.floor(whole / 3600)).padStart(2, "0");
+	const mm = String(Math.floor((whole % 3600) / 60)).padStart(2, "0");
+	const ss = String(whole % 60).padStart(2, "0");
+	return `${hh}:${mm}:${ss}.000`;
+}
+
 // A VTT whose last cue STARTS at `start` seconds (coverage = latest start).
-function vttCoveringTo(start: number): string {
-	const hh = String(Math.floor(start / 3600)).padStart(2, "0");
-	const mm = String(Math.floor((start % 3600) / 60)).padStart(2, "0");
-	const ss = String(Math.floor(start % 60)).padStart(2, "0");
-	const end = `${hh}:${mm}:${String(Math.floor(start % 60) + 1).padStart(2, "0")}`;
-	return `WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nfirst\n\n${hh}:${mm}:${ss}.000 --> ${end}.500\nlast\n`;
+// By default cues are dense enough for the gap-aware retry check.
+function vttCoveringTo(start: number, intervalSec = 60): string {
+	const starts = new Set<number>([0, start]);
+	for (let sec = intervalSec; sec < start; sec += intervalSec) {
+		starts.add(sec);
+	}
+	const cues = [...starts]
+		.sort((a, b) => a - b)
+		.map(
+			(sec, i) =>
+				`${formatVttTime(sec)} --> ${formatVttTime(sec + 1)}\ncue ${i + 1}`,
+		)
+		.join("\n\n");
+	return `WEBVTT\n\n${cues}\n`;
 }
 
 describe("webVttCoverageSec", () => {
@@ -72,7 +88,7 @@ describe("transcribeAudioChunkWithRetry — coverage-aware", () => {
 			.fn()
 			.mockResolvedValueOnce(vttCoveringTo(40))
 			.mockResolvedValueOnce(vttCoveringTo(120)) // best
-			.mockResolvedValueOnce(vttCoveringTo(30))
+			.mockResolvedValueOnce(vttCoveringTo(400, 400)) // farther but sparse
 			.mockResolvedValueOnce(vttCoveringTo(50));
 		const out = await transcribeAudioChunkWithRetry(
 			{ chunk, ownerEncryptedGeminiKey: null, context },
