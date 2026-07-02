@@ -1114,6 +1114,52 @@ ${timestamped}`;
 	return { chapters: out, inputTokens, outputTokens };
 }
 
+/**
+ * Fetch AI content and JSON-parse it; on a parse failure make EXACTLY ONE
+ * fresh attempt (a fresh Gemini call usually returns well-formed JSON — the
+ * failures are stochastic truncation/markdown noise, not deterministic).
+ * Token usage from ALL attempts is accumulated (both were paid for).
+ * Returns parsed:null after both attempts fail; the caller decides fallback.
+ */
+export async function parseJsonWithRetry(
+	fetchContent: (attempt: number) => Promise<{
+		content: string;
+		inputTokens: number;
+		outputTokens: number;
+		model: string;
+	}>,
+	label: string,
+): Promise<{
+	parsed: Record<string, unknown> | null;
+	inputTokens: number;
+	outputTokens: number;
+	model: string;
+}> {
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let model = "unknown";
+	for (let attempt = 1; attempt <= 2; attempt++) {
+		const result = await fetchContent(attempt);
+		inputTokens += result.inputTokens;
+		outputTokens += result.outputTokens;
+		model = result.model;
+		try {
+			return {
+				parsed: JSON.parse(cleanJsonResponse(result.content).trim()),
+				inputTokens,
+				outputTokens,
+				model,
+			};
+		} catch {
+			console.error(
+				`[generate-ai] ${label} JSON parse FAILED (attempt ${attempt}/2)`,
+				{ contentLength: result.content.length, tail: result.content.slice(-150) },
+			);
+		}
+	}
+	return { parsed: null, inputTokens, outputTokens, model };
+}
+
 async function generateMultipleChunks(
 	chunks: { text: string; startTime: number; endTime: number }[],
 	videoDuration: number,
@@ -1158,24 +1204,29 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
 ${chunk.text}`;
 
-			const chunkResult = await callAiApi(chunkPrompt, {}, context);
-			totalInputTokens += chunkResult.inputTokens;
-			totalOutputTokens += chunkResult.outputTokens;
-			usedModel = chunkResult.model;
-			try {
-				const parsed = JSON.parse(cleanJsonResponse(chunkResult.content).trim());
-				return {
-					summary: parsed.summary || "",
-					keyPoints: parsed.keyPoints || [],
-					chapters: parsed.chapters || [],
-					startTime: chunk.startTime,
-					endTime: chunk.endTime,
-					rawText: chunk.text,
-				};
-			} catch {
-				console.error("[generate-ai] per-chunk summary JSON parse FAILED (chunk skipped)", { startTime: chunk.startTime, endTime: chunk.endTime, contentLength: chunkResult.content.length, tail: chunkResult.content.slice(-150) });
+			const { parsed, inputTokens, outputTokens, model } =
+				await parseJsonWithRetry(
+					() => callAiApi(chunkPrompt, {}, context),
+					`per-chunk summary [${chunk.startTime}-${chunk.endTime}s]`,
+				);
+			totalInputTokens += inputTokens;
+			totalOutputTokens += outputTokens;
+			usedModel = model;
+			if (!parsed) {
+				console.error(
+					"[generate-ai] per-chunk summary FAILED after retry (chunk skipped)",
+					{ startTime: chunk.startTime, endTime: chunk.endTime },
+				);
 				return null;
 			}
+			return {
+				summary: (parsed.summary as string) || "",
+				keyPoints: (parsed.keyPoints as string[]) || [],
+				chapters: (parsed.chapters as { title: string; start: number }[]) || [],
+				startTime: chunk.startTime,
+				endTime: chunk.endTime,
+				rawText: chunk.text,
+			};
 		},
 	);
 
@@ -1342,12 +1393,19 @@ Rules:
 - In aiSummary.overview, topics[].title, topics[].body and nextSteps, use markdown **bold** VERY sparingly — bold at most the 1–2 single most important terms or names per field. Do NOT bold every foreign/technical word and do NOT copy the transcript's bold density.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}`;
 
-	const finalResult = await callAiApi(finalPrompt, {}, context);
-	totalInputTokens += finalResult.inputTokens;
-	totalOutputTokens += finalResult.outputTokens;
-	usedModel = finalResult.model;
-	try {
-		const parsed = JSON.parse(cleanJsonResponse(finalResult.content).trim());
+	const {
+		parsed,
+		inputTokens: finalInputTokens,
+		outputTokens: finalOutputTokens,
+		model: finalModel,
+	} = await parseJsonWithRetry(
+		() => callAiApi(finalPrompt, {}, context),
+		"final synthesis",
+	);
+	totalInputTokens += finalInputTokens;
+	totalOutputTokens += finalOutputTokens;
+	usedModel = finalModel;
+	if (parsed) {
 		const aiSummaryRaw = parsed.aiSummary ?? {
 			overview: parsed.summary ?? "",
 			topics: [],
@@ -1370,8 +1428,8 @@ ${MIXED_LANGUAGE_PRESERVATION_RULES}`;
 			};
 		}
 		return {
-			title: parsed.title,
-			summary: parsed.summary,
+			title: parsed.title as string,
+			summary: parsed.summary as string,
 			chapters: allChapters,
 			aiSummary: parseAiSummary(aiSummaryRaw),
 			_usage: {
@@ -1380,34 +1438,32 @@ ${MIXED_LANGUAGE_PRESERVATION_RULES}`;
 				outputTokens: totalOutputTokens,
 			},
 		};
-	} catch {
-		console.error("[generate-ai] final synthesis JSON parse FAILED (likely truncated)", { contentLength: finalResult.content.length, tail: finalResult.content.slice(-150) });
-		const fallbackSummary = chunkSummaries
-			.map((c, i) => `**Part ${i + 1}:** ${c.summary}`)
-			.join("\n\n");
-		const keyPointsSummary =
-			allKeyPoints.length > 0
-				? `\n\n**Key Points:**\n${allKeyPoints.map((p) => `- ${p}`).join("\n")}`
-				: "";
-		return {
-			title: "Video Summary",
-			summary: fallbackSummary + keyPointsSummary,
-			chapters: allChapters,
-			aiSummary: parseAiSummary({
-				overview: fallbackSummary,
-				topics: [],
-				nextSteps: [],
-				tasks: [],
-				chapters: aiSummaryChaptersFromChunks,
-				refinedTranscript: { chapters: refinedChapters },
-			}),
-			_usage: {
-				model: usedModel,
-				inputTokens: totalInputTokens,
-				outputTokens: totalOutputTokens,
-			},
-		};
 	}
+	const fallbackSummary = chunkSummaries
+		.map((c, i) => `**Part ${i + 1}:** ${c.summary}`)
+		.join("\n\n");
+	const keyPointsSummary =
+		allKeyPoints.length > 0
+			? `\n\n**Key Points:**\n${allKeyPoints.map((p) => `- ${p}`).join("\n")}`
+			: "";
+	return {
+		title: "Video Summary",
+		summary: fallbackSummary + keyPointsSummary,
+		chapters: allChapters,
+		aiSummary: parseAiSummary({
+			overview: fallbackSummary,
+			topics: [],
+			nextSteps: [],
+			tasks: [],
+			chapters: aiSummaryChaptersFromChunks,
+			refinedTranscript: { chapters: refinedChapters },
+		}),
+		_usage: {
+			model: usedModel,
+			inputTokens: totalInputTokens,
+			outputTokens: totalOutputTokens,
+		},
+	};
 }
 
 function parseAiResponse(content: string): AiResult {
