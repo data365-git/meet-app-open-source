@@ -125,6 +125,7 @@ export async function transcribeVideoWorkflow(
 			videoData.video,
 			gapFill.transcription,
 			gapFill.remainingGaps,
+			audio.totalDurationSec == null,
 		);
 	} catch (error) {
 		await markError(videoId);
@@ -695,6 +696,58 @@ export function findVttGaps(
 	return gaps;
 }
 
+/**
+ * Keeps only the cues of `vtt` whose ABSOLUTE start time (relative start +
+ * offsetSec) falls strictly inside (minAbsStartSec, maxAbsStartSec). Used to
+ * drop recovered gap-fill cues that land on top of an existing good cue's
+ * boundary — see the boundary-damage note on `fillTranscriptGaps`. Relative
+ * timestamps in kept cue blocks are left unchanged; only whole cues are
+ * dropped.
+ */
+export function filterVttCuesByAbsoluteStart(
+	vtt: string,
+	offsetSec: number,
+	minAbsStartSec: number,
+	maxAbsStartSec: number,
+): string {
+	const blocks = vtt.split(/\r?\n\r?\n/);
+	const kept: string[] = [];
+
+	for (const block of blocks) {
+		const lines = block
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean);
+
+		if (lines.length === 0 || /^WEBVTT/i.test(lines[0] ?? "")) {
+			continue;
+		}
+
+		const timingIndex = lines.findIndex((line) => line.includes("-->"));
+		if (timingIndex === -1) continue;
+
+		const timingLine = lines[timingIndex] ?? "";
+		const arrow = timingLine.indexOf("-->");
+		const m = timingLine
+			.slice(0, arrow)
+			.match(/(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})/);
+		if (!m) continue;
+
+		const start =
+			(m[1] ? Number(m[1]) : 0) * 3600 +
+			Number(m[2]) * 60 +
+			Number(m[3]) +
+			Number(m[4]) / 1000;
+		const absStart = start + offsetSec;
+
+		if (absStart > minAbsStartSec && absStart < maxAbsStartSec) {
+			kept.push(block);
+		}
+	}
+
+	return kept.length > 0 ? `WEBVTT\n\n${kept.join("\n\n")}\n\n` : "WEBVTT\n\n";
+}
+
 /** Gap-fill spans are deliberately SHORT: Gemini is far more reliable on ≤5-min
  * audio than on the 15-min chunks that produced the hole in the first place. */
 export const GAP_FILL_SPAN_SEC = 5 * 60;
@@ -706,13 +759,20 @@ interface GapSpanAudio {
 	url: string;
 	startSec: number;
 	durationSec: number;
+	gapStartSec: number;
+	gapEndSec: number;
 }
 
 async function extractGapSpanAudio(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
-	spans: Array<{ startSec: number; durationSec: number }>,
+	spans: Array<{
+		startSec: number;
+		durationSec: number;
+		gapStartSec: number;
+		gapEndSec: number;
+	}>,
 ): Promise<GapSpanAudio[]> {
 	"use step";
 
@@ -722,6 +782,7 @@ async function extractGapSpanAudio(
 	const out: GapSpanAudio[] = [];
 	for (const span of spans) {
 		// One failed span must not kill the whole gap-fill pass.
+		let uploadedKey: string | null = null;
 		try {
 			const result = await extractAudioSpanFromUrl(
 				videoUrl,
@@ -734,10 +795,18 @@ async function extractGapSpanAudio(
 				await bucket
 					.putObject(key, audioBuffer, { contentType: "audio/mpeg" })
 					.pipe(runPromise);
+				uploadedKey = key;
 				const url = await bucket
 					.getInternalSignedObjectUrl(key)
 					.pipe(runPromise);
-				out.push({ key, url, startSec: span.startSec, durationSec: span.durationSec });
+				out.push({
+					key,
+					url,
+					startSec: span.startSec,
+					durationSec: span.durationSec,
+					gapStartSec: span.gapStartSec,
+					gapEndSec: span.gapEndSec,
+				});
 			} finally {
 				await result.cleanup();
 			}
@@ -746,6 +815,14 @@ async function extractGapSpanAudio(
 				`[transcribe] gap-fill span extraction at ${span.startSec}s failed for ${videoId}; skipping span`,
 				error,
 			);
+			// The object may have been uploaded before signing failed — clean it up
+			// rather than leaking an orphaned temp file in R2.
+			if (uploadedKey) {
+				await bucket
+					.deleteObject(uploadedKey)
+					.pipe(runPromise)
+					.catch(() => {});
+			}
 		}
 	}
 	return out;
@@ -791,13 +868,20 @@ export async function fillTranscriptGaps(
 		return { transcription: mergedVtt, remainingGaps: [] };
 	}
 
-	const spans: Array<{ startSec: number; durationSec: number }> = [];
+	const spans: Array<{
+		startSec: number;
+		durationSec: number;
+		gapStartSec: number;
+		gapEndSec: number;
+	}> = [];
 	for (const gap of gaps) {
 		for (let s = gap.startSec; s < gap.endSec; s += GAP_FILL_SPAN_SEC) {
 			if (spans.length >= MAX_GAP_FILL_SPANS) break;
 			spans.push({
 				startSec: s,
 				durationSec: Math.min(GAP_FILL_SPAN_SEC, gap.endSec - s),
+				gapStartSec: gap.startSec,
+				gapEndSec: gap.endSec,
 			});
 		}
 	}
@@ -827,7 +911,23 @@ export async function fillTranscriptGaps(
 				ownerEncryptedGeminiKey,
 				context,
 			);
-			parts.push({ vtt, offsetSec: span.startSec });
+			// Boundary protection: an internal gap's startSec IS the previous good
+			// cue's start (gaps are measured cue-START to cue-START), so a
+			// recovered cue landing at/near relative 0 would sit at or just after
+			// that good cue's start — mergeChunkedWebVtt would then clamp the good
+			// cue's end down to it, shrinking a real caption to ~0.1s. Drop any
+			// recovered cue that isn't strictly INSIDE its parent gap. A leading
+			// gap (gapStartSec === 0) has no preceding cue to protect, so a cue at
+			// absolute 0 is kept.
+			const minAbs = span.gapStartSec === 0 ? -1 : span.gapStartSec + 1;
+			const maxAbs = span.gapEndSec - 0.25;
+			const filteredVtt = filterVttCuesByAbsoluteStart(
+				vtt,
+				span.startSec,
+				minAbs,
+				maxAbs,
+			);
+			parts.push({ vtt: filteredVtt, offsetSec: span.startSec });
 		} catch (error) {
 			console.warn(
 				`[transcribe] gap-fill span at ${span.startSec}s failed for ${videoId} (silence or ASR failure)`,
@@ -964,6 +1064,7 @@ async function saveTranscription(
 	video: typeof videos.$inferSelect,
 	transcription: string,
 	remainingGaps: VttGap[] = [],
+	coverageUnknown = false,
 ): Promise<void> {
 	"use step";
 
@@ -990,6 +1091,11 @@ async function saveTranscription(
 		}));
 	} else {
 		delete md.transcriptionGaps;
+	}
+	if (coverageUnknown) {
+		md.transcriptionCoverageUnknown = true;
+	} else {
+		delete md.transcriptionCoverageUnknown;
 	}
 	await db()
 		.update(videos)

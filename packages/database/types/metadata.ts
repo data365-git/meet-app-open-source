@@ -75,6 +75,12 @@ export interface VideoMetadata {
 	 */
 	transcriptionGaps?: { startSec: number; endSec: number }[];
 	/**
+	 * True when the video's total duration was unknown at gap-fill time, so
+	 * `transcriptionGaps` could not detect trailing/whole-file holes — a video
+	 * can show COMPLETE with no recorded gaps despite stopping early.
+	 */
+	transcriptionCoverageUnknown?: boolean;
+	/**
 	 * Multi-language analysis (ИSH 3). The base `aiSummary` above is the original
 	 * generation; `aiSummaryByLanguage` holds on-demand-translated cached versions.
 	 * Translated caption/transcript VTT lives in R2 at
