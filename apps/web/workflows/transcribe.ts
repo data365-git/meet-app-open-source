@@ -590,6 +590,62 @@ export function webVttLargestGapSec(
 	return largest;
 }
 
+export interface VttGap {
+	startSec: number;
+	endSec: number;
+}
+
+/**
+ * All holes bigger than minGapSec in a MERGED (absolute-timestamped) VTT:
+ * leading (0 → first cue start), internal (between consecutive cue starts),
+ * and — unlike the per-chunk metric — TRAILING (last cue start → total
+ * duration) when the real duration is known. This is the merge-level "did the
+ * final transcript actually cover the whole video" measure that per-chunk
+ * checks can never provide (a wholly-failed chunk merges in as silence).
+ */
+export function findVttGaps(
+	vtt: string,
+	totalDurationSec: number | null,
+	minGapSec: number = MAX_CHUNK_GAP_SEC,
+): VttGap[] {
+	const starts: number[] = [];
+	for (const line of vtt.split(/\r?\n/)) {
+		const arrow = line.indexOf("-->");
+		if (arrow === -1) continue;
+		const m = line
+			.slice(0, arrow)
+			.match(/(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})/);
+		if (!m) continue;
+		starts.push(
+			(m[1] ? Number(m[1]) : 0) * 3600 +
+				Number(m[2]) * 60 +
+				Number(m[3]) +
+				Number(m[4]) / 1000,
+		);
+	}
+	starts.sort((a, b) => a - b);
+
+	const gaps: VttGap[] = [];
+	if (starts.length === 0) {
+		if (totalDurationSec != null && totalDurationSec > minGapSec) {
+			gaps.push({ startSec: 0, endSec: totalDurationSec });
+		}
+		return gaps;
+	}
+	const first = starts[0] ?? 0;
+	if (first > minGapSec) gaps.push({ startSec: 0, endSec: first });
+	for (let i = 1; i < starts.length; i++) {
+		const prev = starts[i - 1] ?? 0;
+		const cur = starts[i] ?? 0;
+		if (cur - prev > minGapSec) gaps.push({ startSec: prev, endSec: cur });
+	}
+	const last = starts[starts.length - 1] ?? 0;
+	if (totalDurationSec != null && totalDurationSec - last > minGapSec) {
+		gaps.push({ startSec: last, endSec: totalDurationSec });
+	}
+	return gaps;
+}
+
 export async function transcribeAudioChunkWithRetry(
 	{
 		chunk,
