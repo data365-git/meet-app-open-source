@@ -429,7 +429,10 @@ export function extractSpeakerLabels(vtt: string): string[] {
 
 import { isTransientGeminiError, withGeminiRetry } from "@/lib/gemini-retry";
 
-const GEMINI_TRANSCRIBE_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"] as const;
+// NOTE: gemini-2.0-flash was RETIRED by Google (HTTP 404 "no longer available",
+// verified 2026-07-02) — the overload fallback now uses the Google-managed
+// "gemini-flash-latest" alias, which always points at a live flash model.
+const GEMINI_TRANSCRIBE_MODELS = ["gemini-2.5-flash", "gemini-flash-latest"] as const;
 
 async function pollUntilActive(
 	fileName: string,

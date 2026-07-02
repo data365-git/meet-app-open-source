@@ -181,6 +181,15 @@ const ROMANIZED_RUSSIAN: Record<string, string> = {
 	naoborot: "наоборот",
 	smysl: "смысл",
 	smysle: "смысле",
+	// --- observed in the 2026-07-02 live A/B sample (finance-Russian):
+	pribil: "прибыль",
+	pribyl: "прибыль",
+	daxodnost: "доходность",
+	dohodnost: "доходность",
+	otchyot: "отчёт",
+	otchet: "отчёт",
+	otchyotnost: "отчётность",
+	otchetnost: "отчётность",
 };
 
 const PATTERN = new RegExp(
