@@ -113,3 +113,62 @@ describe("restoreRussianScriptDeep", () => {
 		expect(out.s).toBe("любой");
 	});
 });
+
+describe("expanded dictionary", () => {
+	it("restores newly added high-frequency spoken-Russian words", () => {
+		const cases: Array<[string, string]> = [
+			["eto muhim", "это muhim"],
+			["esli kelsa", "если kelsa"],
+			["mozhet bo'ladi", "может bo'ladi"],
+			["mojno savol", "можно savol"],
+			["nuzhno qilish", "нужно qilish"],
+			["nado tezroq", "надо tezroq"],
+			["budet yaxshi", "будет yaxshi"],
+			["bylo qiziq", "было qiziq"],
+			["horosho dedi", "хорошо dedi"],
+			["xarasho dedi", "хорошо dedi"],
+			["normalno ishladi", "нормально ishladi"],
+			["ponyatno bo'ldi", "понятно bo'ldi"],
+			["tolko bitta", "только bitta"],
+			["ochen zo'r", "очень zo'r"],
+			["potom qilamiz", "потом qilamiz"],
+			["segodnya boshlaymiz", "сегодня boshlaymiz"],
+			["hvatit endi", "хватит endi"],
+			["xvatit endi", "хватит endi"],
+			["posmotrim keyin", "посмотрим keyin"],
+			["sovsem boshqa", "совсем boshqa"],
+			["pravilno aytdingiz", "правильно aytdingiz"],
+			["vazhno bu", "важно bu"],
+			["poluchilos zo'r", "получилось zo'r"],
+		];
+		for (const [input, expected] of cases) {
+			expect(restoreRussianScript(input)).toBe(expected);
+		}
+	});
+
+	it("preserves capitalization on new words", () => {
+		expect(restoreRussianScript("Horosho, boshladik")).toBe(
+			"Хорошо, boshladik",
+		);
+		expect(restoreRussianScript("ETO muhim")).toBe("ЭТО muhim");
+	});
+
+	it("NEVER touches legitimate Uzbek loanwords or English words", () => {
+		const untouched = [
+			"byudjet tasdiqlandi",
+			"klient keldi",
+			"proyekt boshlandi",
+			"printsip bo'yicha",
+			"moment kutamiz",
+			"dogovor imzolandi",
+			"plan tayyor",
+			"deadline ertaga",
+			"dashboard ochildi",
+			"bugun ish bor",
+			"paket yetib keldi",
+		];
+		for (const text of untouched) {
+			expect(restoreRussianScript(text)).toBe(text);
+		}
+	});
+});
