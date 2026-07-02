@@ -38,8 +38,10 @@ vi.mock("workflow", () => ({
 import { FatalError } from "workflow";
 import { mergeChunkedWebVtt } from "@/lib/gemini-transcribe";
 import {
+  MAX_CHUNK_GAP_SEC,
   transcribeAudioChunks,
   transcribeAudioChunkWithRetry,
+  webVttLargestGapSec,
 } from "@/workflows/transcribe";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -223,6 +225,77 @@ describe("transcribeAudioChunkWithRetry", () => {
     ).rejects.toThrow("persistent error");
 
     expect(stub).toHaveBeenCalledTimes(4);
+  });
+});
+
+// ─── Leading/internal-gap detection (the "first 14 min missing" bug) ─────────
+describe("webVttLargestGapSec", () => {
+  it("reports the whole duration when a chunk has no cues", () => {
+    expect(webVttLargestGapSec("WEBVTT\n\n", 900)).toBe(900);
+  });
+
+  it("detects a large LEADING gap (cues only near the chunk end)", () => {
+    // Single cue at 14:14 in a 15-min chunk → 854s blank at the start.
+    const vtt = `WEBVTT\n\n1\n${fmt(854)} --> ${fmt(856)}\nlate cue\n\n`;
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(854, 0);
+  });
+
+  it("detects a large INTERNAL gap between cues", () => {
+    const vtt =
+      `WEBVTT\n\n1\n${fmt(0)} --> ${fmt(2)}\na\n\n` +
+      `2\n${fmt(300)} --> ${fmt(302)}\nb\n\n`; // 300s hole
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(300, 0);
+  });
+
+  it("ignores trailing silence (a lone early cue → only its leading gap counts)", () => {
+    const vtt = `WEBVTT\n\n1\n${fmt(2)} --> ${fmt(4)}\na\n\n`; // one cue at 2s
+    // Largest gap is the 2s leading gap, NOT the ~896s of trailing silence.
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(2, 0);
+  });
+});
+
+describe("transcribeAudioChunkWithRetry — gap triggers a retry", () => {
+  it("retries a chunk whose cues sit only near the end, then keeps the denser result", async () => {
+    const sparse = `WEBVTT\n\n1\n${fmt(854)} --> ${fmt(856)}\nlate only\n\n`;
+    // Dense: reaches ≥450s (needSec) with every gap ≤120s.
+    const dense =
+      `WEBVTT\n\n1\n${fmt(1)} --> ${fmt(3)}\nearly\n\n` +
+      `2\n${fmt(100)} --> ${fmt(102)}\nb\n\n` +
+      `3\n${fmt(200)} --> ${fmt(202)}\nc\n\n` +
+      `4\n${fmt(300)} --> ${fmt(302)}\nd\n\n` +
+      `5\n${fmt(400)} --> ${fmt(402)}\ne\n\n` +
+      `6\n${fmt(500)} --> ${fmt(502)}\nf\n\n`;
+    let calls = 0;
+    const stub = vi.fn(async () => {
+      calls++;
+      return calls === 1 ? sparse : dense;
+    });
+    const result = await transcribeAudioChunkWithRetry(
+      { chunk: makeChunk(0), ownerEncryptedGeminiKey: null, context: CTX },
+      stub,
+    );
+    // First attempt had an 854s leading gap (> MAX_CHUNK_GAP_SEC) → retried.
+    expect(calls).toBeGreaterThan(1);
+    expect(result).toContain("early");
+    expect(webVttLargestGapSec(result, 900)).toBeLessThanOrEqual(
+      MAX_CHUNK_GAP_SEC,
+    );
+  });
+
+  it("does NOT retry a well-covered chunk (dense from the start)", async () => {
+    const dense =
+      `WEBVTT\n\n1\n${fmt(1)} --> ${fmt(3)}\na\n\n` +
+      `2\n${fmt(100)} --> ${fmt(102)}\nb\n\n` +
+      `3\n${fmt(200)} --> ${fmt(202)}\nc\n\n` +
+      `4\n${fmt(300)} --> ${fmt(302)}\nd\n\n` +
+      `5\n${fmt(400)} --> ${fmt(402)}\ne\n\n` +
+      `6\n${fmt(500)} --> ${fmt(502)}\nf\n\n`;
+    const stub = vi.fn(async () => dense);
+    await transcribeAudioChunkWithRetry(
+      { chunk: makeChunk(0), ownerEncryptedGeminiKey: null, context: CTX },
+      stub,
+    );
+    expect(stub).toHaveBeenCalledTimes(1);
   });
 });
 

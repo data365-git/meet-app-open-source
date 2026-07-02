@@ -541,6 +541,52 @@ export function webVttCoverageSec(vtt: string): number {
  * as grossly incomplete (retry it). 0.5 tolerates normal trailing silence. */
 export const MIN_CHUNK_COVERAGE = 0.5;
 
+/**
+ * The largest silent hole (seconds) tolerated INSIDE a chunk — measured from the
+ * chunk start to its first cue, and between consecutive cue starts. Trailing
+ * silence (after the last cue) is ignored. A hole bigger than this means Gemini
+ * skipped a stretch of speech (the "first 14 minutes missing" bug), which the
+ * reach-based coverage metric can't see: a single cue near the chunk END makes
+ * `webVttCoverageSec` look ~fully covered while everything before it is blank.
+ * 120s is well above a normal meeting pause but far below a dropped section.
+ */
+export const MAX_CHUNK_GAP_SEC = 120;
+
+/**
+ * The largest leading/internal gap (seconds) in a chunk's cue timeline. Returns
+ * the whole chunk duration when there are no cues at all. Trailing silence is
+ * intentionally NOT counted (a chunk can legitimately end quiet).
+ */
+export function webVttLargestGapSec(
+	vtt: string,
+	chunkDurationSec: number,
+): number {
+	const starts: number[] = [];
+	for (const line of vtt.split(/\r?\n/)) {
+		const arrow = line.indexOf("-->");
+		if (arrow === -1) continue;
+		const m = line
+			.slice(0, arrow)
+			.match(/(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})/);
+		if (!m) continue;
+		starts.push(
+			(m[1] ? Number(m[1]) : 0) * 3600 +
+				Number(m[2]) * 60 +
+				Number(m[3]) +
+				Number(m[4]) / 1000,
+		);
+	}
+	if (starts.length === 0) return chunkDurationSec > 0 ? chunkDurationSec : 0;
+	starts.sort((a, b) => a - b);
+	// Leading gap: chunk start (0) → first cue.
+	let largest = starts[0] ?? 0;
+	for (let i = 1; i < starts.length; i++) {
+		const gap = (starts[i] ?? 0) - (starts[i - 1] ?? 0);
+		if (gap > largest) largest = gap;
+	}
+	return largest;
+}
+
 export async function transcribeAudioChunkWithRetry(
 	{
 		chunk,
@@ -555,10 +601,12 @@ export async function transcribeAudioChunkWithRetry(
 ): Promise<string> {
 	const maxAttempts = 4;
 	let lastError: unknown;
-	// Keep the BEST (most-covering) result across attempts so a retry can only
-	// improve coverage, never lose a partial we already have.
+	// Keep the BEST result across attempts so a retry can only improve, never
+	// lose a partial we already have. "Best" = highest reach with the smallest
+	// internal gap (reach − largestGap), so a denser transcript beats one that
+	// merely reaches further with a big hole in it.
 	let bestVtt: string | null = null;
-	let bestCoverage = -1;
+	let bestScore = Number.NEGATIVE_INFINITY;
 	const chunkDurationSec = chunk.durationSec ?? 0;
 	const needSec =
 		chunkDurationSec > 0 ? chunkDurationSec * MIN_CHUNK_COVERAGE : 0;
@@ -572,21 +620,26 @@ export async function transcribeAudioChunkWithRetry(
 				context,
 			);
 			const coverage = webVttCoverageSec(vtt);
-			if (coverage > bestCoverage) {
-				bestCoverage = coverage;
+			const largestGap = webVttLargestGapSec(vtt, chunkDurationSec);
+			const score = coverage - largestGap;
+			if (score > bestScore) {
+				bestScore = score;
 				bestVtt = vtt;
 			}
-			// Good enough coverage, or out of attempts → return the best we have.
-			if (coverage >= needSec || attempt === maxAttempts) {
-				if (coverage < needSec) {
+			// Under-covered if cues stop early OR a big hole was skipped mid-chunk
+			// (the leading/internal-gap bug the reach metric alone can't see).
+			const wellCovered =
+				coverage >= needSec && largestGap <= MAX_CHUNK_GAP_SEC;
+			if (wellCovered || attempt === maxAttempts) {
+				if (!wellCovered) {
 					console.warn(
-						`[transcribe] Chunk at ${chunk.startSec}s for ${context.videoId} under-covered after ${attempt} attempts: cues reach ${coverage.toFixed(0)}s of ${chunk.durationSec}s — keeping partial (a transcript gap will remain here).`,
+						`[transcribe] Chunk at ${chunk.startSec}s for ${context.videoId} under-covered after ${attempt} attempts: cues reach ${coverage.toFixed(0)}s of ${chunk.durationSec}s, largest gap ${largestGap.toFixed(0)}s — keeping best partial (a transcript gap will remain here).`,
 					);
 				}
 				return bestVtt ?? vtt;
 			}
 			console.warn(
-				`[transcribe] Chunk at ${chunk.startSec}s for ${context.videoId} transcribed only ${coverage.toFixed(0)}s of ${chunk.durationSec}s (attempt ${attempt}); retrying for fuller coverage.`,
+				`[transcribe] Chunk at ${chunk.startSec}s for ${context.videoId} under-covered (reach ${coverage.toFixed(0)}s/${chunk.durationSec}s, largest gap ${largestGap.toFixed(0)}s) on attempt ${attempt}; retrying for fuller coverage.`,
 			);
 		} catch (error) {
 			lastError = error;
