@@ -25,6 +25,7 @@ import {
 	checkHasAudioTrack,
 	extractAudioChunksFromUrl,
 	extractAudioFromUrl,
+	extractAudioSpanFromUrl,
 } from "@/lib/audio-extract";
 import {
 	mergeChunkedWebVtt,
@@ -106,7 +107,24 @@ export async function transcribeVideoWorkflow(
 			},
 		);
 
-		await saveTranscription(videoId, userId, videoData.video, transcription);
+		// Merge-level gap-fill: close any hole the per-chunk retries left behind.
+		const gapFill = await fillTranscriptGaps({
+			videoId,
+			userId,
+			video: videoData.video,
+			ownerEncryptedGeminiKey: videoData.ownerEncryptedGeminiKey,
+			context: { userId, orgId: videoData.orgId, videoId },
+			mergedVtt: transcription,
+			totalDurationSec: audio.totalDurationSec,
+		});
+
+		await saveTranscription(
+			videoId,
+			userId,
+			videoData.video,
+			gapFill.transcription,
+			gapFill.remainingGaps,
+		);
 	} catch (error) {
 		await markError(videoId);
 		await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
@@ -646,6 +664,162 @@ export function findVttGaps(
 	return gaps;
 }
 
+/** Gap-fill spans are deliberately SHORT: Gemini is far more reliable on ≤5-min
+ * audio than on the 15-min chunks that produced the hole in the first place. */
+export const GAP_FILL_SPAN_SEC = 5 * 60;
+/** Upper bound on gap-fill work per video (12 spans = 1h of re-transcription). */
+export const MAX_GAP_FILL_SPANS = 12;
+
+interface GapSpanAudio {
+	key: string;
+	url: string;
+	startSec: number;
+	durationSec: number;
+}
+
+async function extractGapSpanAudio(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+	spans: Array<{ startSec: number; durationSec: number }>,
+): Promise<GapSpanAudio[]> {
+	"use step";
+
+	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+	const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
+
+	const out: GapSpanAudio[] = [];
+	for (const span of spans) {
+		// One failed span must not kill the whole gap-fill pass.
+		try {
+			const result = await extractAudioSpanFromUrl(
+				videoUrl,
+				span.startSec,
+				span.durationSec,
+			);
+			try {
+				const audioBuffer = await fs.readFile(result.filePath);
+				const key = `${userId}/${videoId}/audio-gap-${Math.round(span.startSec)}.mp3`;
+				await bucket
+					.putObject(key, audioBuffer, { contentType: "audio/mpeg" })
+					.pipe(runPromise);
+				const url = await bucket
+					.getInternalSignedObjectUrl(key)
+					.pipe(runPromise);
+				out.push({ key, url, startSec: span.startSec, durationSec: span.durationSec });
+			} finally {
+				await result.cleanup();
+			}
+		} catch (error) {
+			console.warn(
+				`[transcribe] gap-fill span extraction at ${span.startSec}s failed for ${videoId}; skipping span`,
+				error,
+			);
+		}
+	}
+	return out;
+}
+
+/**
+ * Merge-level safety net for the "dropped section" class: whatever holes the
+ * per-chunk retries left in the FINAL merged transcript get re-transcribed in
+ * short spans and merged back in. Holes that survive (genuine silence or
+ * persistent ASR failure) are returned so the caller can RECORD them instead
+ * of silently shipping a gapped transcript as complete.
+ */
+export async function fillTranscriptGaps(
+	{
+		videoId,
+		userId,
+		video,
+		ownerEncryptedGeminiKey,
+		context,
+		mergedVtt,
+		totalDurationSec,
+	}: {
+		videoId: string;
+		userId: string;
+		video: typeof videos.$inferSelect;
+		ownerEncryptedGeminiKey: string | null;
+		context: { userId: string; orgId: string; videoId: string };
+		mergedVtt: string;
+		totalDurationSec: number | null;
+	},
+	deps: {
+		extractSpans?: typeof extractGapSpanAudio;
+		transcribeFn?: typeof transcribeAudio;
+		cleanupFn?: typeof cleanupTempAudioKeys;
+	} = {},
+): Promise<{ transcription: string; remainingGaps: VttGap[] }> {
+	const extractSpans = deps.extractSpans ?? extractGapSpanAudio;
+	const transcribeFn = deps.transcribeFn ?? transcribeAudio;
+	const cleanupFn = deps.cleanupFn ?? cleanupTempAudioKeys;
+
+	const gaps = findVttGaps(mergedVtt, totalDurationSec);
+	if (gaps.length === 0) {
+		return { transcription: mergedVtt, remainingGaps: [] };
+	}
+
+	const spans: Array<{ startSec: number; durationSec: number }> = [];
+	for (const gap of gaps) {
+		for (let s = gap.startSec; s < gap.endSec; s += GAP_FILL_SPAN_SEC) {
+			if (spans.length >= MAX_GAP_FILL_SPANS) break;
+			spans.push({
+				startSec: s,
+				durationSec: Math.min(GAP_FILL_SPAN_SEC, gap.endSec - s),
+			});
+		}
+	}
+	console.warn(
+		`[transcribe] gap-fill for ${videoId}: ${gaps.length} gap(s) -> ${spans.length} span(s): ${JSON.stringify(gaps.map((g) => [Math.round(g.startSec), Math.round(g.endSec)]))}`,
+	);
+
+	let spanAudios: GapSpanAudio[];
+	try {
+		spanAudios = await extractSpans(videoId, userId, video, spans);
+	} catch (error) {
+		console.error(
+			`[transcribe] gap-fill audio extraction failed for ${videoId}; keeping gapped transcript`,
+			error,
+		);
+		return { transcription: mergedVtt, remainingGaps: gaps };
+	}
+
+	const parts: Array<{ vtt: string; offsetSec: number }> = [
+		{ vtt: mergedVtt, offsetSec: 0 },
+	];
+	await mapWithConcurrency(spanAudios, AI_CHUNK_CONCURRENCY, async (span) => {
+		try {
+			const vtt = await transcribeFn(
+				span.url,
+				span.durationSec,
+				ownerEncryptedGeminiKey,
+				context,
+			);
+			parts.push({ vtt, offsetSec: span.startSec });
+		} catch (error) {
+			console.warn(
+				`[transcribe] gap-fill span at ${span.startSec}s failed for ${videoId} (silence or ASR failure)`,
+				error,
+			);
+		}
+	});
+
+	await cleanupFn(spanAudios.map((s) => s.key), video);
+
+	const filled =
+		parts.length > 1
+			? restoreRussianScript(mergeChunkedWebVtt(parts))
+			: mergedVtt;
+	const remainingGaps = findVttGaps(filled, totalDurationSec);
+	if (remainingGaps.length > 0) {
+		console.warn(
+			`[transcribe] gap-fill for ${videoId}: ${remainingGaps.length} gap(s) REMAIN (recorded in metadata): ${JSON.stringify(remainingGaps.map((g) => [Math.round(g.startSec), Math.round(g.endSec)]))}`,
+		);
+	}
+	return { transcription: filled, remainingGaps };
+}
+
 export async function transcribeAudioChunkWithRetry(
 	{
 		chunk,
@@ -755,6 +929,7 @@ async function saveTranscription(
 	_userId: string,
 	video: typeof videos.$inferSelect,
 	transcription: string,
+	remainingGaps: VttGap[] = [],
 ): Promise<void> {
 	"use step";
 
@@ -774,6 +949,14 @@ async function saveTranscription(
 	const md = { ...((row?.metadata as VideoMetadata) || {}) } as VideoMetadata;
 	delete (md as any).transcriptionChunksCompleted;
 	delete (md as any).transcriptionChunksTotal;
+	if (remainingGaps.length > 0) {
+		md.transcriptionGaps = remainingGaps.map((g) => ({
+			startSec: Math.round(g.startSec),
+			endSec: Math.round(g.endSec),
+		}));
+	} else {
+		delete md.transcriptionGaps;
+	}
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE", metadata: md })

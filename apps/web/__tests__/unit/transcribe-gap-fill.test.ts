@@ -22,6 +22,7 @@ vi.mock("@/lib/audio-extract", () => ({
 	checkHasAudioTrack: vi.fn(),
 	extractAudioChunksFromUrl: vi.fn(),
 	extractAudioFromUrl: vi.fn(),
+	extractAudioSpanFromUrl: vi.fn(),
 }));
 vi.mock("@/lib/generate-ai", () => ({ startAiGeneration: vi.fn() }));
 vi.mock("@/lib/transcription-settings", () => ({
@@ -35,7 +36,13 @@ vi.mock("workflow", () => ({
 }));
 
 // ─── Import AFTER mocks ───────────────────────────────────────────────────────
-import { findVttGaps } from "../../workflows/transcribe";
+import { fillTranscriptGaps, findVttGaps } from "../../workflows/transcribe";
+
+const fakeVideo = {} as never; // deps are injected; the video row is never touched
+
+function ctx() {
+	return { userId: "u1", orgId: "o1", videoId: "v1" };
+}
 
 function vtt(cues: Array<[number, number, string]>): string {
 	const ts = (s: number) => {
@@ -95,5 +102,131 @@ describe("findVttGaps", () => {
 		const v = vtt([[0, 5, "a"], [100, 105, "b"]]);
 		expect(findVttGaps(v, 110, 200)).toEqual([]);
 		expect(findVttGaps(v, 110, 60)).toEqual([{ startSec: 0, endSec: 100 }]);
+	});
+});
+
+describe("fillTranscriptGaps", () => {
+	it("returns the input unchanged when there are no gaps", async () => {
+		const v = vtt([[0, 50, "a"], [60, 110, "b"]]);
+		let extractCalled = false;
+		const out = await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null, context: ctx(),
+				mergedVtt: v, totalDurationSec: 120,
+			},
+			{
+				extractSpans: async () => { extractCalled = true; return []; },
+				transcribeFn: async () => "WEBVTT\n\n",
+				cleanupFn: async () => {},
+			},
+		);
+		expect(out.transcription).toBe(v);
+		expect(out.remainingGaps).toEqual([]);
+		expect(extractCalled).toBe(false);
+	});
+
+	it("fills a leading gap from re-transcribed spans", async () => {
+		// Cues only from 854s; gap 0-854 must be filled by span transcription.
+		const holey = vtt([[854, 860, "late"], [900, 906, "tail"]]);
+		const requestedSpans: Array<{ startSec: number; durationSec: number }> = [];
+		const out = await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null, context: ctx(),
+				mergedVtt: holey, totalDurationSec: 910,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) => {
+					requestedSpans.push(...spans);
+					return spans.map((s, i) => ({
+						key: `k${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+					}));
+				},
+				// Each span returns a cue every 60s so the hole disappears. Text is
+				// unique per cue so the degenerate-run collapser (collapseRepeatedVttCues)
+				// doesn't merge them away — real transcripts have varied text.
+				transcribeFn: async (_url, durationSec) => {
+					const cues: Array<[number, number, string]> = [];
+					for (let t = 0; t < (durationSec ?? 0); t += 60) {
+						cues.push([t, Math.min(t + 5, (durationSec ?? 0)), `filled ${t}`]);
+					}
+					return vtt(cues);
+				},
+				cleanupFn: async () => {},
+			},
+		);
+		// 854s gap → ceil(854/300) = 3 spans of ≤300s
+		expect(requestedSpans.length).toBe(3);
+		expect(requestedSpans[0]).toEqual({ startSec: 0, durationSec: 300 });
+		expect(out.remainingGaps).toEqual([]);
+		expect(out.transcription).toContain("filled");
+		expect(out.transcription).toContain("late");
+	});
+
+	it("keeps the gap in remainingGaps when span transcription fails (silence)", async () => {
+		const holey = vtt([[854, 860, "late"]]);
+		const out = await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null, context: ctx(),
+				mergedVtt: holey, totalDurationSec: 900,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) =>
+					spans.map((s, i) => ({
+						key: `k${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+					})),
+				transcribeFn: async () => {
+					throw new Error("empty transcript from Gemini");
+				},
+				cleanupFn: async () => {},
+			},
+		);
+		expect(out.remainingGaps).toEqual([{ startSec: 0, endSec: 854 }]);
+		expect(out.transcription).toContain("late");
+	});
+
+	it("survives a wholesale extraction failure (returns original + gaps)", async () => {
+		const holey = vtt([[854, 860, "late"]]);
+		const out = await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null, context: ctx(),
+				mergedVtt: holey, totalDurationSec: 900,
+			},
+			{
+				extractSpans: async () => { throw new Error("ffmpeg died"); },
+				transcribeFn: async () => "WEBVTT\n\n",
+				cleanupFn: async () => {},
+			},
+		);
+		expect(out.transcription).toBe(holey);
+		expect(out.remainingGaps).toEqual([{ startSec: 0, endSec: 854 }]);
+	});
+
+	it("cleans up every uploaded span key", async () => {
+		const holey = vtt([[400, 410, "x"]]);
+		const cleaned: string[] = [];
+		await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null, context: ctx(),
+				mergedVtt: holey, totalDurationSec: 420,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) =>
+					spans.map((s, i) => ({
+						key: `gap-key-${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+					})),
+				transcribeFn: async () => vtt([[0, 5, "ok"]]),
+				cleanupFn: async (keys) => { cleaned.push(...keys); },
+			},
+		);
+		expect(cleaned.length).toBeGreaterThan(0);
+		expect(cleaned.every((k) => k.startsWith("gap-key-"))).toBe(true);
 	});
 });

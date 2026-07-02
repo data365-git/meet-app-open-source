@@ -69,6 +69,12 @@ export interface VideoMetadata {
 	transcriptionChunksCompleted?: number;
 	transcriptionChunksTotal?: number;
 	/**
+	 * Holes (>120s) left in the final transcript after the gap-fill pass —
+	 * either genuine silence or a stretch the ASR persistently failed on.
+	 * Absent/undefined when the transcript is fully covered.
+	 */
+	transcriptionGaps?: { startSec: number; endSec: number }[];
+	/**
 	 * Multi-language analysis (ИSH 3). The base `aiSummary` above is the original
 	 * generation; `aiSummaryByLanguage` holds on-demand-translated cached versions.
 	 * Translated caption/transcript VTT lives in R2 at
