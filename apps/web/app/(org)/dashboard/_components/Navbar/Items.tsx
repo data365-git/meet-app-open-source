@@ -85,7 +85,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
 
-	const manageNavigation = [
+	const mainNavigation = [
 		{
 			name: t("instructions"),
 			href: `/dashboard/caps`,
@@ -100,6 +100,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			name: t("meetingRecordings"),
 			href: `/dashboard/meetings`,
 			matchChildren: true,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <UsersIcon />,
 			subNav: [],
 		},
@@ -107,19 +109,20 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			name: t("analytics"),
 			href: `/dashboard/analytics`,
 			matchChildren: true,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <ChartLineIcon />,
 			subNav: [],
 		},
-		{
-			name: t("newRecording"),
-			href: `/dashboard/caps/record`,
-			icon: <RecordIcon />,
-			subNav: [],
-		},
+	];
+
+	const manageNavigation = [
 		{
 			name: t("installExtension"),
 			href: `/dashboard/extension`,
 			matchChildren: true,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <DownloadIcon />,
 			subNav: [],
 		},
@@ -127,6 +130,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			name: t("settings"),
 			href: `/dashboard/settings/account`,
 			extraText: null as number | null,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <CogIcon />,
 			subNav: [],
 		},
@@ -142,6 +147,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					},
 				]
 			: []),
+	];
+	const navigationGroups = [
+		{ label: t("navGroupMain"), items: mainNavigation },
+		{ label: t("navGroupManage"), items: manageNavigation },
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -352,53 +361,86 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			>
 				<div
 					className={clsx(
-						"mt-8 shrink-0",
+						"mt-6 shrink-0",
 						sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
 					)}
 				>
-					{manageNavigation
-						.filter((item) => !item.ownerOnly || isOwner)
-						.filter((item) => !item.adminOnly || canViewSettings)
-						.map((item) => (
-							<div
-								key={item.name}
-								className="flex relative justify-center items-center mb-1.5 w-full"
-							>
-								{isPathActive(item.href, item.matchChildren ?? false) && (
-									<motion.div
-										animate={{
-											width: sidebarCollapsed ? 36 : "100%",
-										}}
-										transition={{
-											layout: {
-												type: "tween",
-												duration: 0.15,
-											},
-											width: {
-												type: "tween",
-												duration: 0.05,
-											},
-										}}
-										layoutId="navlinks"
-										className={clsx(
-											"absolute w-full rounded-xl pointer-events-none bg-gray-3",
-											toggleMobileNav ? "h-[44px]" : "h-[36px]",
-										)}
-									/>
-								)}
+					<Tooltip
+						disable={!sidebarCollapsed}
+						position="right"
+						content={t("newRecording")}
+					>
+						<Link
+							href="/dashboard/caps/record"
+							onClick={() => toggleMobileNav?.()}
+							className={clsx(
+								"mb-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--brand)] px-3 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90",
+								sidebarCollapsed && "mx-auto size-11 px-0",
+							)}
+						>
+							<span className="size-[9px] rounded-full bg-current" />
+							<span className={clsx(sidebarCollapsed && "sr-only")}>
+								{t("newRecording")}
+							</span>
+						</Link>
+					</Tooltip>
+					{navigationGroups.map((group) => {
+						const items = group.items
+							.filter((item) => !item.ownerOnly || isOwner)
+							.filter((item) => !item.adminOnly || canViewSettings);
 
-								<NavItem
-									name={item.name}
-									href={item.href}
-									icon={item.icon}
-									sidebarCollapsed={sidebarCollapsed}
-									toggleMobileNav={toggleMobileNav}
-									isPathActive={isPathActive}
-									extraText={item.extraText}
-									matchChildren={item.matchChildren ?? false}
-								/>
+						if (items.length === 0) return null;
+
+						return (
+							<div key={group.label} className="mb-5 w-full">
+								{!sidebarCollapsed && (
+									<p className="mb-2 px-3 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-gray-10">
+										{group.label}
+									</p>
+								)}
+								{items.map((item) => (
+									<div
+										key={item.name}
+										className="flex relative justify-center items-center mb-1.5 w-full"
+									>
+										{isPathActive(item.href, item.matchChildren ?? false) && (
+											<motion.div
+												animate={{
+													width: sidebarCollapsed ? 36 : "100%",
+												}}
+												transition={{
+													layout: {
+														type: "tween",
+														duration: 0.15,
+													},
+													width: {
+														type: "tween",
+														duration: 0.05,
+													},
+												}}
+												layoutId="navlinks"
+												className={clsx(
+													"absolute w-full rounded-xl pointer-events-none bg-gray-3",
+													toggleMobileNav ? "h-[44px]" : "h-[36px]",
+												)}
+											/>
+										)}
+
+										<NavItem
+											name={item.name}
+											href={item.href}
+											icon={item.icon}
+											sidebarCollapsed={sidebarCollapsed}
+											toggleMobileNav={toggleMobileNav}
+											isPathActive={isPathActive}
+											extraText={item.extraText}
+											matchChildren={item.matchChildren ?? false}
+										/>
+									</div>
+								))}
 							</div>
-						))}
+						);
+					})}
 				</div>
 				<div className="pb-4 mt-auto w-full flex flex-col gap-2 shrink-0">
 					<StorageIndicator />
