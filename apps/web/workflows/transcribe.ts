@@ -468,12 +468,14 @@ export async function transcribeAudio(
 		return runSync();
 	}
 
-	// Cheap (Batch API) path. Records cost at batch rates (batch: true). If the
-	// batch is too slow or fails terminally, transcribeChunkWithBatch throws a
-	// BatchFallbackError — we then run the SYNC path for this one chunk so a slow
-	// batch never fails the video. Inline errors / empty output throw a plain
-	// Error instead, which propagates to the caller's existing retry path (the
-	// same path a sync error takes).
+	// Cheap (Batch API) path. Records cost at batch rates (batch: true). Any
+	// error from the batch attempt — a slow/terminal batch (BatchFallbackError)
+	// or a plain error (e.g. the batch succeeded but an inline per-request error
+	// or empty output was thrown by unwrapBatchResponse) — falls back to the
+	// SYNC path for this one chunk, so a single-chunk video (no retry wrapper
+	// above this call) never fails just because batch mode had a bad outcome.
+	// If runSync() itself then fails, that error propagates to the caller's
+	// existing retry path unchanged.
 	try {
 		const result = await withCostGuard({
 			orgId: context.orgId,
@@ -503,9 +505,13 @@ export async function transcribeAudio(
 			console.warn(
 				`[transcribe] batch fallback → sync for video=${context.videoId} at ${audioUrl.split("?")[0]}: ${error.message}`,
 			);
-			return runSync();
+		} else {
+			const message = error instanceof Error ? error.message : String(error);
+			console.warn(
+				`[transcribe] batch error → sync fallback for video=${context.videoId} at ${audioUrl.split("?")[0]}: ${message}`,
+			);
 		}
-		throw error;
+		return runSync();
 	}
 }
 

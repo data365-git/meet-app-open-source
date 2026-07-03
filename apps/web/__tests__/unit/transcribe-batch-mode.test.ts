@@ -186,21 +186,46 @@ describe("transcribeAudio speed-mode routing", () => {
 		expect(costGuardCall(1).batch).toBeFalsy();
 	});
 
-	it("mode=cheap + inline/plain error: propagates (NOT swallowed) into the retry path", async () => {
+	it("mode=cheap + inline/plain error: falls back to SYNC (single-chunk videos must not fail outright)", async () => {
 		costGuardRunsFn();
 		// A non-fallback error (e.g. inline RESOURCE_EXHAUSTED surfaced by unwrap).
+		// The single-chunk path calls transcribeAudio directly with no retry
+		// wrapper, so this must fall back to sync rather than rethrow.
 		transcribeChunkWithBatch.mockRejectedValue(
 			new Error("Batch inline request error: RESOURCE_EXHAUSTED"),
 		);
+		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
+
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
+			...CTX_BASE,
+			aiSpeedMode: "cheap",
+		});
+
+		expect(out).toBe("WEBVTT\n\nSYNC");
+		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		// Two cost-guard calls: the batch attempt (batch:true) then the sync
+		// fallback (batch falsy).
+		expect(withCostGuard).toHaveBeenCalledTimes(2);
+		expect(costGuardCall(0).batch).toBe(true);
+		expect(costGuardCall(1).batch).toBeFalsy();
+	});
+
+	it("mode=cheap + sync fallback ALSO fails: that error propagates to the caller's retry path", async () => {
+		costGuardRunsFn();
+		transcribeChunkWithBatch.mockRejectedValue(
+			new Error("Batch inline request error: RESOURCE_EXHAUSTED"),
+		);
+		transcribeWithGemini.mockRejectedValue(new Error("sync also failed"));
 
 		await expect(
 			transcribeAudio("https://a/x.mp3", 300, null, {
 				...CTX_BASE,
 				aiSpeedMode: "cheap",
 			}),
-		).rejects.toThrow(/RESOURCE_EXHAUSTED/);
+		).rejects.toThrow(/sync also failed/);
 
-		// Did NOT silently fall back to sync for a plain (retryable) error.
-		expect(transcribeWithGemini).not.toHaveBeenCalled();
+		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
 	});
 });

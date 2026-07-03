@@ -50,7 +50,7 @@ const defaultProOrganizationSettings = {
 	(typeof proOrganizationSettingKeys)[number]
 >;
 
-const preserveProSettings = (
+export const preserveProSettings = (
 	submittedSettings: OrganizationSettingsInput,
 	existingSettings: OrganizationSettingsInput | null | undefined,
 ) => ({
@@ -61,6 +61,21 @@ const preserveProSettings = (
 			existingSettings?.[key] ?? defaultProOrganizationSettings[key],
 		]),
 	),
+});
+
+/**
+ * Merges a partial settings update onto the organization's existing settings
+ * JSON column, so callers that submit only a subset of keys (e.g.
+ * AiSpeedModeCard sending only `{ aiSpeedMode }`) don't erase the rest.
+ * `nextSettings` must contain only keys the caller explicitly set — no
+ * `key: undefined` entries — so this is a plain last-write-wins shallow merge.
+ */
+export const mergeOrganizationSettings = (
+	existingSettings: OrganizationSettingsInput | null | undefined,
+	nextSettings: OrganizationSettingsInput,
+): OrganizationSettingsInput => ({
+	...(existingSettings ?? {}),
+	...nextSettings,
 });
 
 export async function updateOrganizationSettings(
@@ -119,9 +134,14 @@ export async function updateOrganizationSettings(
 		? sanitizedSettings
 		: preserveProSettings(sanitizedSettings, organization.settings);
 
+	const mergedSettings = mergeOrganizationSettings(
+		organization.settings,
+		nextSettings,
+	);
+
 	await db()
 		.update(organizations)
-		.set({ settings: nextSettings })
+		.set({ settings: mergedSettings })
 		.where(eq(organizations.id, user.activeOrganizationId));
 
 	revalidatePath("/dashboard/caps");

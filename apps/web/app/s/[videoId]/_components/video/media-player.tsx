@@ -409,6 +409,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 		} else {
 			unlockOrientation();
 		}
+		return () => unlockOrientation();
 	}, [isFullscreen]);
 
 	const portalContainer = mounted
