@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { priceForMicros } from "./ai-pricing";
+import { estimateVideoAiCostUsd, priceForMicros } from "./ai-pricing";
 
 describe("priceForMicros", () => {
 	it("prices text-in, audio-in, and output at their distinct 2.5-flash rates", () => {
@@ -101,5 +101,25 @@ describe("priceForMicros", () => {
 		});
 		const batchUsd = batchMicros / 1_000_000;
 		expect(batchUsd).toBeCloseTo(syncUsd / 2, 5);
+	});
+});
+
+describe("estimateVideoAiCostUsd", () => {
+	it("estimates 1h sync within the spec's ≈$0.45/soat anchor band", () => {
+		const usd = estimateVideoAiCostUsd(3600, { batch: false });
+		expect(usd).toBeGreaterThanOrEqual(0.4);
+		expect(usd).toBeLessThanOrEqual(0.5);
+	});
+
+	it("halves the estimate exactly when batch is true", () => {
+		const sync = estimateVideoAiCostUsd(3600, { batch: false });
+		const batch = estimateVideoAiCostUsd(3600, { batch: true });
+		expect(batch).toBe(sync / 2);
+	});
+
+	it("returns 0 for zero or undefined duration", () => {
+		expect(estimateVideoAiCostUsd(0)).toBe(0);
+		expect(estimateVideoAiCostUsd(undefined)).toBe(0);
+		expect(estimateVideoAiCostUsd(null)).toBe(0);
 	});
 });

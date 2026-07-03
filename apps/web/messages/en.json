@@ -411,6 +411,7 @@
     "aiRetry": "Retry",
     "aiNotRunYet": "AI analysis has not been run for this video yet.",
     "aiStartAnalysis": "Start AI analysis",
+    "aiCostEstimate": "Estimated cost: ~{amount}",
     "aiReanalyze": "Re-analyze",
     "aiReanalyzeHint": "Re-run AI analysis on the existing transcript (uses AI credits).",
     "aiIncompleteHint": "This analysis looks incomplete — re-run it.",

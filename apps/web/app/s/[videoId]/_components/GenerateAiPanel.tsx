@@ -6,10 +6,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@cap/ui";
+import { estimateVideoAiCostUsd } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { MoreVertical } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
+import { formatUzs } from "@/lib/format-uzs";
 
 type TranscriptionStatus =
   | "PROCESSING"
@@ -34,6 +36,7 @@ interface GenerateAiPanelProps {
   aiGenerationStatus: AiGenerationStatus | null | undefined;
   aiProcessingStep?: AiProcessingStep | null;
   duration?: number | null;
+  aiSpeedMode?: "fast" | "cheap";
   /** When true, the completed analysis looks incomplete ("chala") and the
    * re-analyze affordance should be shown prominently instead of tucked away. */
   aiIncomplete?: boolean;
@@ -105,6 +108,7 @@ export function GenerateAiPanel({
   aiGenerationStatus,
   aiProcessingStep,
   duration,
+  aiSpeedMode = "fast",
   aiIncomplete = false,
   onStarted,
 }: GenerateAiPanelProps) {
@@ -128,6 +132,9 @@ export function GenerateAiPanel({
   const hasError =
     transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
   const aiNotice = getAiAnalysisNotice(duration);
+  const estimatedCostUsd = estimateVideoAiCostUsd(duration, {
+    batch: aiSpeedMode === "cheap",
+  });
 
   // Fire AI generation directly on click — one click is enough. No second
   // confirmation dialog (AI is admin-only and the panel already states it uses
@@ -341,6 +348,13 @@ export function GenerateAiPanel({
         >
           {loading ? tShare("aiStarting") : tShare("aiStartAnalysis")}
         </button>
+        {estimatedCostUsd > 0 && (
+          <p className="text-xs text-gray-10">
+            {tShare("aiCostEstimate", {
+              amount: formatUzs(Math.round(estimatedCostUsd * 100)),
+            })}
+          </p>
+        )}
       </div>
     );
   }
