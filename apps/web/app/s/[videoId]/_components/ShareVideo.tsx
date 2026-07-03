@@ -137,6 +137,7 @@ export const ShareVideo = forwardRef<
 			string | null
 		>(null);
 		const [currentTime, setCurrentTime] = useState(0);
+		const [isPlaying, setIsPlaying] = useState(false);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
@@ -299,6 +300,10 @@ export const ShareVideo = forwardRef<
 			const onTimeUpdate = () => {
 				if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
 			};
+			// Playing-state drives the mobile sticky pin (see left-column wrapper).
+			const onPlay = () => setIsPlaying(true);
+			const onPause = () => setIsPlaying(false);
+			const onEnded = () => setIsPlaying(false);
 			const attach = () => {
 				const video = videoRef.current;
 				if (!video) {
@@ -307,11 +312,19 @@ export const ShareVideo = forwardRef<
 				}
 				attached = video;
 				video.addEventListener("timeupdate", onTimeUpdate);
+				video.addEventListener("play", onPlay);
+				video.addEventListener("pause", onPause);
+				video.addEventListener("ended", onEnded);
+				// Sync initial state in case playback already started before attach.
+				setIsPlaying(!video.paused && !video.ended);
 			};
 			attach();
 			return () => {
 				cancelAnimationFrame(raf);
 				attached?.removeEventListener("timeupdate", onTimeUpdate);
+				attached?.removeEventListener("play", onPlay);
+				attached?.removeEventListener("pause", onPause);
+				attached?.removeEventListener("ended", onEnded);
 			};
 		}, []);
 
@@ -739,7 +752,15 @@ export const ShareVideo = forwardRef<
 				    RIGHT: unified AI panel (summary / tasks / transcript / refined /
 				    comments tabs + pinned AI input). On small screens the panel stacks
 				    directly below the video so the tab bar sits right under it. */}
-				<div className="min-w-0 flex-1">{playerBlock}</div>
+				<div
+					className={`min-w-0 flex-1${
+						isPlaying
+							? " max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-gray-2 max-lg:shadow-lg max-lg:shadow-black/10"
+							: ""
+					}`}
+				>
+					{playerBlock}
+				</div>
 
 				<div className="flex w-full flex-col gap-3 lg:w-80 xl:w-96">
 					{costPanel}
