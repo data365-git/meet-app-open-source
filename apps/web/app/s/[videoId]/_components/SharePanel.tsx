@@ -9,7 +9,7 @@ import {
 	parseTimestampToSeconds,
 } from "./ai-chat-timestamps";
 
-type PanelTab = "summary" | "transcript" | "refined" | "comments";
+type PanelTab = "summary" | "tasks" | "transcript" | "refined" | "comments";
 
 interface Message {
 	id: string;
@@ -109,6 +109,7 @@ interface SharePanelProps {
 	videoId: string;
 	onVideoJump: (seconds: number) => void;
 	summary: React.ReactNode;
+	tasks: React.ReactNode;
 	transcript: React.ReactNode;
 	refined: React.ReactNode;
 	comments: React.ReactNode;
@@ -118,6 +119,7 @@ export function SharePanel({
 	videoId,
 	onVideoJump,
 	summary,
+	tasks,
 	transcript,
 	refined,
 	comments,
@@ -127,8 +129,8 @@ export function SharePanel({
 	const router = useRouter();
 
 	const rawParam = searchParams.get("tab");
-	// Legacy links: `?tab=tasks` content now lives inside the summary tab.
 	const initialTab: PanelTab =
+		rawParam === "tasks" ||
 		rawParam === "transcript" ||
 		rawParam === "refined" ||
 		rawParam === "comments"
@@ -342,6 +344,7 @@ export function SharePanel({
 
 	const TABS: { id: PanelTab; label: string }[] = [
 		{ id: "summary", label: t("tabSummaryShort") },
+		{ id: "tasks", label: t("tabTasksShort") },
 		{ id: "transcript", label: t("tabTranscriptShort") },
 		{ id: "refined", label: t("tabRefinedShort") },
 		{ id: "comments", label: t("tabComments") },
@@ -349,6 +352,7 @@ export function SharePanel({
 
 	const panels: { id: PanelTab; content: React.ReactNode }[] = [
 		{ id: "summary", content: summary },
+		{ id: "tasks", content: tasks },
 		{ id: "transcript", content: transcript },
 		{ id: "refined", content: refined },
 		{ id: "comments", content: comments },
@@ -360,7 +364,7 @@ export function SharePanel({
 			<div
 				role="tablist"
 				aria-label={t("tabsAriaLabel")}
-				className="flex shrink-0 border-b border-gray-4"
+				className="flex shrink-0 overflow-x-auto border-b border-gray-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 			>
 				{TABS.map((tab) => {
 					const isActive = activeTab === tab.id;
@@ -374,7 +378,7 @@ export function SharePanel({
 							id={`tab-${tab.id}`}
 							onClick={() => handleTabClick(tab.id)}
 							className={clsx(
-								"-mb-px min-h-11 flex-1 whitespace-nowrap border-b-2 px-2 text-[13.5px] font-semibold transition-colors",
+								"-mb-px min-h-11 flex-1 shrink-0 whitespace-nowrap border-b-2 px-3 text-[13.5px] font-semibold transition-colors",
 								isActive
 									? "border-[var(--brand)] text-[var(--brand)]"
 									: "border-transparent text-gray-11 hover:text-gray-12",

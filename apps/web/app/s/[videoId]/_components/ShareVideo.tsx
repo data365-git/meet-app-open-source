@@ -26,7 +26,6 @@ import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
-import { formatSeconds } from "./ai-chat-timestamps";
 import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { GenerateAiPanel } from "./GenerateAiPanel";
@@ -736,30 +735,11 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<div className="flex flex-col gap-4 lg:flex-row">
-				{/* LEFT: video + chapter chips. RIGHT: unified AI panel (summary /
-				    transcript / refined / comments tabs + pinned AI input). On small
-				    screens the panel stacks below the video. */}
-				<div className="min-w-0 flex-1">
-					{playerBlock}
-
-					{!areChaptersDisabled && safeChapters.length > 0 && (
-						<div className="mt-4 flex flex-wrap gap-2">
-							{safeChapters.map((chapter) => (
-								<button
-									key={`${chapter.start}-${chapter.title}`}
-									type="button"
-									onClick={() => handleSeekAndPlay(chapter.start)}
-									className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-gray-5 bg-gray-1 px-3 py-1.5 text-xs transition-colors hover:border-[var(--brand)]"
-								>
-									<span className="font-mono text-[11px] font-medium text-[var(--brand)]">
-										{formatSeconds(chapter.start)}
-									</span>
-									<span className="text-gray-12">{chapter.title}</span>
-								</button>
-							))}
-						</div>
-					)}
-				</div>
+				{/* LEFT: video only (chapter chips moved into the Summary tab's TOC).
+				    RIGHT: unified AI panel (summary / tasks / transcript / refined /
+				    comments tabs + pinned AI input). On small screens the panel stacks
+				    directly below the video so the tab bar sits right under it. */}
+				<div className="min-w-0 flex-1">{playerBlock}</div>
 
 				<div className="flex w-full flex-col gap-3 lg:w-80 xl:w-96">
 					{costPanel}
@@ -798,17 +778,19 @@ export const ShareVideo = forwardRef<
 									}}
 									onVideoJump={handleSeekAndPlay}
 								/>
-								<div className="mt-5">
-									<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
-										{t("tabTasks")} · {activeTasks.length}
-									</p>
-									<TasksPanel
-										videoId={data.id}
-										tasks={activeTasks}
-										canEdit={canGenerate}
-									/>
-								</div>
 							</>
+						}
+						tasks={
+							<div>
+								<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
+									{t("tabTasks")} · {activeTasks.length}
+								</p>
+								<TasksPanel
+									videoId={data.id}
+									tasks={activeTasks}
+									canEdit={canGenerate}
+								/>
+							</div>
 						}
 						transcript={
 							<>
