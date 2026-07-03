@@ -278,7 +278,7 @@ export async function withCostGuard<T>(
 
 	const audioInTokens = result.audioInTokens ?? 0;
 	const costUsdMicros = priceForMicros(options.model, {
-		textInTokens: result.inputTokens - audioInTokens,
+		textInTokens: Math.max(0, result.inputTokens - audioInTokens),
 		audioInTokens,
 		outputTokens: result.outputTokens,
 		batch: options.batch,

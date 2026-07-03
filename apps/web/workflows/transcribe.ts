@@ -15,6 +15,11 @@ import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
+import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
+import {
+	BatchFallbackError,
+	transcribeChunkWithBatch,
+} from "@/lib/gemini-batch-transcribe";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -50,6 +55,7 @@ interface VideoData {
 	isOwnerPro: boolean;
 	ownerEncryptedGeminiKey: string | null;
 	orgId: string;
+	aiSpeedMode: AiSpeedMode;
 }
 
 interface ExtractedAudioChunk {
@@ -99,7 +105,7 @@ export async function transcribeVideoWorkflow(
 		const transcription = await transcribeAudioChunks(
 			audio,
 			videoData.ownerEncryptedGeminiKey,
-			{ userId, orgId: videoData.orgId, videoId },
+			{ userId, orgId: videoData.orgId, videoId, aiSpeedMode: videoData.aiSpeedMode },
 			undefined,
 			async (p) => {
 				await savePartialTranscription(
@@ -114,7 +120,7 @@ export async function transcribeVideoWorkflow(
 			userId,
 			video: videoData.video,
 			ownerEncryptedGeminiKey: videoData.ownerEncryptedGeminiKey,
-			context: { userId, orgId: videoData.orgId, videoId },
+			context: { userId, orgId: videoData.orgId, videoId, aiSpeedMode: videoData.aiSpeedMode },
 			mergedVtt: transcription,
 			totalDurationSec: audio.totalDurationSec,
 		});
@@ -173,8 +179,13 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 
 	const isOwnerPro = userIsPro(result.owner);
 
+	// Read the org's transcription speed/cost mode ONCE, here at workflow start,
+	// from settings already loaded above (no extra query). Defaults to "fast"
+	// (sync) so an org that never opted in behaves exactly as before.
+	const aiSpeedMode = resolveAiSpeedMode(result.orgSettings?.aiSpeedMode);
+
 	console.log(
-		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}`,
+		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}, aiSpeedMode=${aiSpeedMode}`,
 	);
 
 	await db()
@@ -195,6 +206,7 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		isOwnerPro,
 		ownerEncryptedGeminiKey: result.owner.geminiApiKey ?? null,
 		orgId: result.video.orgId,
+		aiSpeedMode,
 	};
 }
 
@@ -393,11 +405,11 @@ async function resolveVideoSourceUrl(
 	throw new Error("Video file not accessible");
 }
 
-async function transcribeAudio(
+export async function transcribeAudio(
 	audioUrl: string,
 	audioDurationSec: number | null,
 	ownerEncryptedGeminiKey: string | null,
-	context: { userId: string; orgId: string; videoId: string },
+	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
 	knownSpeakers: string[] = [],
 ): Promise<string> {
 	"use step";
@@ -426,34 +438,81 @@ async function transcribeAudio(
 
 	const resolvedApiKey = apiKey;
 
-	const result = await withCostGuard({
-		orgId: context.orgId,
-		userId: context.userId,
-		videoId: context.videoId,
-		operation: "transcription",
-		model: "gemini-2.5-flash",
-		fn: async () => {
-			const res = await transcribeWithGemini(audioUrl, {
-				apiKey: resolvedApiKey,
-				audioDurationSec: audioDurationSec ?? undefined,
-				knownSpeakers,
-			});
-			return {
-				transcriptVtt: res.transcriptVtt,
-				inputTokens: res.inputTokens,
-				outputTokens: res.outputTokens,
-				audioInTokens: res.audioInTokens,
-			};
-		},
-	});
+	// Synchronous path — the default. UNCHANGED from before batch mode existed;
+	// this is the regression line that must behave identically when mode=fast.
+	const runSync = async (): Promise<string> => {
+		const result = await withCostGuard({
+			orgId: context.orgId,
+			userId: context.userId,
+			videoId: context.videoId,
+			operation: "transcription",
+			model: "gemini-2.5-flash",
+			fn: async () => {
+				const res = await transcribeWithGemini(audioUrl, {
+					apiKey: resolvedApiKey,
+					audioDurationSec: audioDurationSec ?? undefined,
+					knownSpeakers,
+				});
+				return {
+					transcriptVtt: res.transcriptVtt,
+					inputTokens: res.inputTokens,
+					outputTokens: res.outputTokens,
+					audioInTokens: res.audioInTokens,
+				};
+			},
+		});
+		return result.transcriptVtt;
+	};
 
-	return result.transcriptVtt;
+	if (context.aiSpeedMode !== "cheap") {
+		return runSync();
+	}
+
+	// Cheap (Batch API) path. Records cost at batch rates (batch: true). If the
+	// batch is too slow or fails terminally, transcribeChunkWithBatch throws a
+	// BatchFallbackError — we then run the SYNC path for this one chunk so a slow
+	// batch never fails the video. Inline errors / empty output throw a plain
+	// Error instead, which propagates to the caller's existing retry path (the
+	// same path a sync error takes).
+	try {
+		const result = await withCostGuard({
+			orgId: context.orgId,
+			userId: context.userId,
+			videoId: context.videoId,
+			operation: "transcription",
+			model: "gemini-2.5-flash",
+			batch: true,
+			fn: async () => {
+				const res = await transcribeChunkWithBatch(audioUrl, {
+					apiKey: resolvedApiKey,
+					audioDurationSec: audioDurationSec ?? undefined,
+					knownSpeakers,
+					videoId: context.videoId,
+				});
+				return {
+					transcriptVtt: res.transcriptVtt,
+					inputTokens: res.inputTokens,
+					outputTokens: res.outputTokens,
+					audioInTokens: res.audioInTokens,
+				};
+			},
+		});
+		return result.transcriptVtt;
+	} catch (error) {
+		if (error instanceof BatchFallbackError) {
+			console.warn(
+				`[transcribe] batch fallback → sync for video=${context.videoId} at ${audioUrl.split("?")[0]}: ${error.message}`,
+			);
+			return runSync();
+		}
+		throw error;
+	}
 }
 
 export async function transcribeAudioChunks(
 	audio: ExtractedAudio,
 	ownerEncryptedGeminiKey: string | null,
-	context: { userId: string; orgId: string; videoId: string },
+	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
 	transcribeChunk: typeof transcribeAudioChunkWithRetry = transcribeAudioChunkWithRetry,
 	onProgress?: (p: { transcribedChunks: Array<{ vtt: string; offsetSec: number }>; completed: number; total: number }) => Promise<void>,
 ): Promise<string> {
@@ -850,7 +909,7 @@ export async function fillTranscriptGaps(
 		userId: string;
 		video: typeof videos.$inferSelect;
 		ownerEncryptedGeminiKey: string | null;
-		context: { userId: string; orgId: string; videoId: string };
+		context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode };
 		mergedVtt: string;
 		totalDurationSec: number | null;
 	},
@@ -961,7 +1020,7 @@ export async function transcribeAudioChunkWithRetry(
 	}: {
 		chunk: ExtractedAudioChunk;
 		ownerEncryptedGeminiKey: string | null;
-		context: { userId: string; orgId: string; videoId: string };
+		context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode };
 		knownSpeakers?: string[];
 	},
 	transcribeFn: typeof transcribeAudio = transcribeAudio,
