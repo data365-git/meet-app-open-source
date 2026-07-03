@@ -181,14 +181,6 @@ function formatTimestamp(seconds: number): string {
 	return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-function speakerHue(name: string): number {
-	let hash = 0;
-	for (let i = 0; i < name.length; i++) {
-		hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
-	}
-	return Math.abs(hash) % 360;
-}
-
 function speakerInitials(name: string): string {
 	return name
 		.split(/\s+/)
@@ -197,22 +189,58 @@ function speakerInitials(name: string): string {
 		.join("");
 }
 
-interface CueGroup {
+// Generic numbered fallback labels ("Speaker 2", "Spiker 1", "Спикер 3") get a
+// blue avatar/name in the reference design; real names get a neutral dark block.
+// Mirrors GENERIC_SPEAKER_LABEL in lib/gemini-transcribe.ts.
+const GENERIC_SPEAKER_LABEL = /^(?:speaker|spiker|спикер)\s*\d+$/i;
+
+function isGenericSpeaker(name: string): boolean {
+	return GENERIC_SPEAKER_LABEL.test(name.trim());
+}
+
+// Card grouping bounds (see plan Task P2): consecutive same-speaker cues merge
+// into one card while the inter-cue gap and the accumulated span stay small.
+const MAX_CARD_GAP_SEC = 6;
+const MAX_CARD_SPAN_SEC = 60;
+
+export interface TranscriptCard {
 	speaker: string | null;
+	startSeconds: number;
+	timestamp: string;
 	cues: Cue[];
 }
 
-function groupBySpeaker(cues: Cue[]): CueGroup[] {
-	const groups: CueGroup[] = [];
+/**
+ * Group consecutive cues into speaker cards. A running card keeps absorbing the
+ * next cue while ALL hold: (a) same speaker, (b) inter-cue gap
+ * (next.start − prev.end) ≤ 6s, (c) accumulated span (next.end − card.start)
+ * ≤ 60s. Any violation starts a new card. The card's timestamp is its first
+ * cue's start. Pure + deterministic so it can be unit-tested in isolation.
+ */
+export function groupCuesIntoCards(cues: Cue[]): TranscriptCard[] {
+	const cards: TranscriptCard[] = [];
 	for (const cue of cues) {
-		const last = groups[groups.length - 1];
-		if (last && last.speaker === cue.speaker) {
-			last.cues.push(cue);
+		const current = cards[cards.length - 1];
+		const prev = current?.cues[current.cues.length - 1];
+		const sameSpeaker = current != null && current.speaker === cue.speaker;
+		const gapOk =
+			prev != null && cue.startSeconds - prev.endSeconds <= MAX_CARD_GAP_SEC;
+		const spanOk =
+			current != null &&
+			cue.endSeconds - current.startSeconds <= MAX_CARD_SPAN_SEC;
+
+		if (current && sameSpeaker && gapOk && spanOk) {
+			current.cues.push(cue);
 		} else {
-			groups.push({ speaker: cue.speaker, cues: [cue] });
+			cards.push({
+				speaker: cue.speaker,
+				startSeconds: cue.startSeconds,
+				timestamp: cue.timestamp,
+				cues: [cue],
+			});
 		}
 	}
-	return groups;
+	return cards;
 }
 
 interface ChapterSection {
@@ -403,13 +431,10 @@ export function TranscriptPanel({
 
 	const useChapterMode = chapters != null && chapters.length > 0;
 	const chapterSections = useChapterMode ? groupByChapters(cues, chapters) : [];
-	const groups = useChapterMode ? [] : groupBySpeaker(cues);
 
 	const activeCueId = cues.find((c) => isActive(c, currentTime))?.id ?? null;
 
-	const hasAnySpeaker = useChapterMode
-		? chapterSections.some((s) => s.cues.some((c) => c.speaker !== null))
-		: groups.some((g) => g.speaker !== null);
+	const hasAnySpeaker = cues.some((c) => c.speaker !== null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCueId drives which DOM node activeRef points to; re-running when it changes is intentional
 	useEffect(() => {
@@ -468,6 +493,21 @@ export function TranscriptPanel({
 			)
 		: cues;
 	const filteredCueIds = new Set(filteredCues.map((c) => c.id));
+
+	// While a search query is active, grouping is DISABLED so each matching cue
+	// is its own card (keeps the highlight + result-count logic 1:1 with cues);
+	// otherwise consecutive cues merge into speaker cards.
+	function cuesToCards(list: Cue[]): TranscriptCard[] {
+		if (trimmedQuery) {
+			return list.map((cue) => ({
+				speaker: cue.speaker,
+				startSeconds: cue.startSeconds,
+				timestamp: cue.timestamp,
+				cues: [cue],
+			}));
+		}
+		return groupCuesIntoCards(list);
+	}
 
 	// Shared panel header (search + copy + download)
 	function renderHeader() {
@@ -764,143 +804,157 @@ export function TranscriptPanel({
 		);
 	}
 
-	// Shared per-cue card renderer
-	function renderCue(cue: Cue, gi: number, ci: number, speaker: string | null) {
-		const hue = speakerHue(speaker ?? "Transcript");
+	// Speaker card: header (avatar + name + time pill) then one text span per cue.
+	// A named speaker gets a neutral dark avatar/name; a generic "Speaker N"
+	// label gets a blue avatar/name (per the reference screenshot).
+	function renderCard(card: TranscriptCard, keyPrefix: string) {
+		const speaker = card.speaker;
+		const generic = speaker != null && isGenericSpeaker(speaker);
 		const initials = speaker ? speakerInitials(speaker) : "";
-		const avatarBg = `hsl(${hue},55%,55%)`;
-		const active = cue.id === activeCueId;
-		const showAvatarCol = hasAnySpeaker;
+		const avatarBg = generic ? "var(--blue-9)" : "var(--gray-12)";
+		// blue-9 is the same in light/dark → white reads on it in both. The
+		// neutral gray-12 block flips tone between modes (near-black ↔ near-white),
+		// so its initials use gray-1 (the opposite end of the scale) to stay legible.
+		const avatarText = generic ? "#fff" : "var(--gray-1)";
+		const nameColor = generic ? "var(--blue-11)" : "var(--gray-12)";
+		const cardIsActive = card.cues.some((c) => c.id === activeCueId);
+		const showHeader = hasAnySpeaker && speaker != null;
 
 		return (
 			<div
-				key={`cue-${gi}-${ci}`}
-				ref={active ? activeRef : undefined}
-				className="group"
-				onMouseEnter={(e) => {
-					if (!active) e.currentTarget.style.background = "var(--gray-2)";
-				}}
-				onMouseLeave={(e) => {
-					if (!active) e.currentTarget.style.background = "transparent";
-				}}
+				key={keyPrefix}
+				ref={cardIsActive ? activeRef : undefined}
 				style={{
-					display: "grid",
-					gridTemplateColumns: showAvatarCol
-						? "52px minmax(0,1fr) 38px"
-						: "56px minmax(0,1fr) 28px",
-					gap: "14px",
-					alignItems: "start",
-					padding: "8px 12px",
-					marginBottom: "2px",
-					borderRadius: "8px",
-					background: active ? "var(--blue-3)" : "transparent",
-					borderLeft: active
-						? "3px solid var(--brand)"
-						: "3px solid transparent",
-					position: "relative",
-					cursor: "default",
-					transition: "background 160ms, border-color 160ms",
+					background: "var(--gray-2)",
+					border: "1px solid var(--gray-4)",
+					borderRadius: "14px",
+					padding: "12px 14px",
+					boxShadow: "0 1px 2px rgba(15,23,42,.04)",
 				}}
 			>
-				<div className="flex flex-col items-center gap-1 pt-0.5">
-					{showAvatarCol && speaker ? (
+				{showHeader ? (
+					<div className="mb-2 flex items-center gap-2.5">
 						<div
-							className="flex items-center justify-center text-[13px] font-bold text-white shrink-0"
+							className="flex items-center justify-center text-[13px] font-bold shrink-0"
 							style={{
-								width: "42px",
-								height: "42px",
-								borderRadius: "13px",
-								backgroundColor: avatarBg,
+								width: "34px",
+								height: "34px",
+								borderRadius: "10px",
+								background: avatarBg,
+								color: avatarText,
 								flexShrink: 0,
 							}}
-							title={speaker}
+							title={speaker ?? undefined}
 						>
 							{initials}
 						</div>
-					) : null}
-					<button
-						type="button"
-						onClick={() => onVideoJump?.(cue.startSeconds)}
-						onMouseEnter={(e) => {
-							e.currentTarget.style.background = "var(--blue-3)";
-							e.currentTarget.style.color = "var(--blue-11)";
-						}}
-						onMouseLeave={(e) => {
-							e.currentTarget.style.background = "var(--gray-3)";
-							e.currentTarget.style.color = "var(--gray-11)";
-						}}
-						style={{
-							fontSize: "11px",
-							fontWeight: 500,
-							color: "var(--gray-11)",
-							fontVariantNumeric: "tabular-nums",
-							background: "var(--gray-3)",
-							padding: "2px 8px",
-							borderRadius: "999px",
-							fontFamily:
-								"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-							border: "none",
-							cursor: "pointer",
-						}}
-					>
-						{cue.timestamp}
-					</button>
-				</div>
-
-				<div className="min-w-0">
-					{showAvatarCol && speaker ? (
-						<p className="mb-1 text-xs font-semibold text-gray-11">
-							{speaker}
-						</p>
-					) : null}
-					<p
-						className="min-w-0 break-words"
-						style={{
-							fontSize: "13.5px",
-							lineHeight: 1.72,
-							color: "var(--gray-12)",
-							paddingTop: showAvatarCol && speaker ? 0 : "4px",
-						}}
-					>
-						{trimmedQuery && cue.text.toLowerCase().includes(trimmedQuery.toLowerCase())
-							? highlightMatch(cue.text, trimmedQuery)
-							: active
-								? renderKaraokeText(cue, currentTime)
-								: renderMarkdownBold(cue.text)}
-					</p>
-				</div>
-
-				<div className="flex items-start justify-end pt-1">
-					<button
-						type="button"
-						onClick={() => onVideoJump?.(cue.startSeconds)}
-						aria-label={t("jumpToTime", { time: cue.timestamp })}
-						onMouseEnter={(e) => {
-							e.currentTarget.style.background = "var(--blue-3)";
-							e.currentTarget.style.color = "var(--blue-11)";
-						}}
-						onMouseLeave={(e) => {
-							e.currentTarget.style.background = "var(--gray-3)";
-							e.currentTarget.style.color = "var(--gray-11)";
-						}}
-						className="flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 transition-all duration-150"
-						style={{
-							width: "34px",
-							height: "34px",
-							background: "var(--gray-3)",
-							color: "var(--gray-11)",
-						}}
-					>
-						<svg
-							aria-hidden="true"
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 24 24"
-							fill="currentColor"
-							className="size-3"
+						<span
+							className="text-sm font-semibold"
+							style={{ color: nameColor }}
 						>
-							<path d="M8 5v14l11-7z" />
-						</svg>
-					</button>
+							{speaker}
+						</span>
+						<button
+							type="button"
+							onClick={() => onVideoJump?.(card.startSeconds)}
+							aria-label={t("jumpToTime", { time: card.timestamp })}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.background = "var(--blue-3)";
+								e.currentTarget.style.color = "var(--blue-11)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.background = "var(--gray-3)";
+								e.currentTarget.style.color = "var(--gray-11)";
+							}}
+							style={{
+								fontSize: "11px",
+								fontWeight: 500,
+								color: "var(--gray-11)",
+								fontVariantNumeric: "tabular-nums",
+								background: "var(--gray-3)",
+								padding: "2px 8px",
+								borderRadius: "999px",
+								fontFamily:
+									"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+								border: "none",
+								cursor: "pointer",
+							}}
+						>
+							{card.timestamp}
+						</button>
+					</div>
+				) : null}
+
+				<div
+					className="break-words"
+					style={{
+						fontSize: "13.5px",
+						lineHeight: 1.72,
+						color: "var(--gray-12)",
+					}}
+				>
+					{!showHeader ? (
+						<button
+							type="button"
+							onClick={() => onVideoJump?.(card.startSeconds)}
+							aria-label={t("jumpToTime", { time: card.timestamp })}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.background = "var(--blue-3)";
+								e.currentTarget.style.color = "var(--blue-11)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.background = "var(--gray-3)";
+								e.currentTarget.style.color = "var(--gray-11)";
+							}}
+							className="mb-2"
+							style={{
+								fontSize: "11px",
+								fontWeight: 500,
+								color: "var(--gray-11)",
+								fontVariantNumeric: "tabular-nums",
+								background: "var(--gray-3)",
+								padding: "2px 8px",
+								borderRadius: "999px",
+								fontFamily:
+									"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+								border: "none",
+								cursor: "pointer",
+							}}
+						>
+							{card.timestamp}
+						</button>
+					) : null}
+					{card.cues.map((cue) => {
+						const active = cue.id === activeCueId;
+						const matches =
+							!!trimmedQuery &&
+							cue.text.toLowerCase().includes(trimmedQuery.toLowerCase());
+						return (
+							<button
+								type="button"
+								key={`${keyPrefix}-cue-${cue.id}`}
+								onClick={() => onVideoJump?.(cue.startSeconds)}
+								title={t("jumpToTime", { time: cue.timestamp })}
+								className="cursor-pointer rounded text-left align-baseline transition-colors hover:bg-gray-3"
+								style={{
+									display: "inline",
+									font: "inherit",
+									color: "inherit",
+									lineHeight: "inherit",
+									background: active ? "var(--blue-3)" : "transparent",
+									border: "none",
+									padding: 0,
+									margin: 0,
+								}}
+							>
+								{matches
+									? highlightMatch(cue.text, trimmedQuery)
+									: active
+										? renderKaraokeText(cue, currentTime)
+										: renderMarkdownBold(cue.text)}{" "}
+							</button>
+						);
+					})}
 				</div>
 			</div>
 		);
@@ -910,7 +964,7 @@ export function TranscriptPanel({
 		return (
 			<div ref={containerRef} className="flex flex-col gap-4 p-4">
 				{renderHeader()}
-				{chapterSections.map((section, si) => {
+				{chapterSections.map((section) => {
 					if (trimmedQuery && section.cues.every((c) => !filteredCueIds.has(c.id))) {
 						return null;
 					}
@@ -992,9 +1046,13 @@ export function TranscriptPanel({
 										{t("noSpeechInChapter")}
 									</p>
 								) : (
-									section.cues
-										.filter((cue) => filteredCueIds.has(cue.id))
-										.map((cue, ci) => renderCue(cue, si, ci, cue.speaker))
+									<div className="flex flex-col gap-2">
+										{cuesToCards(
+											section.cues.filter((cue) => filteredCueIds.has(cue.id)),
+										).map((card, ci) =>
+											renderCard(card, `chapter-${section.startSec}-card-${ci}`),
+										)}
+									</div>
 								))}
 						</section>
 					);
@@ -1003,22 +1061,13 @@ export function TranscriptPanel({
 		);
 	}
 
-	// Fallback: existing speaker-grouped flat list
+	// Flat speaker-card list
 	return (
-		<div ref={containerRef} className="flex flex-col gap-1 p-4">
+		<div ref={containerRef} className="flex flex-col gap-2 p-4">
 			{renderHeader()}
-			{groups.map((group, gi) => {
-				if (trimmedQuery && group.cues.every((c) => !filteredCueIds.has(c.id))) {
-					return null;
-				}
-				return (
-					<div key={`${group.speaker}-${gi}`} className="flex flex-col gap-0.5">
-						{group.cues
-							.filter((cue) => filteredCueIds.has(cue.id))
-							.map((cue, ci) => renderCue(cue, gi, ci, group.speaker))}
-					</div>
-				);
-			})}
+			{cuesToCards(filteredCues).map((card, ci) =>
+				renderCard(card, `card-${ci}`),
+			)}
 		</div>
 	);
 }
