@@ -73,13 +73,30 @@ export function normalizeWebVttVoiceText(text: string): {
 	};
 }
 
+// Known WebVTT cue-span tag names. We ONLY strip angle-bracket runs whose tag
+// name is one of these, so a legit text comparison like "5 < 10" is never
+// touched. Covers opening (`<v Name>`, `<c.class>`), closing (`</v>`, `</c>`),
+// orphan closings (a `</v>` whose opener was lost across a cue/chunk boundary —
+// the Gemini bug that leaks `</v>` into rendered text), and attributed/spaced
+// variants (`</v >`, `</c.yellow>`, `<lang uz>`, `</lang>`, `</ruby>`).
+const WEBVTT_TAG_PATTERN =
+	/<\/?(?:v|c|i|b|u|lang|ruby|rt)(?:\.[\w-]+)*(?:\s[^>]*)?>/gi;
+
 function stripWebVttTags(text: string): string {
-	return normalizeTranscriptCueText(
-		text
-			.replace(/<\/v>/gi, "")
-			.replace(/<v\s+[^>]+>/gi, "")
-			.replace(/<\/?(?:c|i|b|u)(?:\.[^>]+)?(?:\s+[^>]*)?>/gi, ""),
-	);
+	return normalizeTranscriptCueText(text.replace(WEBVTT_TAG_PATTERN, ""));
+}
+
+/**
+ * Final render-boundary sanitizer: strip any residual WebVTT cue-span tags
+ * (including orphan closings like a lone `</v>`) from a fully-resolved,
+ * display-ready caption string. `normalizeWebVttVoiceText` already removes
+ * well-formed tags while extracting speakers, but a caption can reach a render
+ * path (search highlight, copy/download) still carrying an orphan tag; applying
+ * this as the last step guarantees the DOM never shows `</v>`. Legit `<`
+ * comparisons in text are preserved (the pattern only matches known tag names).
+ */
+export function stripRenderedVttTags(text: string): string {
+	return text.replace(WEBVTT_TAG_PATTERN, "");
 }
 
 export function updateVttEntryText(

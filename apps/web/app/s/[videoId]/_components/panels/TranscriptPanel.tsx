@@ -2,7 +2,10 @@
 
 import { useTranslations } from "next-intl";
 import React, { useEffect, useRef, useState } from "react";
-import { normalizeWebVttVoiceText } from "@/lib/transcript-vtt";
+import {
+	normalizeWebVttVoiceText,
+	stripRenderedVttTags,
+} from "@/lib/transcript-vtt";
 import {
 	clampStartSec,
 	collapseRepeatedCues,
@@ -112,7 +115,10 @@ export function parseVTTCues(vttContent: string): Cue[] {
 				id: cues.length,
 				startSeconds,
 				endSeconds,
-				text,
+				// Final render-boundary strip: guarantee no orphan WebVTT tag
+				// (e.g. a lone `</v>` from a lost cross-cue opener) survives into
+				// any downstream path (karaoke, search highlight, copy/download).
+				text: stripRenderedVttTags(text),
 				speaker,
 				timestamp: formatTimestamp(startSeconds),
 			});
