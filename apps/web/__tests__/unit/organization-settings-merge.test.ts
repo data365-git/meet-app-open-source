@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	mergeOrganizationSettings,
 	preserveProSettings,
-} from "@/actions/organization/settings";
+} from "@/lib/organization-settings";
 
 describe("mergeOrganizationSettings", () => {
 	it("a single-key update preserves existing aiBudget, disable-flags, and defaultPlaybackSpeed", () => {
