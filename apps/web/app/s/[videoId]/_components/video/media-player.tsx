@@ -56,6 +56,7 @@ import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import { lockLandscape, unlockOrientation } from "../utils/orientation-lock";
 import {
 	formatPlaybackDuration,
 	normalizePlaybackSpeed,
@@ -393,6 +394,22 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 
 	const [mounted, setMounted] = React.useState(false);
 	React.useLayoutEffect(() => setMounted(true), []);
+
+	// Mobile fullscreen → landscape (like YouTube). Only on touch/small
+	// viewports; desktop fullscreen keeps its natural orientation. iOS Safari
+	// ignores lock() — see orientation-lock.ts.
+	React.useEffect(() => {
+		const isMobileContext =
+			(typeof matchMedia === "function" &&
+				matchMedia("(pointer: coarse)").matches) ||
+			(typeof window !== "undefined" && window.innerWidth < 1024);
+		if (!isMobileContext) return;
+		if (isFullscreen) {
+			lockLandscape();
+		} else {
+			unlockOrientation();
+		}
+	}, [isFullscreen]);
 
 	const portalContainer = mounted
 		? isFullscreen
