@@ -1,12 +1,15 @@
 "use client";
 
+import clsx from "clsx";
 import { useTranslations } from "next-intl";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	formatSeconds,
 	parseTimestampToSeconds,
 } from "./ai-chat-timestamps";
-import "./ai-chat.css";
+
+type PanelTab = "summary" | "transcript" | "refined" | "comments";
 
 interface Message {
 	id: string;
@@ -17,13 +20,6 @@ interface Message {
 let msgIdCounter = 0;
 function nextMsgId() {
 	return `msg-${++msgIdCounter}`;
-}
-
-interface AIChatPopupProps {
-	videoId: string;
-	onVideoJump: (seconds: number) => void;
-	onClose: () => void;
-	isOpen?: boolean;
 }
 
 function splitByLineBreak(text: string, keyOffset: number): React.ReactNode[] {
@@ -92,7 +88,7 @@ function renderMessageContent(
 			<button
 				key={`cite-${match.index}`}
 				type="button"
-				className="ai-citation"
+				className="inline-block rounded-md border border-[var(--brand)] bg-[var(--brand-wash)] px-1.5 text-xs font-medium text-[var(--brand)] transition-[filter] hover:brightness-95"
 				onClick={() => onVideoJump(seconds)}
 			>
 				{`[${formatSeconds(seconds)}]`}
@@ -109,155 +105,63 @@ function renderMessageContent(
 	return parts;
 }
 
-function OrbIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path
-				d="M12 7.5 13.4 11.2 17 12l-3.6 1L12 16.5 10.6 13 7 12l3.6-.8z"
-				fill="currentColor"
-				stroke="none"
-			/>
-			<circle cx="17.5" cy="6.5" r="1.1" fill="currentColor" stroke="none" />
-		</svg>
-	);
+interface SharePanelProps {
+	videoId: string;
+	onVideoJump: (seconds: number) => void;
+	summary: React.ReactNode;
+	transcript: React.ReactNode;
+	refined: React.ReactNode;
+	comments: React.ReactNode;
 }
 
-function ChipSummaryIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M4 6h16M4 11h16M4 16h10" />
-		</svg>
-	);
-}
-
-function ChipTasksIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="m3 7 1.6 1.6L8 5" />
-			<path d="m3 17 1.6 1.6L8 15" />
-			<path d="M11 7h10M11 17h10" />
-		</svg>
-	);
-}
-
-function ChipEmailIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<rect x="3" y="5" width="18" height="14" rx="2.5" />
-			<path d="m3.5 7 8.5 6 8.5-6" />
-		</svg>
-	);
-}
-
-function ChipDecisionsIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M12 2.6l2.5 1.85 3.1.05.05 3.1L19.4 10l-1.85 2.5.05 3.1-3.1.05L12 17.4l-2.5-1.85-3.1-.05-.05-3.1L4.6 10l1.85-2.5-.05-3.1 3.1-.05z" />
-			<path d="m9.2 10.2 2 2 3.6-3.6" />
-		</svg>
-	);
-}
-
-const CHIP_ICONS = [
-	<ChipSummaryIcon key="summary" />,
-	<ChipTasksIcon key="tasks" />,
-	<ChipEmailIcon key="email" />,
-	<ChipDecisionsIcon key="decisions" />,
-];
-
-export function AIChatPopup({
+export function SharePanel({
 	videoId,
 	onVideoJump,
-	onClose,
-	isOpen = false,
-}: AIChatPopupProps) {
+	summary,
+	transcript,
+	refined,
+	comments,
+}: SharePanelProps) {
 	const t = useTranslations("share");
-	const QUICK_ACTIONS = [
-		{
-			label: t("aiQuickSummary"),
-			query: "Give me a concise summary of this video.",
+	const searchParams = useSearchParams();
+	const router = useRouter();
+
+	const rawParam = searchParams.get("tab");
+	// Legacy links: `?tab=tasks` content now lives inside the summary tab.
+	const initialTab: PanelTab =
+		rawParam === "transcript" ||
+		rawParam === "refined" ||
+		rawParam === "comments"
+			? rawParam
+			: "summary";
+	const [activeTab, setActiveTab] = useState<PanelTab>(initialTab);
+
+	const handleTabClick = useCallback(
+		(id: PanelTab) => {
+			setActiveTab(id);
+			const params = new URLSearchParams(searchParams.toString());
+			params.set("tab", id);
+			router.replace(`?${params.toString()}`, { scroll: false });
 		},
-		{
-			label: t("aiQuickActionItems"),
-			query: "What are the main action items and who is responsible?",
-		},
-		{
-			label: t("aiQuickFollowUpEmail"),
-			query: "Draft a follow-up email about the next steps.",
-		},
-		{
-			label: t("aiQuickKeyPoints"),
-			query: "What were the key decisions or points made?",
-		},
-	];
+		[router, searchParams],
+	);
+
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
-	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const chatEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const popupRef = useRef<HTMLDivElement>(null);
 	const abortRef = useRef<AbortController | null>(null);
-
-	const resizeState = useRef<{
-		startX: number;
-		startY: number;
-		startW: number;
-		startH: number;
-	} | null>(null);
-
-	useEffect(() => {
-		const handleKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
-		};
-		window.addEventListener("keydown", handleKey);
-		return () => window.removeEventListener("keydown", handleKey);
-	}, [onClose]);
 
 	const messageCount = messages.length;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional scroll trigger on message count and streaming state changes
 	useEffect(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+		chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, [messageCount, isStreaming]);
+
+	useEffect(() => {
+		return () => abortRef.current?.abort();
+	}, []);
 
 	const adjustTextarea = () => {
 		const el = textareaRef.current;
@@ -430,153 +334,136 @@ export function AIChatPopup({
 		}
 	};
 
-	const onResizeMouseDown = (e: React.MouseEvent) => {
-		e.preventDefault();
-		const el = popupRef.current;
-		if (!el) return;
-		const rect = el.getBoundingClientRect();
-		resizeState.current = {
-			startX: e.clientX,
-			startY: e.clientY,
-			startW: rect.width,
-			startH: rect.height,
-		};
-
-		const onMove = (ev: MouseEvent) => {
-			if (!resizeState.current || !popupRef.current) return;
-			const dx = resizeState.current.startX - ev.clientX;
-			const dy = resizeState.current.startY - ev.clientY;
-			const newW = Math.max(300, resizeState.current.startW + dx);
-			const newH = Math.max(360, resizeState.current.startH + dy);
-			popupRef.current.style.width = `${newW}px`;
-			popupRef.current.style.height = `${newH}px`;
-		};
-
-		const onUp = () => {
-			resizeState.current = null;
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("mouseup", onUp);
-		};
-
-		window.addEventListener("mousemove", onMove);
-		window.addEventListener("mouseup", onUp);
+	const clearChat = () => {
+		abortRef.current?.abort();
+		setMessages([]);
+		setIsStreaming(false);
 	};
 
-	const hasMessages = messages.length > 0;
+	const TABS: { id: PanelTab; label: string }[] = [
+		{ id: "summary", label: t("tabSummaryShort") },
+		{ id: "transcript", label: t("tabTranscriptShort") },
+		{ id: "refined", label: t("tabRefinedShort") },
+		{ id: "comments", label: t("tabComments") },
+	];
+
+	const panels: { id: PanelTab; content: React.ReactNode }[] = [
+		{ id: "summary", content: summary },
+		{ id: "transcript", content: transcript },
+		{ id: "refined", content: refined },
+		{ id: "comments", content: comments },
+	];
+	const activeContent = panels.find((p) => p.id === activeTab)?.content;
 
 	return (
-		<div
-			ref={popupRef}
-			className={`ai-popup${isOpen ? " open" : ""}`}
-			role="dialog"
-			aria-label={t("aiDialogAriaLabel")}
-			aria-hidden={!isOpen}
-		>
-			<div className="ai-tint-overlay" />
-			<div className="ai-noise" />
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only by design */}
-			<div className="ai-resize" onMouseDown={onResizeMouseDown} />
-
-			<div className="ai-hd">
-				<div className="orb-sm">
-					<OrbIcon />
-				</div>
-				<div className="htxt">
-					<div className="t">{t("aiChatTitle")}</div>
-					<div className="s">
-						<span className="live" />
-						{t("aiContextLoaded")}
-					</div>
-				</div>
-				<button
-					type="button"
-					className="ai-x"
-					onClick={onClose}
-					aria-label={t("aiCloseAriaLabel")}
-				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2.2"
-						aria-hidden="true"
-					>
-						<path d="M18 6 6 18M6 6l12 12" />
-					</svg>
-				</button>
+		<div className="flex w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)] lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)]">
+			<div
+				role="tablist"
+				aria-label={t("tabsAriaLabel")}
+				className="flex shrink-0 border-b border-gray-4"
+			>
+				{TABS.map((tab) => {
+					const isActive = activeTab === tab.id;
+					return (
+						<button
+							key={tab.id}
+							type="button"
+							role="tab"
+							aria-selected={isActive}
+							aria-controls={`panel-${tab.id}`}
+							id={`tab-${tab.id}`}
+							onClick={() => handleTabClick(tab.id)}
+							className={clsx(
+								"-mb-px min-h-11 flex-1 whitespace-nowrap border-b-2 px-2 text-[13.5px] font-semibold transition-colors",
+								isActive
+									? "border-[var(--brand)] text-[var(--brand)]"
+									: "border-transparent text-gray-11 hover:text-gray-12",
+							)}
+						>
+							{tab.label}
+						</button>
+					);
+				})}
 			</div>
 
-			<div className="ai-body">
-				{!hasMessages && (
-					<>
-						<div className="ai-welcome">
-							<div className="wt">
-								{t.rich("aiWelcomeTitle", {
-									emphasis: (chunks) => (
-										<span className="grad">{chunks}</span>
-									),
-								})}
-							</div>
-							<div className="ws">{t("aiWelcomeSubtitle")}</div>
-						</div>
-						<div className="ai-chips">
-							{QUICK_ACTIONS.map((action, idx) => (
-								<button
-									key={action.query}
-									type="button"
-									className="ai-chip"
-									onClick={() => sendMessage(action.query)}
+			<div
+				id={`panel-${activeTab}`}
+				role="tabpanel"
+				aria-labelledby={`tab-${activeTab}`}
+				className={
+					activeTab === "comments"
+						? "flex min-h-0 flex-1 flex-col overflow-hidden"
+						: "min-h-0 flex-1 overflow-y-auto p-4"
+				}
+			>
+				{activeContent}
+			</div>
+
+			{messages.length > 0 && (
+				<div className="shrink-0 border-t border-gray-4">
+					<div className="flex items-center justify-between px-4 pt-2.5">
+						<span className="inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--brand)]">
+							{t("aiChatTitle")}
+						</span>
+						<button
+							type="button"
+							onClick={clearChat}
+							aria-label={t("aiClearChat")}
+							className="flex size-6 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
+						>
+							<svg
+								width="13"
+								height="13"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.2"
+								aria-hidden="true"
+							>
+								<path d="M18 6 6 18M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div className="flex max-h-64 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+						{messages.map((msg) =>
+							msg.role === "user" ? (
+								<div
+									key={msg.id}
+									className="ml-6 self-end rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12"
 								>
-									{CHIP_ICONS[idx]}
-									{action.label}
-								</button>
-							))}
-						</div>
-					</>
-				)}
-
-				{messages.map((msg) => (
-					<div
-						key={msg.id}
-						className={`ai-msg${msg.role === "user" ? " user" : " ai"}`}
-					>
-						{msg.role === "assistant" && (
-							<div className="av">
-								<OrbIcon />
-							</div>
+									{msg.content}
+								</div>
+							) : (
+								<div
+									key={msg.id}
+									className="self-start text-[13px] leading-relaxed text-gray-12"
+								>
+									{renderMessageContent(msg.content, onVideoJump)}
+								</div>
+							),
 						)}
-						<div className="bubble">
-							{msg.role === "assistant"
-								? renderMessageContent(msg.content, onVideoJump)
-								: msg.content}
-						</div>
+						{isStreaming &&
+							messages[messages.length - 1]?.role !== "assistant" && (
+								<div
+									className="flex gap-1 self-start py-1"
+									aria-hidden="true"
+								>
+									<span className="size-1.5 animate-pulse rounded-full bg-gray-8" />
+									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:150ms]" />
+									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:300ms]" />
+								</div>
+							)}
+						<div ref={chatEndRef} />
 					</div>
-				))}
+				</div>
+			)}
 
-				{isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
-					<div className="ai-msg ai">
-						<div className="av">
-							<OrbIcon />
-						</div>
-						<div className="ai-typing">
-							<span />
-							<span />
-							<span />
-						</div>
-					</div>
-				)}
-
-				<div ref={messagesEndRef} />
-			</div>
-
-			<div className="ai-foot">
-				<div className="ai-inputbar">
+			<div className="shrink-0 border-t border-gray-4 p-3">
+				<div className="flex items-end gap-2">
 					<textarea
 						ref={textareaRef}
 						rows={1}
-						placeholder={t("aiPlaceholder")}
+						placeholder={t("aiAskPlaceholder")}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
@@ -584,15 +471,18 @@ export function AIChatPopup({
 						}}
 						onKeyDown={handleKeyDown}
 						disabled={isStreaming}
+						className="min-h-9 flex-1 resize-none rounded-[18px] border border-gray-5 bg-gray-2 px-4 py-2 text-[13px] text-gray-12 placeholder:text-gray-9 focus:border-[var(--brand)] focus:outline-none disabled:opacity-60"
 					/>
 					<button
 						type="button"
-						className="ai-send"
 						onClick={() => sendMessage(input)}
 						disabled={!input.trim() || isStreaming}
 						aria-label={t("aiSendAriaLabel")}
+						className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
 					>
 						<svg
+							width="15"
+							height="15"
 							viewBox="0 0 24 24"
 							fill="none"
 							stroke="currentColor"
@@ -606,7 +496,9 @@ export function AIChatPopup({
 						</svg>
 					</button>
 				</div>
-				<div className="ai-disclaimer">{t("aiDisclaimer")}</div>
+				<p className="mt-1.5 px-1 text-[10.5px] text-gray-9">
+					{t("aiDisclaimer")}
+				</p>
 			</div>
 		</div>
 	);

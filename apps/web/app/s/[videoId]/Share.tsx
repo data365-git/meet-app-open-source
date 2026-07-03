@@ -22,6 +22,7 @@ import {
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { CaptionProvider } from "./_components/CaptionContext";
+import { MeetingCostPanel } from "./_components/panels/MeetingCostPanel";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import type { VideoData } from "./types";
@@ -352,10 +353,6 @@ export const Share = ({
 	const areCaptionsDisabled = isDisabled("disableCaptions");
 	const areCommentStampsDisabled = isDisabled("disableComments");
 	const areReactionStampsDisabled = isDisabled("disableReactions");
-	const allSettingsDisabled =
-		isDisabled("disableComments") &&
-		isDisabled("disableSummary") &&
-		isDisabled("disableTranscript");
 
 	const searchParams = useSearchParams();
 	const initialSeekDone = useRef(false);
@@ -482,66 +479,73 @@ export const Share = ({
 		}, 100);
 	}, []);
 
+	const isOwnerOrMember = Boolean(
+		viewerId &&
+			(viewerId === data.owner.id ||
+				data.organizationMembers?.some((id) => id === viewerId)),
+	);
+
 	return (
 		<CaptionProvider
 			videoId={data.id}
 			transcriptionStatus={transcriptionStatus}
 		>
 			<div className="mt-4">
-				<div className="flex flex-col gap-4 lg:flex-row">
-					<div className="flex-1 min-w-0">
-						<ShareVideo
+				<ShareVideo
+					data={{
+						...data,
+						transcriptionStatus,
+						metadata: {
+							...(data.metadata || {}),
+							aiSummary: aiData.aiSummary,
+						},
+					}}
+					comments={comments}
+					areChaptersDisabled={areChaptersDisabled}
+					areCaptionsDisabled={areCaptionsDisabled}
+					areCommentStampsDisabled={areCommentStampsDisabled}
+					areReactionStampsDisabled={areReactionStampsDisabled}
+					chapters={aiData?.chapters || []}
+					aiGenerationStatus={aiData?.aiGenerationStatus}
+					canRetryProcessing={viewerId === data.owner.id}
+					canFinalizeDesktopSegments={viewerId === data.owner.id}
+					showPlaybackStatusBadge={viewerId === data.owner.id}
+					isEditProcessing={isEditProcessing}
+					recordingStopped={recordingStopped}
+					defaultPlaybackSpeed={defaultPlaybackSpeed}
+					canGenerate={canGenerate}
+					ref={playerRef}
+					costPanel={
+						isOwnerOrMember ? (
+							// Processing cost is internal billing info — show it only to the
+							// owner/org members, never to viewers (students/clients) who open
+							// the share link.
+							<div className="overflow-hidden rounded-[14px] border border-gray-4 bg-gray-1 shadow-[0_1px_2px_rgba(15,23,42,.06),0_2px_6px_rgba(15,23,42,.07)]">
+								<MeetingCostPanel videoId={data.id} />
+							</div>
+						) : null
+					}
+					commentsPanel={
+						<Sidebar
 							data={{
 								...data,
+								createdAt: effectiveDate,
 								transcriptionStatus,
-								metadata: {
-									...(data.metadata || {}),
-									aiSummary: aiData.aiSummary,
-								},
 							}}
-							comments={comments}
-							areChaptersDisabled={areChaptersDisabled}
-							areCaptionsDisabled={areCaptionsDisabled}
-							areCommentStampsDisabled={areCommentStampsDisabled}
-							areReactionStampsDisabled={areReactionStampsDisabled}
-							chapters={aiData?.chapters || []}
-							aiGenerationStatus={aiData?.aiGenerationStatus}
-							canRetryProcessing={viewerId === data.owner.id}
-							canFinalizeDesktopSegments={viewerId === data.owner.id}
-							showPlaybackStatusBadge={viewerId === data.owner.id}
-							isEditProcessing={isEditProcessing}
-							recordingStopped={recordingStopped}
-							defaultPlaybackSpeed={defaultPlaybackSpeed}
-							canGenerate={canGenerate}
-							ref={playerRef}
+							videoSettings={videoSettings}
+							commentsData={commentsData}
+							setCommentsData={setCommentsData}
+							optimisticComments={optimisticComments}
+							setOptimisticComments={setOptimisticComments}
+							handleCommentSuccess={handleCommentSuccess}
+							views={views}
+							onSeek={handleSeek}
+							videoId={data.id}
+							disableReactions={areReactionStampsDisabled}
+							ref={activityRef}
 						/>
-					</div>
-
-					{!allSettingsDisabled && (
-						<div className="flex flex-col lg:w-80">
-							<Sidebar
-								data={{
-									...data,
-									createdAt: effectiveDate,
-									transcriptionStatus,
-								}}
-								videoSettings={videoSettings}
-								commentsData={commentsData}
-								setCommentsData={setCommentsData}
-								optimisticComments={optimisticComments}
-								setOptimisticComments={setOptimisticComments}
-								handleCommentSuccess={handleCommentSuccess}
-								views={views}
-								onSeek={handleSeek}
-								videoId={data.id}
-								aiData={aiData}
-								aiGenerationEnabled={aiGenerationAvailable}
-								disableReactions={areReactionStampsDisabled}
-								ref={activityRef}
-							/>
-						</div>
-					)}
-				</div>
+					}
+				/>
 			</div>
 		</CaptionProvider>
 	);

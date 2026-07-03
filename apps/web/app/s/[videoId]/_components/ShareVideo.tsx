@@ -26,9 +26,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
-import { AIChatPopup } from "./AIChatPopup";
-import { AIFab } from "./AIFab";
-import { BelowVideoTabs } from "./BelowVideoTabs";
+import { formatSeconds } from "./ai-chat-timestamps";
 import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { GenerateAiPanel } from "./GenerateAiPanel";
@@ -42,6 +40,7 @@ import { RefinedTranscriptPanel } from "./panels/RefinedTranscriptPanel";
 import { SummaryPanel } from "./panels/SummaryPanel";
 import { TasksPanel } from "./panels/TasksPanel";
 import { TranscriptPanel } from "./panels/TranscriptPanel";
+import { SharePanel } from "./SharePanel";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
@@ -81,6 +80,10 @@ export const ShareVideo = forwardRef<
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		canGenerate?: boolean;
+		/** Owner/member-only cost card rendered above the share panel. */
+		costPanel?: React.ReactNode;
+		/** Comments/activity content for the panel's "Izohlar" tab. */
+		commentsPanel?: React.ReactNode;
 	}
 >(
 	(
@@ -100,6 +103,8 @@ export const ShareVideo = forwardRef<
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			canGenerate = false,
+			costPanel,
+			commentsPanel,
 		},
 		ref,
 	) => {
@@ -132,7 +137,6 @@ export const ShareVideo = forwardRef<
 		const [confirmStoppedError, setConfirmStoppedError] = useState<
 			string | null
 		>(null);
-		const [aiChatOpen, setAiChatOpen] = useState(false);
 		const [currentTime, setCurrentTime] = useState(0);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
@@ -731,25 +735,37 @@ export const ShareVideo = forwardRef<
 		);
 
 		return (
-			<>
-				{/*
-				  Loom-style layout:
-				  - Below xl: single column → video on top, transcript reachable via the
-				    BelowVideoTabs "Transcript" tab (unchanged narrow/mobile experience).
-				    Gated at xl (not lg) because the share page also has a 320px comments
-				    rail; engaging the pinned transcript below 1280px would squeeze the
-				    video too narrow (three columns at lg → ~290px video).
-				  - xl+: two columns → LEFT = video pinned (sticky) while you scroll,
-				    RIGHT = transcript scrolls independently. The in-tab Transcript is
-				    hidden at xl+ (hideTranscriptTab) so only ONE live TranscriptPanel
-				    is mounted at a time.
-				*/}
-				{/* Video full-width; the raw transcript now lives as a tab next to
-				    "Clean Transcript" (BelowVideoTabs) instead of a pinned side column. */}
-				<div className="min-w-0">{playerBlock}</div>
+			<div className="flex flex-col gap-4 lg:flex-row">
+				{/* LEFT: video + chapter chips. RIGHT: unified AI panel (summary /
+				    transcript / refined / comments tabs + pinned AI input). On small
+				    screens the panel stacks below the video. */}
+				<div className="min-w-0 flex-1">
+					{playerBlock}
 
-				<div className="mt-4">
-					<BelowVideoTabs
+					{!areChaptersDisabled && safeChapters.length > 0 && (
+						<div className="mt-4 flex flex-wrap gap-2">
+							{safeChapters.map((chapter) => (
+								<button
+									key={`${chapter.start}-${chapter.title}`}
+									type="button"
+									onClick={() => handleSeekAndPlay(chapter.start)}
+									className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-gray-5 bg-gray-1 px-3 py-1.5 text-xs transition-colors hover:border-[var(--brand)]"
+								>
+									<span className="font-mono text-[11px] font-medium text-[var(--brand)]">
+										{formatSeconds(chapter.start)}
+									</span>
+									<span className="text-gray-12">{chapter.title}</span>
+								</button>
+							))}
+						</div>
+					)}
+				</div>
+
+				<div className="flex w-full flex-col gap-3 lg:w-80 xl:w-96">
+					{costPanel}
+					<SharePanel
+						videoId={data.id}
+						onVideoJump={handleSeekAndPlay}
 						summary={
 							<>
 								<GenerateAiPanel
@@ -771,6 +787,9 @@ export const ShareVideo = forwardRef<
 									duration={data.duration}
 									onStarted={handleAiStarted}
 								/>
+								<span className="mb-3 inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand)]">
+									{t("aiChatTitle")}
+								</span>
 								<SummaryPanel
 									data={{
 										duration: data.duration ?? undefined,
@@ -779,14 +798,17 @@ export const ShareVideo = forwardRef<
 									}}
 									onVideoJump={handleSeekAndPlay}
 								/>
+								<div className="mt-5">
+									<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
+										{t("tabTasks")} · {activeTasks.length}
+									</p>
+									<TasksPanel
+										videoId={data.id}
+										tasks={activeTasks}
+										canEdit={canGenerate}
+									/>
+								</div>
 							</>
-						}
-						tasks={
-							<TasksPanel
-								videoId={data.id}
-								tasks={activeTasks}
-								canEdit={canGenerate}
-							/>
 						}
 						transcript={
 							<>
@@ -838,18 +860,10 @@ export const ShareVideo = forwardRef<
 								currentTime={currentTime}
 							/>
 						}
+						comments={commentsPanel}
 					/>
 				</div>
-
-				<div className={`ai-aura${aiChatOpen ? " show" : ""}`} />
-				<AIChatPopup
-					videoId={data.id}
-					onVideoJump={handleSeekAndPlay}
-					onClose={() => setAiChatOpen(false)}
-					isOpen={aiChatOpen}
-				/>
-				<AIFab onClick={() => setAiChatOpen((v) => !v)} isOpen={aiChatOpen} />
-			</>
+			</div>
 		);
 	},
 );
