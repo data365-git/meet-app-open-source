@@ -341,7 +341,10 @@ export const Caps = ({
             {(["groupToday", "groupThisWeek", "groupEarlier"] as const).map(
               (groupKey) => {
                 const videos = groupedVideos[groupKey];
-                if (videos.length === 0 && groupKey !== "groupToday")
+                if (
+                  videos.length === 0 &&
+                  !(groupKey === "groupToday" && isUploading)
+                )
                   return null;
 
                 return (
