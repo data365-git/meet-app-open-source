@@ -442,6 +442,7 @@ async function transcribeAudio(
 				transcriptVtt: res.transcriptVtt,
 				inputTokens: res.inputTokens,
 				outputTokens: res.outputTokens,
+				audioInTokens: res.audioInTokens,
 			};
 		},
 	});

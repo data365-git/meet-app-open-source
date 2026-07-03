@@ -2,6 +2,7 @@ export interface GeminiTranscribeResult {
 	transcriptVtt: string;
 	inputTokens: number;
 	outputTokens: number;
+	audioInTokens: number;
 	words?: Array<{
 		word: string;
 		start: number;
@@ -615,6 +616,7 @@ export async function transcribeWithGemini(
 		usageMetadata?: {
 			promptTokenCount?: number;
 			candidatesTokenCount?: number;
+			promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
 		};
 		error?: { message: string };
 	};
@@ -689,6 +691,10 @@ export async function transcribeWithGemini(
 	const rawText = genData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 	const inputTokens = genData.usageMetadata?.promptTokenCount ?? 0;
 	const outputTokens = genData.usageMetadata?.candidatesTokenCount ?? 0;
+	const audioInTokens =
+		genData.usageMetadata?.promptTokensDetails?.find(
+			(d) => d.modality === "AUDIO",
+		)?.tokenCount ?? 0;
 
 	// [diag] long-audio near-empty transcript — tells us whether Gemini itself
 	// returned little (finishReason / 0 output) or our parser dropped cues
@@ -721,5 +727,5 @@ export async function transcribeWithGemini(
 		);
 	}
 
-	return { transcriptVtt, inputTokens, outputTokens };
+	return { transcriptVtt, inputTokens, outputTokens, audioInTokens };
 }

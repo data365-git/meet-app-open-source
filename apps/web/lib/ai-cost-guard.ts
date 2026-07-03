@@ -203,12 +203,15 @@ interface CostGuardOptions<T> {
 	budgetCapUserMicros?: number | null;
 	budgetCapOrgMicros?: number | null;
 	recordUsageBestEffort?: boolean;
-	fn: () => Promise<T & { inputTokens: number; outputTokens: number }>;
+	batch?: boolean;
+	fn: () => Promise<
+		T & { inputTokens: number; outputTokens: number; audioInTokens?: number }
+	>;
 }
 
 export async function withCostGuard<T>(
 	options: CostGuardOptions<T>,
-): Promise<T & { inputTokens: number; outputTokens: number }> {
+): Promise<T & { inputTokens: number; outputTokens: number; audioInTokens?: number }> {
 	const billingMonth = currentBillingMonth();
 	const configuredCaps = await getAiBudgetCapsMicros({
 		orgId: options.orgId,
@@ -273,11 +276,13 @@ export async function withCostGuard<T>(
 
 	const result = await options.fn();
 
-	const costUsdMicros = priceForMicros(
-		options.model,
-		result.inputTokens,
-		result.outputTokens,
-	);
+	const audioInTokens = result.audioInTokens ?? 0;
+	const costUsdMicros = priceForMicros(options.model, {
+		textInTokens: result.inputTokens - audioInTokens,
+		audioInTokens,
+		outputTokens: result.outputTokens,
+		batch: options.batch,
+	});
 
 	try {
 		await db()
