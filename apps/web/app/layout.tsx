@@ -7,14 +7,14 @@ import { getLocale, getMessages } from "next-intl/server";
 import type { PropsWithChildren } from "react";
 
 export const metadata: Metadata = {
-	metadataBase: new URL(process.env.NEXT_PUBLIC_WEB_URL ?? process.env.WEB_URL ?? "https://capweb-production-dd85.up.railway.app"),
+	metadataBase: new URL(process.env.NEXT_PUBLIC_WEB_URL ?? process.env.WEB_URL ?? "https://data365.uz"),
 	title: "data365",
 	description: "data365 — uchrashuv yozuvlari va AI tahlil platformasi",
 	openGraph: {
 		title: "data365",
 		description: "data365 — uchrashuv yozuvlari va AI tahlil platformasi",
 		type: "website",
-		url: process.env.NEXT_PUBLIC_WEB_URL ?? "https://capweb-production-dd85.up.railway.app",
+		url: process.env.NEXT_PUBLIC_WEB_URL ?? "https://data365.uz",
 		siteName: "data365",
 	},
 };
