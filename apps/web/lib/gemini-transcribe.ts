@@ -484,9 +484,15 @@ Rules:
 
 3. Detect the content type from the recording:
 - If it is a multi-speaker online/offline meeting, identify speakers by voice, context, and conversation flow.
+- Do NOT decide who is speaking from voice/tone alone. Voice is a hint, not proof. Confirm every speaker change against the CONTENT and CONVERSATION FLOW:
+  - A question is normally followed by an answer from a DIFFERENT speaker. If cue N ends with a question ("...to'g'rimi?", "как думаешь?", "right?") and cue N+1 answers it, that answer is very likely the OTHER speaker, even if the voice sounds similar.
+  - A short reply, agreement, or backchannel ("ha", "yo'q", "да", "хорошо", "ok", "mm-hmm", "tushunarli") interrupting or following someone else's longer turn is almost always the OTHER speaker's turn, not a continuation of the same speaker.
+  - If the SAME speaker keeps talking without being addressed, interrupted, or asked something, do NOT split their speech into a new speaker label just because their tone, pitch, or energy changed (louder, faster, excited, calmer). Tone shifts inside one uninterrupted turn are the SAME speaker.
+  - When two voices sound similar (e.g. two men or two women with close pitch), rely MORE on who is being addressed, whose question is being answered, and role patterns (e.g. one person asks most questions = interviewer/teacher, the other mostly answers = interviewee/student) to keep them separate and consistent — do not merge them into one label just because they sound alike.
+  - Before assigning a label, check: does this content make sense as a continuation of what the same speaker was just saying, or does it read as a response/reaction to it? Continuations stay the same label; responses/reactions get the other speaker's label.
 - ACTIVELY listen for speaker NAMES throughout the whole recording: self-introductions ("Men Alisherman", "Меня зовут Дмитрий", "This is John"), people addressing each other ("Alisher aka, siz nima deysiz?", "Спасибо, Дмитрий", "Thanks, Sarah"), and names used in conversation. When you can confidently attach a name to a voice, use that NAME as the voice label for EVERY cue of that voice, e.g. <v Alisher>.
 - If a voice's name is never revealed, use a numbered label in the dominant language — Uzbek: Spiker 1, Spiker 2; Russian: Спикер 1, Спикер 2; English: Speaker 1, Speaker 2 — and keep the SAME label for the same voice throughout.
-- Never use both a name and a number for the same voice; once the name is known, use only the name.
+- Never use both a name and a number for the same voice; once the name is known, use only the name. Keep each speaker's label CONSISTENT across the whole recording by tracking their conversational role (who asks, who answers, who was introduced first), not just by re-recognizing their voice moment to moment.
 - If two people talk over each other and both cannot be clearly separated, write [ustma-ust gaplashildi].
 - If it is a one-speaker instruction, YouTube-style video, or voice note, do not invent speaker labels.
 - If another person clearly speaks in the background and their words are important, use Boshqa ovoz.
