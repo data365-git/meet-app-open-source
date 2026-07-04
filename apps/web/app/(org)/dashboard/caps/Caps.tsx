@@ -315,7 +315,7 @@ export const Caps = ({
           onClick={() => setOpenNewFolderDialog(true)}
         >
           <FontAwesomeIcon className="size-3" icon={faFolderPlus} />
-          New Folder
+          {t("newFolder")}
         </Button>
       </div>
       {isEmpty && <EmptyCapState />}
@@ -333,10 +333,6 @@ export const Caps = ({
       )}
       {visibleVideos.length > 0 && (
         <>
-          <div className="flex justify-between items-center mb-6 w-full">
-            <h1 className="text-2xl font-medium text-gray-12">{t("videos")}</h1>
-          </div>
-
           <div className="flex flex-col gap-8">
             {(["groupToday", "groupThisWeek", "groupEarlier"] as const).map(
               (groupKey) => {
