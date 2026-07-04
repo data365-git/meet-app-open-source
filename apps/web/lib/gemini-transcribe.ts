@@ -433,7 +433,15 @@ import { isTransientGeminiError, withGeminiRetry } from "@/lib/gemini-retry";
 // NOTE: gemini-2.0-flash was RETIRED by Google (HTTP 404 "no longer available",
 // verified 2026-07-02) — the overload fallback now uses the Google-managed
 // "gemini-flash-latest" alias, which always points at a live flash model.
-const GEMINI_TRANSCRIBE_MODELS = ["gemini-2.5-flash", "gemini-flash-latest"] as const;
+// PRIMARY switched to gemini-3-flash-preview 2026-07-04 (owner decision — fixes
+// the Cyrillic/romanization problem for free, verified in A/B testing on real
+// uz+ru audio; same audio price as 2.5-flash). gemini-2.5-flash kept as the
+// first overload fallback, gemini-flash-latest as the last resort.
+const GEMINI_TRANSCRIBE_MODELS = [
+	"gemini-3-flash-preview",
+	"gemini-2.5-flash",
+	"gemini-flash-latest",
+] as const;
 
 async function pollUntilActive(
 	fileName: string,
