@@ -1,6 +1,13 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 6) — DIZAYN n01 5 FAZA HAMMASI BAJARILDI + DEPLOY SUCCESS + JONLI SMOKE O'TDI. HEAD=`c712afe` PUSH+DEPLOY QILINGAN (branch `qa-fixes`). Railway build ~3.5min SUCCESS. /clear XAVFSIZ.**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 6) — n01 5 FAZA DEPLOY + REFINED/COST FIX DEPLOY. HEAD=`b207c80` (branch `qa-fixes`). /clear XAVFSIZ.**
+>
+> **🔧 REFINED "Matn" TOZALASH + COST (owner: "refined clean emas, short-form — data yo'qolmasin, faqat filler ket" + "cost test qil"):** commit `b207c80` deploy qilindi.
+> - **Tashxis (DB'дан real output + arzon A/B, taxmin emas):** refined `[time][speaker]` matn devori edi, uz filler ("Aha/Xo'p/Mhm/Xudo xohlasa"/raqam-aks-sado) saqlanardi. 2 sabab: (1) prompt faqat INGLIZCHA filler misolи; (2) `GEMINI_SUMMARY_MODEL="gemini-2.5-flash"` (transkript 3-flash'ga o'tган, refined qolган).
+> - **A/B (real 53-min video 1-bob, `151qnwcyxkarpdk`):** 2.5-flash+yangi-prompt = hali chat-cruft, out=6761 tok; **3-flash-preview+yangi-prompt = toza oqar matn, hamma fakt saqlangan, out=1713 tok (4x kam)**. → fix: 2 refine-prompt (uz/ru filler+merge+"data yo'qolmasin") + `GEMINI_SUMMARY_MODEL→gemini-3-flash-preview` + `stripRunawayRepetition` guard 2 refine call-site'ga (loop-dumini kesadi, prefiks saqlanadi — cap PASAYTIRILMADI, uzun-data kesilmasin uchun).
+> - **⚠️ HALOL NARX-TUZATISH (men "refined=eng qimmat" degandim — NOTO'G'RI):** DB real narx (`ai_usage_events`): normal 53-min = **$0.086 (~1100 so'm)**, undan **transkripsiya 82% ($0.07)**, summary/refined faqat 18% ($0.015). Ya'ni refined-fix = **katta SIFAT yutuq + faqat ~10% narx-tejash**. "8000 so'm" = `9w7xac4wvgj6em5` runaway/test outlier ($0.63, transkripsiya-side). **Normal narx allaqachon arzon edi.** Real cost-cut lever = TRANSKRIPSIYA (alohida ish).
+> - **KEYINGI (verify):** owner o'sha videoда "AI qayta tahlil" bossin → men yangi toza refined'ни DB'dan ko'rsataman + aniq $ o'lchayman (end-to-end). Yoki yangi videolarda avtomatik.
+> - **⏸️ Uncommitted (owner'ники, TEGMADIM):** `LogoBadge.tsx` viewBox 64 redesign (oq-fon kontrast fix — och-fon+ramka). Owner commit/deploy qilsinmi — hali lokal.
 >
 > **🎯 MAQSAD (BAJARILDI + JONLI):** dizayn n01 ga to'liq o'tish — 5 faza tugadi, prod'ga chiqdi. **KEYINGI = FAQAT owner telefon-ko'rik (login-orqasi vizual).**
 >
