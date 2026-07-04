@@ -1,5 +1,37 @@
 # Ustoz (Cap fork) — Project STATE
 
+> 🚀 **STATUS 2026-07-04 (Jarvis, sessiya 6) — DIZAYN n01 5 FAZA HAMMASI BAJARILDI → DEPLOY qilinmoqda (owner: "deploy qil va tekshir"). Kod HEAD=`a0ddde4` (branch `qa-fixes`, 10 commit origin'dan oldinda). Push + jonli smoke davom etyapti.**
+>
+> **🎯 MAQSAD (BAJARILDI):** dizayn n01 ga to'liq o'tish — 5 faza tugadi. **KEYINGI = deploy natijasini jonli tasdiqlash + owner telefon-ko'rik.**
+>
+> **BARCHA FAZA (10 commit `7024cee..a0ddde4`, har biri tsc0+build+review):** F1 `73426e6` tokenlar+logo+favicon+infra · F2 `860a8e3` shell+library (i18n reconcile) · F3 `ec4493f` layout re-org (tabs-below-video, cost ega-only, comments o'ngga) + `f3f9dc9` transkript flat-rows+speaker-filter + `81c32d0` chips+accent-tokens · F4+F5 `a0ddde4` §4.3 library-toast i18n + extension/import i18n + analytics Stripe-upsell olib tashlandi + login/settings verified.
+>
+> **⚠️ OWNER JONLI-KO'RIK (deploy'дан keyin, `admin@ustoz.uz` telefonда — men login ko'ra olmayman):** (1) **LogoBadge OQ-fon** sidebar/login och-fonда xira emasmi (agar ha → logo-katakka `--ds-border` ramka, tez fix); (2) watch-sahifa yangi layout (video sticky chap-keng + tab'lar ostида + o'ngда cost[EGA]+izohlar); (3) **guest havolада cost-karta KO'RINMASLIGI** (kritik — kodда gate bор, jonli tasdiqla); (4) transkript flat-row o'qishbop; (5) dark-mode + uz/ru/en. Yoqmasa → fix-forward.
+>
+> **⏸️ DEFERRED (deploy'ни bloklamaydi, keyingi ish):** video max-h-60vh qattiq-clip emas · mobil 42vh-cap yo'q · transkript "Qidirish pill expand" (funksional teng) · Matn tab collapsible (spec doc-flow) · error-state §4.2 aniq-vizual (doira+2-tugma; hozir funksional+i18n) · dialog/admin toast'lar (Folder/Sharing/Settings/useWebRecorder ~140 hardcoded — mock-scope'дан tashqari) · analytics.upgrade.* o'lik kalitlar (zararsiz).
+>
+> **Faza 3 bajarilgan (4 commit: `ec4493f` 3A · `f3f9dc9` 3D · `81c32d0` polish):**
+> - **3A layout re-org** (`ShareVideo.tsx`/`Share.tsx`/`SharePanel.tsx`): grid `1.55fr/1fr` — chap keng = sticky-video (max-h 60vh) + tab'lar OSTIDA; o'ng tor sticky = **cost-karta EGA-ONLY** (`viewerId===data.owner.id ? <MeetingCostPanel/> : null` — guest hech qachon render qilmaydi/billing-query trigger qilmaydi ✅ FIX6 teskari) + **izohlar** (FIX1 teskari). ≤lg 1 ustun stack. SharePanel o'z sticky'sini yo'qotdi.
+> - **3D transkript** (`TranscriptPanel.tsx`): karta→flat row (`[time·speaker·text]`, time=mono `--brand` seek, speaker on-change, active=`--brand-wash`); chapter-branch olib tashlandi (chapters Xulosa'да); **speaker-filter `Suhbatdosh ▾`** qo'shildi; qidiruv-highlight `--brand-wash`; 9 share-key i18n. Export'lar+testlar saqlandi (vitest 28/28).
+> - **3-polish**: SharePanel'да **TAYYOR SAVOLLAR** chips (chatдan oldin, `sendMessage(q)`) · SummaryPanel+Refined `--blue-*`→`--brand`/`--brand-wash` · copy i18n · aiDisclaimer allaqachon bор (ru/en spec-matnga tuzatildi).
+> - **GATE (har commit):** tsc 0 · next build SUCCESS · vitest 28/28 · commander diff-review (guest-cost gate tasdiqlandi).
+> - **⚠️ FAZA 3 DEFERRED (jonli-ko'rikда baholanadi, deploy'ni bloklamaydi):** (a) video `max-h-60vh` qattiq-clip emas (amalда kamdan-kam yetadi); (b) mobil video 42vh-cap yo'q (sticky-when-playing qoldirilgan); (c) transkript qidiruv doim-ko'rinadigan input (spec "Qidirish pill expand" — funksional teng); (d) Matn tab hali collapsible-chapters (spec doc-flow — funksional). Owner yoqmasa fix-forward.
+>
+> **Faza 2'да bajarilgan (commit `860a8e3`, 9 fayl) — ~65% oldingi sessiyalarda tayyor edi (audit bilan tasdiqlandi):** Top.tsx titles-map +2 route (extension/import) · extension+import sahifalaridan dublikat `<h1>` olib tashlandi · Items.tsx nav-group label `font-mono` (uppercase mono muted) · CapCard+CapCardContent'да 12 hardcoded inglizcha toast→`library` i18n (uz/ru/en, uz naturallik o'zim sayqalladim). **Mobil tab-bar + EmptyCapState allaqachon to'liq lokalizatsiya — tegilmadi.** Gate: tsc 0·build SUCCESS·3 json valid·commander-review. **SKIP (deliberate): "Ulashilgan" sidebar item — `/dashboard/shared-caps` sahifasi bu fork'да YO'Q → 404-havola bo'lardi; alohida feature, Faza-2 stil-ishi emas.** ⚠️ Audit "3 route yetishmaydi + Ulashilgan kerak" dedi — 2 tasi noto'g'ri edi (meetings bор, sahifa yo'q); tekshirib ushladim (audit=gipoteza).
+>
+> **Faza 1'даги RISK hali ochiq:** LogoBadge OQ-fon → och sidebar/login'да xira ko'rinishi mumkin. **Faza 3'дан keyin YOKI sidebar'ni jonli ko'rganда hal:** logo-katakka `--ds-border` nozik ramka. (Owner deploy'дан keyin telefonда ko'radi.)
+>
+> **Faza 1'да bajarilgan (commit `73426e6`, 6 fayl):**
+> - **1A tokenlar** (`globals.css`): n01 jadvalidan `--ds-bg/-surface/-surface-2/-text/-muted/-border/-error/-error-wash/-success/-warning` qo'shildi (light+dark). ⚠️ `--brand*` ALLAQACHON n01 accent qiymatlarida edi (`#005cb1`/`#2e9dff`) + `::selection` allaqachon `--brand-wash` → tegilmadi. **Naqsh: yangi komponentlar `bg-[var(--ds-surface)]` kabi arbitrary-value ishlatadi (tailwind color-utility YO'Q, `--brand` shunday ishlatiladi) — Faza 2-5 shu naqshga amal qilsin.**
+> - **1B ikonka** (`LogoBadge.tsx` @cap/ui): mening qo'lда-chizganim → haqiqiy `logo-mark.svg` verbatim port (viewBox 200, gradient halqa+play+teal nuqta). `safari-pinned-tab.svg` + `favicon.ico` n01'dan qayta yaratildi (favicon.ico = node PNG-in-ICO trick, 16/32 PNG'lardan; ImageMagick/sharp yo'q edi). apple-touch/16/32 PNG + manifest oldingi FIX9'да yangilangan.
+> - **1C infra** (`layout.tsx` meta-ranglar `#5bbad5`/`#da532c` → brand `#005cb1`; `Items.tsx` dev-email fallback `["richie@cap.so"]` → `[]`). metadata allaqachon data365.uz + localized (FIX3).
+> - **GATE O'TDI:** tsc 0 · `next build` SUCCESS · CRLF-flip yo'q (`git diff --stat` toza) · commander-review (hex'lar README jadvaliga 1:1, SVG verbatim). Alohida review-agent chaqirilmadi (trivial-risk static diff — tokenlarни hali hech kim ishlatmaydi, mavjud UI buzilmaydi).
+>
+> **⚠️ FAZA 2'DA JONLI-VERIFY QILINADIGAN RISK:** LogoBadge endi **OQ fonli** (asset shunday, spec "qayta chizma" dedi) → och sidebar/login (oq fon)да oq-oq bo'lib ko'rinmasligi mumkin. Faza 2 sidebar §1.1'да logo-katakka nozik `--ds-border` halqa yoki accent-fon kerak bo'lishi mumkin — owner telefon-ko'rikда tasdiqласин. (Men LogoBadge'ni O'ZIM qayta chizmayman — oldingi saboq; container-border Faza 2 ishi.)
+>
+> **OWNER TODO:** (bu faza) — hozircha lokal, jonli ko'rish deploy'дан keyin (n01 oxiri). Oldingi TODOlar (kamera/mic test · Chrome Web Store · UzbekVoice kalit) hali ochiq.
+> ---
+
 > 🎯 **YANGI GOAL 2026-07-04 kech (owner: "bu dizaynga o'tamiz") — DIZAYN n01 = YANGI AVTORITATIV SPEC.** Manba: `apps/web/scratchpad/design-n01/design_handoff_data365_polish/` (owner zip: `Data365 loyiha dizayni n01.zip`). "Done" ko'rinishi = watch-sahifa + sidebar + icon + transkript shu spec'ga to'liq mos, 3-tilli, light+dark, toza/senior.
 >
 > **✅ REJA QULFLANDI:** `docs/plans/2026-07-04-design-n01.md` (5 faza: token+icon+infra → shell+library → watch → system-states → auth/analytics). Owner qarorlari: watch=tab'lar-video-ostida · **deploy=OXIRIDA BITTA (5 faza lokal yig'iladi)** · TEAM=o'z-nomi qoladi. **KEYINGI = Faza 1 (token-tizim + icon-asset + infra).** Katta foundational ish → toza-kontekst uchun `/clear` + resume tavsiya (STATE+plan hamma narsani saqlaydi; LIMIT_TEJASH: qisqa sessiya).
