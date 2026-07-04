@@ -126,6 +126,7 @@ export function LoginForm() {
         </motion.div>
         <motion.div layout="position" className="flex flex-col space-y-3">
           <form
+            method="post"
             onSubmit={handleSubmit}
             className="flex flex-col space-y-3 sm:px-1"
           >
