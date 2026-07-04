@@ -29,6 +29,7 @@ import { resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import type { VideoData } from "../types";
 import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
+import { DockableVideo } from "./DockableVideo";
 import { GenerateAiPanel } from "./GenerateAiPanel";
 import { detectShareLanguage, LanguagePicker } from "./LanguagePicker";
 import {
@@ -138,7 +139,6 @@ export const ShareVideo = forwardRef<
 			string | null
 		>(null);
 		const [currentTime, setCurrentTime] = useState(0);
-		const [isPlaying, setIsPlaying] = useState(false);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
@@ -308,10 +308,6 @@ export const ShareVideo = forwardRef<
 			const onTimeUpdate = () => {
 				if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
 			};
-			// Playing-state drives the mobile sticky pin (see left-column wrapper).
-			const onPlay = () => setIsPlaying(true);
-			const onPause = () => setIsPlaying(false);
-			const onEnded = () => setIsPlaying(false);
 			const attach = () => {
 				const video = videoRef.current;
 				if (!video) {
@@ -320,19 +316,11 @@ export const ShareVideo = forwardRef<
 				}
 				attached = video;
 				video.addEventListener("timeupdate", onTimeUpdate);
-				video.addEventListener("play", onPlay);
-				video.addEventListener("pause", onPause);
-				video.addEventListener("ended", onEnded);
-				// Sync initial state in case playback already started before attach.
-				setIsPlaying(!video.paused && !video.ended);
 			};
 			attach();
 			return () => {
 				cancelAnimationFrame(raf);
 				attached?.removeEventListener("timeupdate", onTimeUpdate);
-				attached?.removeEventListener("play", onPlay);
-				attached?.removeEventListener("pause", onPause);
-				attached?.removeEventListener("ended", onEnded);
 			};
 		}, []);
 
@@ -765,17 +753,7 @@ export const ShareVideo = forwardRef<
 				    On small screens both columns stack in DOM order: video, tabs,
 				    then cost + comments. */}
 				<div className="flex min-w-0 flex-col gap-3">
-					<div
-						className={`min-w-0 lg:sticky lg:top-4 lg:self-start${
-							isPlaying
-								? " max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-gray-2 max-lg:shadow-lg max-lg:shadow-black/10"
-								: ""
-						}`}
-					>
-						<div className="mx-auto lg:max-h-[60vh]">
-							{playerBlock}
-						</div>
-					</div>
+					<DockableVideo>{playerBlock}</DockableVideo>
 					<SharePanel
 						videoId={data.id}
 						onVideoJump={handleSeekAndPlay}
