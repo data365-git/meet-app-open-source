@@ -77,9 +77,10 @@ async function buildAggregation(
 	const dailySpend: AiSpendAggregation["dailySpend"] = [];
 
 	for (const row of rows) {
-		const cents = Math.round(row.totalMicros / 10_000);
+		const micros = Number(row.totalMicros ?? 0);
+		const cents = Math.round(micros / 10_000);
 		breakdown[row.operation] = (breakdown[row.operation] ?? 0) + cents;
-		totalMicros += row.totalMicros;
+		totalMicros += micros;
 		dailySpend.push({
 			date: row.date,
 			costUsdCents: cents,
