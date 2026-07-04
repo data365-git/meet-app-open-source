@@ -98,7 +98,7 @@ export function SignupForm() {
 				layout: { duration: 0.3, ease: "easeInOut" },
 				height: { duration: 0.3, ease: "easeInOut" },
 			}}
-			className="mx-auto w-full max-w-[432px] overflow-hidden rounded-2xl border border-gray-5 bg-gray-3 p-5 sm:p-7"
+			className="mx-auto w-full max-w-[432px] overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 p-6 sm:p-9"
 		>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
 				<MotionLogoBadge layout="position" className="size-11 sm:size-12" />
@@ -143,7 +143,7 @@ export function SignupForm() {
 						id={emailInputId}
 						name="email"
 						type="email"
-						placeholder="tim@apple.com"
+						placeholder={t("emailPlaceholder")}
 						autoComplete="email"
 						required
 						value={email}
@@ -219,10 +219,10 @@ export function SignupForm() {
 						</div>
 					)}
 					<MotionButton
-						variant="dark"
 						type="submit"
 						disabled={submitting}
 						spinner={submitting}
+						className="w-full bg-[var(--brand)] text-[var(--brand-fg)] hover:brightness-95"
 					>
 						{submitting ? t("creatingLoading") : t("createAccount")}
 					</MotionButton>
@@ -243,7 +243,7 @@ export function SignupForm() {
 					layout="position"
 					className="pt-3 text-xs text-center text-gray-11"
 				>
-					{t.rich("termsNoticeSignup", { terms: (c) => (<Link href="/terms" target="_blank" className="text-xs font-semibold text-gray-12 hover:text-blue-300">{c}</Link>), privacy: (c) => (<Link href="/privacy" target="_blank" className="text-xs font-semibold text-gray-12 hover:text-blue-300">{c}</Link>) })}
+					{t.rich("termsNoticeSignup", { terms: (c) => (<Link href="/terms" target="_blank" className="text-xs font-semibold text-gray-12 hover:text-gray-11">{c}</Link>), privacy: (c) => (<Link href="/privacy" target="_blank" className="text-xs font-semibold text-gray-12 hover:text-gray-11">{c}</Link>) })}
 				</motion.p>
 			</motion.div>
 		</motion.div>

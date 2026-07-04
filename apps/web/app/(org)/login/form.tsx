@@ -221,7 +221,7 @@ export function LoginForm() {
                 <Link
                   href="/terms"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+                  className="text-xs font-semibold text-gray-12 hover:text-gray-11"
                 >
                   {c}
                 </Link>
@@ -230,7 +230,7 @@ export function LoginForm() {
                 <Link
                   href="/privacy"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+                  className="text-xs font-semibold text-gray-12 hover:text-gray-11"
                 >
                   {c}
                 </Link>

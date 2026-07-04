@@ -3,6 +3,7 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { LoginForm } from "./form";
 
@@ -21,6 +22,7 @@ export default async function LoginPage(props: {
 		const next = typeof sp.next === "string" ? sp.next : null;
 		redirect(next && isSafeRelativePath(next) ? next : "/dashboard");
 	}
+	const t = await getTranslations("common");
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-gray-2 px-4 py-4 sm:relative sm:items-center sm:justify-center sm:px-6 sm:py-10">
 			<Link
@@ -31,7 +33,7 @@ export default async function LoginPage(props: {
 					className="opacity-75 size-3 text-gray-12"
 					icon={faArrowLeft}
 				/>
-				<span>Home</span>
+				<span>{t("backHome")}</span>
 			</Link>
 			<div className="mb-6 flex w-full justify-end sm:absolute sm:right-10 sm:top-10 sm:mb-0 sm:w-auto">
 				<LocaleSwitcher />
