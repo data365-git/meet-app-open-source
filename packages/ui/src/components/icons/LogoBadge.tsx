@@ -2,9 +2,7 @@ import { useId } from "react";
 
 export const LogoBadge = ({ className }: { className: string }) => {
 	const id = useId();
-	const badgeFillId = `${id}-data365-badge-fill`;
-	const playFillId = `${id}-data365-play-fill`;
-	const orbitStrokeId = `${id}-data365-orbit-stroke`;
+	const badgeFillId = `${id}-data365-blue-badge`;
 
 	return (
 		<svg
@@ -22,65 +20,30 @@ export const LogoBadge = ({ className }: { className: string }) => {
 			<defs>
 				<linearGradient
 					id={badgeFillId}
-					x1="14"
-					y1="9"
-					x2="50"
-					y2="55"
+					x1="8"
+					y1="6"
+					x2="56"
+					y2="58"
 					gradientUnits="userSpaceOnUse"
 				>
-					<stop stopColor="#f8fbff" />
-					<stop offset="1" stopColor="#eaf4ff" />
-				</linearGradient>
-				<linearGradient
-					id={playFillId}
-					x1="18"
-					y1="21"
-					x2="40"
-					y2="43"
-					gradientUnits="userSpaceOnUse"
-				>
-					<stop stopColor="#25d0c3" />
-					<stop offset="1" stopColor="#2478ff" />
-				</linearGradient>
-				<linearGradient
-					id={orbitStrokeId}
-					x1="18"
-					y1="15"
-					x2="50"
-					y2="34"
-					gradientUnits="userSpaceOnUse"
-				>
-					<stop stopColor="#2dd4bf" />
-					<stop offset="1" stopColor="#1d4ed8" />
+					<stop stopColor="#1d7cff" />
+					<stop offset="1" stopColor="#005bea" />
 				</linearGradient>
 			</defs>
-			<rect
-				x="4"
-				y="4"
-				width="56"
-				height="56"
-				rx="16"
-				fill={`url(#${badgeFillId})`}
-			/>
-			<rect x="4.5" y="4.5" width="55" height="55" rx="15.5" stroke="#dbeafe" />
+			<rect width="64" height="64" rx="16" fill={`url(#${badgeFillId})`} />
 			<path
-				d="M23 17.5c6.7-4.6 16.2-3.5 21.7 2.5 2.5 2.7 3.9 6 4.1 9.4"
-				stroke={`url(#${orbitStrokeId})`}
-				strokeWidth="4"
+				d="M50 39.5V26.5C50 20.7 45.3 16 39.5 16h-15C18.7 16 14 20.7 14 26.5v11C14 43.3 18.7 48 24.5 48H40"
+				stroke="white"
+				strokeWidth="5"
 				strokeLinecap="round"
-			/>
-			<path
-				d="M23 22.5v19l17-9.5-17-9.5Z"
-				fill={`url(#${playFillId})`}
 				strokeLinejoin="round"
 			/>
 			<path
-				d="M37 41h11M37 47h8"
-				stroke="#0f766e"
-				strokeWidth="3"
-				strokeLinecap="round"
+				d="M28 25.2v13.6c0 1.2 1.3 1.9 2.3 1.3l11-6.8c1-.6 1-2 0-2.6l-11-6.8c-1-.6-2.3.1-2.3 1.3Z"
+				fill="white"
+				strokeLinejoin="round"
 			/>
-			<circle cx="49" cy="30" r="3.5" fill="#22c7b8" />
+			<circle cx="48" cy="48" r="4.2" fill="#35efc2" />
 		</svg>
 	);
 };
