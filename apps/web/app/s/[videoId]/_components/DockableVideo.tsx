@@ -108,10 +108,10 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 				ref={innerRef}
 				className={
 					docked
-						? `fixed bottom-4 right-4 z-50 w-[min(300px,72vw)] ${transitionClass} ${
+						? `fixed top-4 right-4 z-50 w-[min(300px,72vw)] ${transitionClass} ${
 								showMini
 									? "translate-y-0 opacity-100"
-									: "pointer-events-none translate-y-2 opacity-0"
+									: "pointer-events-none -translate-y-2 opacity-0"
 							}`
 						: `relative ${transitionClass}`
 				}
