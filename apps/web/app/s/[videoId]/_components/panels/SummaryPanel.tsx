@@ -118,7 +118,7 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 					>
 						{t("topicsHeading")}
 					</h3>
-					<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+					<div className="flex flex-col">
 						{topics.map((topic) => (
 							<TopicCard key={topic.title} topic={topic} />
 						))}
@@ -229,26 +229,20 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 }
 
 function TopicCard({ topic }: { topic: { title: string; body: string } }) {
-	const [hovered, setHovered] = useState(false);
 	return (
 		<div
-			onMouseEnter={() => setHovered(true)}
-			onMouseLeave={() => setHovered(false)}
 			style={{
-				background: "transparent",
-				border: `1px solid ${hovered ? "var(--gray-6)" : "var(--gray-4)"}`,
-				borderRadius: "11px",
-				padding: "13px 14px",
-				transition: "border-color 200ms",
+				borderBottom: "1px solid var(--gray-4)",
+				padding: "10px 0",
 			}}
 		>
 			<p
 				className="mb-1"
-				style={{ fontSize: "13px", fontWeight: 600, color: "var(--gray-12)" }}
+				style={{ fontSize: "14px", fontWeight: 600, color: "var(--gray-12)" }}
 			>
 				{renderMarkdownBold(topic.title)}
 			</p>
-			<p style={{ fontSize: "12.5px", lineHeight: 1.55, color: "var(--gray-11)" }}>
+			<p style={{ fontSize: "13.5px", lineHeight: 1.55, color: "var(--gray-11)" }}>
 				{renderMarkdownBold(topic.body)}
 			</p>
 		</div>
