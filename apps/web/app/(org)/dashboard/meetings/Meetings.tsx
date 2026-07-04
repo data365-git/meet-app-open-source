@@ -202,9 +202,6 @@ export const Meetings = ({
 
   return (
     <div className="flex relative flex-col w-full h-full">
-      <div className="flex flex-wrap gap-3 items-center mb-10 w-full">
-        <h1 className="text-2xl font-medium text-gray-12">{t("meetings")}</h1>
-      </div>
       {isEmpty && (
         <div className="flex flex-col flex-1 justify-center items-center w-full h-full">
           <div className="flex flex-col gap-3 justify-center items-center h-full text-center">
