@@ -1,5 +1,26 @@
 # Ustoz (Cap fork) — Project STATE
 
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 4) — CHECKPOINT, /clear XAVFSIZ. Bug-fixlar + COST tekshiruv + 3 ta yangi katta ish HUJJATLANDI (bajarilmagan, keyingi sessiya). HEAD=`f64ba9e` (lokal, origin `436ac3c`dan 3 commit oldinda — PUSH/DEPLOY qilinmagan).**
+>
+> **Bu sessiyada bajarildi (commit, LOKAL):** `5607e0d` extension meeting-**Pause fix** (timer pauzada muzlamasdi — media aslida pauza bo'lardi; endi pausedAt/pausedAccumMs bilan popup+pill timer to'g'ri; ⚠️ extension qo'lda reload kerak) · `f64ba9e` extension **update-banner olib tashlandi** (owner). ⚠️ Bu 2 commit hali push/deploy qilinmagan.
+>
+> **💰 COST TEKSHIRUVI (o'lchandi, ai_usage_events proxy orqali):** owner "51min video 8000 so'm oldimi normmi" dedi → HA real Gemini hisobi (`9w7xac4wvgj6em5` $0.63) LEKIN **istisno**: model bitta bo'lakda **runaway** bo'lган (out=65537 = max-cap, takror-loop, $0.19 bekorga) + gap-fill. **Odatda 53min ≈ $0.07 (~890 so'm)** (isbot: `151qnwcyxkarpdk` 53min $0.07). Reja yozildi → **`docs/plans/2026-07-04-cost-runaway-guard.md`** (maxOutputTokens pasaytir + runaway-guard + 3-flash'da uzun video sinov, metric ≤$0.15/50min). Owner "ha planga yoz" dedi → BAJARILMAGAN, keyingi sessiya.
+>
+> **🎨 YANGI DIZAYN-UPDATE (owner: "sinab ko'ramiz") — `apps/web/scratchpad/design-update-n1/design_handoff_data365_polish/`** (CHANGE_REQUEST.md = 9 fix + README + REAL logo/icon assetlar: logo-mark.svg/logo-glyph.svg/favicons/icon-192-512). 9 FIX qisqacha: (1) watch 4-tab uz `Xulosa·Vazifalar·Transkript·Matn` (Comments tab olib tashlanadi, izohlar video ostida); (2) processing pill→**stepper** (Transkript→Xulosa→Matn→Tayyor + ETA + skeleton, "No AI summary" xom matn olib tashlanadi); (3) share URL env-domen (railway ko'rinmasin); (4) sarlavha truncation `title` attr; (5) qolgan share inglizcha→uz; (6) **Meeting-cost kartasini watch'dan OLIB TASHLASH** (faqat admin/sozlamada); (7) **Xulosa = 1-ustun oqar matn** (2-ustun quti emas); (8) Kutubxona: ulkan h1 olib tashlash + yetishmayotgan i18n kalitlar + karta-meta `-3 min` bug + duration pill; (9) **yangi brend ikonka** (logo-mark.svg → sidebar/login/favicon/PWA). ⚠️ Ba'zisi allaqachon qilingan (Faza D tablar) → reconciliation shart. BAJARILMAGAN.
+>
+> **🔍 CODEX FULL REVIEW (owner: "statega yoz") — `apps/web/scratchpad/codex-reviews/ustoz-full-review-2026-07-04.md`.** Real bug backlog (prioritet, BAJARILMAGAN):
+> - **P0 — login parol URL'ga chiqishi:** hydration'dan oldin submit qilinsa `/login?password=...` GET bo'ladi → parol history/log'ga. `login/form.tsx` method=post kafolatla. ENG BIRINCHI.
+> - **P1 — AI Spend jami NOTO'G'RI (ulkan son):** MySQL `SUM()` string qaytaradi, kod `+=` bilan **string concat** qiladi → `get-org-ai-spend.ts:82` `Number(row.totalMicros)` qil. (Owner "8000 so'm" ko'rgan joyi shu bo'lishi mumkin.) + `get-monthly-spend.ts`, `export-ai-spend-csv.ts`.
+> - **P1 — hydration #418** `/dashboard/caps`+`/meetings` (CapCardContent.tsx:235 relativeTime SSR-mismatch).
+> - **P1 — manfiy nisbiy vaqt `-44 min`** (CapCardContent) = dizayn FIX 8.3 bilan bir xil.
+> - **P1 — dark mode:** body.dark klass bor lekin fon `rgb(242,242,242)` (och) → globals.css/theme-script root token.
+> - **P1 — mobil gorizontal overflow** (390px'da 395px) ko'p dashboard sahifada (banner olib tashlash biroz yordam berishi mumkin).
+> - Boshqa: AI-truthiness (`chapters:[]` truthy → `hasUsableAiContent` helper); share "Video optimallashtirilmoqda" video tayyor bo'lса-da; admin/settings i18n gaps; sarlavhalar/H1; **Vitest combined-run flaky** (developer-credits-checkout timeout, izolyatsiyada 15/15 o'tadi); **Biome 121 error/170 warn**.
+> - Owner QA akkaunt: `admin@ustoz.uz`. `apps/web/.auth/` COMMIT QILMA (Playwright artifact).
+>
+> **KEYINGI SESSIYA TARTIBI (tavsiya):** (0) 2 lokal commitni push+deploy (yoki dizayn bilan birga) → (1) **P0 parol-leak** → (2) **AI-spend string-concat** → (3) cost-runaway-guard (plan tayyor) → (4) hydration#418 + `-44min` (dizayn FIX8.3) → (5) dizayn-update reconcile + logo → (6) qolgan P1 (dark/mobil) → (7) i18n gaps + Vitest/Biome. Har biri gate + Codex review + LOKAL, oxirida bitta deploy.
+> ---
+
 > ✅ **STATUS 2026-07-04 (Jarvis, sessiya 3) — FAZA 1-5 + 3-FLASH(sync+batch) + ANALYTICS i18n + AGENTS.md DEPLOY SUCCESS, JONLI. HEAD=`436ac3c` (push qilingan). /clear XAVFSIZ.**
 >
 > **✅ DEPLOY 2026-07-04:** push `c1c24f5..436ac3c` (12 commit) → Railway build SUCCESS → jonли smoke O'TDI (`/api/health` 200 db=ok storage=ok · `/login` 200 · data365 render). Deploy-oldi tekshiruv: jonли PROCESSING job = **0** (autoresearch bilan o'lchandi — Railway MySQL public proxy `thomas.proxy.rlwy.net:26774` orqali, repo'нинг o'z `mysql2` driveri; usul memory'da). Deploy hech narsani uzмади.
