@@ -194,6 +194,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
           />
         ) : (
           <p
+            title={title}
             className="truncate text-[14.5px] leading-[1.25rem] text-gray-12 font-semibold p-0 m-0 h-[1.25rem] tracking-normal"
             onClick={() => {
               if (!sharedCapCard) {

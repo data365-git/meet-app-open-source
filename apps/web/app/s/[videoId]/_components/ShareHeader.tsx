@@ -553,6 +553,7 @@ export const ShareHeader = ({
 											role={isOwner ? "button" : undefined}
 											tabIndex={isOwner ? 0 : undefined}
 											className="truncate text-xl font-semibold text-gray-12 sm:text-3xl"
+											title={displayTitle}
 											onClick={() => {
 												if (isOwner) {
 													startEditing();
