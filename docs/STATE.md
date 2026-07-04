@@ -1,6 +1,12 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 6) — n01 5 FAZA DEPLOY + REFINED/COST FIX DEPLOY. HEAD=`b207c80` (branch `qa-fixes`). /clear XAVFSIZ.**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 6) — n01 5 FAZA + REFINED-FIX + MINI-PLAYER + CODEX-LOGO DEPLOY. HEAD=`01e604c` (branch `qa-fixes`). /clear XAVFSIZ.**
+>
+> **🎬 MINI-PLAYER (owner: watch-video doim pin tursa Xulosani kичик oynada o'qib bo'lmaydi → `~/Downloads/WATCH_LAYOUT.md` spec bilan):** commit `01e604c` deploy. Video endi tepada to'liq (pin YO'Q), scroll'да past-o'ngga **mini-pleerga** yig'iladi (`DockableVideo.tsx` yangi). Bir xil playerBlock CSS-reposition (remount YO'Q → ijro+seek uzilmaydi), slot min-height rezerv (jump yo'q). Mini-nazorat: × (yopish) · expand · **pin toggle** (default O'CHIQ, localStorage `data365:watchMiniPin`). i18n miniClose/Expand/PinOn/PinOff. tsc0+build+review (4 risk-nuqta o'zim tekshirдим). ⚠️ Owner jonli-verify: mini o'lchov/silliqlik/seek.
+>
+> **🤝 CODEX ishi (owner: "codex ham ishlar qildi, tekshir") — commit `dd50eb6` deploy:** Codex `LogoBadge.tsx` (high-contrast data365 mark + `useId()` gradient — Phase-1 versiyamдан yaxshi: oq-fon kontrast + dublikat-ID hал) + `Items.tsx` (TEAM selector-karta, Video-ikonka, mobil profil-overlay, Biome-fix). Codex koordinatsiyal_ган (mening fayllarimga tegmagan, push/deploy qilmagan, tsc+biome+build tekshirган). Men review+commit qildim, fayl-overlap yo'q. Handoff: `CODEX_TO_CLAUDE_SIDEBAR_LOGO_FIX_2026-07-04.md` (repo root, untracked). Codex `main`да `recover-cron.yml` ham qo'shган (stale-AI-job tiklash, alohida).
+>
+> **⏸️ OWNER QAROR KUTILMOQDA — batch default:** batch API ("Arzon") = 2x arzon, sifat BIR XIL (3-flash), faqat sekinroq (daqiqalar). Hozir default=Tez. Owner default'ni Arzon qilmoqchimi? (kichik: `ai-speed-mode.ts` default). **NARX BO'YICHA HALOL XULOSA:** normal video allaqachon ~1100 so'm; transkripsiya-model'ни arzonlashtirmaslik (sifat buzadi); batch = yagona xavfsiz lever (2x, sifatsiz-yo'qotishsiz).
 >
 > **🔧 REFINED "Matn" TOZALASH + COST (owner: "refined clean emas, short-form — data yo'qolmasin, faqat filler ket" + "cost test qil"):** commit `b207c80` deploy qilindi.
 > - **Tashxis (DB'дан real output + arzon A/B, taxmin emas):** refined `[time][speaker]` matn devori edi, uz filler ("Aha/Xo'p/Mhm/Xudo xohlasa"/raqam-aks-sado) saqlanardi. 2 sabab: (1) prompt faqat INGLIZCHA filler misolи; (2) `GEMINI_SUMMARY_MODEL="gemini-2.5-flash"` (transkript 3-flash'ga o'tган, refined qolган).
