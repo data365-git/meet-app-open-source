@@ -24,6 +24,7 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 	const innerRef = useRef<HTMLDivElement | null>(null);
 	const [docked, setDocked] = useState(false);
 	const [dismissed, setDismissed] = useState(false);
+	const [activated, setActivated] = useState(false);
 	const [isDesktop, setIsDesktop] = useState(false);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [pos, setPos] = useState<Pos | null>(null);
@@ -107,6 +108,7 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 				} else if (entry.isIntersecting) {
 					setDocked(false);
 					setDismissed(false);
+					setActivated(false);
 				}
 			},
 			{ threshold: 0 },
@@ -117,7 +119,14 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
 	const dockable = docked && isDesktop;
-	const showMini = dockable && isPlaying && !dismissed;
+	// The mini auto-appears the moment playback starts while docked, then stays
+	// (owner choice B): pausing keeps it so the user can resume; only × or
+	// scrolling the main player back into view hides it.
+	const showMini = dockable && activated && !dismissed;
+
+	useEffect(() => {
+		if (dockable && isPlaying) setActivated(true);
+	}, [dockable, isPlaying]);
 
 	// Measure the player's inline (non-docked) height so the slot can reserve
 	// that space via min-height once the inner wrapper becomes `fixed` and
