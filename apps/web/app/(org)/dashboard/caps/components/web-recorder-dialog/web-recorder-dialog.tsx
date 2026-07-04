@@ -174,6 +174,7 @@ export const WebRecorderDialog = ({
 		isCameraOff,
 		toggleCameraMute,
 		canToggleCamera,
+		registerPreviewCameraStream,
 		chunkUploads,
 		errorDownload,
 		completedShareUrl,
@@ -598,6 +599,7 @@ export const WebRecorderDialog = ({
 				<CameraPreviewWindow
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
+					onStreamChange={registerPreviewCameraStream}
 				/>
 			)}
 		</>

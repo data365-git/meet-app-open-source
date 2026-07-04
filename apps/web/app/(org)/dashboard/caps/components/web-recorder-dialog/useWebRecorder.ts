@@ -1549,6 +1549,20 @@ export const useWebRecorder = ({
 		setIsMicMuted(nextMuted);
 	}, [isMicMuted]);
 
+	// In camera-only mode, cameraStreamRef holds the actual recorded stream. In
+	// screen/window/tab + camera mode, there is no camera track in the recorded
+	// stream (the camera is only a floating preview bubble) — so
+	// registerPreviewCameraStream below lets CameraPreviewWindow hand its own
+	// getUserMedia stream to the hook, so the toggle can mute the same stream
+	// the user sees on screen.
+	const registerPreviewCameraStream = useCallback(
+		(stream: MediaStream | null) => {
+			if (recordingMode === "camera") return;
+			cameraStreamRef.current = stream;
+		},
+		[recordingMode, cameraStreamRef],
+	);
+
 	const canToggleCamera =
 		(cameraStreamRef.current?.getVideoTracks().length ?? 0) > 0;
 
@@ -1598,6 +1612,7 @@ export const useWebRecorder = ({
 		isCameraOff,
 		toggleCameraMute,
 		canToggleCamera,
+		registerPreviewCameraStream,
 		chunkUploads,
 		errorDownload,
 		completedShareUrl,

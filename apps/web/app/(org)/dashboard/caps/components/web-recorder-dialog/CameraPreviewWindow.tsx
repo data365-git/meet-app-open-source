@@ -79,11 +79,13 @@ const getPreviewMetrics = (
 interface CameraPreviewWindowProps {
 	cameraId: string;
 	onClose: () => void;
+	onStreamChange?: (stream: MediaStream | null) => void;
 }
 
 export const CameraPreviewWindow = ({
 	cameraId,
 	onClose,
+	onStreamChange,
 }: CameraPreviewWindowProps) => {
 	const t = useTranslations("recorder");
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
@@ -189,6 +191,7 @@ export const CameraPreviewWindow = ({
 				if (videoRef.current) {
 					videoRef.current.srcObject = stream;
 				}
+				onStreamChange?.(stream);
 			} catch (err) {
 				console.error("Failed to start camera", err);
 			}
@@ -203,8 +206,9 @@ export const CameraPreviewWindow = ({
 				});
 				streamRef.current = null;
 			}
+			onStreamChange?.(null);
 		};
-	}, [cameraId]);
+	}, [cameraId, onStreamChange]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
