@@ -1,6 +1,10 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — 3 BATCH QO'LLANDI (bug-batch 4 fix + dizayn mexanik FIX1/3/4/5/8 + dizayn kichik-vizual FIX6/8.4/8.2) + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`0e0d266` (origin `436ac3c`dan 14 commit oldinda). Owner: "kutamiz, dizayn bilan" → deploy oxirida. QOLGAN = 4 KATTA VIZUAL (stepper/summary/logo/comments) — owner telefon-verify shart.**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — 5 BATCH QO'LLANDI (bug-batch 4 fix + dizayn mexanik FIX1-labels/3/4/5/8 + kichik-vizual FIX6/8.4/8.2 + FIX7 summary + FIX9 logo + FIX2 stepper) + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`b0b41d2` (origin `436ac3c`dan 17 commit oldinda). Owner: "4 vizualni ham qur, keyin bitta deploy". QOLGAN = FAQAT FIX1 (comments-relocation) — desktop-layout owner-qarori kutilyapti. Owner TELEFON-VERIFY shart (men vizual ko'ra olmayman).**
+>
+> **VIZUAL BATCH commitlari:** `ce94055` FIX7 summary 1-ustun + FIX9 data365 logo (LogoBadge+favicon+PWA; ⚠️ favicon.ico/safari-pinned-tab.svg/eski meta-rang follow-up) · `b0b41d2` FIX2 processing stepper (`--brand` token; SummaryPanel noAiSummary→null; SharePanel processing-prop tab-lock). Har biri fresh-Opus review SHIP.
+> - ⚠️ **FIX2 ishchi HOLLOW+NESTED** bo'ldi (Agent-tool ishlatma dedim — bo'ysunmadi, grandchild yozdi); disk-verify bilan ushladim, ish aslida to'g'ri chiqdi, gate+review o'tdi. Codex 2-marta osilib qoldi → fallback fresh-Opus (butun vizual-batch shu bilan review qilindi).
+> - **FIX1 (oxirgi, BAJARILMAGAN — owner-qaror):** SharePanel'dan Comments-tab olib tashlash toza (5→4 tab), LEKIN izohlar (Share.tsx `<Sidebar>` commentsPanel) desktop'da QAYERGA: (A) tor chap-ustun video ostiga (~34%, siqilgan) yoki (B) butun-kенglikda ikkala ustun ostiga. Fayllar: `SharePanel.tsx` (type/props/TABS/panels/tabpanel-className) + `ShareVideo.tsx:879` `comments=` olib + placement. Owner tanlaguncha QILINMAYDI.
 >
 > **DIZAYN MEXANIK-BATCH (autoresearch loop: 9-agent reconcile → Sonnet apply → tsc/build/fresh-Opus-review SHIP; Codex 2-chi chaqiruvda osildi → fallback fresh-Opus):**
 > - `4aeef59` i18n: tab-yorliqlar `Transkript`/`Matn` (FIX1) + `newFolder` kalit + share so'zlar (uz/ru/en).
@@ -12,11 +16,8 @@
 > **DIZAYN KICHIK-VIZUAL BATCH (autoresearch loop, Sonnet apply → tsc/build/fresh-Opus SHIP; ⚠️ CRLF-FLIP takrorlandi: DashboardSearch LF edi, ishchi CRLF'ga flip qildi — `git diff --stat` bilan ushladim, `python replace \r\n→\n` bilan LF'ga qaytardim → diff toza 4 qator. SABOQ: spec'da qator-tugash DA'VO QILMA + har subagent-editdan keyin diff --stat):**
 > - `0e0d266` FIX6 meeting-cost share'dan olib tashlandi (+o'lik `isOwnerOrMember`) · FIX8.4 duration pill numeric `4:54` · FIX8.2 search placeholder i18n (`nav.searchPlaceholder`, uz "Space" — "bo'shliq" mistranslation tuzatildi). HEAD=`0e0d266` (origin'dan 14 commit oldinda).
 >
-> **⏸️ QOLGAN VIZUAL (needsOwnerVisual — kod yozsa bo'ladi lekin OWNER TELEFONDA KO'RISHI SHART, men vizual verify qila olmayman — dashboard login orqasida, parol menda yo'q):**
-> - **FIX2 processing STEPPER (L)** — hozir ko'k pill'lar; spec: 4-doira+rail stepper + ETA pill + `data365 AI` badge + status-qatori + skeleton + tab-disable + AI-input disable. `GenerateAiPanel.tsx:173-256` (step-state logic REUSE, faqat markup almashtir) + `SummaryPanel.tsx:58` "noAiSummary" olib tashla + `SharePanel.tsx` processing-prop + `ShareVideo.tsx`. ⚠️ TOKEN: CR `--accent` NOTO'G'RI shu repo'da (neutral) → `--brand`/`--brand-wash`/`--brand-fg`/`--border` ishlat. i18n kalitlar reconcile'da tayyor.
-> - **FIX7 Summary 1-ustun (M)** — `SummaryPanel.tsx`: Topics hozir 2-ustunli quti-grid (`:121 grid-cols-2` + `TopicCard :231-256`) → 1-ustun oqar (title 14/600 + desc 13.5 muted, faqat 1px pastki chegara). Overview/NextSteps/Chapters allaqachon 1-ustun.
-> - **FIX9 LOGO (M)** — reconcile-agent XATO berdi (qayta kerak). Assetlar: `apps/web/scratchpad/design-update-n1/design_handoff_data365_polish/assets/` (logo-mark.svg, logo-glyph.svg, favicon-16/32, apple-touch-icon, icon-192/512). Ulash: sidebar `Navbar/Items.tsx`, login, `app/icon.svg`+favicon+manifest, mobil-rail glyph.
-> - **FIX1 izohlar video-ostiga (M)** — `SharePanel.tsx` comments-tab olib tashla + `ShareVideo.tsx` commentsPanel video-karta OSTIGA. ⚠️ Sidebar tab-panel uchun stillangan edi → height/scroll moslash kerak.
+> **⏸️ QOLGAN (owner-qaror + verify):**
+> - **FIX1 izohlar video-ostiga (M) — OWNER LAYOUT-QARORI KUTILYAPTI.** SharePanel'dan Comments-tab olib tashlash toza (5→4). Desktop'da izohlar (`Share.tsx` commentsPanel = `<Sidebar>`) QAYERGA: (A) tor chap-ustun video ostiga (~34% kенг) yoki (B) butun-kенglikda ikkala ustun ostiga. Fayllar: `SharePanel.tsx` (type/props :115/126, initialTab :138, TABS :353, panels :361, tabpanel-className :404) + `ShareVideo.tsx` (`comments=` :879 olib + placement). ⚠️ Sidebar tab-panel uchun stillangan → height/scroll moslash kerak; comment-post + timestamp-jump ishlashini verify.
 > - **FIX8.5b auto-name locale-aware** — upload-path'da (bu fayllarda emas), trace kerak.
 > ---
 >
