@@ -115,7 +115,8 @@
     "meetingsEmptySubtitle": "Record a Google Meet call with the Chrome extension - analysis will arrive automatically.",
     "installExtension": "Install extension",
     "uploadVideo": "Upload video",
-    "or": "or"
+    "or": "or",
+    "newFolder": "New Folder"
   },
   "auth": {
     "signingIn": "Signing you in…",
@@ -303,7 +304,7 @@
     "tabTranscript": "Transcript",
     "tabTranscriptShort": "Transcript",
     "tabRefined": "Clean Transcript",
-    "tabRefinedShort": "Clean",
+    "tabRefinedShort": "Text",
     "tabComments": "Comments",
     "aiAskPlaceholder": "Ask AI…",
     "aiClearChat": "Clear AI chat",

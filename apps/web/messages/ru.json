@@ -115,7 +115,8 @@
     "meetingsEmptySubtitle": "Запишите встречу Google Meet через расширение Chrome - аналитика появится автоматически.",
     "installExtension": "Установить расширение",
     "uploadVideo": "Загрузить видео",
-    "or": "или"
+    "or": "или",
+    "newFolder": "Новая папка"
   },
   "auth": {
     "signingIn": "Выполняется вход…",
@@ -301,9 +302,9 @@
     "tabTasks": "Задачи",
     "tabTasksShort": "Задачи",
     "tabTranscript": "Транскрипт",
-    "tabTranscriptShort": "Текст",
+    "tabTranscriptShort": "Транскрипт",
     "tabRefined": "Очищенный текст",
-    "tabRefinedShort": "Очищен",
+    "tabRefinedShort": "Текст",
     "tabComments": "Комментарии",
     "aiAskPlaceholder": "Спросите ИИ…",
     "aiClearChat": "Очистить чат ИИ",
