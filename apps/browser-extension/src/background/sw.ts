@@ -428,7 +428,7 @@ async function handleMessage(
 					.sendMessage(contentStopTabId, { type: "STOP_CAPTURE" })
 					.catch(() => {});
 			} else {
-				await sendToOffscreen({ type: "STOP_CAPTURE" });
+				await sendToOffscreen({ type: "STOP_CAPTURE" }).catch(() => {});
 			}
 			return { ok: true };
 		}
@@ -452,7 +452,7 @@ async function handleMessage(
 					.sendMessage(pauseState.contentRecorderTabId, { type: "PAUSE_CAPTURE" })
 					.catch(() => {});
 			} else {
-				await sendToOffscreen({ type: "PAUSE_CAPTURE" });
+				await sendToOffscreen({ type: "PAUSE_CAPTURE" }).catch(() => {});
 			}
 			if (pauseState.kind === "recording") {
 				const nextState = { ...pauseState, paused: true, pausedAt: Date.now() };
@@ -481,7 +481,7 @@ async function handleMessage(
 					.sendMessage(resumeState.contentRecorderTabId, { type: "RESUME_CAPTURE" })
 					.catch(() => {});
 			} else {
-				await sendToOffscreen({ type: "RESUME_CAPTURE" });
+				await sendToOffscreen({ type: "RESUME_CAPTURE" }).catch(() => {});
 			}
 			if (resumeState.kind === "recording") {
 				const nextState = {

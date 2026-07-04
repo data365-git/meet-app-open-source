@@ -267,7 +267,7 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 	}
 }
 
-chrome.runtime.onMessage.addListener((raw: unknown) => {
+chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
 	const msg = raw as InboundMsg;
 
 	if (msg.type === "START_CAPTURE") {
@@ -277,11 +277,15 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		});
+		sendResponse({ ok: true });
 		return;
 	}
 
 	if (msg.type === "STOP_CAPTURE") {
-		if (!state) return;
+		if (!state) {
+			sendResponse({ ok: true });
+			return;
+		}
 		if (state.recorder.state !== "inactive") {
 			state.recorder.stop();
 		} else {
@@ -289,6 +293,7 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
 			state = null;
 			sendMsg({ type: "RECORDER_STOPPED" });
 		}
+		sendResponse({ ok: true });
 		return;
 	}
 
@@ -296,6 +301,7 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
 		if (state && state.recorder.state === "recording") {
 			state.recorder.pause();
 		}
+		sendResponse({ ok: true });
 		return;
 	}
 
@@ -303,6 +309,7 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
 		if (state && state.recorder.state === "paused") {
 			state.recorder.resume();
 		}
+		sendResponse({ ok: true });
 		return;
 	}
 });

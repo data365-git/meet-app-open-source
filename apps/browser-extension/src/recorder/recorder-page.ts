@@ -473,7 +473,7 @@ function wire(): void {
 		window.close();
 	});
 
-	chrome.runtime.onMessage.addListener((message: unknown) => {
+	chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
 		if (typeof message !== "object" || message === null) return;
 		const msg = message as Record<string, unknown>;
 		if (msg.type === "STATE_CHANGED") {
@@ -481,14 +481,17 @@ function wire(): void {
 			if (s) handleStateChange(s);
 		} else if (msg.type === "STOP_CAPTURE") {
 			stopRecording();
+			sendResponse({ ok: true });
 		} else if (msg.type === "PAUSE_CAPTURE") {
 			if (state && state.recorder.state === "recording") {
 				state.recorder.pause();
 			}
+			sendResponse({ ok: true });
 		} else if (msg.type === "RESUME_CAPTURE") {
 			if (state && state.recorder.state === "paused") {
 				state.recorder.resume();
 			}
+			sendResponse({ ok: true });
 		}
 	});
 

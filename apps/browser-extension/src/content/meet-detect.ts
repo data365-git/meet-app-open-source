@@ -1241,21 +1241,24 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 	}
 }
 
-chrome.runtime.onMessage.addListener((msg: unknown) => {
+chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 	if (!msg || typeof msg !== "object") return;
 	const message = msg as Record<string, unknown>;
 	if (message.type === "STATE_CHANGED" && message.state) {
 		handleStateChange(message.state as StateChangedMessage["state"]);
 	} else if (message.type === "STOP_CAPTURE") {
 		stopNudgeRecorder();
+		sendResponse({ ok: true });
 	} else if (message.type === "PAUSE_CAPTURE") {
 		if (nudgeRecorder && nudgeRecorder.recorder.state === "recording") {
 			nudgeRecorder.recorder.pause();
 		}
+		sendResponse({ ok: true });
 	} else if (message.type === "RESUME_CAPTURE") {
 		if (nudgeRecorder && nudgeRecorder.recorder.state === "paused") {
 			nudgeRecorder.recorder.resume();
 		}
+		sendResponse({ ok: true });
 	}
 });
 
