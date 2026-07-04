@@ -26,7 +26,15 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { Check, ChevronDown, Moon, MoreVertical, Plus, Sun } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	Moon,
+	MoreVertical,
+	Plus,
+	Sun,
+	Video,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -61,7 +69,6 @@ import {
 	HomeIcon,
 	LogoutIcon,
 	ReferIcon,
-	RecordIcon,
 	SettingsGearIcon,
 	UsersIcon,
 } from "../AnimatedIcons";
@@ -80,7 +87,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const t = useTranslations("nav");
 
 	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS =
-		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ?? [];
+		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ??
+		[];
 
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
@@ -200,11 +208,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								duration: 0.2,
 							}}
 							className={clsx(
-								"mt-1.5 mx-auto rounded-xl border cursor-pointer transition-colors",
+								"mx-auto rounded-xl border cursor-pointer transition-colors",
 								open
 									? "bg-gray-3 border-gray-3"
-									: "border-transparent hover:bg-gray-2 hover:border-gray-3",
-								sidebarCollapsed ? "w-fit px-2 py-0.5" : "w-full p-2.5",
+									: "border-gray-3/60 bg-gray-2/60 hover:bg-gray-2 hover:border-gray-4",
+								sidebarCollapsed ? "w-fit px-2 py-1" : "w-full px-3 py-2.5",
+								toggleMobileNav ? "mt-0 mb-4" : "mt-2 mb-2",
 							)}
 						>
 							<div
@@ -227,9 +236,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									<div className="flex items-center">
 										<SignedImageUrl
 											image={activeOrg?.organization.iconUrl}
-											name={
-												activeOrg?.organization.name ?? t("noOrganization")
-											}
+											name={activeOrg?.organization.name ?? t("noOrganization")}
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
@@ -243,8 +250,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										<div className="flex justify-between items-center w-full">
 											{!sidebarCollapsed && (
 												<p className="text-sm truncate leading-tight text-gray-12">
-													{activeOrg?.organization.name ??
-														t("noOrganization")}
+													{activeOrg?.organization.name ?? t("noOrganization")}
 												</p>
 											)}
 											{!sidebarCollapsed && (
@@ -356,13 +362,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					</PopoverTrigger>
 				</Tooltip>
 			</Popover>
-			<nav
-				className="flex flex-col w-full min-h-full"
-				aria-label="Sidebar"
-			>
+			<nav className="flex flex-col w-full min-h-full" aria-label="Sidebar">
 				<div
 					className={clsx(
-						"mt-4 shrink-0",
+						"mt-3 shrink-0",
 						sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
 					)}
 				>
@@ -375,11 +378,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							href="/dashboard/caps/record"
 							onClick={() => toggleMobileNav?.()}
 							className={clsx(
-								"mb-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--brand)] px-3 py-2 text-[13px] font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90",
+								"flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--brand)] px-3 text-[13px] font-semibold text-[var(--brand-fg)] shadow-sm shadow-blue-950/10 transition-opacity hover:opacity-90",
 								sidebarCollapsed && "mx-auto size-11 px-0",
+								toggleMobileNav ? "mb-8 min-h-12 py-3" : "mb-7 min-h-11 py-2.5",
 							)}
 						>
-							<span className="size-[7px] rounded-full bg-current" />
+							<Video className="size-4 shrink-0" strokeWidth={2.4} />
 							<span className={clsx(sidebarCollapsed && "sr-only")}>
 								{t("newRecording")}
 							</span>
@@ -492,8 +496,7 @@ const SidebarUser = ({ inline }: { inline?: boolean }) => {
 	const { theme, setThemeHandler } = useTheme();
 	const t = useTranslations("nav");
 	const nextTheme = theme === "light" ? "dark" : "light";
-	const themeLabel =
-		theme === "light" ? t("toggleDark") : t("toggleLight");
+	const themeLabel = theme === "light" ? t("toggleDark") : t("toggleLight");
 
 	const menuItems = useMemo(
 		() => [
@@ -558,7 +561,7 @@ const SidebarUser = ({ inline }: { inline?: boolean }) => {
 				showCondition: true,
 			},
 		],
-		[nextTheme, setThemeHandler, themeLabel, user.isPro],
+		[nextTheme, setThemeHandler, themeLabel, user.isPro, t],
 	);
 
 	if (inline) {
@@ -568,35 +571,66 @@ const SidebarUser = ({ inline }: { inline?: boolean }) => {
 					open={upgradeModalOpen}
 					onOpenChange={setUpgradeModalOpen}
 				/>
-				<div className="w-full">
+				<div className="relative w-full">
 					{/* Profile header — non-interactive, mirrors the Popover trigger markup */}
-					<div className="flex items-center gap-2 p-2 rounded-xl border border-transparent">
-						<SignedImageUrl
-							image={user.imageUrl}
-							name={user.name ?? t("user")}
-							letterClass="text-xs"
-							className="flex-shrink-0 size-6 text-gray-12"
-						/>
-						<span className="text-sm truncate text-gray-12">
-							{user.name ?? t("user")}
+					<button
+						type="button"
+						aria-expanded={menuOpen}
+						aria-label={t("user")}
+						onClick={() => setMenuOpen((value) => !value)}
+						className={clsx(
+							"flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border p-2 text-left transition-colors",
+							menuOpen
+								? "border-gray-4 bg-gray-3"
+								: "border-transparent hover:border-gray-3 hover:bg-gray-3",
+						)}
+					>
+						<span className="flex min-w-0 items-center gap-2">
+							<SignedImageUrl
+								image={user.imageUrl}
+								name={user.name ?? t("user")}
+								letterClass="text-xs"
+								className="flex-shrink-0 size-6 text-gray-12"
+							/>
+							<span className="text-sm truncate text-gray-12">
+								{user.name ?? t("user")}
+							</span>
 						</span>
-					</div>
-					{/* Inline menu items — each at least 44 px tall for touch targets */}
-					<div className="flex flex-col w-full mt-1">
-						{menuItems
-							.filter((item) => item.showCondition)
-							.map((item, index) => {
-								const sharedClassName =
-									"flex items-center gap-2 w-full min-h-[44px] px-2 py-2 rounded-lg text-sm text-gray-12 hover:bg-gray-5 transition-colors cursor-pointer text-left";
-								const iconEl = cloneElement(item.icon, {
-									className: item.iconClassName,
-									size: 14,
-								});
-								if ("href" in item && item.href) {
+						<MoreVertical
+							className="h-4 w-4 flex-shrink-0 text-gray-10"
+							aria-hidden="true"
+						/>
+					</button>
+					{menuOpen && (
+						<div className="absolute right-0 bottom-full left-0 z-[200] mb-2 flex flex-col rounded-xl border border-gray-4 bg-gray-2 p-1 shadow-2xl shadow-black/25">
+							{menuItems
+								.filter((item) => item.showCondition)
+								.map((item, index) => {
+									const sharedClassName =
+										"flex items-center gap-2 w-full min-h-[44px] px-2 py-2 rounded-lg text-sm text-gray-12 hover:bg-gray-5 transition-colors cursor-pointer text-left";
+									const iconEl = cloneElement(item.icon, {
+										className: item.iconClassName,
+										size: 14,
+									});
+									if ("href" in item && item.href) {
+										return (
+											<Link
+												key={index.toString()}
+												href={item.href}
+												className={sharedClassName}
+												onClick={item.onClick}
+											>
+												<span className="flex flex-shrink-0 justify-center items-center w-3.5 h-3.5">
+													{iconEl}
+												</span>
+												{item.name}
+											</Link>
+										);
+									}
 									return (
-										<Link
+										<button
 											key={index.toString()}
-											href={item.href}
+											type="button"
 											className={sharedClassName}
 											onClick={item.onClick}
 										>
@@ -604,24 +638,11 @@ const SidebarUser = ({ inline }: { inline?: boolean }) => {
 												{iconEl}
 											</span>
 											{item.name}
-										</Link>
+										</button>
 									);
-								}
-								return (
-									<button
-										key={index.toString()}
-										type="button"
-										className={sharedClassName}
-										onClick={item.onClick}
-									>
-										<span className="flex flex-shrink-0 justify-center items-center w-3.5 h-3.5">
-											{iconEl}
-										</span>
-										{item.name}
-									</button>
-								);
-							})}
-					</div>
+								})}
+						</div>
+					)}
 				</div>
 			</>
 		);
@@ -672,10 +693,7 @@ const SidebarUser = ({ inline }: { inline?: boolean }) => {
 						</div>
 					</PopoverTrigger>
 					<PopoverContent
-						className={clsx(
-							"p-1 w-48",
-							sidebarCollapsed ? "ml-3" : "mx-auto",
-						)}
+						className={clsx("p-1 w-48", sidebarCollapsed ? "ml-3" : "mx-auto")}
 						side="top"
 						align="start"
 						sideOffset={6}
