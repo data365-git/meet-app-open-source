@@ -248,6 +248,13 @@ export const ShareVideo = forwardRef<
 		const effectiveAiProcessingStep =
 			aiStatusQuery.data?.aiProcessingStep ?? data.metadata?.aiProcessingStep ?? null;
 
+		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
+		// the other tabs / AI input while transcription or AI generation is busy.
+		const aiProcessing =
+			data.transcriptionStatus === "PROCESSING" ||
+			effectiveAiStatus === "QUEUED" ||
+			effectiveAiStatus === "PROCESSING";
+
 		// "chala" (incomplete-looking) analysis: empty-but-complete, or refined
 		// sections fewer than summary chapters (misaligned old-data case).
 		const aiIncomplete = useMemo(() => {
@@ -771,6 +778,7 @@ export const ShareVideo = forwardRef<
 					<SharePanel
 						videoId={data.id}
 						onVideoJump={handleSeekAndPlay}
+						processing={aiProcessing}
 						summary={
 							<>
 								<GenerateAiPanel

@@ -56,11 +56,7 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 	const chapters = aiSummary?.chapters ?? [];
 
 	if (!aiSummary) {
-		return (
-			<div className="rounded-xl border border-gray-4 bg-gray-2 px-4 py-6 text-center">
-				<p className="text-sm text-gray-10">{t("noAiSummary")}</p>
-			</div>
-		);
+		return null;
 	}
 
 	function handleCopy() {

@@ -113,6 +113,7 @@ interface SharePanelProps {
 	transcript: React.ReactNode;
 	refined: React.ReactNode;
 	comments: React.ReactNode;
+	processing?: boolean;
 }
 
 export function SharePanel({
@@ -123,6 +124,7 @@ export function SharePanel({
 	transcript,
 	refined,
 	comments,
+	processing,
 }: SharePanelProps) {
 	const t = useTranslations("share");
 	const searchParams = useSearchParams();
@@ -137,6 +139,7 @@ export function SharePanel({
 			? rawParam
 			: "summary";
 	const [activeTab, setActiveTab] = useState<PanelTab>(initialTab);
+	const effectiveActiveTab: PanelTab = processing ? "summary" : activeTab;
 
 	const handleTabClick = useCallback(
 		(id: PanelTab) => {
@@ -357,7 +360,7 @@ export function SharePanel({
 		{ id: "refined", content: refined },
 		{ id: "comments", content: comments },
 	];
-	const activeContent = panels.find((p) => p.id === activeTab)?.content;
+	const activeContent = panels.find((p) => p.id === effectiveActiveTab)?.content;
 
 	return (
 		<div className="flex w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)] lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)]">
@@ -367,7 +370,8 @@ export function SharePanel({
 				className="flex shrink-0 overflow-x-auto border-b border-gray-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 			>
 				{TABS.map((tab) => {
-					const isActive = activeTab === tab.id;
+					const isActive = effectiveActiveTab === tab.id;
+					const isDisabledByProcessing = processing && tab.id !== "summary";
 					return (
 						<button
 							key={tab.id}
@@ -377,11 +381,13 @@ export function SharePanel({
 							aria-controls={`panel-${tab.id}`}
 							id={`tab-${tab.id}`}
 							onClick={() => handleTabClick(tab.id)}
+							disabled={isDisabledByProcessing}
 							className={clsx(
 								"-mb-px min-h-11 flex-1 shrink-0 whitespace-nowrap border-b-2 px-3 text-[13.5px] font-semibold transition-colors",
 								isActive
 									? "border-[var(--brand)] text-[var(--brand)]"
 									: "border-transparent text-gray-11 hover:text-gray-12",
+								isDisabledByProcessing && "opacity-45 pointer-events-none",
 							)}
 						>
 							{tab.label}
@@ -391,11 +397,11 @@ export function SharePanel({
 			</div>
 
 			<div
-				id={`panel-${activeTab}`}
+				id={`panel-${effectiveActiveTab}`}
 				role="tabpanel"
-				aria-labelledby={`tab-${activeTab}`}
+				aria-labelledby={`tab-${effectiveActiveTab}`}
 				className={
-					activeTab === "comments"
+					effectiveActiveTab === "comments"
 						? "flex min-h-0 flex-1 flex-col overflow-hidden"
 						: "min-h-0 flex-1 overflow-y-auto p-4"
 				}
@@ -467,14 +473,14 @@ export function SharePanel({
 					<textarea
 						ref={textareaRef}
 						rows={1}
-						placeholder={t("aiAskPlaceholder")}
+						placeholder={processing ? t("aiInputDisabledPlaceholder") : t("aiAskPlaceholder")}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
 							adjustTextarea();
 						}}
 						onKeyDown={handleKeyDown}
-						disabled={isStreaming}
+						disabled={isStreaming || processing}
 						className="min-h-9 flex-1 resize-none rounded-[18px] border border-gray-5 bg-gray-2 px-4 py-2 text-[13px] text-gray-12 placeholder:text-gray-9 focus:border-[var(--brand)] focus:outline-none disabled:opacity-60"
 					/>
 					<button

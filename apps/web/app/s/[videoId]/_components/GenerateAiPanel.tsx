@@ -222,35 +222,77 @@ export function GenerateAiPanel({
       },
     ] as const;
 
+    const etaMin = Math.max(1, Math.round((duration ?? 120) / 120));
+
     return (
-      <div className="flex flex-col gap-3 rounded-xl border border-blue-6 bg-blue-3 px-4 py-4">
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 px-4 py-4">
         {/* Header row */}
-        <div className="flex items-center gap-2">
-          <SpinnerIcon />
-          <span className="text-sm font-semibold text-blue-11">
-            {tShare("aiAnalyzing")}
+        <div className="flex justify-between items-center gap-2">
+          <span className="inline-flex items-center gap-2 rounded-full bg-[var(--brand-wash)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand)]">
+            <SpinnerIcon />
+            {tShare("aiBadge")}
           </span>
+          {duration != null && (
+            <span className="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-gray-10">
+              {tShare("aiEta", { minutes: etaMin })}
+            </span>
+          )}
         </div>
 
-        <div className="flex gap-2" aria-label={tShare("aiAnalysisStage")}>
-          {steps.map((step) => (
-            <div
-              key={step.key}
-              className={`flex-1 rounded-full px-3 py-1.5 text-center text-xs font-medium ${
-                step.state === "done"
-                  ? "bg-[var(--brand)] text-[var(--brand-fg)]"
-                  : step.state === "current"
-                    ? "bg-[var(--brand)] text-[var(--brand-fg)] ring-2 ring-blue-6 animate-pulse"
-                    : "bg-blue-3 text-blue-10 ring-1 ring-blue-5"
-              }`}
-            >
-              {step.label}
+        {/* Stepper */}
+        <div className="flex" aria-label={tShare("aiAnalysisStage")}>
+          {steps.map((step, i) => (
+            <div key={step.key} className="flex flex-1 flex-col items-center gap-1.5 last:flex-none">
+              <div className="relative flex w-full items-center justify-center">
+                <div
+                  className={`flex size-[22px] items-center justify-center rounded-full border-2 text-[11px] font-semibold relative z-10 ${
+                    step.state === "done"
+                      ? "bg-[var(--brand)] border-[var(--brand)] text-[var(--brand-fg)]"
+                      : step.state === "current"
+                        ? "border-[var(--brand)] text-[var(--brand)] shadow-[0_0_0_4px_var(--brand-wash)] animate-pulse"
+                        : "border-border text-gray-9"
+                  }`}
+                >
+                  {step.state === "done" ? "✓" : i + 1}
+                </div>
+                {i < steps.length - 1 && (
+                  <span
+                    aria-hidden="true"
+                    className={`absolute top-[10px] left-1/2 h-0.5 w-full ${
+                      step.state === "done" ? "bg-[var(--brand)]" : "bg-border"
+                    }`}
+                  />
+                )}
+              </div>
+              <span
+                className={`text-[11.5px] font-semibold ${
+                  step.state === "pending" ? "text-gray-9" : "text-gray-12"
+                }`}
+              >
+                {step.label}
+              </span>
             </div>
           ))}
         </div>
 
-        {/* Label */}
-        <p className="text-sm text-blue-11">{tShare(labelKey)}</p>
+        {/* Status row */}
+        <div className="flex items-center gap-2 text-[13.5px] font-medium text-gray-12">
+          <SpinnerIcon />
+          {tShare("aiStatusRow")}
+        </div>
+
+        {/* Skeleton */}
+        <div className="flex flex-col gap-2">
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "95%" }} />
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "88%" }} />
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "92%" }} />
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "58%" }} />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-10">
+            {tShare("skeletonNextSteps")}
+          </span>
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "78%" }} />
+          <div className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse" style={{ width: "66%" }} />
+        </div>
       </div>
     );
   }
