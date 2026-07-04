@@ -9,7 +9,7 @@ import {
 	parseTimestampToSeconds,
 } from "./ai-chat-timestamps";
 
-type PanelTab = "summary" | "tasks" | "transcript" | "refined" | "comments";
+type PanelTab = "summary" | "tasks" | "transcript" | "refined";
 
 interface Message {
 	id: string;
@@ -112,7 +112,6 @@ interface SharePanelProps {
 	tasks: React.ReactNode;
 	transcript: React.ReactNode;
 	refined: React.ReactNode;
-	comments: React.ReactNode;
 	processing?: boolean;
 }
 
@@ -123,7 +122,6 @@ export function SharePanel({
 	tasks,
 	transcript,
 	refined,
-	comments,
 	processing,
 }: SharePanelProps) {
 	const t = useTranslations("share");
@@ -134,8 +132,7 @@ export function SharePanel({
 	const initialTab: PanelTab =
 		rawParam === "tasks" ||
 		rawParam === "transcript" ||
-		rawParam === "refined" ||
-		rawParam === "comments"
+		rawParam === "refined"
 			? rawParam
 			: "summary";
 	const [activeTab, setActiveTab] = useState<PanelTab>(initialTab);
@@ -350,7 +347,6 @@ export function SharePanel({
 		{ id: "tasks", label: t("tabTasksShort") },
 		{ id: "transcript", label: t("tabTranscriptShort") },
 		{ id: "refined", label: t("tabRefinedShort") },
-		{ id: "comments", label: t("tabComments") },
 	];
 
 	const panels: { id: PanelTab; content: React.ReactNode }[] = [
@@ -358,7 +354,6 @@ export function SharePanel({
 		{ id: "tasks", content: tasks },
 		{ id: "transcript", content: transcript },
 		{ id: "refined", content: refined },
-		{ id: "comments", content: comments },
 	];
 	const activeContent = panels.find((p) => p.id === effectiveActiveTab)?.content;
 
@@ -400,11 +395,7 @@ export function SharePanel({
 				id={`panel-${effectiveActiveTab}`}
 				role="tabpanel"
 				aria-labelledby={`tab-${effectiveActiveTab}`}
-				className={
-					effectiveActiveTab === "comments"
-						? "flex min-h-0 flex-1 flex-col overflow-hidden"
-						: "min-h-0 flex-1 overflow-y-auto p-4"
-				}
+				className="min-h-0 flex-1 overflow-y-auto p-4"
 			>
 				{activeContent}
 			</div>

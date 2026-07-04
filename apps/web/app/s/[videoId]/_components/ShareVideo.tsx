@@ -755,6 +755,7 @@ export const ShareVideo = forwardRef<
 		);
 
 		return (
+			<>
 			<div className="flex flex-col gap-4 lg:flex-row">
 				{/* LEFT: video only (chapter chips moved into the Summary tab's TOC).
 				    Video is the secondary/helper element, so it takes a smaller share
@@ -876,10 +877,11 @@ export const ShareVideo = forwardRef<
 								currentTime={currentTime}
 							/>
 						}
-						comments={commentsPanel}
 					/>
 				</div>
 			</div>
+			{commentsPanel && <div className="mt-4">{commentsPanel}</div>}
+			</>
 		);
 	},
 );
