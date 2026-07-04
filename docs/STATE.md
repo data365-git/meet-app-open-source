@@ -1,8 +1,10 @@
 # Ustoz (Cap fork) — Project STATE
 
-> 🚀 **STATUS 2026-07-04 (Jarvis, sessiya 6) — DIZAYN n01 5 FAZA HAMMASI BAJARILDI → DEPLOY qilinmoqda (owner: "deploy qil va tekshir"). Kod HEAD=`a0ddde4` (branch `qa-fixes`, 10 commit origin'dan oldinda). Push + jonli smoke davom etyapti.**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 6) — DIZAYN n01 5 FAZA HAMMASI BAJARILDI + DEPLOY SUCCESS + JONLI SMOKE O'TDI. HEAD=`c712afe` PUSH+DEPLOY QILINGAN (branch `qa-fixes`). Railway build ~3.5min SUCCESS. /clear XAVFSIZ.**
 >
-> **🎯 MAQSAD (BAJARILDI):** dizayn n01 ga to'liq o'tish — 5 faza tugadi. **KEYINGI = deploy natijasini jonli tasdiqlash + owner telefon-ko'rik.**
+> **🎯 MAQSAD (BAJARILDI + JONLI):** dizayn n01 ga to'liq o'tish — 5 faza tugadi, prod'ga chiqdi. **KEYINGI = FAQAT owner telefon-ko'rik (login-orqasi vizual).**
+>
+> **✅ JONLI SMOKE (`capweb-production-dd85.up.railway.app`):** `/api/health` 200 (db=ok storage=ok) · `/login`+`/signup`+`/privacy` 200 · **F1 LogoBadge jonli** (`viewBox 0 0 200 200`) · **favicon.ico jonli** (2047b = qayta-yaratilgan) · **P0 saqlangan** (`<form method="post">`) · F5 login uz (`siz@kompaniya.uz`). Loglar toza (faqat benign ER_DUP_FIELDNAME migration note). Public tomon = TASDIQLANGAN.
 >
 > **BARCHA FAZA (10 commit `7024cee..a0ddde4`, har biri tsc0+build+review):** F1 `73426e6` tokenlar+logo+favicon+infra · F2 `860a8e3` shell+library (i18n reconcile) · F3 `ec4493f` layout re-org (tabs-below-video, cost ega-only, comments o'ngga) + `f3f9dc9` transkript flat-rows+speaker-filter + `81c32d0` chips+accent-tokens · F4+F5 `a0ddde4` §4.3 library-toast i18n + extension/import i18n + analytics Stripe-upsell olib tashlandi + login/settings verified.
 >
