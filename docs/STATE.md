@@ -1,5 +1,20 @@
 # Ustoz (Cap fork) — Project STATE
 
+> 🎯 **YANGI GOAL 2026-07-04 kech (owner: "bu dizaynga o'tamiz") — DIZAYN n01 = YANGI AVTORITATIV SPEC.** Manba: `apps/web/scratchpad/design-n01/design_handoff_data365_polish/` (owner zip: `Data365 loyiha dizayni n01.zip`). "Done" ko'rinishi = watch-sahifa + sidebar + icon + transkript shu spec'ga to'liq mos, 3-tilli, light+dark, toza/senior.
+>
+> **YANGI/O'ZGARGAN ISHLAR (n01, BAJARILMAGAN — owner reja-tasdig'i kutilyapti):**
+> - **A. Watch YANGI layout** (`WATCH_LAYOUT_AND_ICON.md` — eski yon-panel BEKOR): CHAP ustun = **sticky video (pin, max-h 60vh)** + sarlavha/meta + **AI-tab'lar video OSTIDA to'liq-kенг** (Xulosa·Vazifalar·Transkript·Matn + pinned AI input); O'NG ustun (sticky ~360-400px) = **AI-harajat karta (FAQAT ega/admin)** + **izohlar**. ≤1024px: 1 ustun stack. AIFab orb olib tashlanadi. ⚠️ **Bu FIX1 (izohlar full-width) + FIX6 (cost olib tashlangan)ni TESKARI qiladi** — cost qaytadi (ega-only), izohlar o'ng ustunga.
+> - **B. Icon** — sidebar logo buzuq (owner jonli tasdiqladi). Spec: `assets/logo-mark.svg`ni 32-34px `<img>`/inline ISHLAT, **o'zim qayta chizmayman**, halqa to'liq (stroke ~6% diametr). ⚠️ Men `LogoBadge`ni o'zim qayta chizdim (`b64cd8d`) → asset'ga moslash kerak.
+> - **C. Sidebar i18n** — MAIN→ASOSIY, MANAGE→BOSHQARISH, Recordings→Yozuvlar, Meetings→Uchrashuvlar, Analytics→Tahlil, Settings→Sozlamalar, Storage→Xotira/used→ishlatilgan, New recording→Yangi yozuv (ru ham). Extension inglizcha qoladi.
+> - **FIX5b Transkript restrukturizatsiya** — "matn devori" → har replika `[vaqt] [suhbatdosh] matn`, joriy-ijro qatori `--accent-wash` belgilangan, seek, ixcham qidiruv. `TranscriptPanel`.
+> - **FIX5 addendum** — transkript inglizcha: Search transcript→Transkriptdan qidirish, Copy→Nusxa olish, TXT/SRT title/aria.
+> - **⚠️ ZIDDIYAT:** WATCH_LAYOUT (tab'lar video-ostida) vs FIX5c (tab'lar o'ng-panel 1.45fr/1fr). WATCH_LAYOUT = newer + "yon-panel bekor" → avtoritativ, LEKIN owner tasdiqlasin.
+> - Token: n01 `--accent` deydi lekin repo'da `--accent`=neutral → `--brand`/`--brand-wash`/`--brand-fg` ishlat (oldingi saboq).
+>
+> **🔓 YANGI KIRISH (bu sessiya): Railway CLI authed** → jonli DB (public proxy `thomas.proxy.rlwy.net:26774`, MySQL_URL railway'dан) + `railway logs --service @cap/web`. DB-recipe: `railway variables --service MySQL --json` MYSQL_URL → host'ni proxy'ga almashtir → mysql2. Bu edit-404 diagnostika + cost-o'lchov'ni ochdi.
+>
+> **EDIT-404 (owner report):** admin'ning 8 videosi ham edit-shartlaridan O'TADI (DB-tekshirildi) → 404 kod-bug EMAS. Log: `Failed to find Server Action ... older/newer deployment` = **eskirgan-tab** (ko'p deploy paytida). Yechim: owner **qattiq-yangilash** → retry. Hali bo'lsa DB+log bilan qaziyman. (Yon: loglarда `S3Error` ko'p — storage, alohida tekshir.)
+> ---
 > 🚀 **STATUS 2026-07-04 (Jarvis, sessiya 5) — DEPLOY SUCCESS, JONLI. Bug-batch + butun dizayn-update (FIX1-9) push+deploy bo'ldi (`436ac3c..3bc0465`, 21 commit). Railway build SUCCESS (~4min). HEAD=`3bc0465` PUSH QILINGAN. /clear XAVFSIZ.**
 >
 > **✅ JONLI SMOKE O'TDI:** `/api/health` 200 (db=ok storage=ok) · `/login`+`/signup`+`/privacy` 200 · **P0 parol-fix JONLI TASDIQLANDI** (login VA signup server-HTML'da `<form method="post">` — leak yopildi) · yangi data365 LogoBadge jonli (`viewBox 0 0 200 200`).
