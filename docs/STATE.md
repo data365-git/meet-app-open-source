@@ -1,5 +1,29 @@
 # Ustoz (Cap fork) — Project STATE
 
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — CODEX-BUG-BATCH 1: 4 FIX QO'LLANDI + GATE + CODEX SHIP. LOKAL commit, PUSH/DEPLOY QILINMAGAN. HEAD=`df1c014` (origin `436ac3c`dan 8 commit oldinda).**
+>
+> **MAQSAD (o'zgarmagan):** o'zbek video-transkript + AI-xulosa mahsuloti — dizayn toza, narx arzon, Codex topgan buglar yo'q, senior-ship darajasi.
+>
+> **Bu sessiyada (parallel investigate-workflow `ustoz-bug-batch-investigate` = 10 Opus-agent, har bug: tasdiqla→patch→adversarial verify; keyin men serial qo'lladim + Codex review):**
+> - `7680640` **P0 xavfsizlik** — login+signup `<form method="post">` (hydration'dan oldin GET-submit paroli URL'ga chiqishini yopdi; agent login'ni topdi, signup'ni O'TKAZIB YUBORGAN edi — verifier ushladi, ikkalasi tuzatildi).
+> - `d8649b9` **AI-spend string-concat** — `get-org-ai-spend.ts:80-82` `Number(row.totalMicros ?? 0)` (mysql2 SUM() string qaytaradi → `+=` konkatenatsiya → ulkan noto'g'ri son. Owner "8000 so'm ulkan" ko'rgan joyi shu bo'lishi mumkin). sibling get-monthly-spend/ai-cost-guard allaqachon to'g'ri, CSV'da SUM yo'q.
+> - `f526691` **hydration #418 + `-44min`** — `CapCardContent.tsx` `mounted` flag + `format.relativeTime(effectiveDate, Date.now())` client-only (bitta komponent /caps + /meetings ikkalasini tuzatadi).
+> - `df1c014` **dark-mode root** — `globals.css` `body.dark` uchun bg/fg override (hardcoded `#f2f2f2` unlayered qoida dark-token'ni bosib turgan edi). ⚠️ globals.css = CRLF fayl; edit CRLF saqladi (Python-byte + `git diff --stat` tekshirildi, flip YO'Q).
+> - **GATE: tsc 0 + `next build` SUCCESS (actions/* o'zgardi → real build shart, o'tdi).** **Codex mustaqil review = overall SHIP** (4/4, CRLF churn yo'q).
+>
+> **⏸️ QOLGAN (bu batch, BAJARILMAGAN):**
+> - **Mobil overflow (P1/P2)** — kod bilan aniqlanmadi: `body{overflow-x:hidden}` in-flow elementni kesadi, yagona fixed+100vw = messenger panel LEKIN u faqat ochilganda render. **JONLI O'LCHOV kerak (390px, login qilingan dashboard) — `document.querySelectorAll('*')` bilan haqiqiy toshayotgan elementni top.** Taxminiy fix QO'LLANMADI (adversarial: "ehtimol tuzatmaydi"). Owner-parol yoki deploy-keyin.
+> - **cost-runaway-guard** — plan tayyor (`docs/plans/2026-07-04-cost-runaway-guard.md`), pulli uzun-video test kerak (owner-tasdiq/spend). Alohida deliberate ish.
+> - **dizayn-update (logo + 9 fix)** — owner vizual-ko'rik + reconciliation shart. Alohida bosqich.
+>
+> **DEPLOY QARORI OWNER'DA:** P0 = JONLI parol-leak → tavsiya: shu 4 fix (+3 oldingi lokal: pause/banner) HOZIR push+deploy, dizayn keyin. Owner "deploy" desa: push `qa-fixes` → Railway build → jonli smoke (health + login + /caps konsol #418 yo'qligi + dark-root rangi).
+>
+> **OWNER TODO (ADHD-tashqi-xotira):**
+> - [ ] **Qaror: hozir deploy** (P0 xavfsizlik jonli) yoki dizayn bilan birga kutamizmi?
+> - [ ] Mobil overflow uchun: telefonда login qilib dashboardни 390px'da ko'rsang, yoki men deploy-keyin o'lchayman.
+> - [ ] (oldingi) Kamera/mic qurilma-test · Chrome Web Store · UzbekVoice `data365-test` kalitni o'chir.
+> ---
+
 > ✅ **STATUS 2026-07-04 (Jarvis, sessiya 4) — CHECKPOINT, /clear XAVFSIZ. Bug-fixlar + COST tekshiruv + 3 ta yangi katta ish HUJJATLANDI (bajarilmagan, keyingi sessiya). HEAD=`f64ba9e` (lokal, origin `436ac3c`dan 3 commit oldinda — PUSH/DEPLOY qilinmagan).**
 >
 > **Bu sessiyada bajarildi (commit, LOKAL):** `5607e0d` extension meeting-**Pause fix** (timer pauzada muzlamasdi — media aslida pauza bo'lardi; endi pausedAt/pausedAccumMs bilan popup+pill timer to'g'ri; ⚠️ extension qo'lda reload kerak) · `f64ba9e` extension **update-banner olib tashlandi** (owner). ⚠️ Bu 2 commit hali push/deploy qilinmagan.
