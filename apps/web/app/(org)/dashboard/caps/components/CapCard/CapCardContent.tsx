@@ -5,7 +5,7 @@ import clsx from "clsx";
 import moment from "moment";
 import { useFormatter, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -43,6 +43,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
   );
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [showFullDate, setShowFullDate] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const [title, setTitle] = useState(cap.name);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -232,7 +237,9 @@ export const CapCardContent: React.FC<CapContentProps> = ({
               <span className="px-1.5 text-gray-8">{"\u00b7"}</span>
               {showFullDate
                 ? formatPlatformDateTime(effectiveDate)
-                : format.relativeTime(effectiveDate)}
+                : mounted
+                  ? format.relativeTime(effectiveDate, Date.now())
+                  : ""}
             </p>
           </Tooltip>
         )}
