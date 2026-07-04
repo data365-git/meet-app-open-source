@@ -443,6 +443,54 @@ const GEMINI_TRANSCRIBE_MODELS = [
 	"gemini-flash-latest",
 ] as const;
 
+// Runaway cost guard. A 15-min transcription chunk cannot legitimately exceed
+// ~16k output tokens; the model's 65k max let a repetition-loop runaway burn the
+// whole cap (measured: one 2.5-flash chunk hit 65537 out-tokens and cost $0.19 of
+// garbage on a video that should have cost ~$0.07). 24k keeps generous headroom
+// for a dense chunk while cutting a runaway's blast radius ~2.7x.
+const TRANSCRIBE_MAX_OUTPUT_TOKENS = 24000;
+
+// Detect a repetition-loop runaway (the model repeating one line over and over)
+// and truncate the garbage tail, keeping the clean prefix. Legit transcripts
+// essentially never repeat the same >8-char, non-timestamp line >12 times, so
+// the false-positive risk is negligible. Exported for unit testing.
+export function stripRunawayRepetition(text: string): {
+	text: string;
+	runaway: boolean;
+} {
+	const lines = text.split("\n");
+	const counts = new Map<string, number>();
+	for (const line of lines) {
+		const t = line.trim();
+		if (t.length > 8 && !t.includes("-->")) {
+			counts.set(t, (counts.get(t) ?? 0) + 1);
+		}
+	}
+	let worst: string | null = null;
+	let worstN = 0;
+	for (const [t, n] of counts) {
+		if (n > worstN) {
+			worstN = n;
+			worst = t;
+		}
+	}
+	if (!worst || worstN <= 12) return { text, runaway: false };
+	// Cut at the 3rd occurrence of the runaway line: keep a little context, drop
+	// the loop. Downstream coverage/gap-fill handles the resulting short chunk.
+	let seen = 0;
+	let cutIdx = lines.length;
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i]?.trim() === worst) {
+			seen++;
+			if (seen === 3) {
+				cutIdx = i;
+				break;
+			}
+		}
+	}
+	return { text: lines.slice(0, cutIdx).join("\n"), runaway: true };
+}
+
 async function pollUntilActive(
 	fileName: string,
 	apiKey: string,
@@ -662,7 +710,7 @@ export async function transcribeWithGemini(
 							],
 							generationConfig: {
 								temperature: 0.1,
-								maxOutputTokens: 65536,
+								maxOutputTokens: TRANSCRIBE_MAX_OUTPUT_TOKENS,
 								thinkingConfig: { thinkingBudget: 0 },
 							},
 						}),
@@ -728,13 +776,20 @@ export async function transcribeWithGemini(
 	// Always normalize Gemini's raw output into STANDARD WebVTT before saving,
 	// regardless of the shape it returns (inline cues, single timestamps, etc.).
 	// This keeps the AI workflow's parser happy and keeps HTML <track> captions valid.
-	if (rawText.trim().length === 0) {
+	const { text: guardedText, runaway } = stripRunawayRepetition(rawText);
+	if (runaway) {
+		console.warn(
+			`[gemini-transcribe] RUNAWAY repetition detected (outputTokens=${outputTokens}, finishReason=${finishReason}); truncated garbage tail, kept clean prefix`,
+		);
+	}
+
+	if (guardedText.trim().length === 0) {
 		throw new Error(
 			`[gemini-transcribe] empty transcript from Gemini (finishReason=${finishReason}); not saving as complete`,
 		);
 	}
 
-	const transcriptVtt = normalizeToWebVtt(rawText, audioDurationSec);
+	const transcriptVtt = normalizeToWebVtt(guardedText, audioDurationSec);
 	if (!transcriptVtt.includes("-->")) {
 		console.warn(
 			"[gemini-transcribe] Gemini did not return usable WEBVTT timestamps; fabricated approximate timestamps from plain text fallback.",
