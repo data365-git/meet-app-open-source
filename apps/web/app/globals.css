@@ -18,6 +18,17 @@
 	--brand: #005cb1;
 	--brand-fg: #ffffff;
 	--brand-wash: #e0edff;
+	/* design n01 semantic surface/text/state tokens (consume via bg-[var(--ds-*)] etc.) */
+	--ds-bg: #f7f7f7;
+	--ds-surface: #ffffff;
+	--ds-surface-2: #fbfbfb;
+	--ds-text: #202020;
+	--ds-muted: #6b6b6b;
+	--ds-border: #e8e8e8;
+	--ds-error: #e5484d;
+	--ds-error-wash: #fdeaea;
+	--ds-success: #1a9e5c;
+	--ds-warning: #f0a03c;
 	--primary: var(--brand);
 	--secondary: var(--brand);
 	--filler: #efefef;
@@ -46,6 +57,17 @@
 .dark {
 	--brand: #2e9dff;
 	--brand-wash: rgba(46, 157, 255, 0.15);
+	/* design n01 semantic tokens — dark values */
+	--ds-bg: #141416;
+	--ds-surface: #1c1c1f;
+	--ds-surface-2: #18181b;
+	--ds-text: #ededef;
+	--ds-muted: #909096;
+	--ds-border: #2b2b30;
+	--ds-error: #e5484d;
+	--ds-error-wash: rgba(229, 72, 77, 0.15);
+	--ds-success: #3ecf8e;
+	--ds-warning: #f0a03c;
 	/* Semantic text token for recorder dialog labels in dark mode. */
 	--text-primary: var(--gray-12);
 }

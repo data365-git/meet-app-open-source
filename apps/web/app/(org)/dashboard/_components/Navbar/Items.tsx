@@ -80,7 +80,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const t = useTranslations("nav");
 
 	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS =
-		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ?? ["richie@cap.so"];
+		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ?? [];
 
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
