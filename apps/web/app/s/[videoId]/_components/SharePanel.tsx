@@ -460,6 +460,27 @@ export function SharePanel({
 			)}
 
 			<div className="shrink-0 border-t border-gray-4 p-3">
+				{messages.length === 0 && (
+					<div className="mb-2.5 flex flex-col gap-1.5">
+						<span className="font-mono text-[11px] uppercase tracking-wide text-gray-9">
+							{t("suggestedQuestionsLabel")}
+						</span>
+						<div className="flex flex-wrap gap-1.5">
+							{[t("suggestedQ1"), t("suggestedQ2"), t("suggestedQ3")].map(
+								(q) => (
+									<button
+										key={q}
+										type="button"
+										onClick={() => sendMessage(q)}
+										className="rounded-[14px] border border-gray-5 bg-gray-2 px-2.5 py-1.5 text-[13px] text-gray-12 transition-colors hover:bg-gray-3"
+									>
+										{q}
+									</button>
+								),
+							)}
+						</div>
+					</div>
+				)}
 				<div className="flex items-end gap-2">
 					<textarea
 						ref={textareaRef}

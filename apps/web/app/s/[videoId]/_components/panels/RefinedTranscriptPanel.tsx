@@ -108,7 +108,7 @@ export function RefinedTranscriptPanel({
 							isActive
 								? {
 										borderLeft: "3px solid var(--brand)",
-										background: "var(--blue-2)",
+										background: "var(--brand-wash)",
 									}
 								: undefined
 						}
@@ -119,8 +119,8 @@ export function RefinedTranscriptPanel({
 								onClick={() => onVideoJump?.(startSec)}
 								className="rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors"
 								style={{
-									background: "var(--blue-3)",
-									color: "var(--blue-11)",
+									background: "var(--brand-wash)",
+									color: "var(--brand)",
 								}}
 							>
 								{formatTimeMinutes(startSec)}
@@ -177,8 +177,8 @@ export function RefinedTranscriptPanel({
 								aria-label={t("playFromChapter", { title: chapter.title })}
 								className="flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors"
 								style={{
-									background: "var(--blue-3)",
-									color: "var(--blue-11)",
+									background: "var(--brand-wash)",
+									color: "var(--brand)",
 								}}
 							>
 								<Play className="size-3.5 fill-current" />

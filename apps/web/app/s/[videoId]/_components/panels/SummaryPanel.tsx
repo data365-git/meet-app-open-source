@@ -80,15 +80,15 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 						padding: "4px 10px",
 						fontSize: "12px",
 						fontWeight: 500,
-						color: copied ? "var(--blue-11)" : "var(--gray-11)",
+						color: copied ? "var(--brand)" : "var(--gray-11)",
 						background: "transparent",
-						border: `1px solid ${copied ? "var(--blue-6)" : "var(--gray-5)"}`,
+						border: `1px solid ${copied ? "var(--brand)" : "var(--gray-5)"}`,
 						borderRadius: "7px",
 						cursor: "pointer",
 						transition: "color 150ms, border-color 150ms",
 					}}
 				>
-					{copied ? "Nusxa olindi" : "Nusxa olish"}
+					{copied ? t("copied") : t("copyTranscript")}
 				</button>
 			</div>
 			{/* Overview — lead paragraph, no card */}
@@ -155,7 +155,7 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 										flexShrink: 0,
 										fontSize: "13px",
 										fontWeight: 700,
-										color: "var(--blue-11)",
+										color: "var(--brand)",
 										fontVariantNumeric: "tabular-nums",
 										minWidth: "18px",
 									}}
@@ -197,7 +197,7 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 										className="font-mono"
 										style={{
 											fontSize: "12.5px",
-											color: "var(--blue-11)",
+											color: "var(--brand)",
 											flexShrink: 0,
 										}}
 									>
