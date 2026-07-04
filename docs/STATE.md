@@ -1,6 +1,10 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 3) — FAZA 1-5 + 3-FLASH(sync+batch) + ANALYTICS i18n + AGENTS.md TAYYOR. HEAD=`1854845`. DEPLOY QILINYAPTI (owner "a"). /clear XAVFSIZ (deploy tugашини kut).**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 3) — FAZA 1-5 + 3-FLASH(sync+batch) + ANALYTICS i18n + AGENTS.md DEPLOY SUCCESS, JONLI. HEAD=`436ac3c` (push qilingan). /clear XAVFSIZ.**
+>
+> **✅ DEPLOY 2026-07-04:** push `c1c24f5..436ac3c` (12 commit) → Railway build SUCCESS → jonли smoke O'TDI (`/api/health` 200 db=ok storage=ok · `/login` 200 · data365 render). Deploy-oldi tekshiruv: jonли PROCESSING job = **0** (autoresearch bilan o'lchandi — Railway MySQL public proxy `thomas.proxy.rlwy.net:26774` orqali, repo'нинг o'z `mysql2` driveri; usul memory'da). Deploy hech narsani uzмади.
+> - **NATURALLIK — owner telefon-ko'rikда tekshirsin** (Faza 1-5 + analytics, light/dark): "Spacelar"/"Dasturlar"/"Butun davr" qoldirildi. Yoqmasa fix-forward.
+> - **⚠️ STATE tracked endi (`git add -f docs/STATE.md`) — keyingi yangilanишни ham -f bilan qo'sh; keyingi deploy bilan pushlanadi.**
 >
 > **Sessiya-3 yakuni (13 commit `c1c24f5`..`1854845`):** yuqoridagilar + `36a9ad2` **analytics i18n** (uz/ru/en; Cap→"Yozuvlar", "Analitika" izchil; ⚠️ agent 5 tsx faylни CR-flip qilган edi → `--ignore-cr-at-eol` bilan ushlab LF'ga qaytardim; gate green) + `1854845` **AGENTS.md** (Codex `sen kabi` davom etsin: STATE-resume protokоли + gate'lar + deploy qoidasi + delegatsiya; Codex `AGENTS.md`ни men `CLAUDE.md`ни o'qigandек o'qiydi).
 > - **CODEX CONTINUITY:** owner Codex'ни loyihaга ulamoqchi (chatgpt.com/codex → GitHub → `mirkomilovabrorwork-dot/ustoz-github`). Push(deploy)дан keyin Codex hamma yangi ishни + AGENTS.md'ни ko'radi.
