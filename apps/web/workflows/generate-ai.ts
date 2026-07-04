@@ -51,6 +51,21 @@ interface VttSegment {
 	text: string;
 }
 
+interface TranscriptChunk {
+	text: string;
+	segments: VttSegment[];
+	startTime: number;
+	endTime: number;
+}
+
+interface RefinedTranscriptLine {
+	id: number;
+	start: number;
+	time: string;
+	text: string;
+	speaker: string | null;
+}
+
 interface TranscriptData {
 	segments: VttSegment[];
 	text: string;
@@ -439,10 +454,10 @@ export function shouldGenerateRefinedTranscript({
 	videoDurationSeconds: number;
 }): boolean {
 	// The cleaned transcript is generated SEPARATELY from the summary JSON call
-	// (single-chunk: its own non-JSON call; multi-chunk: one non-JSON call per
-	// chunk, each bounded by MAX_CHARS_PER_CHUNK). It therefore does NOT share the
-	// summary token budget. We intentionally do NOT gate on duration: this is a
-	// lessons platform with long (up to ~2h) recordings, and the previous
+	// (single-chunk: its own delete-classifier call; multi-chunk: one
+	// delete-classifier call per chunk, each bounded by MAX_CHARS_PER_CHUNK). It
+	// therefore does NOT share the summary token budget. We intentionally do NOT
+	// gate on duration: this is a lessons platform with long recordings, and the previous
 	// duration cap (a) excluded every video longer than the cap and (b) tripped
 	// on inflated durations from hallucinated trailing VTT cues — both left the
 	// Refined tab empty. The only requirement is that a transcript exists.
@@ -552,8 +567,7 @@ function hasUsableSummaryContent(
 	);
 }
 
-export const AI_EMPTY_RESULT_ERROR =
-	"AI generation returned no usable content";
+export const AI_EMPTY_RESULT_ERROR = "AI generation returned no usable content";
 
 /**
  * Pure metadata-patch decision for saveResults. Exported for unit tests.
@@ -746,8 +760,8 @@ function parseVttWithTimestamps(vttContent: string): VttSegment[] {
 
 function chunkTranscriptWithTimestamps(
 	segments: VttSegment[],
-): { text: string; startTime: number; endTime: number }[] {
-	const chunks: { text: string; startTime: number; endTime: number }[] = [];
+): TranscriptChunk[] {
+	const chunks: TranscriptChunk[] = [];
 	let currentChunk: VttSegment[] = [];
 	let currentLength = 0;
 
@@ -758,6 +772,7 @@ function chunkTranscriptWithTimestamps(
 		) {
 			chunks.push({
 				text: currentChunk.map((s) => s.text).join(" "),
+				segments: [...currentChunk],
 				startTime: currentChunk[0]?.start ?? 0,
 				endTime: currentChunk[currentChunk.length - 1]?.start ?? 0,
 			});
@@ -771,6 +786,7 @@ function chunkTranscriptWithTimestamps(
 	if (currentChunk.length > 0) {
 		chunks.push({
 			text: currentChunk.map((s) => s.text).join(" "),
+			segments: [...currentChunk],
 			startTime: currentChunk[0]?.start ?? 0,
 			endTime: currentChunk[currentChunk.length - 1]?.start ?? 0,
 		});
@@ -869,7 +885,10 @@ async function callAiApi(
 				});
 			}
 			if (data.candidates?.[0]?.finishReason === "MAX_TOKENS") {
-				console.error("[generate-ai] response TRUNCATED (MAX_TOKENS) - raise maxOutputTokens", { json, outputTokens: data.usageMetadata?.candidatesTokenCount ?? 0 });
+				console.error(
+					"[generate-ai] response TRUNCATED (MAX_TOKENS) - raise maxOutputTokens",
+					{ json, outputTokens: data.usageMetadata?.candidatesTokenCount ?? 0 },
+				);
 			}
 			const content = rawText ?? "{}";
 			const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
@@ -890,6 +909,457 @@ function cleanJsonResponse(content: string): string {
 		return content.replace(/```\s*/g, "");
 	}
 	return content;
+}
+
+function formatTranscriptTime(seconds: number): string {
+	const safeSeconds = Number.isFinite(seconds)
+		? Math.max(0, Math.floor(seconds))
+		: 0;
+	const hours = Math.floor(safeSeconds / 3600);
+	const minutes = Math.floor((safeSeconds % 3600) / 60);
+	const secs = safeSeconds % 60;
+	if (hours > 0) {
+		return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+	}
+	return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function splitSpeakerPrefix(text: string): {
+	speaker: string | null;
+	body: string;
+} {
+	const trimmed = text.trim();
+	const match = trimmed.match(/^([^:\n]{1,50}):\s+(.+)$/);
+	if (!match) return { speaker: null, body: trimmed };
+	return {
+		speaker: match[1]?.trim() || null,
+		body: match[2]?.trim() || trimmed,
+	};
+}
+
+function buildRefinedTranscriptLines(
+	segments: VttSegment[],
+): RefinedTranscriptLine[] {
+	return segments
+		.map((segment) => ({
+			start: segment.start,
+			text: segment.text.trim(),
+		}))
+		.filter((line) => line.text.length > 0)
+		.map((line, id) => {
+			const { speaker } = splitSpeakerPrefix(line.text);
+			return {
+				id,
+				start: line.start,
+				time: formatTranscriptTime(line.start),
+				text: line.text,
+				speaker,
+			};
+		});
+}
+
+function normalizeRefinedComparable(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/[`'’]/g, "")
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+const PURE_ACKNOWLEDGEMENT_LINES = new Set([
+	"aha",
+	"aha aha",
+	"mhm",
+	"hm",
+	"hmm",
+	"mm",
+	"uh",
+	"um",
+	"uh huh",
+	"xop",
+	"hop",
+	"mayli",
+	"ok",
+	"okay",
+	"okey",
+	"aga",
+	"ugu",
+	"aga aga",
+	"ugu ugu",
+	"да",
+	"ага",
+	"угу",
+	"угу угу",
+]);
+
+const PROTECTED_ENTITY_STOPWORDS = new Set([
+	"admin",
+	"speaker",
+	"bugun",
+	"mana",
+	"demak",
+	"lekin",
+	"keyin",
+	"shunaqa",
+	"ha",
+	"yoq",
+	"yani",
+	"agar",
+	"bilan",
+	"uchun",
+	"kerak",
+	"bor",
+	"yo",
+	"va",
+	"the",
+	"and",
+	"this",
+	"that",
+	"yes",
+	"no",
+	"ok",
+	"okay",
+]);
+
+function isPureAcknowledgementLine(line: RefinedTranscriptLine): boolean {
+	const { body } = splitSpeakerPrefix(line.text);
+	const normalized = normalizeRefinedComparable(body);
+	return PURE_ACKNOWLEDGEMENT_LINES.has(normalized);
+}
+
+function isExactRefinedRepeat(
+	line: RefinedTranscriptLine,
+	lines: RefinedTranscriptLine[],
+): boolean {
+	const normalized = normalizeRefinedComparable(
+		splitSpeakerPrefix(line.text).body,
+	);
+	if (!normalized) return false;
+	const previous = lines.slice(Math.max(0, line.id - 3), line.id);
+	return previous.some(
+		(prev) =>
+			normalizeRefinedComparable(splitSpeakerPrefix(prev.text).body) ===
+			normalized,
+	);
+}
+
+function isBareEcho(
+	line: RefinedTranscriptLine,
+	lines: RefinedTranscriptLine[],
+): boolean {
+	const normalized = normalizeRefinedComparable(
+		splitSpeakerPrefix(line.text).body,
+	);
+	if (!normalized) return false;
+	const tokens = normalized.split(" ");
+	if (tokens.length > 3 || normalized.length > 40) return false;
+	const previous = lines.slice(Math.max(0, line.id - 3), line.id);
+	return previous.some((prev) => {
+		const prevNormalized = normalizeRefinedComparable(
+			splitSpeakerPrefix(prev.text).body,
+		);
+		return new RegExp(`(^| )${escapeRegExp(normalized)}( |$)`).test(
+			prevNormalized,
+		);
+	});
+}
+
+function isShortFalseStart(line: RefinedTranscriptLine): boolean {
+	const { body } = splitSpeakerPrefix(line.text);
+	const normalized = normalizeRefinedComparable(body);
+	if (!normalized || /\d/.test(normalized)) return false;
+	const tokenCount = normalized.split(" ").length;
+	return tokenCount <= 5 && /(?:[-–—]|\.\.\.|…)\s*$/.test(body.trim());
+}
+
+function isSafeRefinedDelete(
+	line: RefinedTranscriptLine,
+	lines: RefinedTranscriptLine[],
+): boolean {
+	return (
+		isPureAcknowledgementLine(line) ||
+		isExactRefinedRepeat(line, lines) ||
+		isBareEcho(line, lines) ||
+		isShortFalseStart(line)
+	);
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractProtectedRefinedTokens(text: string): Set<string> {
+	if (
+		PURE_ACKNOWLEDGEMENT_LINES.has(
+			normalizeRefinedComparable(splitSpeakerPrefix(text).body),
+		)
+	) {
+		return new Set();
+	}
+
+	const numbers = text.match(/\d[\d\s.,]*\d|\d/g) ?? [];
+	const entityLike =
+		text.match(
+			/\b(?:[A-Z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*|[A-Za-z]*\d+[A-Za-z]*|[А-ЯЁ][А-ЯЁа-яё0-9]+)\b/g,
+		) ?? [];
+	const tokens = new Set<string>();
+
+	for (const number of numbers) {
+		const normalized = number.replace(/\D/g, "");
+		if (normalized.length >= 2) tokens.add(`n:${normalized}`);
+	}
+
+	for (const entity of entityLike) {
+		const normalized = entity
+			.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+			.toLowerCase();
+		if (
+			normalized.length > 1 &&
+			!/^\d+$/.test(normalized) &&
+			!PURE_ACKNOWLEDGEMENT_LINES.has(normalizeRefinedComparable(normalized)) &&
+			!PROTECTED_ENTITY_STOPWORDS.has(normalized)
+		) {
+			tokens.add(`e:${normalized}`);
+		}
+	}
+
+	return tokens;
+}
+
+function guardDeletesForProtectedTokens(
+	lines: RefinedTranscriptLine[],
+	deleteIds: Set<number>,
+): Set<number> {
+	const guardedDeleteIds = new Set(deleteIds);
+	const keptTokens = new Set<string>();
+
+	for (const line of lines) {
+		if (guardedDeleteIds.has(line.id)) continue;
+		for (const token of extractProtectedRefinedTokens(line.text)) {
+			keptTokens.add(token);
+		}
+	}
+
+	for (const line of lines) {
+		if (!guardedDeleteIds.has(line.id)) continue;
+		const lineTokens = extractProtectedRefinedTokens(line.text);
+		if ([...lineTokens].some((token) => !keptTokens.has(token))) {
+			guardedDeleteIds.delete(line.id);
+			for (const token of lineTokens) keptTokens.add(token);
+		}
+	}
+
+	return guardedDeleteIds;
+}
+
+function readDeleteId(value: unknown): number | null {
+	if (typeof value === "number" && Number.isInteger(value)) return value;
+	if (typeof value === "string" && /^\d+$/.test(value)) {
+		return Number.parseInt(value, 10);
+	}
+	if (isRecord(value)) {
+		return readDeleteId(value.id);
+	}
+	return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function addDeleteIds(
+	value: unknown,
+	validIds: Set<number>,
+	deleteIds: Set<number>,
+) {
+	if (!Array.isArray(value)) return;
+	for (const item of value) {
+		const id = readDeleteId(item);
+		if (id !== null && validIds.has(id)) deleteIds.add(id);
+	}
+}
+
+function parseRefinedDeleteIds(
+	content: string,
+	lines: RefinedTranscriptLine[],
+): Set<number> {
+	const validIds = new Set(lines.map((line) => line.id));
+	const deleteIds = new Set<number>();
+	const parsed = JSON.parse(cleanJsonResponse(content).trim()) as unknown;
+
+	if (Array.isArray(parsed)) {
+		addDeleteIds(parsed, validIds, deleteIds);
+		return deleteIds;
+	}
+
+	if (!isRecord(parsed)) return deleteIds;
+
+	addDeleteIds(parsed.deleteIds, validIds, deleteIds);
+	addDeleteIds(parsed.delete_ids, validIds, deleteIds);
+	addDeleteIds(parsed.deletedIds, validIds, deleteIds);
+	addDeleteIds(parsed.deleted_ids, validIds, deleteIds);
+
+	const decisions = parsed.lines ?? parsed.decisions ?? parsed.items;
+	if (Array.isArray(decisions)) {
+		for (const decision of decisions) {
+			if (!isRecord(decision)) continue;
+			const shouldDelete =
+				decision.delete === true ||
+				decision.keep === false ||
+				decision.action === "delete" ||
+				decision.decision === "delete";
+			if (!shouldDelete) continue;
+			const id = readDeleteId(decision.id);
+			if (id !== null && validIds.has(id)) deleteIds.add(id);
+		}
+	}
+
+	return deleteIds;
+}
+
+function buildRefinedDeletePrompt(lines: RefinedTranscriptLine[]): string {
+	const transcriptLines = JSON.stringify(
+		lines.map(({ id, time, speaker, text }) => ({
+			id,
+			time,
+			speaker,
+			text,
+		})),
+		null,
+		2,
+	);
+
+	return `You are a lossless transcript noise classifier.
+
+Your only job is to mark transcript lines that should be DELETED. You must not rewrite, shorten, translate, merge, or clean any text. The application will keep every unmarked line verbatim.
+
+Delete a line ONLY when the whole line is useless noise:
+- Pure acknowledgement/backchannel: "aha", "xo'p", "mhm", "uh huh", "ага", "угу", etc.
+- A bare echo of a number or word the other speaker just said.
+- Exact verbatim repetition of a previous line.
+- A false start with no completed useful content.
+
+KEEP every line that contains any fact, number, name, price, place, decision, explanation, argument, question, or answer. When unsure, KEEP. Do not translate Uzbek, Russian, or English.
+
+Return ONLY valid JSON in this exact shape:
+{"deleteIds":[1,2,3]}
+
+Do not include ids for lines that should be kept.
+
+Transcript lines:
+${transcriptLines}`;
+}
+
+function buildRefinedParagraphsFromLines(
+	lines: RefinedTranscriptLine[],
+	deleteIds: Set<number>,
+): string[] {
+	const paragraphs: string[] = [];
+	let currentSpeaker: string | null = null;
+	let currentParts: string[] = [];
+	let currentLength = 0;
+
+	const flush = () => {
+		if (currentParts.length > 0) {
+			paragraphs.push(currentParts.join(" ").trim());
+		}
+		currentSpeaker = null;
+		currentParts = [];
+		currentLength = 0;
+	};
+
+	for (const line of lines) {
+		if (deleteIds.has(line.id)) continue;
+		const text = line.text.trim();
+		if (!text) continue;
+
+		const { speaker } = splitSpeakerPrefix(text);
+		const canJoin =
+			currentParts.length > 0 &&
+			speaker !== null &&
+			speaker === currentSpeaker &&
+			currentLength + text.length < 2000;
+
+		if (!canJoin) flush();
+		currentSpeaker = speaker;
+		currentParts.push(text);
+		currentLength += text.length + 1;
+	}
+
+	flush();
+	return paragraphs;
+}
+
+function buildRawRefinedParagraphs(segments: VttSegment[]): string[] {
+	return buildRefinedParagraphsFromLines(
+		buildRefinedTranscriptLines(segments),
+		new Set(),
+	);
+}
+
+async function generateLosslessFilteredRefined(
+	segments: VttSegment[],
+	context: AiCallContext,
+	logLabel: string,
+): Promise<{
+	paragraphs: string[];
+	inputTokens: number;
+	outputTokens: number;
+}> {
+	const lines = buildRefinedTranscriptLines(segments);
+	if (lines.length === 0) {
+		return { paragraphs: [], inputTokens: 0, outputTokens: 0 };
+	}
+
+	const deterministicDeleteIds = new Set(
+		lines
+			.filter((line) => isPureAcknowledgementLine(line))
+			.map((line) => line.id),
+	);
+	let inputTokens = 0;
+	let outputTokens = 0;
+
+	try {
+		const refinedResult = await callAiApi(
+			buildRefinedDeletePrompt(lines),
+			{ json: true },
+			context,
+		);
+		inputTokens += refinedResult.inputTokens;
+		outputTokens += refinedResult.outputTokens;
+
+		const { text: guardedJson, runaway } = stripRunawayRepetition(
+			refinedResult.content,
+		);
+		if (runaway) {
+			console.warn(
+				`[generate-ai] refined delete classifier runaway truncated (${logLabel})`,
+			);
+		}
+
+		const modelDeleteIds = parseRefinedDeleteIds(guardedJson, lines);
+		for (const id of modelDeleteIds) {
+			const line = lines[id];
+			if (line && isSafeRefinedDelete(line, lines)) {
+				deterministicDeleteIds.add(id);
+			}
+		}
+	} catch (error) {
+		console.warn(
+			`[generate-ai] refined delete classifier failed; keeping raw lines (${logLabel})`,
+			error,
+		);
+	}
+
+	return {
+		paragraphs: buildRefinedParagraphsFromLines(
+			lines,
+			guardDeletesForProtectedTokens(lines, deterministicDeleteIds),
+		),
+		inputTokens,
+		outputTokens,
+	};
 }
 
 async function generateSingleChunk(
@@ -991,8 +1461,8 @@ ${transcriptWithTimestamps}`;
 // chapter, clean ONLY the transcript segments that fall under that chapter's
 // time range. This makes the "Refined" tab split into the SAME sections as the
 // raw "Matn" tab (same count/titles/startSec) instead of coarse ~24KB chunks.
-// Each chapter is cleaned with its own dedicated non-JSON call, so output is
-// never truncated. Falls back to the raw slice text if the model returns empty.
+// Each chapter is filtered by a dedicated JSON delete-classifier call; kept cue
+// text is never rewritten. Falls back to the raw slice text if filtering fails.
 /**
  * Force the summary chapters and the refined-transcript chapters to be the SAME
  * set. generateChapterAlignedRefined emits a refined chapter only for windows
@@ -1056,54 +1526,16 @@ async function generateChapterAlignedRefined(
 			);
 			if (slice.length === 0) return null;
 
-			const timestamped = slice
-				.map(
-					(s) =>
-						`[${Math.floor(s.start / 60)}:${String(s.start % 60).padStart(2, "0")}] ${s.text}`,
-				)
-				.join("\n");
-
-			const refinedPrompt = `You are a transcript editor. Your ONLY job is to produce a clean, complete, full version of the spoken text below — NOT a summary.
-
-RULES (strict):
-- Remove filler and backchannel acknowledgements in ANY language — English ("uh", "um", "er", "well", "you know", "like" as filler), Uzbek ("aha", "ha", "xo'p", "mayli", "mhm", "huh", "ie", "qani", "ha-ha"), Russian ("ага", "угу", "ну", "вот", "это самое"). Also remove: standalone agreement/acknowledgement lines that add NO new information (a lone "Aha.", "Xo'p.", "Mhm", or a filler-repeated "Xudo xohlasa."), bare echoes where someone just repeats a word or number the other person said, exact word-for-word repetitions, and false starts (e.g. "I was — I mean, we should").
-- MERGE the dialogue into clean flowing paragraphs. Do NOT keep every short utterance on its own line — combine consecutive lines about the SAME point into readable prose, and drop the pure listener acknowledgements entirely. The result should read like clean written text, not a raw chat log.
-- Keep EVERYTHING substantive: every fact, number, name, decision, explanation, argument, and every question WITH its answer — in the original order. NOTHING important may be dropped or shortened. Only the useless filler goes.
-- Do NOT translate. Do NOT summarize or shorten the substance. Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine); you may join sentences into paragraphs but keep the actual content and words.
-- Output clean readable paragraphs separated by blank lines. No bullet points, no headers.
-- This is NOT a summary (a summary is short): keep the full substance — but WITHOUT the filler/backchannel noise.
-- Wrap EVERY foreign/technical/brand/product word or phrase (any word not in the dominant spoken language) in markdown bold: **word**. Example: Bugun **dashboard** **deadline** bor, **сразу** qilamiz.
-${MIXED_LANGUAGE_PRESERVATION_RULES}
-
-Return ONLY the cleaned text. No JSON. No explanations.
-
-Transcript:
-${timestamped}`;
-
 			let paragraphs: string[] = [];
 			try {
-				const refinedResult = await callAiApi(
-					refinedPrompt,
-					{ json: false },
+				const refined = await generateLosslessFilteredRefined(
+					slice,
 					context,
+					`chapter startSec=${range.startSec}`,
 				);
-				inputTokens += refinedResult.inputTokens;
-				outputTokens += refinedResult.outputTokens;
-				// Guard against a looping model burning tokens on repeated garbage:
-				// keep the clean prefix, drop the runaway tail (no substantive loss).
-				const { text: guardedRefined, runaway } = stripRunawayRepetition(
-					refinedResult.content,
-				);
-				if (runaway) {
-					console.warn(
-						`[generate-ai] refined runaway repetition truncated (chapter startSec=${range.startSec})`,
-					);
-				}
-				paragraphs = guardedRefined
-					.trim()
-					.split(/\n\s*\n/)
-					.map((p) => p.trim())
-					.filter((p) => p.length > 0);
+				inputTokens += refined.inputTokens;
+				outputTokens += refined.outputTokens;
+				paragraphs = refined.paragraphs;
 			} catch (error) {
 				console.error(
 					"[generate-ai] chapter-aligned refine failed for chapter; using raw slice",
@@ -1112,9 +1544,7 @@ ${timestamped}`;
 			}
 
 			if (paragraphs.length === 0) {
-				paragraphs = slice
-					.map((s) => s.text.trim())
-					.filter((t) => t.length > 0);
+				paragraphs = buildRawRefinedParagraphs(slice);
 			}
 
 			return {
@@ -1172,7 +1602,10 @@ export async function parseJsonWithRetry(
 		} catch {
 			console.error(
 				`[generate-ai] ${label} JSON parse FAILED (attempt ${attempt}/2)`,
-				{ contentLength: result.content.length, tail: result.content.slice(-150) },
+				{
+					contentLength: result.content.length,
+					tail: result.content.slice(-150),
+				},
 			);
 		}
 	}
@@ -1180,7 +1613,7 @@ export async function parseJsonWithRetry(
 }
 
 async function generateMultipleChunks(
-	chunks: { text: string; startTime: number; endTime: number }[],
+	chunks: TranscriptChunk[],
 	videoDuration: number,
 	languageInstruction: string,
 	context: AiCallContext,
@@ -1276,74 +1709,42 @@ ${chunk.text}`;
 		for (let i = 0; i < chunks.length; i++) {
 			const chunk = chunks[i];
 			if (!chunk) continue;
-			const timeLabel = `${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")}`;
 			// Use chapter title from the matching summary if available, else "Part N"
 			const matchedSummary = chunkSummaries.find(
 				(cs) => cs.startTime === chunk.startTime,
 			);
 			const chapterTitle =
 				matchedSummary?.chapters[0]?.title ?? `Part ${i + 1}`;
-			const refinedPrompt = `You are a transcript editor. Your ONLY job is to produce a clean, complete, full version of the spoken text below — NOT a summary.
-
-RULES (strict):
-- Remove filler and backchannel acknowledgements in ANY language — English ("uh", "um", "er", "well", "you know", "like" as filler), Uzbek ("aha", "ha", "xo'p", "mayli", "mhm", "huh", "ie", "qani", "ha-ha"), Russian ("ага", "угу", "ну", "вот", "это самое"). Also remove: standalone agreement/acknowledgement lines that add NO new information (a lone "Aha.", "Xo'p.", "Mhm", or a filler-repeated "Xudo xohlasa."), bare echoes where someone just repeats a word or number the other person said, exact word-for-word repetitions, and false starts (e.g. "I was — I mean, we should").
-- MERGE the dialogue into clean flowing paragraphs. Do NOT keep every short utterance on its own line — combine consecutive lines about the SAME point into readable prose, and drop the pure listener acknowledgements entirely. The result should read like clean written text, not a raw chat log.
-- Keep EVERYTHING substantive: every fact, number, name, decision, explanation, argument, and every question WITH its answer — in the original order. NOTHING important may be dropped or shortened. Only the useless filler goes.
-- Do NOT translate. Do NOT summarize or shorten the substance. Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine); you may join sentences into paragraphs but keep the actual content and words.
-- Output clean readable paragraphs separated by blank lines. No bullet points, no headers.
-- This is NOT a summary (a summary is short): keep the full substance — but WITHOUT the filler/backchannel noise.
-- Wrap EVERY foreign/technical/brand/product word or phrase (any word not in the dominant spoken language) in markdown bold: **word**. Example: Bugun **dashboard** **deadline** bor, **сразу** qilamiz.
-${MIXED_LANGUAGE_PRESERVATION_RULES}
-
-Return ONLY the cleaned text. No JSON. No explanations.
-
-Transcript (${timeLabel}):
-${chunk.text}`;
 			// A single failing chunk call must not abort the whole loop and silently
-			// collapse the refined transcript to []. Skip the failed chunk, keep the
-			// rest.
+			// collapse the refined transcript to []. Fall back to raw text instead.
 			try {
-				const refinedResult = await callAiApi(
-					refinedPrompt,
-					{ json: false },
+				const refined = await generateLosslessFilteredRefined(
+					chunk.segments,
 					context,
+					`chunk ${i + 1}/${chunks.length}`,
 				);
-				totalInputTokens += refinedResult.inputTokens;
-				totalOutputTokens += refinedResult.outputTokens;
-				const cleanedText = stripRunawayRepetition(
-					refinedResult.content,
-				).text.trim();
-				if (cleanedText.length === 0) {
-					// AI cleaning returned nothing for this chunk — use raw text as fallback
-					// so every chunk contributes a chapter to the Refined tab.
-					const rawParagraphs = chunk.text
-						.split("\n")
-						.map((line) => line.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, ""))
-						.join("\n")
-						.split(/\n\s*\n/)
-						.map((p) => p.trim())
-						.filter((p) => p.length > 0);
-					refinedChapters.push({
-						startSec: chunk.startTime,
-						title: chapterTitle,
-						paragraphs: rawParagraphs.length > 0 ? rawParagraphs : [chunk.text],
-					});
-					continue;
-				}
-				const paragraphs = cleanedText
-					.split(/\n\s*\n/)
-					.map((p) => p.trim())
-					.filter((p) => p.length > 0);
+				totalInputTokens += refined.inputTokens;
+				totalOutputTokens += refined.outputTokens;
+				const paragraphs =
+					refined.paragraphs.length > 0
+						? refined.paragraphs
+						: buildRawRefinedParagraphs(chunk.segments);
 				refinedChapters.push({
 					startSec: chunk.startTime,
 					title: chapterTitle,
-					paragraphs: paragraphs.length > 0 ? paragraphs : [cleanedText],
+					paragraphs,
 				});
 			} catch (error) {
 				console.warn(
-					`[generate-ai] Refined transcript chunk ${i + 1}/${chunks.length} failed; skipping`,
+					`[generate-ai] Refined transcript chunk ${i + 1}/${chunks.length} failed; using raw text`,
 					error,
 				);
+				const rawParagraphs = buildRawRefinedParagraphs(chunk.segments);
+				refinedChapters.push({
+					startSec: chunk.startTime,
+					title: chapterTitle,
+					paragraphs: rawParagraphs.length > 0 ? rawParagraphs : [chunk.text],
+				});
 			}
 		}
 	}
@@ -1509,7 +1910,10 @@ function parseAiResponse(content: string): AiResult {
 			aiSummary: parseAiSummary(data.aiSummary ?? null),
 		};
 	} catch {
-		console.error("[generate-ai] summary JSON parse FAILED (likely truncated)", { contentLength: content.length, tail: content.slice(-150) });
+		console.error(
+			"[generate-ai] summary JSON parse FAILED (likely truncated)",
+			{ contentLength: content.length, tail: content.slice(-150) },
+		);
 		return {
 			title: "Generated Title",
 			summary: AI_SUMMARY_FAILURE_PLACEHOLDER,
