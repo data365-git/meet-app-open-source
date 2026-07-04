@@ -785,7 +785,7 @@ export const CapCard = ({
                 e.preventDefault();
                 handleEditVideo();
               }}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-3 text-blue-11 border border-blue-6 hover:bg-blue-4 transition-colors self-start"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-[var(--brand-wash)] text-[var(--brand)] border border-[var(--brand)]/30 hover:bg-[var(--brand-wash)]/80 transition-colors self-start"
               title="Trim this video"
             >
               <FontAwesomeIcon icon={faScissors} className="size-2.5" />

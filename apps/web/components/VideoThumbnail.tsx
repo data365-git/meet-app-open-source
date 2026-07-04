@@ -219,7 +219,10 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 					/>
 				)}
 				{videoDuration && (
-					<p className="text-white leading-none px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
+					<p
+						className="text-white leading-none px-2 right-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]"
+						style={{ fontFamily: "ui-monospace, monospace" }}
+					>
 						{formatDuration(videoDuration)}
 					</p>
 				)}
