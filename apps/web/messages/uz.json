@@ -437,6 +437,7 @@
     "aiAnalysisStage": "AI tahlil bosqichi"
   },
   "nav": {
+    "searchPlaceholder": "Yozuv yoki Space qidirish…",
     "instructions": "Yozuvlar",
     "meetingRecordings": "Uchrashuvlar",
     "analytics": "Tahlil",

@@ -1,7 +1,6 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
-import moment from "moment";
 import Image from "next/image";
 import type { CSSProperties } from "react";
 import { memo, useEffect, useRef, useState } from "react";
@@ -31,21 +30,12 @@ interface VideoThumbnailProps {
 }
 
 const formatDuration = (durationSecs: number) => {
-	const momentDuration = moment.duration(durationSecs, "seconds");
-
-	const totalHours = Math.floor(momentDuration.asHours());
-	const totalMinutes = Math.floor(momentDuration.asMinutes());
-	const remainingSeconds = Math.ceil(momentDuration.asSeconds() % 60); // Use ceil to avoid 0 secs
-
-	if (totalHours > 0) {
-		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
-	} else if (totalMinutes > 0) {
-		return `${totalMinutes} min${totalMinutes > 1 ? "s" : ""}`;
-	} else if (remainingSeconds > 0) {
-		return `${remainingSeconds} sec${remainingSeconds !== 1 ? "s" : ""}`;
-	} else {
-		return "< 1 sec"; // For very short durations
-	}
+	const totalSeconds = Math.floor(durationSecs);
+	const s = totalSeconds % 60;
+	const m = Math.floor(totalSeconds / 60);
+	if (m < 60) return `${m}:${String(s).padStart(2, "0")}`;
+	const h = Math.floor(m / 60);
+	return `${h}:${String(m % 60).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 };
 
 const PLACEHOLDER_GRADIENTS = [

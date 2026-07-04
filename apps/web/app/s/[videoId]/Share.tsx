@@ -22,7 +22,6 @@ import {
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { CaptionProvider } from "./_components/CaptionContext";
-import { MeetingCostPanel } from "./_components/panels/MeetingCostPanel";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import type { VideoData } from "./types";
@@ -479,12 +478,6 @@ export const Share = ({
 		}, 100);
 	}, []);
 
-	const isOwnerOrMember = Boolean(
-		viewerId &&
-			(viewerId === data.owner.id ||
-				data.organizationMembers?.some((id) => id === viewerId)),
-	);
-
 	return (
 		<CaptionProvider
 			videoId={data.id}
@@ -515,16 +508,6 @@ export const Share = ({
 					defaultPlaybackSpeed={defaultPlaybackSpeed}
 					canGenerate={canGenerate}
 					ref={playerRef}
-					costPanel={
-						isOwnerOrMember ? (
-							// Processing cost is internal billing info — show it only to the
-							// owner/org members, never to viewers (students/clients) who open
-							// the share link.
-							<div className="overflow-hidden rounded-[14px] border border-gray-4 bg-gray-1 shadow-[0_1px_2px_rgba(15,23,42,.06),0_2px_6px_rgba(15,23,42,.07)]">
-								<MeetingCostPanel videoId={data.id} />
-							</div>
-						) : null
-					}
 					commentsPanel={
 						<Sidebar
 							data={{

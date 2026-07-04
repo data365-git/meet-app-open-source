@@ -437,6 +437,7 @@
     "aiAnalysisStage": "Этап AI-анализа"
   },
   "nav": {
+    "searchPlaceholder": "Поиск записей…",
     "instructions": "Записи",
     "meetingRecordings": "Встречи",
     "analytics": "Аналитика",

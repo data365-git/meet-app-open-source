@@ -437,6 +437,7 @@
     "aiAnalysisStage": "AI analysis stage"
   },
   "nav": {
+    "searchPlaceholder": "Search recordings, spaces, settings…",
     "instructions": "Recordings",
     "meetingRecordings": "Meetings",
     "analytics": "Analytics",
