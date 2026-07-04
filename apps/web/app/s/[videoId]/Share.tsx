@@ -22,6 +22,7 @@ import {
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { CaptionProvider } from "./_components/CaptionContext";
+import { MeetingCostPanel } from "./_components/panels/MeetingCostPanel";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import type { VideoData } from "./types";
@@ -508,6 +509,11 @@ export const Share = ({
 					defaultPlaybackSpeed={defaultPlaybackSpeed}
 					canGenerate={canGenerate}
 					ref={playerRef}
+					costPanel={
+						viewerId === data.owner.id ? (
+							<MeetingCostPanel videoId={data.id} />
+						) : null
+					}
 					commentsPanel={
 						<Sidebar
 							data={{

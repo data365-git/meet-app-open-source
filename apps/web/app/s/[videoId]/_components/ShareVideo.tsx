@@ -756,26 +756,26 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-			<div className="flex flex-col gap-4 lg:flex-row">
-				{/* LEFT: video only (chapter chips moved into the Summary tab's TOC).
-				    Video is the secondary/helper element, so it takes a smaller share
-				    of desktop width (~38%/34%) while the content panel gets the rest.
-				    RIGHT: unified AI panel (summary / tasks / transcript / refined /
-				    comments tabs + pinned AI input) — primary, more readable area.
-				    On small screens the panel stacks directly below the video so the
-				    tab bar sits right under it. */}
-				<div
-					className={`min-w-0 lg:w-[38%] lg:flex-none xl:w-[34%]${
-						isPlaying
-							? " max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-gray-2 max-lg:shadow-lg max-lg:shadow-black/10"
-							: ""
-					}`}
-				>
-					{playerBlock}
-				</div>
-
-				<div className="flex w-full min-w-0 flex-1 flex-col gap-3">
-					{costPanel}
+			<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:gap-6">
+				{/* LEFT (wide): video (sticky-pinned, height-capped) followed by the
+				    unified AI panel (summary / tasks / transcript / refined tabs +
+				    pinned AI input), which scrolls in normal flow beneath the video.
+				    RIGHT (narrow): owner-only cost card + comments/activity, pinned
+				    and independently scrollable.
+				    On small screens both columns stack in DOM order: video, tabs,
+				    then cost + comments. */}
+				<div className="flex min-w-0 flex-col gap-3">
+					<div
+						className={`min-w-0 lg:sticky lg:top-4 lg:self-start${
+							isPlaying
+								? " max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-gray-2 max-lg:shadow-lg max-lg:shadow-black/10"
+								: ""
+						}`}
+					>
+						<div className="mx-auto lg:max-h-[60vh]">
+							{playerBlock}
+						</div>
+					</div>
 					<SharePanel
 						videoId={data.id}
 						onVideoJump={handleSeekAndPlay}
@@ -879,8 +879,12 @@ export const ShareVideo = forwardRef<
 						}
 					/>
 				</div>
+
+				<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+					{costPanel}
+					{commentsPanel}
+				</div>
 			</div>
-			{commentsPanel && <div className="mt-4">{commentsPanel}</div>}
 			</>
 		);
 	},
