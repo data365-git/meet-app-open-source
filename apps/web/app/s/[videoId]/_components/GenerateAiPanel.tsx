@@ -42,54 +42,6 @@ interface GenerateAiPanelProps {
 	onStarted?: () => void;
 }
 
-function deriveProgressState(
-	transcriptionStatus: TranscriptionStatus | null | undefined,
-	aiGenerationStatus: AiGenerationStatus | null | undefined,
-): {
-	labelKey: string;
-	phase: "idle" | "transcribing" | "queued" | "generating" | "done";
-} {
-	if (
-		transcriptionStatus === "COMPLETE" &&
-		(aiGenerationStatus === "COMPLETE" || aiGenerationStatus === "SKIPPED")
-	) {
-		return { labelKey: "aiAnalysisReady", phase: "done" };
-	}
-
-	if (transcriptionStatus === "COMPLETE" && aiGenerationStatus === "QUEUED") {
-		return {
-			labelKey: "aiTranscriptReadyQueued",
-			phase: "queued",
-		};
-	}
-
-	if (
-		transcriptionStatus === "COMPLETE" &&
-		aiGenerationStatus === "PROCESSING"
-	) {
-		return {
-			labelKey: "aiGenerating",
-			phase: "generating",
-		};
-	}
-
-	if (transcriptionStatus === "COMPLETE") {
-		return {
-			labelKey: "aiTranscriptReadyIdle",
-			phase: "idle",
-		};
-	}
-
-	if (transcriptionStatus === "PROCESSING") {
-		return {
-			labelKey: "aiTranscribing",
-			phase: "transcribing",
-		};
-	}
-
-	return { labelKey: "aiPreparing", phase: "idle" };
-}
-
 export function getAiAnalysisNotice(
 	duration?: number | null,
 ): "long" | "medium" | null {
@@ -112,6 +64,9 @@ export function GenerateAiPanel({
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The speed (Arzon/Tez) chooser only appears after the owner presses the
+	// first "AI tahlil" button, so starting analysis is a deliberate two-step.
+	const [showChooser, setShowChooser] = useState(false);
 	const inFlightRef = useRef(false);
 	const isRunning =
 		transcriptionStatus === "PROCESSING" ||
@@ -166,63 +121,51 @@ export function GenerateAiPanel({
 
 	// ── Running state: persisted pipeline stage ──────────────────────────────
 	if (isRunning) {
-		const { labelKey, phase } = deriveProgressState(
-			transcriptionStatus,
-			aiGenerationStatus,
-		);
 		const stepOrder: AiProcessingStep[] = [
 			"transcribe",
 			"summary",
 			"refined",
 			"done",
 		];
-		const stepIndex = aiProcessingStep
-			? stepOrder.indexOf(aiProcessingStep)
-			: -1;
 		const aiComplete =
 			aiGenerationStatus === "COMPLETE" || aiGenerationStatus === "SKIPPED";
 
-		const steps = [
-			{
-				key: "transcribe",
-				label: tShare("stepTranscribe"),
-				state:
-					transcriptionStatus === "COMPLETE"
-						? "done"
-						: transcriptionStatus === "PROCESSING" ||
-								aiProcessingStep === "transcribe" ||
-								phase === "transcribing"
-							? "current"
-							: "pending",
-			},
-			{
-				key: "summary",
-				label: tShare("stepSummary"),
-				state: aiComplete
+		// Drive the stepper from the two AUTHORITATIVE statuses so exactly one
+		// step is ever "current" and the header label always matches it. The old
+		// logic leaned on aiProcessingStep, which the backend does NOT report
+		// during the transcript phase — so every circle looked idle and the
+		// status line wrongly claimed "summary" while the transcript was still
+		// running.
+		const currentStep: AiProcessingStep =
+			transcriptionStatus !== "COMPLETE"
+				? "transcribe"
+				: !aiComplete
+					? aiProcessingStep === "refined"
+						? "refined"
+						: "summary"
+					: "done";
+		const currentIdx = stepOrder.indexOf(currentStep);
+		const labelKey =
+			currentStep === "transcribe" ? "aiTranscribing" : "aiGenerating";
+
+		const stepLabelKey = {
+			transcribe: "stepTranscribe",
+			summary: "stepSummary",
+			refined: "stepRefined",
+			done: "stepDone",
+		} as const;
+		const steps = stepOrder.map((key) => {
+			const idx = stepOrder.indexOf(key);
+			const state =
+				idx < currentIdx
 					? "done"
-					: aiProcessingStep === "summary"
-						? "current"
-						: stepIndex > stepOrder.indexOf("summary")
+					: idx === currentIdx
+						? currentStep === "done"
 							? "done"
-							: "pending",
-			},
-			{
-				key: "refined",
-				label: tShare("stepRefined"),
-				state: aiComplete
-					? "done"
-					: aiProcessingStep === "refined"
-						? "current"
-						: stepIndex > stepOrder.indexOf("refined")
-							? "done"
-							: "pending",
-			},
-			{
-				key: "done",
-				label: tShare("stepDone"),
-				state: aiComplete || aiProcessingStep === "done" ? "done" : "pending",
-			},
-		] as const;
+							: "current"
+						: "pending";
+			return { key, label: tShare(stepLabelKey[key]), state };
+		});
 
 		const etaMin = Math.max(1, Math.round((duration ?? 120) / 120));
 
@@ -280,10 +223,10 @@ export function GenerateAiPanel({
 					))}
 				</div>
 
-				{/* Status row */}
+				{/* Status row — reflects the CURRENT stage, not a fixed message */}
 				<div className="flex items-center gap-2 text-[13.5px] font-medium text-gray-12">
 					<SpinnerIcon />
-					{tShare("aiStatusRow")}
+					{tShare(labelKey)}
 				</div>
 
 				{/* Skeleton */}
@@ -410,49 +353,62 @@ export function GenerateAiPanel({
 					</p>
 				)}
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				<p className="text-xs font-medium text-gray-11">
-					{tShare("aiSpeedChooserTitle")}
-				</p>
-				<div role="radiogroup" className="flex flex-col gap-2 sm:flex-row">
+				{!showChooser && (
 					<button
 						type="button"
-						role="radio"
-						aria-checked={aiSpeedMode === "cheap"}
-						disabled={loading}
-						onClick={() => requestStart(false, "cheap")}
-						className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
-							aiSpeedMode === "cheap"
-								? "border-[var(--brand)] bg-[var(--brand-wash)]"
-								: "border-blue-6 bg-blue-2 hover:bg-blue-3"
-						}`}
+						onClick={() => setShowChooser(true)}
+						className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90"
 					>
-						<span className="block text-sm font-medium text-gray-12">
-							{tShare("aiSpeedChooserCheapLabel")}
-						</span>
-						<span className="block text-xs text-gray-10">
-							{tShare("aiSpeedChooserCheapHint")}
-						</span>
+						{tShare("aiStartAnalysis")}
 					</button>
-					<button
-						type="button"
-						role="radio"
-						aria-checked={aiSpeedMode === "fast"}
-						disabled={loading}
-						onClick={() => requestStart(false, "fast")}
-						className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
-							aiSpeedMode === "fast"
-								? "border-[var(--brand)] bg-[var(--brand-wash)]"
-								: "border-blue-6 bg-blue-2 hover:bg-blue-3"
-						}`}
-					>
-						<span className="block text-sm font-medium text-gray-12">
-							{tShare("aiSpeedChooserFastLabel")}
-						</span>
-						<span className="block text-xs text-gray-10">
-							{tShare("aiSpeedChooserFastHint")}
-						</span>
-					</button>
-				</div>
+				)}
+				{showChooser && (
+					<>
+						<p className="text-xs font-medium text-gray-11">
+							{tShare("aiSpeedChooserTitle")}
+						</p>
+						<div role="radiogroup" className="flex flex-col gap-2 sm:flex-row">
+							<button
+								type="button"
+								role="radio"
+								aria-checked={aiSpeedMode === "cheap"}
+								disabled={loading}
+								onClick={() => requestStart(false, "cheap")}
+								className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
+									aiSpeedMode === "cheap"
+										? "border-[var(--brand)] bg-[var(--brand-wash)]"
+										: "border-blue-6 bg-blue-2 hover:bg-blue-3"
+								}`}
+							>
+								<span className="block text-sm font-medium text-gray-12">
+									{tShare("aiSpeedChooserCheapLabel")}
+								</span>
+								<span className="block text-xs text-gray-10">
+									{tShare("aiSpeedChooserCheapHint")}
+								</span>
+							</button>
+							<button
+								type="button"
+								role="radio"
+								aria-checked={aiSpeedMode === "fast"}
+								disabled={loading}
+								onClick={() => requestStart(false, "fast")}
+								className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
+									aiSpeedMode === "fast"
+										? "border-[var(--brand)] bg-[var(--brand-wash)]"
+										: "border-blue-6 bg-blue-2 hover:bg-blue-3"
+								}`}
+							>
+								<span className="block text-sm font-medium text-gray-12">
+									{tShare("aiSpeedChooserFastLabel")}
+								</span>
+								<span className="block text-xs text-gray-10">
+									{tShare("aiSpeedChooserFastHint")}
+								</span>
+							</button>
+						</div>
+					</>
+				)}
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
 				)}
