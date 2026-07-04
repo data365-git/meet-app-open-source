@@ -455,7 +455,7 @@ async function handleMessage(
 				await sendToOffscreen({ type: "PAUSE_CAPTURE" });
 			}
 			if (pauseState.kind === "recording") {
-				const nextState = { ...pauseState, paused: true };
+				const nextState = { ...pauseState, paused: true, pausedAt: Date.now() };
 				await setState(nextState);
 				updateBadge(nextState);
 			}
@@ -484,7 +484,14 @@ async function handleMessage(
 				await sendToOffscreen({ type: "RESUME_CAPTURE" });
 			}
 			if (resumeState.kind === "recording") {
-				const nextState = { ...resumeState, paused: false };
+				const nextState = {
+					...resumeState,
+					paused: false,
+					pausedAt: undefined,
+					pausedAccumMs:
+						(resumeState.pausedAccumMs ?? 0) +
+						(resumeState.pausedAt ? Date.now() - resumeState.pausedAt : 0),
+				};
 				await setState(nextState);
 				updateBadge(nextState);
 			}
@@ -742,6 +749,7 @@ async function handleMessage(
 				tabId,
 				mime,
 				paused: false,
+				pausedAccumMs: 0,
 				recorderTabId,
 				contentRecorderTabId,
 			};

@@ -603,6 +603,16 @@ function renderNotSignedIn(
 	root.appendChild(inlineMsg);
 }
 
+// Elapsed recording time, EXCLUDING paused spans. While paused it freezes on
+// the moment pause began; after resume it excludes the accumulated paused time
+// — so the timer matches the actual recorded media (which also excludes pauses).
+function recordingElapsedMs(
+	state: Extract<ExtensionState, { kind: "recording" }>,
+): number {
+	const ref = state.paused ? (state.pausedAt ?? Date.now()) : Date.now();
+	return Math.max(0, ref - state.startedAt - (state.pausedAccumMs ?? 0));
+}
+
 function renderRecording(
 	root: HTMLElement,
 	state: Extract<ExtensionState, { kind: "recording" }>,
@@ -619,7 +629,7 @@ function renderRecording(
 	const timerEl = el(
 		"div",
 		{ className: "timer" },
-		formatElapsed(Date.now() - state.startedAt),
+		formatElapsed(recordingElapsedMs(state)),
 	);
 
 	const modeEl = el(
@@ -655,9 +665,8 @@ function renderRecording(
 	root.appendChild(modeEl);
 	root.appendChild(btnRow);
 
-	const startedAt = state.startedAt;
 	timerInterval = setInterval(() => {
-		timerEl.textContent = formatElapsed(Date.now() - startedAt);
+		timerEl.textContent = formatElapsed(recordingElapsedMs(state));
 	}, 1000);
 }
 

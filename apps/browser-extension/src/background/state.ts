@@ -56,6 +56,12 @@ interface RecordingState {
 	recorderTabId?: number;
 	mime: string;
 	paused: boolean;
+	// Timestamp when the current pause began; undefined while running. With
+	// pausedAccumMs this lets the displayed timer FREEZE on pause and exclude
+	// paused time after resume (the recorded media already excludes it).
+	pausedAt?: number;
+	// Total paused time (ms) accumulated across prior pause/resume cycles.
+	pausedAccumMs?: number;
 }
 
 interface UploadingState {

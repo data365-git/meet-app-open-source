@@ -57,6 +57,10 @@ const settings: Settings = {
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let countdownRemaining = 0;
 let recordingStartTime = 0;
+// Accumulated paused time (ms), mirrored from the background state, so the pill
+// timer excludes paused spans (matches the recorded media) instead of counting
+// wall-clock across a pause/resume.
+let pillPausedAccumMs = 0;
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let meetEndTimer: ReturnType<typeof setTimeout> | null = null;
 let nudgeRecorder: {
@@ -748,7 +752,7 @@ function renderRecordingPill(paused = false): void {
 	const elapsed = makeEl(
 		"span",
 		"cap-nudge-elapsed",
-		formatElapsed(Date.now() - recordingStartTime),
+		formatElapsed(Date.now() - recordingStartTime - pillPausedAccumMs),
 	);
 	elapsed.id = "cap-elapsed";
 	const btnStop = makeBtn("cap-nudge-btn-stop", "Stop");
@@ -767,7 +771,10 @@ function renderRecordingPill(paused = false): void {
 	if (!paused) {
 		elapsedTimer = setInterval(() => {
 			const el = container.querySelector("#cap-elapsed");
-			if (el) el.textContent = formatElapsed(Date.now() - recordingStartTime);
+			if (el)
+				el.textContent = formatElapsed(
+					Date.now() - recordingStartTime - pillPausedAccumMs,
+				);
 		}, 1000);
 	}
 
@@ -1197,6 +1204,8 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 			if (recordingStartTime === 0) {
 				recordingStartTime = state.startedAt ?? Date.now();
 			}
+			pillPausedAccumMs =
+				(state as { pausedAccumMs?: number }).pausedAccumMs ?? 0;
 			clearNudge(() => renderRecordingPill(state.paused ?? false));
 			break;
 		case "uploading":
