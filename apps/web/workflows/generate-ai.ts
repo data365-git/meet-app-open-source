@@ -1638,6 +1638,52 @@ export async function parseJsonWithRetry(
 	return { parsed: null, inputTokens, outputTokens, model };
 }
 
+interface RawTask {
+	title: string;
+	assignee: string;
+	priority: "high" | "medium" | "low";
+	deadline: string;
+	done: boolean;
+}
+
+// Read one task object defensively from an unknown LLM value. Returns null for
+// anything without a usable title so junk never reaches the tasks list.
+function readTask(value: unknown): RawTask | null {
+	if (!isRecord(value)) return null;
+	const title = typeof value.title === "string" ? value.title.trim() : "";
+	if (!title) return null;
+	const priority =
+		value.priority === "high" || value.priority === "low"
+			? value.priority
+			: "medium";
+	return {
+		title,
+		assignee: typeof value.assignee === "string" ? value.assignee : "",
+		priority,
+		deadline: typeof value.deadline === "string" ? value.deadline : "",
+		done: value.done === true,
+	};
+}
+
+function readTasks(value: unknown): RawTask[] {
+	if (!Array.isArray(value)) return [];
+	return value.map(readTask).filter((t): t is RawTask => t !== null);
+}
+
+// De-duplicate action items by normalized title (chunks often re-mention the
+// same commitment). First occurrence wins.
+function dedupeTasks(tasks: RawTask[]): RawTask[] {
+	const seen = new Set<string>();
+	const out: RawTask[] = [];
+	for (const task of tasks) {
+		const key = task.title.toLowerCase().replace(/\s+/g, " ").trim();
+		if (!key || seen.has(key)) continue;
+		seen.add(key);
+		out.push(task);
+	}
+	return out;
+}
+
 async function generateMultipleChunks(
 	chunks: TranscriptChunk[],
 	videoDuration: number,
@@ -1649,6 +1695,7 @@ async function generateMultipleChunks(
 		summary: string;
 		keyPoints: string[];
 		chapters: { title: string; start: number }[];
+		tasks: RawTask[];
 		startTime: number;
 		endTime: number;
 		rawText: string;
@@ -1670,11 +1717,13 @@ Analyze this section thoroughly and provide JSON:
 {
   "summary": "string (detailed summary of this section - capture ALL key points, topics discussed, decisions made, or concepts explained. Include specific details like names, numbers, action items, and conclusions. This should be 3-6 sentences minimum.)",
   "keyPoints": ["string (specific key point or takeaway)", ...],
-  "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}]
+  "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}],
+  "tasks": [{"title": "string (a concrete action item, task, commitment, agreement, or next step someone must do)", "assignee": "string (who is responsible, or \\"\\" if unclear)", "priority": "high|medium|low", "deadline": "string (if mentioned, else \\"\\")", "done": false}]
 }
 
 ${languageInstruction}
 Keep JSON property names exactly as shown.
+List in "tasks" EVERY action item, commitment, decision-to-do, deadline, or next step mentioned in this section. If this section has none, use an empty array [].
 IMPORTANT: All chapter "start" values MUST be between ${chunk.startTime} and ${chunk.endTime} seconds. The total video is only ${videoDuration} seconds long.
 Be thorough - this summary will be combined with other sections to create a comprehensive overview.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
@@ -1701,6 +1750,7 @@ ${chunk.text}`;
 				summary: (parsed.summary as string) || "",
 				keyPoints: (parsed.keyPoints as string[]) || [],
 				chapters: (parsed.chapters as { title: string; start: number }[]) || [],
+				tasks: readTasks(parsed.tasks),
 				startTime: chunk.startTime,
 				endTime: chunk.endTime,
 				rawText: chunk.text,
@@ -1716,6 +1766,7 @@ ${chunk.text}`;
 				summary: string;
 				keyPoints: string[];
 				chapters: { title: string; start: number }[];
+				tasks: RawTask[];
 				startTime: number;
 				endTime: number;
 				rawText: string;
@@ -1788,6 +1839,7 @@ ${chunk.text}`;
 	}
 
 	const allKeyPoints = chunkSummaries.flatMap((c) => c.keyPoints);
+	const allChunkTasks = dedupeTasks(chunkSummaries.flatMap((c) => c.tasks));
 
 	const sectionDetails = chunkSummaries
 		.map((c, i) => {
@@ -1829,6 +1881,7 @@ Section analyses:
 ${sectionDetails}
 
 ${allKeyPoints.length > 0 ? `All key points identified:\n${allKeyPoints.map((p, i) => `${i + 1}. ${p}`).join("\n")}\n` : ""}
+${allChunkTasks.length > 0 ? `Action items already extracted from the sections — include ALL of them in aiSummary.tasks (refined and de-duplicated, do not drop any):\n${allChunkTasks.map((t, i) => `${i + 1}. ${t.title}${t.assignee ? ` — ${t.assignee}` : ""}`).join("\n")}\n` : ""}
 
 Return ONLY valid JSON with this exact structure:
 ${schemaExample}
@@ -1875,6 +1928,16 @@ ${MIXED_LANGUAGE_PRESERVATION_RULES}`;
 				chapters: [],
 			};
 		}
+		// The final synthesis is asked to produce tasks from compressed section
+		// summaries and sometimes returns none even when the meeting had clear
+		// action items. Fall back to the tasks extracted per-chunk (from the raw
+		// transcript) so long videos never silently lose their action items.
+		if (aiSummaryRaw && typeof aiSummaryRaw === "object") {
+			const raw = aiSummaryRaw as Record<string, unknown>;
+			if (readTasks(raw.tasks).length === 0 && allChunkTasks.length > 0) {
+				raw.tasks = allChunkTasks;
+			}
+		}
 		return {
 			title: parsed.title as string,
 			summary: parsed.summary as string,
@@ -1902,7 +1965,7 @@ ${MIXED_LANGUAGE_PRESERVATION_RULES}`;
 			overview: fallbackSummary,
 			topics: [],
 			nextSteps: [],
-			tasks: [],
+			tasks: allChunkTasks,
 			chapters: aiSummaryChaptersFromChunks,
 			refinedTranscript: { chapters: refinedChapters },
 		}),
