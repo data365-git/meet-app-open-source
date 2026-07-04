@@ -86,7 +86,12 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
-const STALE_PROCESSING_START_MS = 90 * SECOND;
+// A freshly-uploaded video sits at progress 0 while it waits for a worker to
+// pick it up; on a busy queue or a large file that wait routinely exceeds a
+// minute. 90s was too eager and flashed a red "processing failed" on videos
+// that were merely queued (real failures still surface immediately via
+// phase === "error"). Give the worker up to 5 minutes to report first progress.
+const STALE_PROCESSING_START_MS = 5 * MINUTE;
 const STALE_PROCESSING_PROGRESS_MS = 10 * MINUTE;
 const STALE_THUMBNAIL_MS = 5 * MINUTE;
 
