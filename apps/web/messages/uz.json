@@ -146,13 +146,6 @@
     "termsNoticeSignin": "Tizimga kirish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz.",
     "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz."
   },
-  "extensionBanner": {
-    "title": "Extension'ni yangilash kerak.",
-    "bodyFull": "Ekran yozib olishni yaxshiladik. Extension qo'lda o'rnatilgani uchun, tuzatishni olish uchun eski versiyani o'chirib, qayta o'rnating.",
-    "bodyShort": "Tuzatishni olish uchun qayta o'rnating.",
-    "updateCta": "Extension'ni yangilash",
-    "dismissAria": "Yopish"
-  },
   "recorder": {
     "recordInBrowser": "Yangi yozuv",
     "dialogTitle": "Tezkor yozuv rejimi",

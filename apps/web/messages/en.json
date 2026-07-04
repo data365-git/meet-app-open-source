@@ -146,13 +146,6 @@
     "termsNoticeSignin": "By signing in, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
     "termsNoticeSignup": "By creating an account, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>."
   },
-  "extensionBanner": {
-    "title": "Extension update required.",
-    "bodyFull": "We improved the screen recorder. Because the extension is installed manually, please remove the old version and reinstall it to get the fix.",
-    "bodyShort": "Reinstall once to get the recorder fix.",
-    "updateCta": "Update extension",
-    "dismissAria": "Dismiss"
-  },
   "recorder": {
     "recordInBrowser": "New recording",
     "dialogTitle": "Instant Mode Recorder",
