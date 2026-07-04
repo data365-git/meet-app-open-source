@@ -1,13 +1,11 @@
 "use client";
 
 import clsx from "clsx";
-import { useTranslations } from "next-intl";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-	formatSeconds,
-	parseTimestampToSeconds,
-} from "./ai-chat-timestamps";
+import { formatSeconds, parseTimestampToSeconds } from "./ai-chat-timestamps";
+import { renderMarkdownBold } from "./panels/markdownBold";
 
 type PanelTab = "summary" | "tasks" | "transcript" | "refined";
 
@@ -22,71 +20,32 @@ function nextMsgId() {
 	return `msg-${++msgIdCounter}`;
 }
 
-function splitByLineBreak(text: string, keyOffset: number): React.ReactNode[] {
-	const lines = text.split("\n");
-	const result: React.ReactNode[] = [];
-	for (let n = 0; n < lines.length; n++) {
-		if (n > 0) result.push(<br key={`br-${keyOffset}-${String(n)}`} />);
-		result.push(lines[n]);
-	}
-	return result;
-}
-
-function renderBoldAndBreaks(
-	text: string,
-	keyOffset: number,
-): React.ReactNode[] {
-	const boldRegex = /\*\*(.+?)\*\*/g;
-	const segments: React.ReactNode[] = [];
-	let last = 0;
-	let match: RegExpExecArray | null;
-	let i = keyOffset;
-
-	while (true) {
-		match = boldRegex.exec(text);
-		if (match === null) break;
-		const before = text.slice(last, match.index);
-		if (before) {
-			segments.push(...splitByLineBreak(before, i));
-			i++;
-		}
-		segments.push(
-			<span key={`b-${i++}`} className="font-semibold">
-				{match[1]}
-			</span>,
-		);
-		last = match.index + match[0].length;
-	}
-
-	const tail = text.slice(last);
-	if (tail) {
-		segments.push(...splitByLineBreak(tail, i));
-	}
-
-	return segments;
-}
-
+// Split the message into keyed text spans and clickable timestamp chips.
+// Every node carries a stable position-based key (t-0, c-1, t-2, …) and line
+// breaks are handled by `whitespace-pre-wrap` on the container — NOT by an
+// array of unkeyed strings + <br>, which reconciled badly while the answer was
+// streaming and left overlapping text on screen.
 function renderMessageContent(
 	content: string,
 	onVideoJump: (seconds: number) => void,
 ): React.ReactNode[] {
 	const citationRegex = /\[(\d{1,3}:\d{2}(?::\d{2})?)\]/g;
-	const parts: React.ReactNode[] = [];
+	const nodes: React.ReactNode[] = [];
 	let last = 0;
 	let match: RegExpExecArray | null;
+	let key = 0;
 
 	while (true) {
 		match = citationRegex.exec(content);
 		if (match === null) break;
 		const before = content.slice(last, match.index);
 		if (before) {
-			parts.push(...renderBoldAndBreaks(before, parts.length));
+			nodes.push(<span key={`t-${key++}`}>{renderMarkdownBold(before)}</span>);
 		}
-		const timestamp = match[1] ?? "";
-		const seconds = parseTimestampToSeconds(timestamp);
-		parts.push(
+		const seconds = parseTimestampToSeconds(match[1] ?? "");
+		nodes.push(
 			<button
-				key={`cite-${match.index}`}
+				key={`c-${key++}`}
 				type="button"
 				className="inline-block rounded-md border border-[var(--brand)] bg-[var(--brand-wash)] px-1.5 text-xs font-medium text-[var(--brand)] transition-[filter] hover:brightness-95"
 				onClick={() => onVideoJump(seconds)}
@@ -99,10 +58,10 @@ function renderMessageContent(
 
 	const tail = content.slice(last);
 	if (tail) {
-		parts.push(...renderBoldAndBreaks(tail, parts.length + 1000));
+		nodes.push(<span key={`t-${key++}`}>{renderMarkdownBold(tail)}</span>);
 	}
 
-	return parts;
+	return nodes;
 }
 
 interface SharePanelProps {
@@ -130,9 +89,7 @@ export function SharePanel({
 
 	const rawParam = searchParams.get("tab");
 	const initialTab: PanelTab =
-		rawParam === "tasks" ||
-		rawParam === "transcript" ||
-		rawParam === "refined"
+		rawParam === "tasks" || rawParam === "transcript" || rawParam === "refined"
 			? rawParam
 			: "summary";
 	const [activeTab, setActiveTab] = useState<PanelTab>(initialTab);
@@ -158,12 +115,46 @@ export function SharePanel({
 	const messageCount = messages.length;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional scroll trigger on message count and streaming state changes
 	useEffect(() => {
-		chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+		chatEndRef.current?.scrollIntoView({
+			behavior: "smooth",
+			block: "nearest",
+		});
 	}, [messageCount, isStreaming]);
 
 	useEffect(() => {
 		return () => abortRef.current?.abort();
 	}, []);
+
+	// Persist the chat per-video (owner: keep history for that video only) so a
+	// refresh no longer wipes it. Load once per videoId; bump the id counter past
+	// the restored messages so new ids never collide with loaded ones.
+	useEffect(() => {
+		try {
+			const raw = window.localStorage.getItem(`data365:aiChat:${videoId}`);
+			if (!raw) return;
+			const saved = JSON.parse(raw) as Message[];
+			if (Array.isArray(saved) && saved.length > 0) {
+				setMessages(saved);
+				msgIdCounter = Math.max(msgIdCounter, saved.length);
+			}
+		} catch {
+			// ignore (storage disabled / bad JSON)
+		}
+	}, [videoId]);
+
+	useEffect(() => {
+		// Skip empty so the first mount (before load applies) can't clobber a
+		// stored history with [].
+		if (messages.length === 0) return;
+		try {
+			window.localStorage.setItem(
+				`data365:aiChat:${videoId}`,
+				JSON.stringify(messages),
+			);
+		} catch {
+			// ignore
+		}
+	}, [messages, videoId]);
 
 	const adjustTextarea = () => {
 		const el = textareaRef.current;
@@ -355,7 +346,9 @@ export function SharePanel({
 		{ id: "transcript", content: transcript },
 		{ id: "refined", content: refined },
 	];
-	const activeContent = panels.find((p) => p.id === effectiveActiveTab)?.content;
+	const activeContent = panels.find(
+		(p) => p.id === effectiveActiveTab,
+	)?.content;
 
 	return (
 		<div className="flex w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)]">
@@ -430,14 +423,14 @@ export function SharePanel({
 							msg.role === "user" ? (
 								<div
 									key={msg.id}
-									className="ml-6 self-end rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12"
+									className="ml-6 self-end whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12"
 								>
 									{msg.content}
 								</div>
 							) : (
 								<div
 									key={msg.id}
-									className="self-start text-[13px] leading-relaxed text-gray-12"
+									className="self-start whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12"
 								>
 									{renderMessageContent(msg.content, onVideoJump)}
 								</div>
@@ -445,10 +438,7 @@ export function SharePanel({
 						)}
 						{isStreaming &&
 							messages[messages.length - 1]?.role !== "assistant" && (
-								<div
-									className="flex gap-1 self-start py-1"
-									aria-hidden="true"
-								>
+								<div className="flex gap-1 self-start py-1" aria-hidden="true">
 									<span className="size-1.5 animate-pulse rounded-full bg-gray-8" />
 									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:150ms]" />
 									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:300ms]" />
@@ -485,7 +475,11 @@ export function SharePanel({
 					<textarea
 						ref={textareaRef}
 						rows={1}
-						placeholder={processing ? t("aiInputDisabledPlaceholder") : t("aiAskPlaceholder")}
+						placeholder={
+							processing
+								? t("aiInputDisabledPlaceholder")
+								: t("aiAskPlaceholder")
+						}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
