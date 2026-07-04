@@ -1,6 +1,6 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — BUG-BATCH 1 (4 fix) + DIZAYN MEXANIK-BATCH (FIX1/3/4/5/8-qism) QO'LLANDI + GATE + REVIEW SHIP. LOKAL commit, PUSH/DEPLOY QILINMAGAN. HEAD=`6565857` (origin `436ac3c`dan 12 commit oldinda). Owner: "kutamiz, dizayn bilan" → deploy oxirida.**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — 3 BATCH QO'LLANDI (bug-batch 4 fix + dizayn mexanik FIX1/3/4/5/8 + dizayn kichik-vizual FIX6/8.4/8.2) + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`0e0d266` (origin `436ac3c`dan 14 commit oldinda). Owner: "kutamiz, dizayn bilan" → deploy oxirida. QOLGAN = 4 KATTA VIZUAL (stepper/summary/logo/comments) — owner telefon-verify shart.**
 >
 > **DIZAYN MEXANIK-BATCH (autoresearch loop: 9-agent reconcile → Sonnet apply → tsc/build/fresh-Opus-review SHIP; Codex 2-chi chaqiruvda osildi → fallback fresh-Opus):**
 > - `4aeef59` i18n: tab-yorliqlar `Transkript`/`Matn` (FIX1) + `newFolder` kalit + share so'zlar (uz/ru/en).
@@ -9,13 +9,13 @@
 > - `6565857` metadata fallback railway→`data365.uz` (FIX3, owner tasdiqladi).
 > - **Reconciliation topilma:** dizayn FIXlarning ~ko'pi Faza D'da allaqachon qilingan; FIX5 ~95% tayyor edi; FIX8.3 (`-3min`) allaqachon hydration-fix bilan hal.
 >
+> **DIZAYN KICHIK-VIZUAL BATCH (autoresearch loop, Sonnet apply → tsc/build/fresh-Opus SHIP; ⚠️ CRLF-FLIP takrorlandi: DashboardSearch LF edi, ishchi CRLF'ga flip qildi — `git diff --stat` bilan ushladim, `python replace \r\n→\n` bilan LF'ga qaytardim → diff toza 4 qator. SABOQ: spec'da qator-tugash DA'VO QILMA + har subagent-editdan keyin diff --stat):**
+> - `0e0d266` FIX6 meeting-cost share'dan olib tashlandi (+o'lik `isOwnerOrMember`) · FIX8.4 duration pill numeric `4:54` · FIX8.2 search placeholder i18n (`nav.searchPlaceholder`, uz "Space" — "bo'shliq" mistranslation tuzatildi). HEAD=`0e0d266` (origin'dan 14 commit oldinda).
+>
 > **⏸️ QOLGAN VIZUAL (needsOwnerVisual — kod yozsa bo'ladi lekin OWNER TELEFONDA KO'RISHI SHART, men vizual verify qila olmayman — dashboard login orqasida, parol menda yo'q):**
 > - **FIX2 processing STEPPER (L)** — hozir ko'k pill'lar; spec: 4-doira+rail stepper + ETA pill + `data365 AI` badge + status-qatori + skeleton + tab-disable + AI-input disable. `GenerateAiPanel.tsx:173-256` (step-state logic REUSE, faqat markup almashtir) + `SummaryPanel.tsx:58` "noAiSummary" olib tashla + `SharePanel.tsx` processing-prop + `ShareVideo.tsx`. ⚠️ TOKEN: CR `--accent` NOTO'G'RI shu repo'da (neutral) → `--brand`/`--brand-wash`/`--brand-fg`/`--border` ishlat. i18n kalitlar reconcile'da tayyor.
 > - **FIX7 Summary 1-ustun (M)** — `SummaryPanel.tsx`: Topics hozir 2-ustunli quti-grid (`:121 grid-cols-2` + `TopicCard :231-256`) → 1-ustun oqar (title 14/600 + desc 13.5 muted, faqat 1px pastki chegara). Overview/NextSteps/Chapters allaqachon 1-ustun.
 > - **FIX9 LOGO (M)** — reconcile-agent XATO berdi (qayta kerak). Assetlar: `apps/web/scratchpad/design-update-n1/design_handoff_data365_polish/assets/` (logo-mark.svg, logo-glyph.svg, favicon-16/32, apple-touch-icon, icon-192/512). Ulash: sidebar `Navbar/Items.tsx`, login, `app/icon.svg`+favicon+manifest, mobil-rail glyph.
-> - **FIX6 meeting-cost olib tashlash (S)** — `Share.tsx:518-527` costPanel (hozir owner-only gated) — CR: watch'dan BUTUNLAY olib tashla, faqat admin/settings'da qolsin. `costPanel` optional → xavfsiz.
-> - **FIX8.4 duration pill (S)** — `VideoThumbnail.tsx:33-49` `4 mins` inglizcha → numeric `4:54` (DashboardSearch.tsx:80-93 pattern).
-> - **FIX8.2 search placeholder (S)** — `DashboardSearch.tsx:367-368/384` hardcoded → `t()` (komponentda i18n yo'q, qo'shish kerak) + `nav.searchPlaceholder` kalit.
 > - **FIX1 izohlar video-ostiga (M)** — `SharePanel.tsx` comments-tab olib tashla + `ShareVideo.tsx` commentsPanel video-karta OSTIGA. ⚠️ Sidebar tab-panel uchun stillangan edi → height/scroll moslash kerak.
 > - **FIX8.5b auto-name locale-aware** — upload-path'da (bu fayllarda emas), trace kerak.
 > ---
