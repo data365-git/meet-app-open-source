@@ -116,7 +116,20 @@
     "installExtension": "Install extension",
     "uploadVideo": "Upload video",
     "or": "or",
-    "newFolder": "New Folder"
+    "newFolder": "New Folder",
+    "downloadPreparing": "Preparing download…",
+    "downloadStarted": "Download started",
+    "downloadFailed": "Failed to download video — please try again.",
+    "duplicating": "Duplicating recording…",
+    "duplicateSuccess": "Recording duplicated",
+    "duplicateFailed": "Failed to duplicate recording",
+    "deleting": "Deleting…",
+    "delete": "Delete",
+    "processingFailed": "Processing failed",
+    "uploadFailed": "Upload failed",
+    "titleUpdated": "Video title updated",
+    "titleUpdateFailed": "Failed to update title — please try again.",
+    "invalidDateFormat": "Invalid date format. Please use YYYY-MM-DD HH:mm"
   },
   "auth": {
     "signingIn": "Signing you in…",

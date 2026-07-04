@@ -116,7 +116,20 @@
     "installExtension": "Extension'ni o'rnatish",
     "uploadVideo": "Video yuklash",
     "or": "yoki",
-    "newFolder": "Yangi papka"
+    "newFolder": "Yangi papka",
+    "downloadPreparing": "Yuklab olishga tayyorlanmoqda…",
+    "downloadStarted": "Yuklab olish boshlandi",
+    "downloadFailed": "Videoni yuklab olib bo'lmadi — qayta urinib ko'ring.",
+    "duplicating": "Yozuv nusxalanmoqda…",
+    "duplicateSuccess": "Yozuv nusxalandi",
+    "duplicateFailed": "Yozuvni nusxalab bo'lmadi",
+    "deleting": "O'chirilmoqda…",
+    "delete": "O'chirish",
+    "processingFailed": "Qayta ishlashda xatolik",
+    "uploadFailed": "Yuklashda xatolik",
+    "titleUpdated": "Video sarlavhasi yangilandi",
+    "titleUpdateFailed": "Sarlavhani yangilab bo'lmadi — qayta urinib ko'ring.",
+    "invalidDateFormat": "Sana formati noto'g'ri. YYYY-MM-DD HH:mm dan foydalaning"
   },
   "auth": {
     "signingIn": "Tizimga kiritilmoqda…",

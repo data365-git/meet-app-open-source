@@ -8,7 +8,6 @@ export const ImportPage = ({ folderId }: { folderId?: string }) => {
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
-				<h1 className="text-2xl font-medium text-gray-12">Import</h1>
 				<p className="mt-1 text-sm text-gray-10">
 					Import videos from external sources or upload from your device.
 				</p>

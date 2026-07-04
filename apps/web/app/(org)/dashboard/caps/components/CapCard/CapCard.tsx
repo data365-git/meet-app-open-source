@@ -338,13 +338,13 @@ export const CapCard = ({
     if (downloadMutation.isPending) return;
 
     toast.promise(downloadMutation.mutateAsync(), {
-      loading: "Preparing download...",
-      success: "Download started successfully",
+      loading: t("downloadPreparing"),
+      success: t("downloadStarted"),
       error: (error) => {
         if (error instanceof Error) {
           return error.message;
         }
-        return "Failed to download video - please try again.";
+        return t("downloadFailed");
       },
     });
   };
@@ -516,9 +516,9 @@ export const CapCard = ({
                   <DropdownMenuItem
                     onClick={() => {
                       toast.promise(duplicateMutation.mutateAsync(), {
-                        loading: "Duplicating recording...",
-                        success: "Recording duplicated successfully",
-                        error: "Failed to duplicate recording",
+                        loading: t("duplicating"),
+                        success: t("duplicateSuccess"),
+                        error: t("duplicateFailed"),
                       });
                     }}
                     disabled={
@@ -579,7 +579,7 @@ export const CapCard = ({
             icon={<FontAwesomeIcon icon={faVideo} />}
             title="Delete recording"
             description={`Are you sure you want to delete the recording "${cap.name}"? This action cannot be undone.`}
-            confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
+            confirmLabel={deleteMutation.isPending ? t("deleting") : t("delete")}
             cancelLabel="Cancel"
             loading={deleteMutation.isPending}
             onConfirm={() => deleteMutation.mutate()}
@@ -637,8 +637,8 @@ export const CapCard = ({
                   uploadProgress.status === "error" ? (
                     <span className="text-sm font-semibold text-red-400">
                       {uploadProgress.status === "error"
-                        ? "Processing failed"
-                        : "Upload failed"}
+                        ? t("processingFailed")
+                        : t("uploadFailed")}
                     </span>
                   ) : (
                     <>

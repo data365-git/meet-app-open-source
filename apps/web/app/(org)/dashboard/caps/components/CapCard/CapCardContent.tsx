@@ -59,14 +59,14 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
     try {
       await editTitle(cap.id, title);
-      toast.success("Video title updated");
+      toast.success(t("titleUpdated"));
       setIsEditing(false);
       router.refresh();
     } catch (error) {
       if (error instanceof Error) {
         toast.error(error.message);
       } else {
-        toast.error("Failed to update title - please try again.");
+        toast.error(t("titleUpdateFailed"));
       }
     }
   };
@@ -95,7 +95,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
     const isValidDate = moment(dateValue).isValid();
 
     if (!isValidDate) {
-      toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm");
+      toast.error(t("invalidDateFormat"));
       setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
       setIsDateEditing(false);
       return;

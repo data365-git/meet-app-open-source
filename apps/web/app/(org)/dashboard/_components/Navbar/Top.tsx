@@ -53,6 +53,8 @@ const Top = () => {
 		"/dashboard/spaces/browse": t("browseSpaces"),
 		"/dashboard/meetings": t("meetingRecordings"),
 		"/dashboard/analytics": t("analytics"),
+		"/dashboard/extension": t("installExtension"),
+		"/dashboard/import": "Import",
 		[`/dashboard/folder/${params.id}`]: t("instructions"),
 		[`/dashboard/analytics/s/${params.id}`]: t("analytics"),
 		"/dashboard/developers": t("developers"),

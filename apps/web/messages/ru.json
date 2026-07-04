@@ -116,7 +116,20 @@
     "installExtension": "Установить расширение",
     "uploadVideo": "Загрузить видео",
     "or": "или",
-    "newFolder": "Новая папка"
+    "newFolder": "Новая папка",
+    "downloadPreparing": "Подготовка к загрузке…",
+    "downloadStarted": "Загрузка началась",
+    "downloadFailed": "Не удалось скачать видео — попробуйте ещё раз.",
+    "duplicating": "Копирование записи…",
+    "duplicateSuccess": "Запись скопирована",
+    "duplicateFailed": "Не удалось скопировать запись",
+    "deleting": "Удаление…",
+    "delete": "Удалить",
+    "processingFailed": "Обработка не удалась",
+    "uploadFailed": "Загрузка не удалась",
+    "titleUpdated": "Название видео обновлено",
+    "titleUpdateFailed": "Не удалось обновить название — попробуйте ещё раз.",
+    "invalidDateFormat": "Неверный формат даты. Используйте YYYY-MM-DD HH:mm"
   },
   "auth": {
     "signingIn": "Выполняется вход…",

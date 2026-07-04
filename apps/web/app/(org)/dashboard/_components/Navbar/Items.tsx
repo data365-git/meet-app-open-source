@@ -395,7 +395,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						return (
 							<div key={group.label} className="mb-5 w-full">
 								{!sidebarCollapsed && (
-									<p className="mb-2 px-3 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-gray-10">
+									<p className="mb-2 px-3 text-[10.5px] font-semibold font-mono uppercase tracking-[0.12em] text-gray-10">
 										{group.label}
 									</p>
 								)}
