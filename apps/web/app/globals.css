@@ -59,6 +59,12 @@ html {
 	color: #000000;
 	background-color: #f2f2f2;
 }
+
+body.dark,
+html:has(body.dark) {
+	color: hsl(210, 20%, 98%);
+	background-color: hsl(224, 71.4%, 4.1%);
+}
 .dashboard-grid {
 	display: grid;
 	grid-template-columns: auto 1fr 1fr;
