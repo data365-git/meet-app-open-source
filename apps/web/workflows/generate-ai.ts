@@ -20,6 +20,7 @@ import { z } from "zod";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withGeminiRetry } from "@/lib/gemini-retry";
+import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
 import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
 import { restoreRussianScriptDeep } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
@@ -778,7 +779,11 @@ function chunkTranscriptWithTimestamps(
 	return chunks;
 }
 
-const GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
+// 3-flash-preview follows the "remove filler, keep all substance" refine
+// instruction dramatically better than 2.5-flash (A/B on a real 53-min uz call:
+// clean flowing prose vs. residual chat-cruft) AND emits ~4x fewer output tokens
+// for the same content — so the refined pass is both cleaner and ~75% cheaper.
+const GEMINI_SUMMARY_MODEL = "gemini-3-flash-preview";
 
 interface AiApiResult {
 	content: string;
@@ -1061,12 +1066,12 @@ async function generateChapterAlignedRefined(
 			const refinedPrompt = `You are a transcript editor. Your ONLY job is to produce a clean, complete, full version of the spoken text below — NOT a summary.
 
 RULES (strict):
-- Remove ONLY: filler words ("uh", "um", "a-a", "er", "well", "you know", "like" used as filler), exact word-for-word repetitions, false starts (e.g. "I was — I mean, we should"), and off-topic jokes that add zero informational content.
-- Keep EVERYTHING else: all substantive sentences, explanations, arguments, questions, answers, decisions, names, numbers, details — in the original order.
-- Do NOT translate. Do NOT paraphrase. Do NOT compress into a summary. The output must cover the ENTIRE input from start to finish.
-- Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine).
+- Remove filler and backchannel acknowledgements in ANY language — English ("uh", "um", "er", "well", "you know", "like" as filler), Uzbek ("aha", "ha", "xo'p", "mayli", "mhm", "huh", "ie", "qani", "ha-ha"), Russian ("ага", "угу", "ну", "вот", "это самое"). Also remove: standalone agreement/acknowledgement lines that add NO new information (a lone "Aha.", "Xo'p.", "Mhm", or a filler-repeated "Xudo xohlasa."), bare echoes where someone just repeats a word or number the other person said, exact word-for-word repetitions, and false starts (e.g. "I was — I mean, we should").
+- MERGE the dialogue into clean flowing paragraphs. Do NOT keep every short utterance on its own line — combine consecutive lines about the SAME point into readable prose, and drop the pure listener acknowledgements entirely. The result should read like clean written text, not a raw chat log.
+- Keep EVERYTHING substantive: every fact, number, name, decision, explanation, argument, and every question WITH its answer — in the original order. NOTHING important may be dropped or shortened. Only the useless filler goes.
+- Do NOT translate. Do NOT summarize or shorten the substance. Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine); you may join sentences into paragraphs but keep the actual content and words.
 - Output clean readable paragraphs separated by blank lines. No bullet points, no headers.
-- This is DIFFERENT from a summary: a summary is short; this must be the full cleaned text.
+- This is NOT a summary (a summary is short): keep the full substance — but WITHOUT the filler/backchannel noise.
 - Wrap EVERY foreign/technical/brand/product word or phrase (any word not in the dominant spoken language) in markdown bold: **word**. Example: Bugun **dashboard** **deadline** bor, **сразу** qilamiz.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
 
@@ -1084,7 +1089,17 @@ ${timestamped}`;
 				);
 				inputTokens += refinedResult.inputTokens;
 				outputTokens += refinedResult.outputTokens;
-				paragraphs = refinedResult.content
+				// Guard against a looping model burning tokens on repeated garbage:
+				// keep the clean prefix, drop the runaway tail (no substantive loss).
+				const { text: guardedRefined, runaway } = stripRunawayRepetition(
+					refinedResult.content,
+				);
+				if (runaway) {
+					console.warn(
+						`[generate-ai] refined runaway repetition truncated (chapter startSec=${range.startSec})`,
+					);
+				}
+				paragraphs = guardedRefined
 					.trim()
 					.split(/\n\s*\n/)
 					.map((p) => p.trim())
@@ -1271,12 +1286,12 @@ ${chunk.text}`;
 			const refinedPrompt = `You are a transcript editor. Your ONLY job is to produce a clean, complete, full version of the spoken text below — NOT a summary.
 
 RULES (strict):
-- Remove ONLY: filler words ("uh", "um", "a-a", "er", "well", "you know", "like" used as filler), exact word-for-word repetitions, false starts (e.g. "I was — I mean, we should"), and off-topic jokes that add zero informational content.
-- Keep EVERYTHING else: all substantive sentences, explanations, arguments, questions, answers, decisions, names, numbers, details — in the original order.
-- Do NOT translate. Do NOT paraphrase. Do NOT compress into a summary. The output must cover the ENTIRE input from start to finish.
-- Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine).
+- Remove filler and backchannel acknowledgements in ANY language — English ("uh", "um", "er", "well", "you know", "like" as filler), Uzbek ("aha", "ha", "xo'p", "mayli", "mhm", "huh", "ie", "qani", "ha-ha"), Russian ("ага", "угу", "ну", "вот", "это самое"). Also remove: standalone agreement/acknowledgement lines that add NO new information (a lone "Aha.", "Xo'p.", "Mhm", or a filler-repeated "Xudo xohlasa."), bare echoes where someone just repeats a word or number the other person said, exact word-for-word repetitions, and false starts (e.g. "I was — I mean, we should").
+- MERGE the dialogue into clean flowing paragraphs. Do NOT keep every short utterance on its own line — combine consecutive lines about the SAME point into readable prose, and drop the pure listener acknowledgements entirely. The result should read like clean written text, not a raw chat log.
+- Keep EVERYTHING substantive: every fact, number, name, decision, explanation, argument, and every question WITH its answer — in the original order. NOTHING important may be dropped or shortened. Only the useless filler goes.
+- Do NOT translate. Do NOT summarize or shorten the substance. Preserve the speaker's original wording and language (Uzbek/Russian/English mixed is fine); you may join sentences into paragraphs but keep the actual content and words.
 - Output clean readable paragraphs separated by blank lines. No bullet points, no headers.
-- This is DIFFERENT from a summary: a summary is short; this must be the full cleaned text.
+- This is NOT a summary (a summary is short): keep the full substance — but WITHOUT the filler/backchannel noise.
 - Wrap EVERY foreign/technical/brand/product word or phrase (any word not in the dominant spoken language) in markdown bold: **word**. Example: Bugun **dashboard** **deadline** bor, **сразу** qilamiz.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
 
@@ -1295,7 +1310,9 @@ ${chunk.text}`;
 				);
 				totalInputTokens += refinedResult.inputTokens;
 				totalOutputTokens += refinedResult.outputTokens;
-				const cleanedText = refinedResult.content.trim();
+				const cleanedText = stripRunawayRepetition(
+					refinedResult.content,
+				).text.trim();
 				if (cleanedText.length === 0) {
 					// AI cleaning returned nothing for this chunk — use raw text as fallback
 					// so every chunk contributes a chapter to the Refined tab.
