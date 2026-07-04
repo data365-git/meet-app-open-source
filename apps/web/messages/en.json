@@ -129,7 +129,13 @@
     "uploadFailed": "Upload failed",
     "titleUpdated": "Video title updated",
     "titleUpdateFailed": "Failed to update title — please try again.",
-    "invalidDateFormat": "Invalid date format. Please use YYYY-MM-DD HH:mm"
+    "invalidDateFormat": "Invalid date format. Please use YYYY-MM-DD HH:mm",
+    "recordingDeleted": "Recording deleted",
+    "deleteRecordingFailed": "Failed to delete recording",
+    "linkCopied": "Link copied",
+    "dateInFuture": "Cannot set a date in the future",
+    "dateUpdated": "Video date updated",
+    "dateUpdateFailed": "Failed to update date — please try again."
   },
   "auth": {
     "signingIn": "Signing you in…",
@@ -640,5 +646,22 @@
       "cta": "Upgrade to Pro",
       "alreadyPro": "You are already on the Pro plan"
     }
+  },
+  "extension": {
+    "intro": "Record Google Meet calls and instructional videos right from Chrome.",
+    "download": "Download Extension",
+    "step1": "Download the file, then <b>unzip it first</b> — Chrome loads an unzipped folder, not the .zip.",
+    "step2": "Open <code>chrome://extensions</code> in Chrome.",
+    "step3": "Turn on <b>Developer mode</b> (top-right toggle).",
+    "step4": "Click <b>Load unpacked</b>.",
+    "step5": "Select the unzipped folder.",
+    "step6": "Open the extension's <b>Options</b> section and sign in — you're ready to record."
+  },
+  "import": {
+    "intro": "Import videos from external sources or upload from your device.",
+    "uploadFile": "Upload File",
+    "uploadFileDesc": "Upload a video file from your device",
+    "loom": "Loom",
+    "loomDesc": "Import a Loom share link or bulk import from CSV"
   }
 }

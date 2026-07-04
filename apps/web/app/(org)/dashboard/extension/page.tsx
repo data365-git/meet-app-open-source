@@ -1,17 +1,29 @@
 import type { Metadata } from "next";
+import { getTranslations } from "next-intl/server";
 
 export const metadata: Metadata = {
 	title: "Browser Extension — data365",
 };
 
-export default function ExtensionPage() {
+export default async function ExtensionPage() {
+	const t = await getTranslations("extension");
+
+	const richValues = {
+		b: (c: React.ReactNode) => (
+			<span className="font-semibold text-gray-12">{c}</span>
+		),
+		code: (c: React.ReactNode) => (
+			<code className="rounded border border-gray-5 bg-gray-3 px-1.5 py-0.5 text-xs font-mono text-gray-12">
+				{c}
+			</code>
+		),
+	};
+
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="flex flex-wrap gap-3 items-center mb-10 w-full">
 				<div>
-					<p className="mt-1 text-gray-10 text-md">
-						Record Google Meet calls and instructional videos right from Chrome.
-					</p>
+					<p className="mt-1 text-gray-10 text-md">{t("intro")}</p>
 				</div>
 			</div>
 
@@ -34,38 +46,17 @@ export default function ExtensionPage() {
 						<path d="M12 3v13M5 14l7 7 7-7" />
 						<path d="M3 21h18" />
 					</svg>
-					Download extension
+					{t("download")}
 				</a>
 
 				<ol className="mt-8 flex flex-col gap-4">
 					{[
-						<>
-							Download the file, then{" "}
-							<span className="font-semibold text-gray-12">unzip it first</span>{" "}
-							— Chrome loads an unzipped folder, not the .zip.
-						</>,
-						<>
-							Open{" "}
-							<code className="rounded border border-gray-5 bg-gray-3 px-1.5 py-0.5 text-xs font-mono text-gray-12">
-								chrome://extensions
-							</code>{" "}
-							in Chrome.
-						</>,
-						<>
-							Turn on{" "}
-							<span className="font-semibold text-gray-12">Developer mode</span>{" "}
-							(top-right toggle).
-						</>,
-						<>
-							Click{" "}
-							<span className="font-semibold text-gray-12">Load unpacked</span>.
-						</>,
-						"Select the unzipped folder.",
-						<>
-							Open the extension&apos;s{" "}
-							<span className="font-semibold text-gray-12">Options</span> and
-							sign in — you&apos;re ready to record.
-						</>,
+						t.rich("step1", richValues),
+						t.rich("step2", richValues),
+						t.rich("step3", richValues),
+						t.rich("step4", richValues),
+						t("step5"),
+						t.rich("step6", richValues),
 					].map((step, i) => (
 						<li key={i} className="flex gap-4 items-start">
 							<span className="flex-shrink-0 flex items-center justify-center size-7 rounded-full bg-[var(--brand)] text-[var(--brand-fg)] text-sm font-bold">

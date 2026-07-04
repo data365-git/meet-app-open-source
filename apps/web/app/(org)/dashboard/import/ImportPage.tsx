@@ -2,15 +2,15 @@
 
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 
 export const ImportPage = ({ folderId }: { folderId?: string }) => {
+	const t = useTranslations("import");
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
-				<p className="mt-1 text-sm text-gray-10">
-					Import videos from external sources or upload from your device.
-				</p>
+				<p className="mt-1 text-sm text-gray-10">{t("intro")}</p>
 			</div>
 
 			<div className="grid grid-cols-1 gap-5 max-w-4xl sm:grid-cols-2 lg:grid-cols-3">
@@ -20,7 +20,7 @@ export const ImportPage = ({ folderId }: { folderId?: string }) => {
 							? `/dashboard/import/file?folderId=${encodeURIComponent(folderId)}`
 							: "/dashboard/import/file"
 					}
-					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-[var(--brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
 				>
 					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
 						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 text-gray-10 group-hover:text-gray-12 group-hover:scale-110">
@@ -29,10 +29,10 @@ export const ImportPage = ({ folderId }: { folderId?: string }) => {
 					</div>
 					<div className="flex flex-col gap-1 p-4">
 						<p className="text-sm font-medium text-left text-gray-12">
-							Upload File
+							{t("uploadFile")}
 						</p>
 						<p className="text-xs text-left text-gray-10">
-							Upload a video file from your device
+							{t("uploadFileDesc")}
 						</p>
 					</div>
 				</Link>
@@ -43,7 +43,7 @@ export const ImportPage = ({ folderId }: { folderId?: string }) => {
 							? `/dashboard/import/loom?folderId=${encodeURIComponent(folderId)}`
 							: "/dashboard/import/loom"
 					}
-					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-[var(--brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
 				>
 					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
 						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 group-hover:scale-110">
@@ -64,10 +64,10 @@ export const ImportPage = ({ folderId }: { folderId?: string }) => {
 						</div>
 					</div>
 					<div className="flex flex-col gap-1 p-4">
-						<p className="text-sm font-medium text-left text-gray-12">Loom</p>
-						<p className="text-xs text-left text-gray-10">
-							Import a Loom share link or bulk import from CSV
+						<p className="text-sm font-medium text-left text-gray-12">
+							{t("loom")}
 						</p>
+						<p className="text-xs text-left text-gray-10">{t("loomDesc")}</p>
 					</div>
 				</Link>
 			</div>

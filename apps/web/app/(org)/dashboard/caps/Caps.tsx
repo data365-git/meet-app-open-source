@@ -204,10 +204,10 @@ export const Caps = ({
       yield* rpc.VideoDelete(id);
     }),
     onSuccess: () => {
-      toast.success("Recording deleted successfully");
+      toast.success(t("recordingDeleted"));
       router.refresh();
     },
-    onError: (_error: unknown) => toast.error("Failed to delete recording"),
+    onError: (_error: unknown) => toast.error(t("deleteRecordingFailed")),
   });
 
   useEffect(() => {

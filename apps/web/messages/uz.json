@@ -129,7 +129,13 @@
     "uploadFailed": "Yuklashda xatolik",
     "titleUpdated": "Video sarlavhasi yangilandi",
     "titleUpdateFailed": "Sarlavhani yangilab bo'lmadi — qayta urinib ko'ring.",
-    "invalidDateFormat": "Sana formati noto'g'ri. YYYY-MM-DD HH:mm dan foydalaning"
+    "invalidDateFormat": "Sana formati noto'g'ri. YYYY-MM-DD HH:mm dan foydalaning",
+    "recordingDeleted": "Yozuv o'chirildi",
+    "deleteRecordingFailed": "Yozuvni o'chirib bo'lmadi",
+    "linkCopied": "Havola nusxalandi",
+    "dateInFuture": "Kelajakdagi sanani qo'yib bo'lmaydi",
+    "dateUpdated": "Video sanasi yangilandi",
+    "dateUpdateFailed": "Sanani yangilab bo'lmadi — qayta urinib ko'ring."
   },
   "auth": {
     "signingIn": "Tizimga kiritilmoqda…",
@@ -640,5 +646,22 @@
       "cta": "Pro'ga o'tish",
       "alreadyPro": "Siz allaqachon Pro tarifidasiz"
     }
+  },
+  "extension": {
+    "intro": "Google Meet uchrashuvlari va yo'riqnoma videolarini to'g'ridan-to'g'ri Chrome'dan yozing.",
+    "download": "Extension'ni yuklab olish",
+    "step1": "Faylni yuklab oling, so'ng <b>avval zip'dan chiqaring</b> — Chrome .zip emas, ochilgan papkani yuklaydi.",
+    "step2": "Chrome'da <code>chrome://extensions</code> ni oching.",
+    "step3": "<b>Developer mode</b> ni yoqing (yuqori-o'ngdagi tugma).",
+    "step4": "<b>Load unpacked</b> ni bosing.",
+    "step5": "Ochilgan papkani tanlang.",
+    "step6": "Extension'ning <b>Options</b> bo'limini oching va tizimga kiring — yozishga tayyorsiz."
+  },
+  "import": {
+    "intro": "Tashqi manbalardan video import qiling yoki qurilmangizdan yuklang.",
+    "uploadFile": "Fayl yuklash",
+    "uploadFileDesc": "Qurilmangizdan video fayl yuklang",
+    "loom": "Loom",
+    "loomDesc": "Loom havolasi orqali import qiling yoki CSV orqali ommaviy yuklang"
   }
 }

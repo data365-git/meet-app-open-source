@@ -105,7 +105,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
     const currentDate = moment();
 
     if (selectedDate.isAfter(currentDate)) {
-      toast.error("Cannot set a date in the future");
+      toast.error(t("dateInFuture"));
       setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
       setIsDateEditing(false);
       return;
@@ -118,14 +118,14 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
     try {
       await editDate(cap.id, selectedDate.toISOString());
-      toast.success("Video date updated");
+      toast.success(t("dateUpdated"));
       setIsDateEditing(false);
       router.refresh();
     } catch (error) {
       if (error instanceof Error) {
         toast.error(error.message);
       } else {
-        toast.error("Failed to update date - please try again.");
+        toast.error(t("dateUpdateFailed"));
       }
     }
   };

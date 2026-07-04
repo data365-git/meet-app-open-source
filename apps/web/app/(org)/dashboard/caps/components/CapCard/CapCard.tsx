@@ -502,7 +502,7 @@ export const CapCard = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   copyLinkHandler();
-                  toast.success("Link copied to clipboard");
+                  toast.success(t("linkCopied"));
                 }}
                 className="flex gap-2 items-center rounded-lg"
               >
