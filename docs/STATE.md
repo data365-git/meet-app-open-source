@@ -15,7 +15,9 @@
 >
 > **🔓 YANGI KIRISH (bu sessiya): Railway CLI authed** → jonli DB (public proxy `thomas.proxy.rlwy.net:26774`, MySQL_URL railway'dан) + `railway logs --service @cap/web`. DB-recipe: `railway variables --service MySQL --json` MYSQL_URL → host'ni proxy'ga almashtir → mysql2. Bu edit-404 diagnostika + cost-o'lchov'ni ochdi.
 >
-> **EDIT-404 (owner report):** admin'ning 8 videosi ham edit-shartlaridan O'TADI (DB-tekshirildi) → 404 kod-bug EMAS. Log: `Failed to find Server Action ... older/newer deployment` = **eskirgan-tab** (ko'p deploy paytida). Yechim: owner **qattiq-yangilash** → retry. Hali bo'lsa DB+log bilan qaziyman. (Yon: loglarда `S3Error` ko'p — storage, alohida tekshir.)
+> **VIDEO EDITOR delete-UX (owner report, hard-refresh'дан keyin edit ochildi ✅):** owner "tanlangan qismni delete qilib bo'lmaydi". Sabab = UX-noaniqlik, BUG EMAS: `EditVideoClient.tsx` delete-modeli split-asosli — `Delete` tugmasi `disabled={!canDeleteSegment}` (`canDeleteSegment = activeSegmentAtPlayhead && visibleSegmentCount>1`), ya'ni avval **Split** (qaychi, 2130) bilan 2+ segment yaratish kerak, keyin o'rtadagi segmentga playhead → Delete yonadi (2188). Split qilmasa 1 segment → Delete o'chiq. Tugmalar INGLIZCHA (Split/Delete/Cancel split). FOLLOW-UP (eski Cap-editor, n01 scope'дан tashqari): (a) i18n tugmalar/tooltip; (b) region-select→delete yoki aniqroq ko'rsatma (empty-hint "avval Split qiling"); (c) mobil-touch split test. ⚠️ Agar owner Split qilгандан keyin ham Delete o'chiq tursa → REAL bug, qayta tekshir.
+>
+> **EDIT-404 (owner report — HAL BO'LDI):** admin'ning 8 videosi ham edit-shartlaridan O'TADI (DB-tekshirildi) → 404 kod-bug EMAS. Log: `Failed to find Server Action ... older/newer deployment` = **eskirgan-tab** (ko'p deploy paytida). Yechim: owner **qattiq-yangilash** → retry. Hali bo'lsa DB+log bilan qaziyman. (Yon: loglarда `S3Error` ko'p — storage, alohida tekshir.)
 > ---
 > 🚀 **STATUS 2026-07-04 (Jarvis, sessiya 5) — DEPLOY SUCCESS, JONLI. Bug-batch + butun dizayn-update (FIX1-9) push+deploy bo'ldi (`436ac3c..3bc0465`, 21 commit). Railway build SUCCESS (~4min). HEAD=`3bc0465` PUSH QILINGAN. /clear XAVFSIZ.**
 >
