@@ -1,6 +1,9 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — HAMMA BUG-BATCH + BUTUN DIZAYN-UPDATE (FIX1-9) QO'LLANDI + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`5bf8823` (origin `436ac3c`dan 19 commit oldinda). Owner: "4 vizualni ham qur, keyin bitta deploy" → BARCHASI TAYYOR. Endi: (1) OWNER TELEFON-VERIFY (men vizual ko'ra olmayman — login orqasida) → (2) yoqsa "deploy" → push+Railway+jonli smoke. FIX1 comments = owner layout-qarori "A butun-kенglikda pastda" → bajarildi.**
+> 🚀 **STATUS 2026-07-04 (Jarvis, sessiya 5) — DEPLOY SUCCESS, JONLI. Bug-batch + butun dizayn-update (FIX1-9) push+deploy bo'ldi (`436ac3c..3bc0465`, 21 commit). Railway build SUCCESS (~4min). HEAD=`3bc0465` PUSH QILINGAN. /clear XAVFSIZ.**
+>
+> **✅ JONLI SMOKE O'TDI:** `/api/health` 200 (db=ok storage=ok) · `/login`+`/signup`+`/privacy` 200 · **P0 parol-fix JONLI TASDIQLANDI** (login VA signup server-HTML'da `<form method="post">` — leak yopildi) · yangi data365 LogoBadge jonli (`viewBox 0 0 200 200`).
+> - **OWNER TODO: telefonда `admin@ustoz.uz` bilan login qilib dashboard-orqasi dizaynni ko'r** (men vizual ko'ra olmadim, jonli-verify qildim faqat public): stepper (AI-processing) · summary 1-ustun · izohlar video-ostida (butun-kенг) · dark-mode fon qorayadimi · logo sidebar/login'da (⚠️ oq-fon tayl och sidebar'да kontrast?). Yoqmasa → ayt, fix-forward.
 >
 > **VIZUAL BATCH commitlari:** `ce94055` FIX7 summary 1-ustun + FIX9 data365 logo (LogoBadge+favicon+PWA; ⚠️ favicon.ico/safari-pinned-tab.svg/eski meta-rang follow-up) · `b0b41d2` FIX2 processing stepper (`--brand` token; SummaryPanel noAiSummary→null; SharePanel processing-prop tab-lock). Har biri fresh-Opus review SHIP.
 > - ⚠️ **FIX2 ishchi HOLLOW+NESTED** bo'ldi (Agent-tool ishlatma dedim — bo'ysunmadi, grandchild yozdi); disk-verify bilan ushladim, ish aslida to'g'ri chiqdi, gate+review o'tdi. Codex 2-marta osilib qoldi → fallback fresh-Opus (butun vizual-batch shu bilan review qilindi).
