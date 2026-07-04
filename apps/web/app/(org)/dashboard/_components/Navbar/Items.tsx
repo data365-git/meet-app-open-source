@@ -362,7 +362,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			>
 				<div
 					className={clsx(
-						"mt-6 shrink-0",
+						"mt-4 shrink-0",
 						sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
 					)}
 				>
@@ -375,11 +375,11 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							href="/dashboard/caps/record"
 							onClick={() => toggleMobileNav?.()}
 							className={clsx(
-								"mb-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--brand)] px-3 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90",
+								"mb-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--brand)] px-3 py-2 text-[13px] font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90",
 								sidebarCollapsed && "mx-auto size-11 px-0",
 							)}
 						>
-							<span className="size-[9px] rounded-full bg-current" />
+							<span className="size-[7px] rounded-full bg-current" />
 							<span className={clsx(sidebarCollapsed && "sr-only")}>
 								{t("newRecording")}
 							</span>
