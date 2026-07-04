@@ -1,5 +1,10 @@
 # Ustoz (Cap fork) — Project STATE
 
+> ✅ **STATUS 2026-07-05 (Jarvis, sessiya 7 davomi) — KATTA BUG-BATCH, HAMMASI JONLI. HEAD=`dc04900` (origin/qa-fixes).**
+> - **Yangi deploylar (smoke O'TDI): `53620ec`+`c83a702`** mobil trim-tugma kesilishi (z-[70] + flex-1 min-h-0; c83a702=LF-normalize) · **`3621e0f`** soxta "processing failed" (STALE_PROCESSING_START_MS 90s→5min — navbatдаги video failed ko'rsatmaydi) · **`dc04900`** AI-panel: (1) 2-bosqich start ("AI tahlil" tugma→keyin Arzon/Tez), (2) stepper+status endi ishonchli signaldan (transcript/AI status), `aiProcessingStep`ga tayanmaydi → joriy-bosqich aniq, label mos; o'lik `deriveProgressState` olib tashlandi.
+> - **⏳ OWNER JONLI-TEST (qolган):** task uzun-videoда (AI qayta tahlil→DB'дан o'lchayman) · extension qayta-o'rnatib Meet pause/stop · kamera ekran+kamera yozib · trim-tugma mobil · soxta-failed ketди-mi · AI-panel 2-bosqich+stepper.
+> - **Playwright:** admin-storageState eskirган → jonli authed-test qilib bo'lmadi (owner login yangilasa mumkin). Extension zip SHA=review-artefakt + sendResponse built-JS'да; web-chunk'да `data365:aiChat` — kod jonli tasdiqlangan.
+> ---
 > ✅ **STATUS 2026-07-04 (Jarvis, sessiya 7) — TO'LIQ BUG-BATCH DEPLOY. HEAD=`31c344a` (origin/qa-fixes). Owner "bugun yakunlaymiz" → hammasi tuzatildi.**
 > - **DEPLOYlar (hammasi jonli smoke O'TDI):** `22d299f` mini-pleer+refined-lossless+sidebar · `db9c8c4` refined 2-3 gaplik paragraf · `884d908` narx-fix · `df88dfa` task-extraction · `202cb54` **AI-chat overlap + chat-tarixi saqlash (shu video, localStorage)** · `5c9b140` **extension pause/stop fix + rebuilt zip** · `31c344a` **kamera-o'chirish fix**.
 > - **✅ AI-CHAT OVERLAP + PERSIST (`202cb54`):** overlap = keyed+unkeyed aralash render streamingда buzilardi → keyed `<span>`/`<button>` + `whitespace-pre-wrap`. Persist = localStorage `data365:aiChat:${videoId}` (bo'sh-massivда yozmaydi=clobber yo'q; id-counter bump). tsc0+build.
