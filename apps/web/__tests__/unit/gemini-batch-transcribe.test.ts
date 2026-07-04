@@ -171,7 +171,7 @@ describe("extractInlinedResponse / unwrapBatchResponse", () => {
 describe("buildBatchRequestBody", () => {
 	it("wraps contents/generationConfig in batch.input_config.requests.requests[0].request", () => {
 		const body = buildBatchRequestBody({
-			model: "gemini-2.5-flash",
+			model: "gemini-3-flash-preview",
 			mimeType: "audio/mpeg",
 			fileUri: "https://files/xyz",
 			displayName: "cap-batch-test",

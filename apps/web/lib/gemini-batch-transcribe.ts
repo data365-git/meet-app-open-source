@@ -7,9 +7,11 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Same model set as the sync path's primary. The batch endpoint keys off the
-// model in the URL; keep it aligned with GEMINI_TRANSCRIBE_MODELS[0].
-const BATCH_TRANSCRIBE_MODEL = "gemini-2.5-flash";
+// Same model as the sync path's primary. The batch endpoint keys off the
+// model in the URL; keep it aligned with GEMINI_TRANSCRIBE_MODELS[0]
+// (gemini-3-flash-preview since 2026-07-04 — the Cyrillic fix applies to the
+// "Arzon"/cheap batch path too, owner decision).
+const BATCH_TRANSCRIBE_MODEL = "gemini-3-flash-preview";
 
 // Terminal batch states. The live API returns BATCH_STATE_* (NOT JOB_STATE_*
 // as some Google docs claim — spike-verified 2026-07-03). Anything not in this
