@@ -112,8 +112,8 @@
     "emptyCapsTitle": "Birinchi yozuvni yarating",
     "emptyCapsSubtitle": "Uchrashuvni yozing yoki tayyor videoni yuklang - xulosa, bo'limlar va vazifalarni AI avtomatik tayyorlaydi.",
     "meetingsEmptyTitle": "Hozircha uchrashuv yozuvlari yo'q",
-    "meetingsEmptySubtitle": "Chrome kengaytmasi orqali Google Meet uchrashuvini yozing - tahlil avtomatik keladi.",
-    "installExtension": "Kengaytmani o'rnatish",
+    "meetingsEmptySubtitle": "Chrome Extension orqali Google Meet uchrashuvini yozing - tahlil avtomatik keladi.",
+    "installExtension": "Extension'ni o'rnatish",
     "uploadVideo": "Video yuklash",
     "or": "yoki"
   },
@@ -147,10 +147,10 @@
     "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz."
   },
   "extensionBanner": {
-    "title": "Kengaytmani yangilash kerak.",
-    "bodyFull": "Ekran yozib olishni yaxshiladik. Kengaytma qo'lda o'rnatilgani uchun, tuzatishni olish uchun eski versiyani o'chirib, qayta o'rnating.",
+    "title": "Extension'ni yangilash kerak.",
+    "bodyFull": "Ekran yozib olishni yaxshiladik. Extension qo'lda o'rnatilgani uchun, tuzatishni olish uchun eski versiyani o'chirib, qayta o'rnating.",
     "bodyShort": "Tuzatishni olish uchun qayta o'rnating.",
-    "updateCta": "Kengaytmani yangilash",
+    "updateCta": "Extension'ni yangilash",
     "dismissAria": "Yopish"
   },
   "recorder": {
@@ -448,7 +448,7 @@
     "analytics": "Tahlil",
     "trash": "Savat",
     "newRecording": "Yangi yozuv",
-    "installExtension": "Kengaytma",
+    "installExtension": "Extension",
     "navGroupMain": "Asosiy",
     "navGroupManage": "Boshqarish",
     "profile": "Profil",
