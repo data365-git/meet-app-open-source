@@ -108,7 +108,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			: originalBytes;
 
 	return (
-		<div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+		<div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4">
 			<div className="bg-gray-1 rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
 				<div className="p-4 border-b border-gray-4 flex justify-between items-center">
 					<h2 className="text-lg font-semibold text-gray-12">
@@ -123,7 +123,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						✕
 					</button>
 				</div>
-				<div className="p-4 space-y-4 overflow-auto">
+				<div className="p-4 space-y-4 overflow-auto flex-1 min-h-0">
 					<video
 						ref={videoRef}
 						src={videoUrl}
