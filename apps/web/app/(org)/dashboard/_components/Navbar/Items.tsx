@@ -79,7 +79,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 	const t = useTranslations("nav");
 
-	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
+	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS =
+		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ?? ["richie@cap.so"];
 
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&

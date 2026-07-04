@@ -19,14 +19,7 @@
 	--brand-fg: #ffffff;
 	--brand-wash: #e0edff;
 	--primary: var(--brand);
-	--primary-2: #004c93;
-	--primary-3: #003b73;
 	--secondary: var(--brand);
-	--secondary-2: #1696e0;
-	--secondary-3: #117ebd;
-	--tertiary: #c5eaff;
-	--tertiary-2: #d3e5ff;
-	--tertiary-3: #e0edff;
 	--filler: #efefef;
 	--filler-2: #e4e4e4;
 	--filler-3: #e2e2e2;
@@ -185,7 +178,7 @@ html {
 }
 
 a.text-primary:hover {
-	color: var(--primary-2);
+	color: var(--brand);
 }
 
 .text-secondary {
@@ -193,30 +186,11 @@ a.text-primary:hover {
 }
 
 a.text-secondary:hover {
-	color: var(--secondary-2);
+	color: var(--brand);
 }
 
 a.bg-primary:hover {
-	background-color: var(--primary-2);
-}
-
-.bg-dark {
-	background-color: var(--secondary-3);
-}
-
-.bg-gradient {
-	@apply bg-gradient-to-r transition-all duration-300 from-secondary-2 to-secondary-3;
-}
-
-.bg-gradient:hover {
-	@apply bg-gradient-to-r from-secondary to-secondary-3;
-}
-
-.bg-animated {
-	content: "";
-	background: linear-gradient(60deg, var(--primary), var(--secondary));
-	animation: animatedgradient 2s ease infinite;
-	background-size: 300% 300%;
+	background-color: var(--brand);
 }
 
 .animated-yaxis {
@@ -416,24 +390,6 @@ label {
 		linear-gradient(#fff 0 0);
 	-webkit-mask-composite: xor;
 	mask-composite: exclude;
-}
-
-.muted-custom-bg {
-	background: radial-gradient(
-		50.01% 50.01% at 53.53% 49.99%,
-		var(--tertiary-3) 4.65%,
-		var(--tertiary-3) 68.48%,
-		#ffffff 100%
-	);
-}
-
-.muted-custom-bg-2 {
-	background: radial-gradient(
-		50.01% 50.01% at 53.53% 49.99%,
-		var(--tertiary-2) 4.65%,
-		var(--tertiary) 68.48%,
-		#ffffff 100%
-	);
 }
 
 .theme-transition {

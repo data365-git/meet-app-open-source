@@ -1,45 +1,10 @@
 import "@/app/globals.css";
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import { GeistSans } from "geist/font/sans";
 import Script from "next/script";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import type { PropsWithChildren } from "react";
-
-const defaultFont = localFont({
-	src: [
-		{
-			path: "../public/fonts/NeueMontreal-Bold.otf",
-			weight: "700",
-			style: "normal",
-		},
-		{
-			path: "../public/fonts/NeueMontreal-Regular.otf",
-			weight: "400",
-			style: "normal",
-		},
-		{
-			path: "../public/fonts/NeueMontreal-Medium.otf",
-			weight: "500",
-			style: "normal",
-		},
-		{
-			path: "../public/fonts/NeueMontreal-MediumItalic.otf",
-			weight: "500",
-			style: "italic",
-		},
-		{
-			path: "../public/fonts/NeueMontreal-Italic.otf",
-			weight: "400",
-			style: "italic",
-		},
-		{
-			path: "../public/fonts/NeueMontreal-BoldItalic.otf",
-			weight: "700",
-			style: "italic",
-		},
-	],
-});
 
 export const metadata: Metadata = {
 	metadataBase: new URL(process.env.NEXT_PUBLIC_WEB_URL ?? process.env.WEB_URL ?? "https://capweb-production-dd85.up.railway.app"),
@@ -59,7 +24,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
 	const messages = await getMessages();
 
 	return (
-		<html className={defaultFont.className} lang={locale}>
+		<html className={GeistSans.className} lang={locale}>
 			<head>
 				<link
 					rel="apple-touch-icon"
