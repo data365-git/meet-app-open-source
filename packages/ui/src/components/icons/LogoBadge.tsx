@@ -32,7 +32,7 @@ export const LogoBadge = ({ className }: { className: string }) => {
 			</defs>
 			<rect width="64" height="64" rx="16" fill={`url(#${badgeFillId})`} />
 			<path
-				d="M50 39.5V26.5C50 20.7 45.3 16 39.5 16h-15C18.7 16 14 20.7 14 26.5v11C14 43.3 18.7 48 24.5 48H40"
+				d="M49 38.6V26.8C49 21.2 44.8 17 39.2 17H24.8C19.2 17 15 21.2 15 26.8v10.6C15 43 19.2 47 24.8 47H39"
 				stroke="white"
 				strokeWidth="5"
 				strokeLinecap="round"
@@ -43,7 +43,7 @@ export const LogoBadge = ({ className }: { className: string }) => {
 				fill="white"
 				strokeLinejoin="round"
 			/>
-			<circle cx="48" cy="48" r="4.2" fill="#35efc2" />
+			<circle cx="47" cy="47" r="4" fill="#35efc2" />
 		</svg>
 	);
 };

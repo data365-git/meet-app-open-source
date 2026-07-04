@@ -45,8 +45,8 @@ export function StorageIndicator() {
 
 	if (isLoading) {
 		return (
-			<div className="block p-3 rounded-lg border border-gray-5 bg-gray-1">
-				<div className="flex justify-between items-baseline mb-1.5">
+			<div className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1">
+				<div className="flex justify-between items-baseline mb-1">
 					<span className="text-[11px] font-medium text-gray-11">
 						{t("storage")}
 					</span>
@@ -60,7 +60,7 @@ export function StorageIndicator() {
 	if (error || !data) {
 		if (isStaleActionError(error)) {
 			return (
-				<div className="block p-3 rounded-lg border border-gray-5 bg-gray-1">
+				<div className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1">
 					<div className="text-[11px] font-medium text-gray-11 mb-1">
 						{t("storage")}
 					</div>
@@ -71,7 +71,7 @@ export function StorageIndicator() {
 		return (
 			<Link
 				href="/dashboard/settings/storage"
-				className="block p-3 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2"
+				className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2"
 			>
 				<div className="text-[11px] font-medium text-gray-11 mb-1">
 					{t("storage")}
@@ -88,9 +88,9 @@ export function StorageIndicator() {
 	return (
 		<Link
 			href="/dashboard/settings/storage"
-			className="block p-3 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2 transition-colors"
+			className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2 transition-colors"
 		>
-			<div className="flex justify-between items-baseline mb-1.5">
+			<div className="flex justify-between items-baseline mb-1">
 				<span className="text-[11px] font-medium text-gray-11">
 					{t("storage")}
 				</span>
@@ -104,10 +104,8 @@ export function StorageIndicator() {
 					style={{ width: `${usedPct}%` }}
 				/>
 			</div>
-			<p className="mt-1.5 text-[11px] text-gray-10">
-				{pct >= 99
-					? t("quotaFull")
-					: t("storageUsed", { percent: usedStr })}
+			<p className="mt-1 text-[11px] text-gray-10">
+				{pct >= 99 ? t("quotaFull") : t("storageUsed", { percent: usedStr })}
 			</p>
 		</Link>
 	);

@@ -101,8 +101,8 @@ export const DesktopNav = () => {
 						</Button>
 					</Tooltip>
 				</div>
-				<div className="flex overflow-y-auto flex-col flex-grow min-h-0">
-					<div className="flex flex-col px-3 min-h-full">
+				<div className="flex flex-col flex-grow min-h-0 overflow-hidden">
+					<div className="flex h-full min-h-0 flex-col px-3">
 						{isDeveloperSection ? (
 							<DeveloperSidebarContent />
 						) : (

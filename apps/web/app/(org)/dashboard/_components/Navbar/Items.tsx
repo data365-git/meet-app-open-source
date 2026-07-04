@@ -289,83 +289,80 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									</div>
 								</div>
 							</div>
-							<PopoverContent
-								className={clsx(
-									"p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
-									sidebarCollapsed ? "ml-3" : "mx-auto",
-								)}
-							>
-								<Command>
-									<CommandInput placeholder={t("searchOrganizations")} />
-									<CommandEmpty>{t("noOrganizationsFound")}</CommandEmpty>
-									<CommandGroup>
-										{orgData?.map((organization) => {
-											const isSelected =
-												activeOrg?.organization.id ===
-												organization.organization.id;
-											return (
-												<CommandItem
-													className={clsx(
-														"rounded-lg transition-colors duration-300 group",
-														isSelected
-															? "pointer-events-none"
-															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
-													)}
-													key={`${organization.organization.name}-organization-${organization.organization.id}`}
-													onSelect={async () => {
-														await updateActiveOrganization(
-															organization.organization.id,
-														);
-														setOpen(false);
-														router.push("/dashboard/caps");
-													}}
-												>
-													<div className="flex gap-2 items-center w-full">
-														<SignedImageUrl
-															image={organization.organization.iconUrl}
-															name={organization.organization.name}
-															letterClass="text-xs"
-															className="relative flex-shrink-0 size-5"
-														/>
-														<p
-															className={clsx(
-																"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
-																isSelected ? "text-gray-12" : "text-gray-10",
-															)}
-														>
-															{organization.organization.name}
-														</p>
-													</div>
-													{isSelected && (
-														<Check
-															size={18}
-															className={"ml-auto text-gray-12"}
-														/>
-													)}
-												</CommandItem>
-											);
-										})}
-										<DialogTrigger asChild>
-											<Button
-												variant="dark"
-												size="sm"
-												className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
-											>
-												<Plus className="w-3.5 h-auto" />
-												{t("newOrganization")}
-											</Button>
-										</DialogTrigger>
-									</CommandGroup>
-								</Command>
-							</PopoverContent>
 						</motion.div>
 					</PopoverTrigger>
 				</Tooltip>
+				<PopoverContent
+					className={clsx(
+						"p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
+						sidebarCollapsed ? "ml-3" : "mx-auto",
+					)}
+				>
+					<Command>
+						<CommandInput placeholder={t("searchOrganizations")} />
+						<CommandEmpty>{t("noOrganizationsFound")}</CommandEmpty>
+						<CommandGroup>
+							{orgData?.map((organization) => {
+								const isSelected =
+									activeOrg?.organization.id === organization.organization.id;
+								return (
+									<CommandItem
+										className={clsx(
+											"rounded-lg transition-colors duration-300 group",
+											isSelected
+												? "pointer-events-none"
+												: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
+										)}
+										key={`${organization.organization.name}-organization-${organization.organization.id}`}
+										onSelect={async () => {
+											await updateActiveOrganization(
+												organization.organization.id,
+											);
+											setOpen(false);
+											router.push("/dashboard/caps");
+										}}
+									>
+										<div className="flex gap-2 items-center w-full">
+											<SignedImageUrl
+												image={organization.organization.iconUrl}
+												name={organization.organization.name}
+												letterClass="text-xs"
+												className="relative flex-shrink-0 size-5"
+											/>
+											<p
+												className={clsx(
+													"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
+													isSelected ? "text-gray-12" : "text-gray-10",
+												)}
+											>
+												{organization.organization.name}
+											</p>
+										</div>
+										{isSelected && (
+											<Check size={18} className={"ml-auto text-gray-12"} />
+										)}
+									</CommandItem>
+								);
+							})}
+							<DialogTrigger asChild>
+								<Button
+									variant="dark"
+									size="sm"
+									className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
+								>
+									<Plus className="w-3.5 h-auto" />
+									{t("newOrganization")}
+								</Button>
+							</DialogTrigger>
+						</CommandGroup>
+					</Command>
+				</PopoverContent>
 			</Popover>
-			<nav className="flex flex-col w-full min-h-full" aria-label="Sidebar">
+			<nav className="flex h-full min-h-0 w-full flex-col" aria-label="Sidebar">
 				<div
 					className={clsx(
-						"mt-3 shrink-0",
+						"-mr-1 min-h-0 flex-1 overflow-y-auto pr-1",
+						toggleMobileNav ? "mt-1" : "mt-2",
 						sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
 					)}
 				>
@@ -380,7 +377,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							className={clsx(
 								"flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--brand)] px-3 text-[13px] font-semibold text-[var(--brand-fg)] shadow-sm shadow-blue-950/10 transition-opacity hover:opacity-90",
 								sidebarCollapsed && "mx-auto size-11 px-0",
-								toggleMobileNav ? "mb-8 min-h-12 py-3" : "mb-7 min-h-11 py-2.5",
+								toggleMobileNav ? "mb-6 min-h-12 py-3" : "mb-5 min-h-11 py-2.5",
 							)}
 						>
 							<Video className="size-4 shrink-0" strokeWidth={2.4} />
@@ -397,7 +394,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						if (items.length === 0) return null;
 
 						return (
-							<div key={group.label} className="mb-5 w-full">
+							<div key={group.label} className="mb-4 w-full">
 								{!sidebarCollapsed && (
 									<p className="mb-2 px-3 text-[10.5px] font-semibold font-mono uppercase tracking-[0.12em] text-gray-10">
 										{group.label}
@@ -447,7 +444,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						);
 					})}
 				</div>
-				<div className="pb-4 mt-auto w-full flex flex-col gap-2 shrink-0">
+				<div className="pb-2 pt-2 mt-auto w-full flex flex-col gap-2 shrink-0">
 					<StorageIndicator />
 					<SidebarUser inline={!!toggleMobileNav} />
 				</div>
