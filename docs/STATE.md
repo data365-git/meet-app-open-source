@@ -1,6 +1,6 @@
 # Ustoz (Cap fork) — Project STATE
 
-> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — 5 BATCH QO'LLANDI (bug-batch 4 fix + dizayn mexanik FIX1-labels/3/4/5/8 + kichik-vizual FIX6/8.4/8.2 + FIX7 summary + FIX9 logo + FIX2 stepper) + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`b0b41d2` (origin `436ac3c`dan 17 commit oldinda). Owner: "4 vizualni ham qur, keyin bitta deploy". QOLGAN = FAQAT FIX1 (comments-relocation) — desktop-layout owner-qarori kutilyapti. Owner TELEFON-VERIFY shart (men vizual ko'ra olmayman).**
+> ✅ **STATUS 2026-07-04 (Jarvis, sessiya 5) — HAMMA BUG-BATCH + BUTUN DIZAYN-UPDATE (FIX1-9) QO'LLANDI + GATE + REVIEW SHIP. LOKAL, PUSH/DEPLOY YO'Q. HEAD=`5bf8823` (origin `436ac3c`dan 19 commit oldinda). Owner: "4 vizualni ham qur, keyin bitta deploy" → BARCHASI TAYYOR. Endi: (1) OWNER TELEFON-VERIFY (men vizual ko'ra olmayman — login orqasida) → (2) yoqsa "deploy" → push+Railway+jonli smoke. FIX1 comments = owner layout-qarori "A butun-kенglikda pastda" → bajarildi.**
 >
 > **VIZUAL BATCH commitlari:** `ce94055` FIX7 summary 1-ustun + FIX9 data365 logo (LogoBadge+favicon+PWA; ⚠️ favicon.ico/safari-pinned-tab.svg/eski meta-rang follow-up) · `b0b41d2` FIX2 processing stepper (`--brand` token; SummaryPanel noAiSummary→null; SharePanel processing-prop tab-lock). Har biri fresh-Opus review SHIP.
 > - ⚠️ **FIX2 ishchi HOLLOW+NESTED** bo'ldi (Agent-tool ishlatma dedim — bo'ysunmadi, grandchild yozdi); disk-verify bilan ushladim, ish aslida to'g'ri chiqdi, gate+review o'tdi. Codex 2-marta osilib qoldi → fallback fresh-Opus (butun vizual-batch shu bilan review qilindi).
@@ -16,9 +16,14 @@
 > **DIZAYN KICHIK-VIZUAL BATCH (autoresearch loop, Sonnet apply → tsc/build/fresh-Opus SHIP; ⚠️ CRLF-FLIP takrorlandi: DashboardSearch LF edi, ishchi CRLF'ga flip qildi — `git diff --stat` bilan ushladim, `python replace \r\n→\n` bilan LF'ga qaytardim → diff toza 4 qator. SABOQ: spec'da qator-tugash DA'VO QILMA + har subagent-editdan keyin diff --stat):**
 > - `0e0d266` FIX6 meeting-cost share'dan olib tashlandi (+o'lik `isOwnerOrMember`) · FIX8.4 duration pill numeric `4:54` · FIX8.2 search placeholder i18n (`nav.searchPlaceholder`, uz "Space" — "bo'shliq" mistranslation tuzatildi). HEAD=`0e0d266` (origin'dan 14 commit oldinda).
 >
-> **⏸️ QOLGAN (owner-qaror + verify):**
-> - **FIX1 izohlar video-ostiga (M) — OWNER LAYOUT-QARORI KUTILYAPTI.** SharePanel'dan Comments-tab olib tashlash toza (5→4). Desktop'da izohlar (`Share.tsx` commentsPanel = `<Sidebar>`) QAYERGA: (A) tor chap-ustun video ostiga (~34% kенг) yoki (B) butun-kенglikda ikkala ustun ostiga. Fayllar: `SharePanel.tsx` (type/props :115/126, initialTab :138, TABS :353, panels :361, tabpanel-className :404) + `ShareVideo.tsx` (`comments=` :879 olib + placement). ⚠️ Sidebar tab-panel uchun stillangan → height/scroll moslash kerak; comment-post + timestamp-jump ishlashini verify.
-> - **FIX8.5b auto-name locale-aware** — upload-path'da (bu fayllarda emas), trace kerak.
+> **✅ FIX1 BAJARILDI (`5bf8823`, owner tanladi "A butun-kенglikda pastda"):** Comments-tab olib tashlandi (5→4), izohlar `ShareVideo` fragmentda butun-kенglikda video+panel ostida (`{commentsPanel && <div mt-4>}`), `?tab=comments`→summary fallback. Review SHIP. `tabComments` kalit endi o'lik (zararsiz).
+>
+> **⏸️ QOLGAN FOLLOW-UP (deploy'ni bloklamaydi):**
+> - **OWNER: telefonда butun dizaynni ko'r** (login `admin@ustoz.uz`) — stepper · summary 1-ustun · logo (⚠️ oq-fon tayl och sidebar'да kontrast?) · izohlar video-ostida · dark-mode. Yoqsa "deploy".
+> - **FIX9 residual:** `favicon.ico` + `safari-pinned-tab.svg` + `layout.tsx:47-49` eski meta-rang hali eski brend (past-ko'rinish).
+> - **FIX8.5b auto-name locale-aware** — upload-path'da, trace kerak.
+> - **Mobil overflow (P1/P2)** — jonli o'lchov (390px login-dashboard); taxminiy fix qo'llanmadi.
+> - **cost-runaway-guard** — plan tayyor, pulli test owner-tasdiq.
 > ---
 >
 > **MAQSAD (o'zgarmagan):** o'zbek video-transkript + AI-xulosa mahsuloti — dizayn toza, narx arzon, Codex topgan buglar yo'q, senior-ship darajasi.
