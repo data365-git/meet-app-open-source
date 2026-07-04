@@ -1251,6 +1251,30 @@ Transcript lines:
 ${transcriptLines}`;
 }
 
+// Break a verbatim text block into shorter, reading-friendly paragraphs of a
+// few sentences each (owner: "leave a blank line after every 2-3 sentences").
+// This is purely cosmetic: sentences are split on terminal punctuation followed
+// by whitespace (so numbers/dates like "3.11.2025" are never split — no space
+// inside them) and re-joined with a single space, so no word is added, removed,
+// or rewritten. The refined-transcript lossless guarantee is preserved.
+const SENTENCES_PER_REFINED_PARAGRAPH = 3;
+function splitIntoReadableParagraphs(text: string): string[] {
+	const trimmed = text.trim();
+	if (!trimmed) return [];
+	const sentences = trimmed
+		.split(/(?<=[.!?…])\s+/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	if (sentences.length <= SENTENCES_PER_REFINED_PARAGRAPH) return [trimmed];
+	const paragraphs: string[] = [];
+	for (let i = 0; i < sentences.length; i += SENTENCES_PER_REFINED_PARAGRAPH) {
+		paragraphs.push(
+			sentences.slice(i, i + SENTENCES_PER_REFINED_PARAGRAPH).join(" "),
+		);
+	}
+	return paragraphs;
+}
+
 function buildRefinedParagraphsFromLines(
 	lines: RefinedTranscriptLine[],
 	deleteIds: Set<number>,
@@ -1262,7 +1286,9 @@ function buildRefinedParagraphsFromLines(
 
 	const flush = () => {
 		if (currentParts.length > 0) {
-			paragraphs.push(currentParts.join(" ").trim());
+			for (const para of splitIntoReadableParagraphs(currentParts.join(" "))) {
+				paragraphs.push(para);
+			}
 		}
 		currentSpeaker = null;
 		currentParts = [];
