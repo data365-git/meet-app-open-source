@@ -10,6 +10,7 @@ import {
 	ChevronRight,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
@@ -112,6 +113,7 @@ export default function Header({
 }: HeaderProps) {
 	const user = useCurrentUser();
 	const router = useRouter();
+	const t = useTranslations("analytics");
 	const [open, setOpen] = useState(false);
 	const [orgOpen, setOrgOpen] = useState(false);
 	const [lastUISelection, setLastUISelection] = useState<string | undefined>(
@@ -229,9 +231,9 @@ export default function Header({
 		? selectedSpace.name
 		: isMyCapsSelected
 			? user?.name
-				? `${user.name}'s Caps`
-				: "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
+				? t("userCaps", { name: user.name })
+				: t("myCaps")
+			: selectedOrg?.organization.name || t("selectOrganization");
 
 	const displayIcon = selectedSpace
 		? selectedSpace.iconUrl
@@ -242,8 +244,8 @@ export default function Header({
 	const displayIconName = selectedSpace
 		? selectedSpace.name
 		: isMyCapsSelected
-			? user?.name || selectedOrg?.organization.name || "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
+			? user?.name || selectedOrg?.organization.name || t("myCaps")
+			: selectedOrg?.organization.name || t("selectOrganization");
 
 	if (!activeOrganization) {
 		return null;
@@ -323,13 +325,13 @@ export default function Header({
 										className="size-5 flex-shrink-0"
 									/>
 									<SelectPrimitive.ItemText>
-										{user?.name ? `${user.name}'s Caps` : "My Caps"}
+										{user?.name ? t("userCaps", { name: user.name }) : t("myCaps")}
 									</SelectPrimitive.ItemText>
 								</SelectPrimitive.Item>
 								{filteredSpaces && filteredSpaces.length > 0 && (
 									<>
 										<div className="px-3 py-2 text-xs font-semibold text-gray-9 uppercase tracking-wider">
-											Spaces
+											{t("spaces")}
 										</div>
 										{filteredSpaces.map((space) => {
 											return (
@@ -381,7 +383,7 @@ export default function Header({
 
 					<SelectPrimitive.Trigger className="flex-1 flex items-center justify-between px-4 py-2.5 border-r border-gray-4 outline-none hover:bg-gray-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed space-x-1">
 						<span className="text-sm font-semibold text-gray-12">
-							{selectedOption.label}
+							{t(`range.${selectedOption.value}`)}
 						</span>
 						<SelectPrimitive.Icon>
 							<ChevronDown className="size-4 text-gray-9" />
@@ -424,7 +426,7 @@ export default function Header({
 										)}
 									>
 										<SelectPrimitive.ItemText>
-											{option.label}
+											{t(`range.${option.value}`)}
 										</SelectPrimitive.ItemText>
 									</SelectPrimitive.Item>
 								);

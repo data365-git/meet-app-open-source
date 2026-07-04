@@ -11,6 +11,7 @@ import { Effect } from "effect";
 import { AnimatePresence, motion } from "framer-motion";
 import { Minus, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { memo, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -44,6 +45,7 @@ const ProRiveArt = memo(() => {
 });
 
 export function AnalyticsDashboard() {
+	const t = useTranslations("analytics");
 	const searchParams = useSearchParams();
 	const capId = searchParams.get("capId");
 	const user = useCurrentUser();
@@ -61,7 +63,9 @@ export function AnalyticsDashboard() {
 	const showOverlay = buildEnv.NEXT_PUBLIC_IS_CAP === "true" && !user?.isPro;
 	const pricePerUser = isAnnual ? 8.16 : 12;
 	const totalPrice = pricePerUser * proQuantity;
-	const billingText = isAnnual ? "billed annually" : "billed monthly";
+	const billingText = isAnnual
+		? t("upgrade.billedAnnually")
+		: t("upgrade.billedMonthly");
 
 	const proCheckoutMutation = useMutation({
 		mutationFn: async () => {
@@ -88,7 +92,7 @@ export function AnalyticsDashboard() {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Pro plan");
+				toast.success(t("upgrade.alreadyPro"));
 				return;
 			}
 
@@ -142,7 +146,7 @@ export function AnalyticsDashboard() {
 	if (!orgId) {
 		return (
 			<div className="rounded-xl border border-gray-5 bg-gray-2 p-6 text-gray-11">
-				Select or join an organization to view analytics.
+				{t("emptyOrg")}
 			</div>
 		);
 	}
@@ -231,11 +235,11 @@ export function AnalyticsDashboard() {
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full bg-gray-2 bg-opacity-75 backdrop-blur-md">
 									<div className="flex flex-col items-center">
 										<h1 className="text-3xl font-medium text-gray-12">
-											Upgrade to unlock Analytics
+											{t("upgrade.title")}
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+										{t("upgrade.subtitle")}
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">
@@ -250,7 +254,7 @@ export function AnalyticsDashboard() {
 											/>
 											<span className="mb-2 ml-2 text-gray-11">
 												{proQuantity === 1 ? (
-													`per user, ${billingText}`
+													t("upgrade.perUser", { billing: billingText })
 												) : (
 													<>
 														for{" "}
@@ -266,7 +270,7 @@ export function AnalyticsDashboard() {
 
 										<div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
 											<div className="flex gap-3 items-center">
-												<span className="text-gray-12">Annual billing</span>
+												<span className="text-gray-12">{t("upgrade.annualBilling")}</span>
 												<Switch
 													checked={isAnnual}
 													onCheckedChange={() => setIsAnnual(!isAnnual)}
@@ -274,7 +278,7 @@ export function AnalyticsDashboard() {
 											</div>
 
 											<div className="flex items-center">
-												<span className="mr-3 text-gray-12">Users:</span>
+												<span className="mr-3 text-gray-12">{t("upgrade.users")}</span>
 												<div className="flex items-center">
 													<button
 														type="button"
@@ -303,18 +307,17 @@ export function AnalyticsDashboard() {
 									</div>
 
 									<Button
-										variant="blue"
 										type="button"
 										onClick={(e) => {
 											e.preventDefault();
 											proCheckoutMutation.mutate();
 										}}
-										className="mt-5 w-full max-w-sm h-14 text-lg"
+										className="mt-5 w-full max-w-sm h-14 text-lg bg-[var(--brand)] text-[var(--brand-fg)] hover:brightness-95"
 										disabled={proCheckoutMutation.isPending}
 									>
 										{proCheckoutMutation.isPending
-											? "Loading..."
-											: "Upgrade to Pro"}
+											? t("upgrade.loading")
+											: t("upgrade.cta")}
 									</Button>
 								</div>
 							</div>

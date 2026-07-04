@@ -551,5 +551,68 @@
     "errorNetwork": "Mediani yuklashda tarmoq xatosi yuz berdi",
     "errorDecode": "Mediani dekodlashda xato yuz berdi",
     "errorSrcNotSupported": "Media formati qo'llab-quvvatlanmaydi"
+  },
+  "analytics": {
+    "emptyOrg": "Analitikani ko'rish uchun tashkilotni tanlang yoki unga qo'shiling.",
+    "range": {
+      "today": "Bugun",
+      "yesterday": "Kecha",
+      "24h": "Oxirgi 24 soat",
+      "7d": "Oxirgi 7 kun",
+      "30d": "Oxirgi 30 kun",
+      "wtd": "Shu hafta",
+      "mtd": "Shu oy",
+      "lifetime": "Butun davr"
+    },
+    "myCaps": "Mening yozuvlarim",
+    "userCaps": "{name} yozuvlari",
+    "selectOrganization": "Tashkilotni tanlang",
+    "spaces": "Spacelar",
+    "metrics": {
+      "views": "Ko'rishlar",
+      "comments": "Izohlar",
+      "reactions": "Reaksiyalar",
+      "caps": "Yozuvlar"
+    },
+    "sections": {
+      "geography": "Geografiya",
+      "software": "Dasturlar",
+      "devices": "Qurilmalar",
+      "topCaps": "Eng ko'p ko'rilgan yozuvlar"
+    },
+    "tables": {
+      "countries": "Davlatlar",
+      "cities": "Shaharlar",
+      "browsers": "Brauzerlar",
+      "operatingSystems": "Operatsion tizimlar",
+      "deviceType": "Qurilma turi",
+      "caps": "Yozuvlar"
+    },
+    "columns": {
+      "country": "Davlat",
+      "city": "Shahar",
+      "browser": "Brauzer",
+      "operatingSystem": "Operatsion tizim",
+      "device": "Qurilma",
+      "name": "Nomi",
+      "views": "Ko'rishlar",
+      "percentage": "Foiz"
+    },
+    "chart": {
+      "empty": "Hozircha tahlil ma'lumotlari yo'q.",
+      "noMetric": "Ko'rish uchun kamida bitta ko'rsatkichni tanlang."
+    },
+    "upgrade": {
+      "title": "Analitikani ochish uchun Pro'ga o'ting",
+      "subtitle": "Istalgan vaqtda bekor qilishingiz mumkin. Erta foydalanuvchilar uchun narx saqlanadi.",
+      "billedAnnually": "yillik to'lov",
+      "billedMonthly": "oylik to'lov",
+      "perUser": "har bir foydalanuvchi uchun, {billing}",
+      "annualBilling": "Yillik to'lov",
+      "users": "Foydalanuvchilar:",
+      "loading": "Yuklanmoqda...",
+      "cta": "Pro'ga o'tish",
+      "alreadyPro": "Siz allaqachon Pro tarifidasiz"
+    }
   }
 }

@@ -551,5 +551,68 @@
     "errorNetwork": "A network error occurred while loading the media",
     "errorDecode": "An error occurred while decoding the media",
     "errorSrcNotSupported": "The media format is not supported"
+  },
+  "analytics": {
+    "emptyOrg": "Select or join an organization to view analytics.",
+    "range": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "24h": "Last 24 hours",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "wtd": "Week to date",
+      "mtd": "Month to date",
+      "lifetime": "Lifetime"
+    },
+    "myCaps": "My Caps",
+    "userCaps": "{name}'s Caps",
+    "selectOrganization": "Select organization",
+    "spaces": "Spaces",
+    "metrics": {
+      "views": "Views",
+      "comments": "Comments",
+      "reactions": "Reactions",
+      "caps": "Caps"
+    },
+    "sections": {
+      "geography": "Geography",
+      "software": "Software",
+      "devices": "Devices",
+      "topCaps": "Top Caps"
+    },
+    "tables": {
+      "countries": "Countries",
+      "cities": "Cities",
+      "browsers": "Browsers",
+      "operatingSystems": "Operating Systems",
+      "deviceType": "Device Type",
+      "caps": "Caps"
+    },
+    "columns": {
+      "country": "Country",
+      "city": "City",
+      "browser": "Browser",
+      "operatingSystem": "Operating System",
+      "device": "Device",
+      "name": "Name",
+      "views": "Views",
+      "percentage": "Percentage"
+    },
+    "chart": {
+      "empty": "No analytics data yet.",
+      "noMetric": "Select at least one metric to view."
+    },
+    "upgrade": {
+      "title": "Upgrade to unlock Analytics",
+      "subtitle": "You can cancel anytime. Early adopter pricing locked in.",
+      "billedAnnually": "billed annually",
+      "billedMonthly": "billed monthly",
+      "perUser": "per user, {billing}",
+      "annualBilling": "Annual billing",
+      "users": "Users:",
+      "loading": "Loading...",
+      "cta": "Upgrade to Pro",
+      "alreadyPro": "You are already on the Pro plan"
+    }
   }
 }
