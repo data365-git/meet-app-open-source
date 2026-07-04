@@ -4,7 +4,8 @@
     "send": "Yuborish",
     "copy": "Nusxalash",
     "reset": "Qayta boshlash",
-    "back": "Orqaga"
+    "back": "Orqaga",
+    "backHome": "Bosh sahifa"
   },
   "aiChat": {
     "title": "Meeting AI",
@@ -144,6 +145,13 @@
     "forgotPassword": "Parolni unutdingizmi?",
     "termsNoticeSignin": "Tizimga kirish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz.",
     "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz."
+  },
+  "extensionBanner": {
+    "title": "Kengaytmani yangilash kerak.",
+    "bodyFull": "Ekran yozib olishni yaxshiladik. Kengaytma qo'lda o'rnatilgani uchun, tuzatishni olish uchun eski versiyani o'chirib, qayta o'rnating.",
+    "bodyShort": "Tuzatishni olish uchun qayta o'rnating.",
+    "updateCta": "Kengaytmani yangilash",
+    "dismissAria": "Yopish"
   },
   "recorder": {
     "recordInBrowser": "Yangi yozuv",
@@ -412,6 +420,11 @@
     "aiNotRunYet": "Bu video uchun AI tahlili hali bajarilmagan.",
     "aiStartAnalysis": "AI tahlilini boshlash",
     "aiCostEstimate": "Taxminiy narx: ~{amount}",
+    "aiSpeedChooserTitle": "Tezlikni tanlang:",
+    "aiSpeedChooserCheapLabel": "Arzon",
+    "aiSpeedChooserCheapHint": "To'plamli (batch) — sekinroq",
+    "aiSpeedChooserFastLabel": "Tez",
+    "aiSpeedChooserFastHint": "~2x tezroq, narxi ham ~2x yuqori",
     "aiReanalyze": "Qayta analiz",
     "aiReanalyzeHint": "AI tahlilni mavjud transkript asosida qayta ishga tushirish (AI krediti sarflanadi).",
     "aiIncompleteHint": "Bu tahlil chala ko'rinadi — qayta ishga tushiring.",

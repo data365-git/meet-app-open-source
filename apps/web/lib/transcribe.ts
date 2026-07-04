@@ -13,6 +13,7 @@ import {
 	assertAiBudgetAvailable,
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
+import type { AiSpeedMode } from "@/lib/ai-speed-mode";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
@@ -27,6 +28,7 @@ export async function transcribeVideo(
 	userId: string,
 	aiGenerationEnabled = false,
 	_isRetry = false,
+	speedModeOverride?: AiSpeedMode,
 ): Promise<TranscribeResult> {
 	if (!userId || !videoId) {
 		return {
@@ -152,6 +154,9 @@ export async function transcribeVideo(
 			videoId,
 			userId,
 			aiGenerationEnabled,
+			// Only include the override when explicitly set, so the default-path
+			// payload stays exactly {videoId, userId, aiGenerationEnabled}.
+			...(speedModeOverride ? { speedModeOverride } : {}),
 		}).catch((err) => {
 			console.error(
 				`[transcribeVideo] Inline workflow failed for video ${videoId}:`,

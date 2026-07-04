@@ -5,6 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
+import { type AiSpeedMode, isAiSpeedMode } from "@/lib/ai-speed-mode";
 import { requestAiGenerationAfterTranscription } from "@/lib/ai-generation-request";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
@@ -24,9 +25,16 @@ export async function POST(
     // Owner/admin "Qayta analiz" (retry) re-runs AI on the EXISTING transcript
     // even when content already exists. No re-upload / re-transcription.
     let reprocess = false;
+    // Optional per-click speed-mode override from the share page's price
+    // chooser (only meaningful on the first-run transcribeVideo path below —
+    // never trust an unvalidated client string, so discard anything invalid).
+    let speedMode: AiSpeedMode | undefined;
     try {
       const body = await request.json();
       reprocess = body?.reprocess === true;
+      if (isAiSpeedMode(body?.speedMode)) {
+        speedMode = body.speedMode;
+      }
     } catch {
       // no body → normal (non-forced) request
     }
@@ -147,7 +155,13 @@ export async function POST(
     }
 
     // Transcription not yet started — kick off the full pipeline
-    const result = await transcribeVideo(videoId, video.ownerId, true);
+    const result = await transcribeVideo(
+      videoId,
+      video.ownerId,
+      true,
+      false,
+      speedMode,
+    );
 
     if (!result.success) {
       return Response.json({ error: result.message }, { status: 500 });

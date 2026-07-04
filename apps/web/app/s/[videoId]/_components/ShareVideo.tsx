@@ -750,11 +750,14 @@ export const ShareVideo = forwardRef<
 		return (
 			<div className="flex flex-col gap-4 lg:flex-row">
 				{/* LEFT: video only (chapter chips moved into the Summary tab's TOC).
+				    Video is the secondary/helper element, so it takes a smaller share
+				    of desktop width (~38%/34%) while the content panel gets the rest.
 				    RIGHT: unified AI panel (summary / tasks / transcript / refined /
-				    comments tabs + pinned AI input). On small screens the panel stacks
-				    directly below the video so the tab bar sits right under it. */}
+				    comments tabs + pinned AI input) — primary, more readable area.
+				    On small screens the panel stacks directly below the video so the
+				    tab bar sits right under it. */}
 				<div
-					className={`min-w-0 flex-1${
+					className={`min-w-0 lg:w-[38%] lg:flex-none xl:w-[34%]${
 						isPlaying
 							? " max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-gray-2 max-lg:shadow-lg max-lg:shadow-black/10"
 							: ""
@@ -763,7 +766,7 @@ export const ShareVideo = forwardRef<
 					{playerBlock}
 				</div>
 
-				<div className="flex w-full flex-col gap-3 lg:w-80 xl:w-96">
+				<div className="flex w-full min-w-0 flex-1 flex-col gap-3">
 					{costPanel}
 					<SharePanel
 						videoId={data.id}

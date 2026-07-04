@@ -47,6 +47,9 @@ interface TranscribeWorkflowPayload {
 	videoId: string;
 	userId: string;
 	aiGenerationEnabled: boolean;
+	/** Optional per-click override of the org-level aiSpeedMode default (see
+	 * GenerateAiPanel's price chooser). Falls back to the org setting when absent. */
+	speedModeOverride?: AiSpeedMode;
 }
 
 interface VideoData {
@@ -78,9 +81,9 @@ export async function transcribeVideoWorkflow(
 ) {
 	"use workflow";
 
-	const { videoId, userId, aiGenerationEnabled } = payload;
+	const { videoId, userId, aiGenerationEnabled, speedModeOverride } = payload;
 
-	const videoData = await validateVideo(videoId);
+	const videoData = await validateVideo(videoId, speedModeOverride);
 
 	if (videoData.transcriptionDisabled) {
 		await markSkipped(videoId);
@@ -148,7 +151,10 @@ export async function transcribeVideoWorkflow(
 	return { success: true, message: "Transcription completed successfully" };
 }
 
-async function validateVideo(videoId: string): Promise<VideoData> {
+async function validateVideo(
+	videoId: string,
+	speedModeOverride?: AiSpeedMode,
+): Promise<VideoData> {
 	"use step";
 
 	const query = await db()
@@ -181,8 +187,10 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 
 	// Read the org's transcription speed/cost mode ONCE, here at workflow start,
 	// from settings already loaded above (no extra query). Defaults to "fast"
-	// (sync) so an org that never opted in behaves exactly as before.
-	const aiSpeedMode = resolveAiSpeedMode(result.orgSettings?.aiSpeedMode);
+	// (sync) so an org that never opted in behaves exactly as before. A per-click
+	// override (from the share page's price chooser) takes precedence when present.
+	const aiSpeedMode =
+		speedModeOverride ?? resolveAiSpeedMode(result.orgSettings?.aiSpeedMode);
 
 	console.log(
 		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}, aiSpeedMode=${aiSpeedMode}`,

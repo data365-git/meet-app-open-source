@@ -10,7 +10,7 @@ import { estimateVideoAiCostUsd } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { MoreVertical } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { formatUzs } from "@/lib/format-uzs";
 
 type TranscriptionStatus =
@@ -115,6 +115,7 @@ export function GenerateAiPanel({
   const tShare = useTranslations("share");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
   const isRunning =
     transcriptionStatus === "PROCESSING" ||
     aiGenerationStatus === "QUEUED" ||
@@ -132,14 +133,18 @@ export function GenerateAiPanel({
   const hasError =
     transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
   const aiNotice = getAiAnalysisNotice(duration);
-  const estimatedCostUsd = estimateVideoAiCostUsd(duration, {
-    batch: aiSpeedMode === "cheap",
-  });
+  const cheapCostUsd = estimateVideoAiCostUsd(duration, { batch: true });
+  const fastCostUsd = estimateVideoAiCostUsd(duration, { batch: false });
 
   // Fire AI generation directly on click — one click is enough. No second
   // confirmation dialog (AI is admin-only and the panel already states it uses
-  // extra time + budget).
-  const requestStart = (reprocess = false) => {
+  // extra time + budget). Each price-chooser option IS the one click.
+  const requestStart = (reprocess = false, speedMode?: "fast" | "cheap") => {
+    // Synchronous in-flight guard: a very fast double-click can fire before the
+    // `loading` state re-renders the disabled buttons, sending two POSTs (with
+    // possibly different speedModes). The ref blocks the second call instantly.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setLoading(true);
     setError(null);
     void (async () => {
@@ -147,7 +152,7 @@ export function GenerateAiPanel({
         const res = await fetch(`/api/videos/${videoId}/generate`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ reprocess }),
+          body: JSON.stringify({ reprocess, speedMode }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -159,6 +164,7 @@ export function GenerateAiPanel({
         setError("An error occurred");
       } finally {
         setLoading(false);
+        inFlightRef.current = false;
       }
     })();
   };
@@ -340,20 +346,65 @@ export function GenerateAiPanel({
           </p>
         )}
         {error && <p className="text-xs text-red-10">{error}</p>}
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => requestStart(false)}
-          className="self-start rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-[var(--brand-fg)] transition-colors hover:brightness-95 disabled:opacity-60"
-        >
-          {loading ? tShare("aiStarting") : tShare("aiStartAnalysis")}
-        </button>
-        {estimatedCostUsd > 0 && (
-          <p className="text-xs text-gray-10">
-            {tShare("aiCostEstimate", {
-              amount: formatUzs(Math.round(estimatedCostUsd * 100)),
-            })}
-          </p>
+        <p className="text-xs font-medium text-gray-11">
+          {tShare("aiSpeedChooserTitle")}
+        </p>
+        <div role="radiogroup" className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={aiSpeedMode === "cheap"}
+            disabled={loading}
+            onClick={() => requestStart(false, "cheap")}
+            className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
+              aiSpeedMode === "cheap"
+                ? "border-[var(--brand)] bg-[var(--brand-wash)]"
+                : "border-blue-6 bg-blue-2 hover:bg-blue-3"
+            }`}
+          >
+            <span className="block text-sm font-medium text-gray-12">
+              {tShare("aiSpeedChooserCheapLabel")}
+            </span>
+            <span className="block text-xs text-gray-10">
+              {tShare("aiSpeedChooserCheapHint")}
+            </span>
+            {cheapCostUsd > 0 && (
+              <span className="block text-xs text-gray-10">
+                {tShare("aiCostEstimate", {
+                  amount: formatUzs(Math.round(cheapCostUsd * 100)),
+                })}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={aiSpeedMode === "fast"}
+            disabled={loading}
+            onClick={() => requestStart(false, "fast")}
+            className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
+              aiSpeedMode === "fast"
+                ? "border-[var(--brand)] bg-[var(--brand-wash)]"
+                : "border-blue-6 bg-blue-2 hover:bg-blue-3"
+            }`}
+          >
+            <span className="block text-sm font-medium text-gray-12">
+              {tShare("aiSpeedChooserFastLabel")}
+            </span>
+            <span className="block text-xs text-gray-10">
+              {tShare("aiSpeedChooserFastHint")}
+            </span>
+            {fastCostUsd > 0 && (
+              <span className="block text-xs text-gray-10">
+                {tShare("aiCostEstimate", {
+                  amount: formatUzs(Math.round(fastCostUsd * 100)),
+                })}
+              </span>
+            )}
+          </button>
+        </div>
+        {loading && (
+          <p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
         )}
       </div>
     );

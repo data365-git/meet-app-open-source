@@ -4,7 +4,8 @@
     "send": "Send",
     "copy": "Copy",
     "reset": "Reset",
-    "back": "Back"
+    "back": "Back",
+    "backHome": "Home"
   },
   "aiChat": {
     "title": "Meeting AI",
@@ -144,6 +145,13 @@
     "forgotPassword": "Forgot your password?",
     "termsNoticeSignin": "By signing in, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
     "termsNoticeSignup": "By creating an account, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>."
+  },
+  "extensionBanner": {
+    "title": "Extension update required.",
+    "bodyFull": "We improved the screen recorder. Because the extension is installed manually, please remove the old version and reinstall it to get the fix.",
+    "bodyShort": "Reinstall once to get the recorder fix.",
+    "updateCta": "Update extension",
+    "dismissAria": "Dismiss"
   },
   "recorder": {
     "recordInBrowser": "New recording",
@@ -412,6 +420,11 @@
     "aiNotRunYet": "AI analysis has not been run for this video yet.",
     "aiStartAnalysis": "Start AI analysis",
     "aiCostEstimate": "Estimated cost: ~{amount}",
+    "aiSpeedChooserTitle": "Choose speed:",
+    "aiSpeedChooserCheapLabel": "Cheap",
+    "aiSpeedChooserCheapHint": "Batch — slower",
+    "aiSpeedChooserFastLabel": "Fast",
+    "aiSpeedChooserFastHint": "~2x faster, price also ~2x higher",
     "aiReanalyze": "Re-analyze",
     "aiReanalyzeHint": "Re-run AI analysis on the existing transcript (uses AI credits).",
     "aiIncompleteHint": "This analysis looks incomplete — re-run it.",
