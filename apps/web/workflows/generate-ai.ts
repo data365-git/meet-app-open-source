@@ -1318,10 +1318,11 @@ function buildRefinedParagraphsFromLines(
 }
 
 function buildRawRefinedParagraphs(segments: VttSegment[]): string[] {
-	return buildRefinedParagraphsFromLines(
-		buildRefinedTranscriptLines(segments),
-		new Set(),
-	);
+	const lines = buildRefinedTranscriptLines(segments).map((line) => ({
+		...line,
+		text: splitSpeakerPrefix(line.text).body,
+	}));
+	return buildRefinedParagraphsFromLines(lines, new Set());
 }
 
 async function generateLosslessFilteredRefined(
@@ -1386,6 +1387,83 @@ async function generateLosslessFilteredRefined(
 		inputTokens,
 		outputTokens,
 	};
+}
+
+function buildReadableRefinePrompt(transcript: string): string {
+	return `You are an expert note-taker. Below is a meeting/video transcript excerpt (the content may be in Uzbek, Russian, or English). Each line is "Speaker: text".
+
+Rewrite it into clean, readable notes in flowing prose — as if a person listened to the conversation and wrote down everything important in an easy-to-read short-form style. This is NOT a short summary: it is a full, faithful rendition with the clutter removed.
+
+HARD rules:
+- Include EVERY point actually discussed and EVERY number, quantity, price, count, date, name, product, decision and task — exactly as stated. Missing or altering a number/fact is a FAILURE.
+- Only remove: filler, hesitation, verbatim repetition, small talk, and back-channel ("aha", "xo'p", "mm", "mhm"). Do NOT compress two different facts into one; do NOT generalize specifics away.
+- Aim for roughly HALF to TWO-THIRDS of the original length — fuller than a summary, tighter than verbatim.
+- NO speaker labels ("Spiker 1", "Speaker 2", "Bunyodbek:"). Write flowing prose, NOT a dialogue. A person's name may appear naturally inside a sentence when it carries meaning.
+- Write in the SAME language as the transcript (Uzbek → Uzbek Latin).
+- Group related points into short paragraphs of 2–4 sentences, separated by a blank line.
+- Output ONLY the notes — no preamble, no heading, no bullet symbols.
+
+${MIXED_LANGUAGE_PRESERVATION_RULES}
+
+Transcript:
+${transcript}`;
+}
+
+export function splitReadableParagraphs(text: string): string[] {
+	return text
+		.split(/\n\s*\n+/)
+		.map((p) => p.trim())
+		.filter((p) => p.length > 0)
+		.map((p) => p.replace(/^[-•]\s+/, ""));
+}
+
+async function generateReadableRefined(
+	segments: VttSegment[],
+	context: AiCallContext,
+	logLabel: string,
+): Promise<{
+	paragraphs: string[];
+	inputTokens: number;
+	outputTokens: number;
+}> {
+	const lines = buildRefinedTranscriptLines(segments);
+	if (lines.length === 0) {
+		return { paragraphs: [], inputTokens: 0, outputTokens: 0 };
+	}
+
+	const transcript = lines.map((l) => l.text).join("\n");
+
+	let inputTokens = 0;
+	let outputTokens = 0;
+
+	try {
+		const result = await callAiApi(
+			buildReadableRefinePrompt(transcript),
+			{ json: false },
+			context,
+		);
+		inputTokens += result.inputTokens;
+		outputTokens += result.outputTokens;
+
+		const { text: guardedText, runaway } = stripRunawayRepetition(
+			result.content,
+		);
+		if (runaway) {
+			console.warn(`[generate-ai] readable refine runaway truncated (${logLabel})`);
+		}
+
+		return {
+			paragraphs: splitReadableParagraphs(guardedText),
+			inputTokens,
+			outputTokens,
+		};
+	} catch (error) {
+		console.warn(
+			`[generate-ai] readable refine failed; falling back to raw slice (${logLabel})`,
+			error,
+		);
+		return { paragraphs: [], inputTokens, outputTokens };
+	}
 }
 
 async function generateSingleChunk(
@@ -1554,7 +1632,7 @@ async function generateChapterAlignedRefined(
 
 			let paragraphs: string[] = [];
 			try {
-				const refined = await generateLosslessFilteredRefined(
+				const refined = await generateReadableRefined(
 					slice,
 					context,
 					`chapter startSec=${range.startSec}`,
@@ -1795,7 +1873,7 @@ ${chunk.text}`;
 			// A single failing chunk call must not abort the whole loop and silently
 			// collapse the refined transcript to []. Fall back to raw text instead.
 			try {
-				const refined = await generateLosslessFilteredRefined(
+				const refined = await generateReadableRefined(
 					chunk.segments,
 					context,
 					`chunk ${i + 1}/${chunks.length}`,
