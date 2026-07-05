@@ -1,5 +1,20 @@
 # Ustoz (Cap fork) — Project STATE
 
+> 🎬 **UPLOAD "SMOOTH EMAS" ILDIZ FIX (2026-07-05, owner: "sen qil codex to'xtagan") — DEPLOY qilinмоqда.**
+> - **ILDIZ (chuqur tahlil):** import HAR safar majburий `PreUploadTrimmer`дан o'tади; `handleConfirm` **kesилмаган bo'lса ham** doim `trim()`=brauzer ffmpeg-wasm chaqiradi. `ffmpeg.writeFile` butun faylни wasm-xotirага yuklaydi → 375MB'ni telefon-brauzerда ishlаsh sekin + **OOM/crash** → chiqиш yo'q → **S3 bo'sh** (mening avvalgi topilmам!). "Avval smooth" = bu og'ir qadam urилмаган payt.
+> - **FIX (men, Codex `2e94e73` ustида):** yangi `trim-utils.ts` (`shouldUploadOriginal`: kesилмаган FULL selection + mp4 manba) → `handleConfirm` bunда ffmpeg'ни BUTUNLAY o'tkazиб yuborиб asl faylни to'g'ridan yuklaydi (eski tez "tanla→yukla"). Tugma yorlig'i "Upload video"/"Upload trimmed video". ffmpeg faqat HAQIQATAN kesгандa. Owner fayllari `source=webMP4` → aynan mos.
+> - **Codex ishi (`2e94e73`, men review qildim — SHIP):** mobил trim oyna z-[100] full-screen + sticky footer (tugmalar bosилади) + useFFmpeg mp4/audio normalize (`-map 0:a?`, output.mp4). Tegмадим, ustidan qurдim.
+> - **GATE:** tsc0 · vitest **8/8** yangi (`trim-utils`) · build SUCCESS · biome. Render preview yo'q (auth-gated import).
+> - ⏳ Owner **telefonда** import qilib (kesмасдан) smooth yuklanishini tekshirsин.
+> ---
+> 🛑 **UPLOAD BUG → CODEX olди (2026-07-05, owner: "codex tuzatyapti").** Claude CHEKINDI (konflikt bo'lmasин — upload-fayllарга tegмайди, `qa-fixes`ga push qilмайди shu bo'yicha). Claude'ning tashxis-topilmalari (Codex'ga handoff):
+> - **BELGI:** yangi katta (375MB) import-uploadlar chala qolади; watch'да "Ijro etiladigan video manbasi topilmadi" (`videoLoadError`, CapVideoPlayer `showPlaybackResolutionError`). Owner: "avval yaxshi ishlаётганди" (regressiya deydi, qat'iy).
+> - **🔑 ENG MUHIM DALIL:** 3 fail video (`44ct3vda5ej2h6r` DB=124MB, `0a9aqm1b8w8r6bb` DB=12MB, `1d3z49x9hdaw5c2` DB=0) — DB `video_uploads.uploaded` qisman ko'rsатади LEKIN **S3'да AYNAN HECH NARSA yo'q (raw-upload.mp4 umuman yaratilмаган, prefix BO'SH).** Ya'ni client progress hisoblaydi, lekin baytlar **R2'га umuman yetиб bormаyapti.** → presigned-URL / CORS / R2-auth / client-PUT xatosi gumon (transfer emas, storage-write uzилган).
+> - **RAD ETILGAN:** kod-regressiya emas (upload-target.ts/route.ts/multipart.ts iyun'дан beri o'zgармаган) · deploy-restart mos kelмайди (fail 12:30-13:34, deploy 10:25 va 14:21) · kvota bloklаmaydi (enforceQuota, uploadlar boshланган) · konteyner crash/OOM yo'q.
+> - **IMPORT yo'li:** `ImportFilePage`→`uploadVideoForServerProcessing`→`uploadWithTarget` (utils/upload-target.ts) = **bitta XHR POST/PUT, singlepart, resume YO'Q** (recorder esa multipart ishlatади). Fix yo'nalishi: import ham multipart+resume; LEKIN avval **nega baytlar R2'га bormаyapti** (S3 bo'sh) — o'sha ildiz. Reproduce: real presigned-PUT'ni brauzer/CORS bilan sina.
+> - **Muvaffaqiyatли precedent:** `j520571`(545MB) va `392fryr5`(375MB) 07-04'да R2'га TO'LIQ yuklanган → katta upload avval ishlаган. Nima o'zgарди 07-04→07-05: env/CORS/R2-config? (git kod emas.)
+> ---
+
 > 🛠️ **STATUS 2026-07-05 (Jarvis, sessiya 8) — 2-BUG: MUZLAGAN UPLOAD → AI-TUGMA JIM NO-OP. FIX YOZILDI+GATE O'TDI, DEPLOY KUTILMOQDA.**
 > - **Belgi (owner):** 2-videoда "AI tahlil boshlash" bosса "ishlаяпti" deydi, qayta kirsa yana "boshlash" (Tez bosgan).
 > - **ILDIZ (jonli-tasdiq):** `392fryr5gje52w7` — fayl 100% yuklangan (`uploaded==total`=375MB, S3'да bор) LEKIN `video_uploads.phase="uploading"`да muzlaган (07-04 deploy-restart finalize'ni uzган). `processVideoWorkflow` (webMP4 uchun) = FAQAT `video_uploads` yozuvini o'chirish → o'sha o'chirish uzилган → yozuv qolган. `transcribeVideo`даги `phase==="uploading"` to'sig'i → transkripsiyани boshламай `success:true` qaytаради → tugma jim no-op (UI "boshlash"ga qaytади). Tuzalgandan keyin UI retry-tugmasi faqat `phase==="error"`да chiqадi → owner unга yetа olмaydi = boshi berk.

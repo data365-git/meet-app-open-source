@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Timeline } from "./Timeline";
+import { shouldUploadOriginal } from "./trim-utils";
 import { type TrimMode, useFFmpeg } from "./useFFmpeg";
 
 function fmtBytes(bytes: number): string {
@@ -71,8 +72,30 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 		else v.pause();
 	}, []);
 
+	const uploadingOriginal = shouldUploadOriginal({
+		inSec,
+		outSec,
+		duration,
+		fileType: file.type,
+		fileName: file.name,
+	});
+
 	const handleConfirm = useCallback(async () => {
 		setError(null);
+		// No real trim on an already-MP4 source → upload the file as-is and skip
+		// the heavy in-browser ffmpeg pass (fast, and never OOMs a big/mobile tab).
+		if (
+			shouldUploadOriginal({
+				inSec,
+				outSec,
+				duration,
+				fileType: file.type,
+				fileName: file.name,
+			})
+		) {
+			onConfirm(file);
+			return;
+		}
 		setTrimming(true);
 		try {
 			const trimmedFile = await trim(file, inSec, outSec, mode);
@@ -82,7 +105,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			setError(e instanceof Error ? e.message : "Trim failed");
 			setTrimming(false);
 		}
-	}, [trim, file, inSec, outSec, mode, onConfirm]);
+	}, [trim, file, inSec, outSec, mode, duration, onConfirm]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -208,7 +231,11 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						disabled={trimming || trimmedDuration < 0.5}
 						className="w-full sm:w-auto"
 					>
-						{trimming ? "Working…" : "Upload trimmed video"}
+						{trimming
+							? "Working…"
+							: uploadingOriginal
+								? "Upload video"
+								: "Upload trimmed video"}
 					</Button>
 				</div>
 			</div>
