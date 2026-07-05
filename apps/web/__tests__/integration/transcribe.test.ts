@@ -73,6 +73,9 @@ vi.mock("@cap/database", () => ({
 				where: vi.fn().mockResolvedValue([]),
 			}),
 		}),
+		delete: () => ({
+			where: vi.fn().mockResolvedValue([]),
+		}),
 	}),
 }));
 
@@ -89,7 +92,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 import type { Video } from "@cap/web-domain";
-import { transcribeVideo } from "@/lib/transcribe";
+import { isUploadInProgress, transcribeVideo } from "@/lib/transcribe";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
 
 describe("transcribeVideo", () => {
@@ -328,8 +331,10 @@ describe("transcribeVideo", () => {
 			vi.mocked(transcribeVideoWorkflow).mockResolvedValue(undefined as never);
 		});
 
-		it("does not trigger while upload is still active", async () => {
-			mockUploadQueryResult = [{ phase: "processing" }];
+		it("does not trigger while upload bytes are still arriving", async () => {
+			mockUploadQueryResult = [
+				{ phase: "uploading", uploaded: 500, total: 1000 },
+			];
 
 			const result = await transcribeVideo(
 				"video-123" as Video.VideoId,
@@ -338,7 +343,25 @@ describe("transcribeVideo", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.message).toBe("Video upload is still in progress");
-			expect(mockStart).not.toHaveBeenCalled();
+			expect(transcribeVideoWorkflow).not.toHaveBeenCalled();
+		});
+
+		it("recovers a stuck-but-complete upload (interrupted finalize) and triggers the workflow", async () => {
+			// The finalize that clears this row was interrupted (e.g. a redeploy
+			// restart) so phase never left "uploading" — but every byte is already
+			// in storage. This must NOT block transcription forever.
+			mockUploadQueryResult = [
+				{ phase: "uploading", uploaded: 1000, total: 1000 },
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toBe("Transcription started inline");
+			expect(transcribeVideoWorkflow).toHaveBeenCalled();
 		});
 
 		it("triggers workflow for valid video", async () => {
@@ -403,5 +426,54 @@ describe("transcribeVideo", () => {
 			expect(syncResult.success).toBe(false);
 			expect(syncResult.message).toBe("Failed to start transcription workflow");
 		});
+	});
+});
+
+describe("isUploadInProgress", () => {
+	it("blocks while bytes are still arriving", () => {
+		expect(
+			isUploadInProgress({ phase: "uploading", uploaded: 500, total: 1000 }),
+		).toBe(true);
+	});
+
+	it("does NOT block a byte-complete singlepart row stuck at 'uploading' (interrupted finalize)", () => {
+		expect(
+			isUploadInProgress({
+				phase: "uploading",
+				uploaded: 1000,
+				total: 1000,
+				mode: "singlepart",
+			}),
+		).toBe(false);
+	});
+
+	it("STILL blocks a byte-complete MULTIPART row (parts not yet assembled in S3)", () => {
+		expect(
+			isUploadInProgress({
+				phase: "uploading",
+				uploaded: 1000,
+				total: 1000,
+				mode: "multipart",
+			}),
+		).toBe(true);
+	});
+
+	it("does NOT block a byte-complete row stuck at 'processing'", () => {
+		expect(
+			isUploadInProgress({ phase: "processing", uploaded: 42, total: 42 }),
+		).toBe(false);
+	});
+
+	it("blocks a genuinely-processing row with an unknown total", () => {
+		// total 0 → cannot prove completion → treat as in-progress (safe default).
+		expect(
+			isUploadInProgress({ phase: "generating_thumbnail", uploaded: 0, total: 0 }),
+		).toBe(true);
+	});
+
+	it("does not block terminal / absent rows", () => {
+		expect(isUploadInProgress({ phase: "error", uploaded: 1, total: 2 })).toBe(false);
+		expect(isUploadInProgress(null)).toBe(false);
+		expect(isUploadInProgress(undefined)).toBe(false);
 	});
 });

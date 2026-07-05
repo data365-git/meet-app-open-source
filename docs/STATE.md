@@ -1,5 +1,25 @@
 # Ustoz (Cap fork) — Project STATE
 
+> 🛠️ **STATUS 2026-07-05 (Jarvis, sessiya 8) — 2-BUG: MUZLAGAN UPLOAD → AI-TUGMA JIM NO-OP. FIX YOZILDI+GATE O'TDI, DEPLOY KUTILMOQDA.**
+> - **Belgi (owner):** 2-videoда "AI tahlil boshlash" bosса "ishlаяпti" deydi, qayta kirsa yana "boshlash" (Tez bosgan).
+> - **ILDIZ (jonli-tasdiq):** `392fryr5gje52w7` — fayl 100% yuklangan (`uploaded==total`=375MB, S3'да bор) LEKIN `video_uploads.phase="uploading"`да muzlaган (07-04 deploy-restart finalize'ni uzган). `processVideoWorkflow` (webMP4 uchun) = FAQAT `video_uploads` yozuvini o'chirish → o'sha o'chirish uzилган → yozuv qolган. `transcribeVideo`даги `phase==="uploading"` to'sig'i → transkripsiyани boshламай `success:true` qaytаради → tugma jim no-op (UI "boshlash"ga qaytади). Tuzalgandan keyin UI retry-tugmasi faqat `phase==="error"`да chiqадi → owner unга yetа olмaydi = boshi berk.
+> - **FIX (`apps/web/lib/transcribe.ts`):** yangi pure helper `isUploadInProgress(upload)` — faqat bayt HALI kelaётганда (uploaded<total) bloklaydi; bayt-to'liq muzlаган yozuvни bloklаmaydi + o'sha eskirган yozuvni o'chiradi (processVideoWorkflow'ni takrorlaydi) → transkripsiya davom etadi. Terminal/yo'q yozuvга tegмaydi (regressiyasiz).
+> - **GATE O'TDI:** tsc 0 · vitest **22/22** (yangi: muzlаган-to'liq→trigger, davom-etaётган→bloklanadi, `isUploadInProgress` pure) · **next build SUCCESS**.
+> - **⏳ Fresh-Opus adversarial review** diffда ishlаяпti (fon). Natija+deploy owner-OK bilan.
+> - **⚠️ 1-video (`j520571`) FARQI:** unда upload-yozuvi YO'Q edi → to'siqqa tushмади → retry ishlади (COMPLETE). 2-videoда yozuv muzlаган → shu fix kerak.
+> - **DEPLOY- e'tibor:** push=avto-deploy=konteyner restart → hozir aktiv-processing YO'Q (j520571 tugagan, 392fryr5 muzlаган) → xavfsiz payt.
+> ---
+> 🔎 **STATUS 2026-07-05 (Jarvis, sessiya 8) — "AI tahlil failed" (1-bug) TASHXIS: KOD BUGI EMAS. HEAD=`dc04900`.**
+> - **Owner report:** "AI tahlil muvaffaqiyatsiz bo'ldi, qimmatda ham arzonda ham." → ildiz topildi.
+> - **ILDIZ (dalil bilan):** 2 fail video (`j520571j7ywghwz` audio ajratилган→ERROR, `392fryr5gje52w7` audiоsiz→null) ikkаласи 07-04 KECHQURUN (20:24/20:28) — o'sha payt bug-batch **deploy-bo'roni** ketyapti edi. Har deploy Railway konteynerini restart qiladi → jonli "use workflow" transkripsiya JOB o'rtada o'ladi → 4/4 bo'lak uziladi → video ERROR. Dalil: loglarда `Failed to find Server Action ... older/newer deployment`; `j520571`да **0 ta ai_usage_event** (Gemini'га yetib bormаган).
+> - **JONLI TASDIQ:** GEMINI_API_KEY (`AQ.Ab…` yangi-format) ISHLAYDI · gemini-3-flash-preview ISHLAYDI · `j520571`ning **4 audio-bo'lagini ham** aynan prod-yo'l bilan qayta yubordim → **4/4 HTTP 200, finishReason STOP, real matn**. Pipeline SOG'LOM.
+> - **Arzon vs Qimmat = ahamiyatsiz:** ikkаласи ham AVVAL transkripsiyадан o'tади; uzilish transkripsiyада (AI-bosqichdan oldin) bo'lган → rejim farq qilmaydi.
+> - **⚠️ LATENT XAVF (owner qarori kutilmoqda):** user VA org'да `aiBudget` YOQILGAN = **$10/oy** (`monthlyUsdCents:1000`; default $100 edi, kimdir/test $10 qilган). Hozir iyul-spend $1.67. $10'га yetса — BARCHA AI generic "failed" bilan bloklanadi. → ko'tarish yoki o'chirish kerakmi?
+> - **✅ TASDIQLANDI (owner bosdi):** `j520571` retry → **COMPLETE** (transcriptionStatus+aiStatus=COMPLETE, transcription+9 summary event, 4 bob+11 vazifa, "Bunyodbek" spiker, ERP/Data365 qalin). Deploy-uzilish gipotezasi TO'G'RI edi — barqaror server'да retry ishlади. Backend sog'lom. Owner "ishlamadi" = erta-qarash / UI eski "failed" kesh → HARD-REFRESH kerak.
+> - **⚠️ EHTIMOLIY UI-GAP (kuzatilsin):** retry tugагач share-sahifa avto-yangilanмаса yoki "failed" keshда qolса — owner shuni "ishlamadi" deб o'ylaydi. Agar hard-refresh'дан keyin ham "failed" ko'rsатса → REAL UI-refresh bug, tuzat.
+> - **OWNER TODO:** (1) sahifани **hard-refresh** (Ctrl+Shift+R) → xulosа ko'rinса tamom. (2) $10 cap qarori.
+> - **Ochiq (ixtiyoriy) yaxshilash:** (a) fail videoда sabab ko'rinmaydi (xato-matn saqlanmaydi) — faqat ERROR; (b) deploy-uzган job avto-tiklanmaydi (Codex `recover-cron.yml` qisman qoplagan). Kod-fix hozircha SHART emas.
+> ---
 > ✅ **STATUS 2026-07-05 (Jarvis, sessiya 7 davomi) — KATTA BUG-BATCH, HAMMASI JONLI. HEAD=`dc04900` (origin/qa-fixes).**
 > - **Yangi deploylar (smoke O'TDI): `53620ec`+`c83a702`** mobil trim-tugma kesilishi (z-[70] + flex-1 min-h-0; c83a702=LF-normalize) · **`3621e0f`** soxta "processing failed" (STALE_PROCESSING_START_MS 90s→5min — navbatдаги video failed ko'rsatmaydi) · **`dc04900`** AI-panel: (1) 2-bosqich start ("AI tahlil" tugma→keyin Arzon/Tez), (2) stepper+status endi ishonchli signaldan (transcript/AI status), `aiProcessingStep`ga tayanmaydi → joriy-bosqich aniq, label mos; o'lik `deriveProgressState` olib tashlandi.
 > - **⏳ OWNER JONLI-TEST (qolган):** task uzun-videoда (AI qayta tahlil→DB'дан o'lchayman) · extension qayta-o'rnatib Meet pause/stop · kamera ekran+kamera yozib · trim-tugma mobil · soxta-failed ketди-mi · AI-panel 2-bosqich+stepper.

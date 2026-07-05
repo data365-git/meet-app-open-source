@@ -23,6 +23,40 @@ type TranscribeResult = {
 	message: string;
 };
 
+const UPLOAD_IN_PROGRESS_PHASES = new Set([
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+]);
+
+/**
+ * Is this upload genuinely still receiving bytes, so transcription must wait?
+ *
+ * The guard exists to avoid transcribing before every byte has landed. But a
+ * finalize interrupted mid-flight (e.g. a redeploy restarting the container)
+ * can leave the row stuck at phase "uploading" forever even though the whole
+ * file is already in storage — which then permanently blocks transcription and
+ * makes the "AI tahlil" button silently no-op. So treat a byte-complete row as
+ * a stuck finalize (not a live upload) — EXCEPT for multipart uploads, which
+ * report uploaded===total at their last progress tick BEFORE S3 assembles the
+ * parts into a readable object (CompleteMultipartUpload runs later); for those,
+ * byte-count is not proof of completion, so keep waiting on the phase itself.
+ */
+export function isUploadInProgress(
+	upload:
+		| { phase: string; uploaded: number; total: number; mode?: string | null }
+		| undefined
+		| null,
+): boolean {
+	if (!upload) return false;
+	if (!UPLOAD_IN_PROGRESS_PHASES.has(upload.phase)) return false;
+	const bytesTrulyComplete =
+		upload.mode !== "multipart" &&
+		upload.total > 0 &&
+		upload.uploaded >= upload.total;
+	return !bytesTrulyComplete;
+}
+
 export async function transcribeVideo(
 	videoId: Video.VideoId,
 	userId: string,
@@ -123,20 +157,38 @@ export async function transcribeVideo(
 	}
 
 	const upload = await db()
-		.select({ phase: videoUploads.phase })
+		.select({
+			phase: videoUploads.phase,
+			uploaded: videoUploads.uploaded,
+			total: videoUploads.total,
+			mode: videoUploads.mode,
+		})
 		.from(videoUploads)
 		.where(eq(videoUploads.videoId, videoId))
 		.limit(1);
 
-	if (
-		upload[0]?.phase === "uploading" ||
-		upload[0]?.phase === "processing" ||
-		upload[0]?.phase === "generating_thumbnail"
-	) {
+	const uploadRow = upload[0];
+
+	if (isUploadInProgress(uploadRow)) {
 		return {
 			success: true,
 			message: "Video upload is still in progress",
 		};
+	}
+
+	// An in-progress phase that is NOT "in progress" per isUploadInProgress means
+	// the bytes are complete (singlepart) but a finalize was interrupted and never
+	// cleared the row. processVideoWorkflow's only job for a single-file MP4 is
+	// exactly this delete, so clear the stuck row here — otherwise phase stays
+	// "uploading" and blocks every future retry.
+	if (
+		uploadRow &&
+		UPLOAD_IN_PROGRESS_PHASES.has(uploadRow.phase) &&
+		!isUploadInProgress(uploadRow)
+	) {
+		await db()
+			.delete(videoUploads)
+			.where(eq(videoUploads.videoId, videoId));
 	}
 
 	try {
