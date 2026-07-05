@@ -108,9 +108,9 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			: originalBytes;
 
 	return (
-		<div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4">
-			<div className="bg-gray-1 rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
-				<div className="p-4 border-b border-gray-4 flex justify-between items-center">
+		<div className="fixed inset-0 z-[100] flex items-stretch justify-center bg-black/70 p-0 sm:items-center sm:p-4">
+			<div className="flex h-[100dvh] w-full max-w-3xl flex-col overflow-hidden bg-gray-1 sm:h-auto sm:max-h-[90vh] sm:rounded-xl">
+				<div className="shrink-0 p-4 border-b border-gray-4 flex justify-between items-center">
 					<h2 className="text-lg font-semibold text-gray-12">
 						Trim before upload
 					</h2>
@@ -123,11 +123,11 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						✕
 					</button>
 				</div>
-				<div className="p-4 space-y-4 overflow-auto flex-1 min-h-0">
+				<div className="flex-1 min-h-0 space-y-4 overflow-auto p-4 pb-28 sm:pb-4">
 					<video
 						ref={videoRef}
 						src={videoUrl}
-						className="w-full max-h-[50vh] bg-black rounded"
+						className="w-full max-h-[38dvh] bg-black rounded sm:max-h-[50vh]"
 						onLoadedMetadata={onLoadedMetadata}
 						onTimeUpdate={onTimeUpdate}
 						onClick={togglePlay}
@@ -178,7 +178,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 							</>
 						)}
 					</div>
-					<p className="text-[11px] text-gray-9">
+					<p className="hidden text-[11px] text-gray-9 sm:block">
 						Shortcuts: <kbd>I</kbd> set in, <kbd>O</kbd> set out,{" "}
 						<kbd>Space</kbd> play, <kbd>Esc</kbd> cancel
 					</p>
@@ -191,12 +191,13 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 					)}
 					{error && <div className="text-xs text-red-600">{error}</div>}
 				</div>
-				<div className="p-4 border-t border-gray-4 flex justify-end gap-2">
+				<div className="sticky bottom-0 z-10 flex shrink-0 flex-col gap-2 border-t border-gray-4 bg-gray-1 p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:flex-row sm:justify-end">
 					<Button
 						type="button"
 						variant="gray"
 						onClick={onCancel}
 						disabled={trimming}
+						className="w-full sm:w-auto"
 					>
 						Cancel
 					</Button>
@@ -205,6 +206,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						variant="dark"
 						onClick={handleConfirm}
 						disabled={trimming || trimmedDuration < 0.5}
+						className="w-full sm:w-auto"
 					>
 						{trimming ? "Working…" : "Upload trimmed video"}
 					</Button>
