@@ -38,6 +38,7 @@ vi.mock("workflow", () => ({
 import { FatalError } from "workflow";
 import { mergeChunkedWebVtt } from "@/lib/gemini-transcribe";
 import {
+  isChunkCoveredByPartial,
   MAX_CHUNK_GAP_SEC,
   transcribeAudioChunks,
   transcribeAudioChunkWithRetry,
@@ -171,6 +172,97 @@ describe("transcribeAudioChunks", () => {
     expect(result).toContain("chunk-at-0");
     expect(result).toContain("chunk-at-900");
     expect(result).toContain("chunk-at-1800");
+  });
+});
+
+// ─── Retry resume: reuse partial, don't re-bill Gemini ───────────────────────
+/** A merged (absolute-timestamped) partial that densely covers the chunks at
+ *  absolute 0 and 900, but has NOTHING for the chunk at 1800. */
+function densePartial(): string {
+  const cues: string[] = [];
+  let n = 1;
+  for (const base of [0, 900]) {
+    for (let s = 0; s <= 500; s += 100) {
+      cues.push(`${n++}\n${fmt(base + s)} --> ${fmt(base + s + 2)}\nseeded-${base + s}\n`);
+    }
+  }
+  return `WEBVTT\n\n${cues.join("\n")}\n`;
+}
+
+describe("transcribeAudioChunks — retry resume", () => {
+  it("reuses chunks the partial already covers; transcribes ONLY the missing one", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(
+      audio,
+      null,
+      CTX,
+      stub,
+      undefined,
+      densePartial(),
+    );
+
+    // Only the uncovered chunk (1800) hit the API — 0 and 900 came from the seed.
+    expect(stub).toHaveBeenCalledTimes(1);
+    expect((stub.mock.calls[0]?.[0] as { chunk: { startSec: number } }).chunk.startSec).toBe(1800);
+    expect(result).toContain("seeded-0");
+    expect(result).toContain("seeded-900");
+    expect(result).toContain("fresh-at-1800");
+    // The reused chunks were NOT re-transcribed.
+    expect(result).not.toContain("fresh-at-0");
+    expect(result).not.toContain("fresh-at-900");
+  });
+
+  it("no partial → transcribes every chunk (regression: unchanged behavior)", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, undefined, undefined);
+
+    expect(stub).toHaveBeenCalledTimes(3);
+    expect(result).toContain("fresh-at-0");
+    expect(result).toContain("fresh-at-900");
+    expect(result).toContain("fresh-at-1800");
+  });
+
+  it("all chunks covered by partial → zero API calls, seed content returned", async () => {
+    const audio = makeAudio([0, 900]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, undefined, densePartial());
+
+    expect(stub).toHaveBeenCalledTimes(0);
+    expect(result).toContain("seeded-0");
+    expect(result).toContain("seeded-900");
+  });
+});
+
+describe("isChunkCoveredByPartial", () => {
+  it("true when the partial densely covers the chunk range", () => {
+    expect(isChunkCoveredByPartial(densePartial(), 0, 900)).toBe(true);
+    expect(isChunkCoveredByPartial(densePartial(), 900, 900)).toBe(true);
+  });
+
+  it("false when the partial has no cues in the range", () => {
+    expect(isChunkCoveredByPartial(densePartial(), 1800, 900)).toBe(false);
+  });
+
+  it("false when a hole bigger than MAX_CHUNK_GAP_SEC remains inside the range", () => {
+    // reach 600 ≥ 450 (covered by reach alone) BUT a 600s internal gap > 120s.
+    const vtt = `WEBVTT\n\n1\n${fmt(0)} --> ${fmt(2)}\na\n\n2\n${fmt(600)} --> ${fmt(602)}\nb\n\n`;
+    expect(isChunkCoveredByPartial(vtt, 0, 900)).toBe(false);
+  });
+
+  it("false for empty vtt or non-positive duration", () => {
+    expect(isChunkCoveredByPartial("WEBVTT\n\n", 0, 900)).toBe(false);
+    expect(isChunkCoveredByPartial(densePartial(), 0, 0)).toBe(false);
   });
 });
 

@@ -12,6 +12,7 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Option } from "effect";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
@@ -105,6 +106,13 @@ export async function transcribeVideoWorkflow(
 
 		tempAudioKeys = audio.chunks.map((chunk) => chunk.key);
 
+		// Retry resume: reuse whatever a previous interrupted run already saved so
+		// chunks that succeeded before are not re-transcribed (no wasted tokens).
+		const existingPartialVtt = await loadPartialTranscription(
+			videoId,
+			videoData.video,
+		);
+
 		const transcription = await transcribeAudioChunks(
 			audio,
 			videoData.ownerEncryptedGeminiKey,
@@ -115,6 +123,7 @@ export async function transcribeVideoWorkflow(
 					videoId, videoData.video, p.transcribedChunks, p.completed, p.total,
 				);
 			},
+			existingPartialVtt,
 		);
 
 		// Merge-level gap-fill: close any hole the per-chunk retries left behind.
@@ -529,6 +538,7 @@ export async function transcribeAudioChunks(
 	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
 	transcribeChunk: typeof transcribeAudioChunkWithRetry = transcribeAudioChunkWithRetry,
 	onProgress?: (p: { transcribedChunks: Array<{ vtt: string; offsetSec: number }>; completed: number; total: number }) => Promise<void>,
+	existingPartialVtt?: string,
 ): Promise<string> {
 	if (audio.chunks.length === 1) {
 		const chunk = audio.chunks[0];
@@ -545,9 +555,40 @@ export async function transcribeAudioChunks(
 
 	let failedChunkCount = 0;
 	let completedCount = 0;
+	let reusedChunkCount = 0;
 	const completedResults = new Array<{ vtt: string; offsetSec: number } | undefined>(
 		audio.chunks.length,
 	);
+
+	// Retry resume: an earlier interrupted run may have saved a partial merged
+	// transcript. Seed the result with it (offsetSec 0 = already absolute, the
+	// same pattern fillTranscriptGaps uses) so every chunk it already covers can
+	// be skipped below — a retry never re-bills Gemini for work that succeeded.
+	const hasPartial =
+		typeof existingPartialVtt === "string" &&
+		existingPartialVtt.trim().length > 0 &&
+		!/^WEBVTT\s*$/.test(existingPartialVtt.trim());
+	const seedParts: Array<{ vtt: string; offsetSec: number }> = hasPartial
+		? [{ vtt: existingPartialVtt as string, offsetSec: 0 }]
+		: [];
+
+	const fireProgress = async (): Promise<void> => {
+		if (!onProgress) return;
+		try {
+			await onProgress({
+				transcribedChunks: [
+					...seedParts,
+					...completedResults.filter(
+						(r): r is { vtt: string; offsetSec: number } => r !== undefined,
+					),
+				],
+				completed: completedCount,
+				total: audio.chunks.length,
+			});
+		} catch (e) {
+			console.error("[transcribe] partial-save progress callback failed (non-fatal):", e);
+		}
+	};
 
 	// Worker shared by the serial first chunk and the concurrent rest — keeps
 	// the fault-tolerance, progress-callback and result-indexing behavior
@@ -557,6 +598,21 @@ export async function transcribeAudioChunks(
 		i: number,
 		knownSpeakers: string[],
 	): Promise<{ vtt: string; offsetSec: number }> => {
+		// Already transcribed by a previous run — reuse from the seed, no API call.
+		if (
+			hasPartial &&
+			isChunkCoveredByPartial(
+				existingPartialVtt as string,
+				chunk.startSec,
+				chunk.durationSec ?? 0,
+			)
+		) {
+			reusedChunkCount++;
+			completedResults[i] = undefined; // its cues come from seedParts
+			completedCount++;
+			await fireProgress();
+			return { vtt: "WEBVTT\n\n", offsetSec: chunk.startSec };
+		}
 		let result: { vtt: string; offsetSec: number };
 		try {
 			const vtt = await transcribeChunk({
@@ -580,19 +636,7 @@ export async function transcribeAudioChunks(
 		}
 		completedResults[i] = result;
 		completedCount++;
-		if (onProgress) {
-			try {
-				await onProgress({
-					transcribedChunks: completedResults.filter(
-						(r): r is { vtt: string; offsetSec: number } => r !== undefined,
-					),
-					completed: completedCount,
-					total: audio.chunks.length,
-				});
-			} catch (e) {
-				console.error("[transcribe] partial-save progress callback failed (non-fatal):", e);
-			}
-		}
+		await fireProgress();
 		return result;
 	};
 
@@ -604,6 +648,11 @@ export async function transcribeAudioChunks(
 	if (firstChunk) {
 		const firstResult = await processChunk(firstChunk, 0, []);
 		knownSpeakers = extractSpeakerLabels(firstResult.vtt);
+		// If the first chunk was reused from the partial (empty freshly-transcribed
+		// vtt), harvest the speaker roster from the partial itself instead.
+		if (knownSpeakers.length === 0 && hasPartial) {
+			knownSpeakers = extractSpeakerLabels(existingPartialVtt as string);
+		}
 		if (knownSpeakers.length > 0) {
 			console.log(
 				`[transcribe] speaker roster for ${context.videoId}: ${knownSpeakers.join(", ")}`,
@@ -617,12 +666,21 @@ export async function transcribeAudioChunks(
 		(chunk, sliceIndex) => processChunk(chunk, sliceIndex + 1, knownSpeakers),
 	);
 
-	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> =
-		completedResults.filter(
+	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> = [
+		...seedParts,
+		...completedResults.filter(
 			(r): r is { vtt: string; offsetSec: number } => r !== undefined,
+		),
+	];
+
+	if (reusedChunkCount > 0) {
+		console.log(
+			`[transcribe] resume: reused ${reusedChunkCount}/${audio.chunks.length} chunk(s) from saved partial for ${context.videoId} (no re-transcription).`,
 		);
+	}
 
 	// Only fail the whole job if EVERY chunk failed (nothing usable to save).
+	// Reused chunks count as usable, so a partial seed alone keeps the job alive.
 	if (failedChunkCount === audio.chunks.length) {
 		throw new Error(
 			`All ${failedChunkCount} transcription chunks failed for ${context.videoId}`,
@@ -712,6 +770,51 @@ export function webVttLargestGapSec(
 		if (gap > largest) largest = gap;
 	}
 	return largest;
+}
+
+/**
+ * Retry-resume gate: does an already-saved partial transcript ALREADY cover this
+ * chunk's absolute time range well enough to SKIP re-transcribing it? Uses the
+ * exact same "well covered" definition as transcribeAudioChunkWithRetry (cues
+ * reach ≥ MIN_CHUNK_COVERAGE of the duration AND no leading/internal hole bigger
+ * than MAX_CHUNK_GAP_SEC), measured over the partial's cues that fall inside
+ * [startSec, startSec+durationSec). This is what lets a retry continue from where
+ * a previous interrupted run stopped instead of re-billing Gemini for chunks
+ * that already succeeded.
+ */
+export function isChunkCoveredByPartial(
+	partialVtt: string,
+	startSec: number,
+	durationSec: number,
+): boolean {
+	if (durationSec <= 0) return false;
+	const endSec = startSec + durationSec;
+	const relStarts: number[] = [];
+	for (const line of partialVtt.split(/\r?\n/)) {
+		const arrow = line.indexOf("-->");
+		if (arrow === -1) continue;
+		const m = line
+			.slice(0, arrow)
+			.match(/(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})/);
+		if (!m) continue;
+		const abs =
+			(m[1] ? Number(m[1]) : 0) * 3600 +
+			Number(m[2]) * 60 +
+			Number(m[3]) +
+			Number(m[4]) / 1000;
+		if (abs >= startSec && abs < endSec) relStarts.push(abs - startSec);
+	}
+	if (relStarts.length === 0) return false;
+	relStarts.sort((a, b) => a - b);
+	const reach = relStarts[relStarts.length - 1] ?? 0;
+	let largestGap = relStarts[0] ?? 0; // leading gap: chunk start → first cue
+	for (let i = 1; i < relStarts.length; i++) {
+		const gap = (relStarts[i] ?? 0) - (relStarts[i - 1] ?? 0);
+		if (gap > largestGap) largestGap = gap;
+	}
+	return (
+		reach >= durationSec * MIN_CHUNK_COVERAGE && largestGap <= MAX_CHUNK_GAP_SEC
+	);
 }
 
 export interface VttGap {
@@ -1097,6 +1200,30 @@ export async function transcribeAudioChunkWithRetry(
 	// discarding everything — a partial is better than a fully-missing chunk.
 	if (bestVtt !== null) return bestVtt;
 	throw lastError;
+}
+
+/**
+ * Read the partial transcript a previous interrupted run left in storage, if
+ * any. Missing file (fresh first run) or any read error → undefined, so the
+ * caller simply transcribes everything from scratch (no behavior change).
+ */
+async function loadPartialTranscription(
+	videoId: string,
+	video: typeof videos.$inferSelect,
+): Promise<string | undefined> {
+	"use step";
+
+	try {
+		const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+		const content = await bucket
+			.getObject(`${video.ownerId}/${videoId}/transcription-partial.vtt`)
+			.pipe(runPromise);
+		if (Option.isNone(content)) return undefined;
+		const vtt = content.value;
+		return vtt.trim().length > 0 ? vtt : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function savePartialTranscription(
