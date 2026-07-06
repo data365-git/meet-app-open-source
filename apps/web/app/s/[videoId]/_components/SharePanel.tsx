@@ -441,14 +441,14 @@ export function SharePanel({
 							msg.role === "user" ? (
 								<div
 									key={msg.id}
-									className="ml-6 min-w-0 max-w-[85%] self-end break-words whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
+									className="ml-6 min-w-0 max-w-[85%] shrink-0 self-end break-words whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
 								>
 									{msg.content}
 								</div>
 							) : (
 								<div
 									key={msg.id}
-									className="min-w-0 max-w-full self-start break-words whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
+									className="min-w-0 max-w-full shrink-0 self-start break-words whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
 								>
 									{renderMessageContent(msg.content, onVideoJump)}
 								</div>
