@@ -599,9 +599,13 @@ export async function transcribeWithGemini(
 		apiKey: string;
 		audioDurationSec?: number;
 		knownSpeakers?: string[];
+		/** Override the model list (e.g. a single free-tier model). Defaults to
+		 * GEMINI_TRANSCRIBE_MODELS. */
+		models?: readonly string[];
 	},
 ): Promise<GeminiTranscribeResult> {
 	const { apiKey, audioDurationSec = 300, knownSpeakers } = options;
+	const transcribeModels = options.models ?? GEMINI_TRANSCRIBE_MODELS;
 
 	const audioResponse = await fetch(audioUrl);
 	if (!audioResponse.ok) {
@@ -685,8 +689,8 @@ export async function transcribeWithGemini(
 
 	let genRes!: Response;
 	let genData!: GenData;
-	for (let mi = 0; mi < GEMINI_TRANSCRIBE_MODELS.length; mi++) {
-		const model = GEMINI_TRANSCRIBE_MODELS[mi];
+	for (let mi = 0; mi < transcribeModels.length; mi++) {
+		const model = transcribeModels[mi];
 		try {
 			({ genRes, genData } = await withGeminiRetry(async () => {
 				const res = await fetch(
@@ -735,9 +739,9 @@ export async function transcribeWithGemini(
 			break; // primary model succeeded
 		} catch (err) {
 			const isPermanent = (err as { permanent?: boolean })?.permanent === true;
-			const isLastModel = mi === GEMINI_TRANSCRIBE_MODELS.length - 1;
+			const isLastModel = mi === transcribeModels.length - 1;
 			if (isPermanent || isLastModel) throw err;
-			const nextModel = GEMINI_TRANSCRIBE_MODELS[mi + 1];
+			const nextModel = transcribeModels[mi + 1];
 			console.warn(
 				`[gemini-transcribe] model ${model} overloaded, falling back to ${nextModel}`,
 			);

@@ -97,6 +97,12 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Google Gemini API for AI processing"),
+			GEMINI_API_KEY_FREE: z
+				.string()
+				.optional()
+				.describe(
+					"Optional Gemini key on a free-tier (billing-off) project. When set, transcription tries it first (gemini-3.5-flash, $0) and falls back to GEMINI_API_KEY on any failure/quota.",
+				),
 			DEEPGRAM_API_KEY: z
 				.string()
 				.optional()

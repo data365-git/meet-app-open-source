@@ -74,6 +74,11 @@ interface ExtractedAudio {
 	totalDurationSec: number | null;
 }
 
+// Free-tier transcription model, used only when GEMINI_API_KEY_FREE is set.
+// gemini-3.5-flash is free-of-charge on a billing-off project and higher quality
+// than the paid default; on any failure the paid path takes over.
+const FREE_TRANSCRIBE_MODEL = "gemini-3.5-flash";
+
 const LONG_AUDIO_CHUNK_DURATION_SEC = 15 * 60;
 const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 30 * 60;
 
@@ -467,6 +472,43 @@ export async function transcribeAudio(
 	// Synchronous path — the default. UNCHANGED from before batch mode existed;
 	// this is the regression line that must behave identically when mode=fast.
 	const runSync = async (): Promise<string> => {
+		// Free-tier first (auto-smart cost saver): when a billing-off Gemini key is
+		// configured, transcribe on the free tier (gemini-3.5-flash, $0) and fall
+		// back to the paid key/model on ANY failure — quota exhausted, error, etc.
+		// No free key → this block is skipped and behavior is exactly as before.
+		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
+		if (freeKey) {
+			try {
+				const freeResult = await withCostGuard({
+					orgId: context.orgId,
+					userId: context.userId,
+					videoId: context.videoId,
+					operation: "transcription",
+					model: FREE_TRANSCRIBE_MODEL,
+					free: true,
+					fn: async () => {
+						const res = await transcribeWithGemini(audioUrl, {
+							apiKey: freeKey,
+							audioDurationSec: audioDurationSec ?? undefined,
+							knownSpeakers,
+							models: [FREE_TRANSCRIBE_MODEL],
+						});
+						return {
+							transcriptVtt: res.transcriptVtt,
+							inputTokens: res.inputTokens,
+							outputTokens: res.outputTokens,
+							audioInTokens: res.audioInTokens,
+						};
+					},
+				});
+				return freeResult.transcriptVtt;
+			} catch (error) {
+				console.warn(
+					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+
 		const result = await withCostGuard({
 			orgId: context.orgId,
 			userId: context.userId,

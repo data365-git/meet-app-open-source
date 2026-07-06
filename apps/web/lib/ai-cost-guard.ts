@@ -204,6 +204,8 @@ interface CostGuardOptions<T> {
 	budgetCapOrgMicros?: number | null;
 	recordUsageBestEffort?: boolean;
 	batch?: boolean;
+	/** Free-tier call (billing-off key): record the usage but at $0 cost. */
+	free?: boolean;
 	fn: () => Promise<
 		T & { inputTokens: number; outputTokens: number; audioInTokens?: number }
 	>;
@@ -277,12 +279,14 @@ export async function withCostGuard<T>(
 	const result = await options.fn();
 
 	const audioInTokens = result.audioInTokens ?? 0;
-	const costUsdMicros = priceForMicros(options.model, {
-		textInTokens: Math.max(0, result.inputTokens - audioInTokens),
-		audioInTokens,
-		outputTokens: result.outputTokens,
-		batch: options.batch,
-	});
+	const costUsdMicros = options.free
+		? 0
+		: priceForMicros(options.model, {
+				textInTokens: Math.max(0, result.inputTokens - audioInTokens),
+				audioInTokens,
+				outputTokens: result.outputTokens,
+				batch: options.batch,
+			});
 
 	try {
 		await db()
