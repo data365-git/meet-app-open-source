@@ -146,6 +146,11 @@ export const useWebRecorder = ({
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isMicMuted, setIsMicMuted] = useState(false);
 	const [isCameraOff, setIsCameraOff] = useState(false);
+	// Reactive mirror of whether cameraStreamRef currently holds a camera track.
+	// canToggleCamera must NOT read the ref directly — a ref write (e.g. the
+	// screen+camera preview registering its stream asynchronously) doesn't
+	// re-render, so the toggle button would intermittently stay disabled.
+	const [hasCameraStream, setHasCameraStream] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
@@ -603,6 +608,7 @@ export const useWebRecorder = ({
 		micTracksRef.current = [];
 		setIsMicMuted(false);
 		setIsCameraOff(false);
+		setHasCameraStream(false);
 		replaceErrorDownload(null);
 		setCompletedShareUrl(null);
 		shareUrlOpenedRef.current = false;
@@ -726,6 +732,7 @@ export const useWebRecorder = ({
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 				setIsCameraOff(false);
+				setHasCameraStream(videoStream.getVideoTracks().length > 0);
 			} else {
 				const desiredSurface =
 					RECORDING_MODE_TO_DISPLAY_SURFACE[
@@ -1559,12 +1566,12 @@ export const useWebRecorder = ({
 		(stream: MediaStream | null) => {
 			if (recordingMode === "camera") return;
 			cameraStreamRef.current = stream;
+			setHasCameraStream((stream?.getVideoTracks().length ?? 0) > 0);
 		},
 		[recordingMode, cameraStreamRef],
 	);
 
-	const canToggleCamera =
-		(cameraStreamRef.current?.getVideoTracks().length ?? 0) > 0;
+	const canToggleCamera = hasCameraStream;
 
 	const toggleCameraMute = useCallback(() => {
 		const tracks = cameraStreamRef.current?.getVideoTracks() ?? [];
