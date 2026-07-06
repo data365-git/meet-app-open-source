@@ -15,9 +15,13 @@ interface Message {
 	content: string;
 }
 
-let msgIdCounter = 0;
+// Globally-unique per message. A previous module-level counter collided across
+// videos: reloading reseeded it from saved.length (not the max saved id), so a
+// non-contiguous saved history (msg-1,msg-2,msg-7,…) produced NEW ids that
+// duplicated existing ones → duplicate React keys → messages rendered on top of
+// each other. A UUID can never collide, so no reseed is needed on load.
 function nextMsgId() {
-	return `msg-${++msgIdCounter}`;
+	return `msg-${crypto.randomUUID()}`;
 }
 
 // Split the message into keyed text spans and clickable timestamp chips.
@@ -137,16 +141,19 @@ export function SharePanel({
 	}, []);
 
 	// Persist the chat per-video (owner: keep history for that video only) so a
-	// refresh no longer wipes it. Load once per videoId; bump the id counter past
-	// the restored messages so new ids never collide with loaded ones.
+	// refresh no longer wipes it. Load once per videoId; ids are UUIDs, so no
+	// counter reseed is needed to avoid collisions with the restored messages.
 	useEffect(() => {
 		try {
 			const raw = window.localStorage.getItem(`data365:aiChat:${videoId}`);
 			if (!raw) return;
 			const saved = JSON.parse(raw) as Message[];
 			if (Array.isArray(saved) && saved.length > 0) {
-				setMessages(saved);
-				msgIdCounter = Math.max(msgIdCounter, saved.length);
+				// Re-key every restored message with a fresh UUID. This heals any
+				// history persisted by the old counter that already contains
+				// duplicate ids (which is exactly what rendered messages on top of
+				// each other), guaranteeing unique React keys from now on.
+				setMessages(saved.map((m) => ({ ...m, id: nextMsgId() })));
 			}
 		} catch {
 			// ignore (storage disabled / bad JSON)
