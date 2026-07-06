@@ -40,14 +40,21 @@ function renderMessageContent(
 		if (match === null) break;
 		const before = content.slice(last, match.index);
 		if (before) {
-			nodes.push(<span key={`t-${key++}`}>{renderMarkdownBold(before)}</span>);
+			nodes.push(
+				<span
+					key={`t-${key++}`}
+					className="break-words [overflow-wrap:anywhere]"
+				>
+					{renderMarkdownBold(before)}
+				</span>,
+			);
 		}
 		const seconds = parseTimestampToSeconds(match[1] ?? "");
 		nodes.push(
 			<button
 				key={`c-${key++}`}
 				type="button"
-				className="inline-block rounded-md border border-[var(--brand)] bg-[var(--brand-wash)] px-1.5 text-xs font-medium text-[var(--brand)] transition-[filter] hover:brightness-95"
+				className="mx-0.5 inline-flex max-w-full shrink-0 items-center align-baseline rounded-md border border-[var(--brand)] bg-[var(--brand-wash)] px-1.5 text-xs font-medium text-[var(--brand)] transition-[filter] hover:brightness-95"
 				onClick={() => onVideoJump(seconds)}
 			>
 				{`[${formatSeconds(seconds)}]`}
@@ -58,7 +65,11 @@ function renderMessageContent(
 
 	const tail = content.slice(last);
 	if (tail) {
-		nodes.push(<span key={`t-${key++}`}>{renderMarkdownBold(tail)}</span>);
+		nodes.push(
+			<span key={`t-${key++}`} className="break-words [overflow-wrap:anywhere]">
+				{renderMarkdownBold(tail)}
+			</span>,
+		);
 	}
 
 	return nodes;
@@ -423,14 +434,14 @@ export function SharePanel({
 							msg.role === "user" ? (
 								<div
 									key={msg.id}
-									className="ml-6 self-end whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12"
+									className="ml-6 min-w-0 max-w-[85%] self-end break-words whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
 								>
 									{msg.content}
 								</div>
 							) : (
 								<div
 									key={msg.id}
-									className="self-start whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12"
+									className="min-w-0 max-w-full self-start break-words whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
 								>
 									{renderMessageContent(msg.content, onVideoJump)}
 								</div>
