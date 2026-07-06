@@ -198,8 +198,17 @@ async function validateVideo(
 	// from settings already loaded above (no extra query). Defaults to "fast"
 	// (sync) so an org that never opted in behaves exactly as before. A per-click
 	// override (from the share page's price chooser) takes precedence when present.
-	const aiSpeedMode =
+	//
+	// "Arzon"/batch (cheap) mode is DISABLED here: the Gemini Batch API runs async
+	// for many minutes, but the inline after() task this workflow lives in does not
+	// survive that long, so a batch job left videos frozen mid-transcription
+	// (e.g. stuck at 2/3 chunks forever). Coerce any "cheap" request — per-click
+	// override or org default — to the reliable synchronous path until a durable
+	// batch runner exists.
+	const requestedSpeedMode =
 		speedModeOverride ?? resolveAiSpeedMode(result.orgSettings?.aiSpeedMode);
+	const aiSpeedMode: AiSpeedMode =
+		requestedSpeedMode === "cheap" ? "fast" : requestedSpeedMode;
 
 	console.log(
 		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}, aiSpeedMode=${aiSpeedMode}`,
