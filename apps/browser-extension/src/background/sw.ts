@@ -96,6 +96,33 @@ function sendToOffscreen(message: Record<string, unknown>): Promise<unknown> {
 	});
 }
 
+// Control messages (STOP/PAUSE/RESUME) can hit a target whose listener isn't
+// ready yet (SW waking, offscreen just created, tab still loading) — Chrome then
+// rejects with "Receiving end does not exist". These commands are idempotent, so
+// retry a few times with a short backoff instead of silently dropping the action.
+async function sendControlWithRetry(
+	send: () => Promise<unknown>,
+	label: string,
+	attempts = 4,
+	delayMs = 150,
+): Promise<void> {
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			await send();
+			return;
+		} catch (err) {
+			if (attempt === attempts) {
+				console.warn(
+					`[sw] control send failed after ${attempts} attempts: ${label}`,
+					err,
+				);
+				return;
+			}
+			await new Promise((r) => setTimeout(r, delayMs));
+		}
+	}
+}
+
 // ── Badge ─────────────────────────────────────────────────────────────────
 
 function updateBadge(state: ExtensionState): void {
@@ -420,15 +447,21 @@ async function handleMessage(
 			if (stopTabId !== undefined) {
 				// Instruction recording: tell the recorder tab to stop.
 				// SW state advances only when the tab sends RECORDER_STOPPED.
-				chrome.tabs
-					.sendMessage(stopTabId, { type: "STOP_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() => chrome.tabs.sendMessage(stopTabId, { type: "STOP_CAPTURE" }),
+					"STOP_CAPTURE→tab",
+				);
 			} else if (contentStopTabId !== undefined) {
-				chrome.tabs
-					.sendMessage(contentStopTabId, { type: "STOP_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() =>
+						chrome.tabs.sendMessage(contentStopTabId, { type: "STOP_CAPTURE" }),
+					"STOP_CAPTURE→tab",
+				);
 			} else {
-				await sendToOffscreen({ type: "STOP_CAPTURE" }).catch(() => {});
+				await sendControlWithRetry(
+					() => sendToOffscreen({ type: "STOP_CAPTURE" }),
+					"STOP_CAPTURE→offscreen",
+				);
 			}
 			return { ok: true };
 		}
@@ -441,18 +474,26 @@ async function handleMessage(
 					? pauseState.recorderTabId
 					: undefined;
 			if (pauseTabId !== undefined) {
-				chrome.tabs
-					.sendMessage(pauseTabId, { type: "PAUSE_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() => chrome.tabs.sendMessage(pauseTabId, { type: "PAUSE_CAPTURE" }),
+					"PAUSE_CAPTURE→tab",
+				);
 			} else if (
 				pauseState.kind === "recording" &&
 				pauseState.contentRecorderTabId !== undefined
 			) {
-				chrome.tabs
-					.sendMessage(pauseState.contentRecorderTabId, { type: "PAUSE_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() =>
+						chrome.tabs.sendMessage(pauseState.contentRecorderTabId!, {
+							type: "PAUSE_CAPTURE",
+						}),
+					"PAUSE_CAPTURE→tab",
+				);
 			} else {
-				await sendToOffscreen({ type: "PAUSE_CAPTURE" }).catch(() => {});
+				await sendControlWithRetry(
+					() => sendToOffscreen({ type: "PAUSE_CAPTURE" }),
+					"PAUSE_CAPTURE→offscreen",
+				);
 			}
 			if (pauseState.kind === "recording") {
 				const nextState = { ...pauseState, paused: true, pausedAt: Date.now() };
@@ -470,18 +511,26 @@ async function handleMessage(
 					? resumeState.recorderTabId
 					: undefined;
 			if (resumeTabId !== undefined) {
-				chrome.tabs
-					.sendMessage(resumeTabId, { type: "RESUME_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() => chrome.tabs.sendMessage(resumeTabId, { type: "RESUME_CAPTURE" }),
+					"RESUME_CAPTURE→tab",
+				);
 			} else if (
 				resumeState.kind === "recording" &&
 				resumeState.contentRecorderTabId !== undefined
 			) {
-				chrome.tabs
-					.sendMessage(resumeState.contentRecorderTabId, { type: "RESUME_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() =>
+						chrome.tabs.sendMessage(resumeState.contentRecorderTabId!, {
+							type: "RESUME_CAPTURE",
+						}),
+					"RESUME_CAPTURE→tab",
+				);
 			} else {
-				await sendToOffscreen({ type: "RESUME_CAPTURE" }).catch(() => {});
+				await sendControlWithRetry(
+					() => sendToOffscreen({ type: "RESUME_CAPTURE" }),
+					"RESUME_CAPTURE→offscreen",
+				);
 			}
 			if (resumeState.kind === "recording") {
 				const nextState = {
@@ -532,15 +581,23 @@ async function handleMessage(
 			if (cancelTabId !== undefined) {
 				// Tell the instruction recorder tab to stop so it sends RECORDER_STOPPED
 				// and cleanup runs. Then also reset SW to idle immediately.
-				chrome.tabs
-					.sendMessage(cancelTabId, { type: "STOP_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() => chrome.tabs.sendMessage(cancelTabId, { type: "STOP_CAPTURE" }),
+					"STOP_CAPTURE→tab",
+				);
 			} else if (contentCancelTabId !== undefined) {
-				chrome.tabs
-					.sendMessage(contentCancelTabId, { type: "STOP_CAPTURE" })
-					.catch(() => {});
+				await sendControlWithRetry(
+					() =>
+						chrome.tabs.sendMessage(contentCancelTabId, {
+							type: "STOP_CAPTURE",
+						}),
+					"STOP_CAPTURE→tab",
+				);
 			} else {
-				await sendToOffscreen({ type: "STOP_CAPTURE" }).catch(() => {});
+				await sendControlWithRetry(
+					() => sendToOffscreen({ type: "STOP_CAPTURE" }),
+					"STOP_CAPTURE→offscreen",
+				);
 			}
 			await closeOffscreenDocument();
 			await setState({ kind: "idle" });
@@ -578,11 +635,18 @@ async function handleMessage(
 				Date.now() - state.startedAt >= MIN_MEET_RECORDING_MS_BEFORE_AUTO_STOP
 			) {
 				if (state.contentRecorderTabId !== undefined) {
-					chrome.tabs
-						.sendMessage(state.contentRecorderTabId, { type: "STOP_CAPTURE" })
-						.catch(() => {});
+					await sendControlWithRetry(
+						() =>
+							chrome.tabs.sendMessage(state.contentRecorderTabId!, {
+								type: "STOP_CAPTURE",
+							}),
+						"STOP_CAPTURE→tab",
+					);
 				} else {
-					await sendToOffscreen({ type: "STOP_CAPTURE" });
+					await sendControlWithRetry(
+						() => sendToOffscreen({ type: "STOP_CAPTURE" }),
+						"STOP_CAPTURE→offscreen",
+					);
 				}
 			}
 			return { ok: true };
