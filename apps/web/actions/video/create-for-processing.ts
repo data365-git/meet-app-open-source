@@ -3,7 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoUploads } from "@cap/database/schema";
+import {
+	sharedVideos,
+	spaceVideos,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
@@ -17,6 +22,7 @@ import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
+import { resolveVideoFolderAssignment } from "@/lib/video-folder-assignment";
 
 export interface CreateForProcessingResult {
 	id: Video.VideoId;
@@ -75,9 +81,13 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
+	const folderAssignment = await resolveVideoFolderAssignment({
+		folderId,
+		orgId,
+	});
+
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
 			name: `data365 Upload - ${formattedDate}`,
 			ownerId: user.id,
@@ -86,15 +96,36 @@ export async function createVideoForServerProcessing({
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-			...(folderId ? { folderId } : {}),
+			...(folderAssignment.type === "video"
+				? { folderId: folderAssignment.folderId }
+				: {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		mode: "singlepart",
-		phase: "uploading",
-		processingProgress: 0,
-		rawFileKey,
+		if (folderAssignment.type === "organization") {
+			await tx.insert(sharedVideos).values({
+				id: nanoId(),
+				videoId,
+				folderId: folderAssignment.folderId,
+				organizationId: folderAssignment.organizationId,
+				sharedByUserId: user.id,
+			});
+		} else if (folderAssignment.type === "space") {
+			await tx.insert(spaceVideos).values({
+				id: nanoId(),
+				videoId,
+				folderId: folderAssignment.folderId,
+				spaceId: folderAssignment.spaceId,
+				addedById: user.id,
+			});
+		}
+
+		await tx.insert(videoUploads).values({
+			videoId,
+			mode: "singlepart",
+			phase: "uploading",
+			processingProgress: 0,
+			rawFileKey,
+		});
 	});
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {

@@ -1,6 +1,6 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Video } from "@cap/web-domain";
+import { Folder, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import type { AnyMySqlInsert } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
@@ -21,9 +21,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 *
 		 * The password is returned separately as the `Video` class is client-safe
 		 */
-		const decodeVideoRow = (
-			video: typeof Db.videos.$inferSelect | undefined,
-		) =>
+		const decodeVideoRow = (video: typeof Db.videos.$inferSelect | undefined) =>
 			Option.fromNullable(video).pipe(
 				Option.map(
 					(v) =>
@@ -48,10 +46,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 						.select()
 						.from(Db.videos)
 						.where(
-							Dz.and(
-								Dz.eq(Db.videos.id, id),
-								Dz.isNull(Db.videos.deletedAt),
-							),
+							Dz.and(Dz.eq(Db.videos.id, id), Dz.isNull(Db.videos.deletedAt)),
 						),
 				);
 
@@ -116,13 +111,35 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							duration,
 							password,
 						} = data;
+						const requestedFolderId = Option.getOrNull(
+							folderId ?? Option.none(),
+						);
+						const [folder] = requestedFolderId
+							? await db
+									.select({
+										spaceId: Db.folders.spaceId,
+									})
+									.from(Db.folders)
+									.where(
+										Dz.and(
+											Dz.eq(Db.folders.id, requestedFolderId),
+											Dz.eq(Db.folders.organizationId, orgId),
+										),
+									)
+									.limit(1)
+							: [];
+						const folderAssignment = Folder.resolveVideoFolderAssignment({
+							folderId: requestedFolderId,
+							folderSpaceId: folder?.spaceId ?? null,
+							organizationId: orgId,
+						});
 
 						// The DB `source` column models the `extensionWeb` variant with
 						// extra fields (`context`, `meetingId`, `sourceUrl`) that the
 						// client-safe domain `Video.source` schema does not carry. Map the
 						// domain value onto the DB shape explicitly so the variant that
 						// needs `context` is constructed with a valid value.
-						const dbSource: typeof Db.videos.$inferInsert["source"] =
+						const dbSource: (typeof Db.videos.$inferInsert)["source"] =
 							source.type === "extensionWeb"
 								? { type: "extensionWeb", context: "instruction" }
 								: { type: source.type };
@@ -144,7 +161,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 									transcriptionStatus: Option.getOrNull(
 										transcriptionStatus ?? Option.none(),
 									),
-									folderId: Option.getOrNull(folderId ?? Option.none()),
+									folderId:
+										folderAssignment.type === "video"
+											? folderAssignment.folderId
+											: null,
 									width: Option.getOrNull(width ?? Option.none()),
 									height: Option.getOrNull(height ?? Option.none()),
 									duration: Option.getOrNull(duration ?? Option.none()),
@@ -152,6 +172,32 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 								},
 							]),
 						];
+
+						if (folderAssignment.type === "organization") {
+							promises.push(
+								db.insert(Db.sharedVideos).values([
+									{
+										id: nanoId(),
+										videoId: id,
+										folderId: folderAssignment.folderId,
+										organizationId: folderAssignment.organizationId,
+										sharedByUserId: ownerId,
+									},
+								]),
+							);
+						} else if (folderAssignment.type === "space") {
+							promises.push(
+								db.insert(Db.spaceVideos).values([
+									{
+										id: nanoId(),
+										videoId: id,
+										folderId: folderAssignment.folderId,
+										spaceId: folderAssignment.spaceId,
+										addedById: ownerId,
+									},
+								]),
+							);
+						}
 
 						if (data.importSource)
 							promises.push(

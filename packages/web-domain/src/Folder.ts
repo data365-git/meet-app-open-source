@@ -46,6 +46,37 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	parentId: Schema.OptionFromNullOr(FolderId),
 }) {}
 
+export type VideoFolderAssignment =
+	| { type: "none" }
+	| { type: "video"; folderId: FolderId }
+	| {
+			type: "organization";
+			folderId: FolderId;
+			organizationId: OrganisationId;
+	  }
+	| {
+			type: "space";
+			folderId: FolderId;
+			spaceId: SpaceIdOrOrganisationId;
+	  };
+
+export function resolveVideoFolderAssignment({
+	folderId,
+	folderSpaceId,
+	organizationId,
+}: {
+	folderId?: FolderId | null;
+	folderSpaceId?: SpaceIdOrOrganisationId | null;
+	organizationId: OrganisationId;
+}): VideoFolderAssignment {
+	if (!folderId) return { type: "none" };
+	if (!folderSpaceId) return { type: "video", folderId };
+	if (folderSpaceId === organizationId) {
+		return { type: "organization", folderId, organizationId };
+	}
+	return { type: "space", folderId, spaceId: folderSpaceId };
+}
+
 export const FolderUpdate = Schema.Struct({
 	id: FolderId,
 	name: Schema.optional(Schema.String),
