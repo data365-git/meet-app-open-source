@@ -1,9 +1,10 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Timeline } from "./Timeline";
-import { shouldUploadOriginal } from "./trim-utils";
+import { isAudioSource, shouldUploadOriginal } from "./trim-utils";
 import { type TrimMode, useFFmpeg } from "./useFFmpeg";
 
 function fmtBytes(bytes: number): string {
@@ -31,6 +32,7 @@ type Props = {
 };
 
 export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
+	const t = useTranslations("import.trim");
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const [duration, setDuration] = useState(0);
 	const [currentSec, setCurrentSec] = useState(0);
@@ -85,7 +87,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 		fileType: file.type,
 		fileName: file.name,
 	});
-	const serverTrimLarge = !uploadingOriginal && file.size > MAX_CLIENT_TRIM_BYTES;
+	const isAudio = isAudioSource(file.type, file.name);
 
 	const handleConfirm = useCallback(async () => {
 		setError(null);
@@ -103,6 +105,23 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			onConfirm(file);
 			return;
 		}
+		if (isAudio) {
+			if (file.size > MAX_CLIENT_TRIM_BYTES) {
+				setError(t("tooBigAudio"));
+				onConfirm(file);
+				return;
+			}
+			setTrimming(true);
+			try {
+				const trimmedFile = await trim(file, inSec, outSec, mode, "audio");
+				onConfirm(trimmedFile);
+			} catch (e) {
+				console.error("Audio trim failed:", e);
+				setError(e instanceof Error ? e.message : "Trim failed");
+				setTrimming(false);
+			}
+			return;
+		}
 		if (file.size > MAX_CLIENT_TRIM_BYTES) {
 			onConfirm(file, { inSec, outSec, duration });
 			return;
@@ -116,7 +135,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			setError(e instanceof Error ? e.message : "Trim failed");
 			setTrimming(false);
 		}
-	}, [trim, file, inSec, outSec, mode, duration, onConfirm]);
+	}, [trim, file, inSec, outSec, mode, duration, onConfirm, isAudio, t]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -146,7 +165,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			<div className="flex h-[100dvh] w-full max-w-3xl flex-col overflow-hidden bg-gray-1 sm:h-auto sm:max-h-[90vh] sm:rounded-xl">
 				<div className="shrink-0 p-4 border-b border-gray-4 flex justify-between items-center">
 					<h2 className="text-lg font-semibold text-gray-12">
-						Trim before upload
+						{t(isAudio ? "titleAudio" : "title")}
 					</h2>
 					<button
 						type="button"
@@ -185,7 +204,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 								checked={mode === "lossless"}
 								onChange={() => setMode("lossless")}
 							/>
-							<span>Fast trim, same quality</span>
+							<span>{t("quick")}</span>
 						</label>
 						<label className="flex items-center gap-2 cursor-pointer">
 							<input
@@ -193,34 +212,34 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 								checked={mode === "precise"}
 								onChange={() => setMode("precise")}
 							/>
-							<span>Precise trim, slower</span>
+							<span>{t("exact")}</span>
 						</label>
 					</div>
 					<div className="text-xs text-gray-10">
-						Original: {Math.floor(duration / 60)}:
+						{t("original")} {Math.floor(duration / 60)}:
 						{String(Math.floor(duration % 60)).padStart(2, "0")} (
 						{fmtBytes(originalBytes)})
 						{trimmedDuration > 0 && trimmedDuration < duration && (
 							<>
 								{" → "}
-								After trim: {Math.floor(trimmedDuration / 60)}:
+								{t("afterCut")} {Math.floor(trimmedDuration / 60)}:
 								{String(Math.floor(trimmedDuration % 60)).padStart(2, "0")} (~
 								{fmtBytes(estTrimmedBytes)})
 								{originalBytes > estTrimmedBytes && (
-									<> — save ~{fmtBytes(originalBytes - estTrimmedBytes)}</>
+									<>
+										{" "}
+										— {t("save")} ~
+										{fmtBytes(originalBytes - estTrimmedBytes)}
+									</>
 								)}
 							</>
 						)}
 					</div>
-					<p className="hidden text-[11px] text-gray-9 sm:block">
-						Shortcuts: <kbd>I</kbd> set in, <kbd>O</kbd> set out,{" "}
-						<kbd>Space</kbd> play, <kbd>Esc</kbd> cancel
-					</p>
 					{trimming && (
 						<div className="text-xs text-gray-10">
 							{ffmpegLoading
-								? "Loading trimmer…"
-								: `Trimming… ${Math.round(progress * 100)}%`}
+								? t("loading")
+								: `${t("cutting")} ${Math.round(progress * 100)}%`}
 						</div>
 					)}
 					{error && <div className="text-xs text-red-600">{error}</div>}
@@ -233,7 +252,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						disabled={trimming}
 						className="w-full sm:w-auto"
 					>
-						Cancel
+						{t("cancel")}
 					</Button>
 					<Button
 						type="button"
@@ -243,12 +262,10 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						className="w-full sm:w-auto"
 					>
 						{trimming
-							? "Working…"
+							? t("working")
 							: uploadingOriginal
-								? "Upload video"
-								: serverTrimLarge
-									? "Upload & trim on server"
-									: "Upload trimmed video"}
+								? t("upload")
+								: t("cutUpload")}
 					</Button>
 				</div>
 			</div>

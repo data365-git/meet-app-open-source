@@ -41,16 +41,36 @@ export function useFFmpeg() {
 			inSec: number,
 			outSec: number,
 			mode: TrimMode,
+			kind: "video" | "audio" = "video",
 		): Promise<File> => {
 			const ffmpeg = await load();
 			const ext = file.name.split(".").pop() ?? "mp4";
 			const inputName = `input.${ext}`;
 			const outputName = "output.mp4";
+			const audioOutputName = "output.m4a";
 			setProgress(0);
 			await ffmpeg.writeFile(inputName, await fetchFile(file));
 			const duration = Math.max(0.1, outSec - inSec);
 			const args =
-				mode === "lossless"
+				kind === "audio"
+					? [
+							"-ss",
+							String(inSec),
+							"-i",
+							inputName,
+							"-t",
+							String(duration),
+							"-map",
+							"0:a:0",
+							"-c:a",
+							"aac",
+							"-b:a",
+							"192k",
+							"-movflags",
+							"+faststart",
+							audioOutputName,
+						]
+					: mode === "lossless"
 					? [
 							"-ss",
 							String(inSec),
@@ -96,6 +116,16 @@ export function useFFmpeg() {
 							outputName,
 						];
 			await ffmpeg.exec(args);
+			if (kind === "audio") {
+				const data = await ffmpeg.readFile(audioOutputName);
+				await ffmpeg.deleteFile(inputName).catch(() => {});
+				await ffmpeg.deleteFile(audioOutputName).catch(() => {});
+				const bytes = data as Uint8Array;
+				const trimmedName = file.name.replace(/(\.[^.]+)?$/, "-trimmed.m4a");
+				return new File([bytes], trimmedName, {
+					type: "audio/mp4",
+				});
+			}
 			const data = await ffmpeg.readFile(outputName);
 			await ffmpeg.deleteFile(inputName).catch(() => {});
 			await ffmpeg.deleteFile(outputName).catch(() => {});

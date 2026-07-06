@@ -24,17 +24,6 @@ import { PreUploadTrimmer } from "@/components/PreUploadTrimmer";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { uploadWithTarget } from "@/utils/upload-target";
 
-// Audio-only imports skip the pre-upload trimmer: the trimmer's <video>/ffmpeg
-// path is video-oriented (and large-audio server-trim via editVideoWorkflow is
-// unproven), so audio uploads straight through and is transcribed as-is. Audio
-// trimming can be added later.
-function isAudioFile(file: File): boolean {
-	return (
-		file.type.startsWith("audio/") ||
-		/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(file.name)
-	);
-}
-
 export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const { user, activeOrganization } = useDashboardContext();
 	const router = useRouter();
@@ -103,8 +92,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file) return;
-		if (isAudioFile(file)) void processFile(file);
-		else setPendingFile(file);
+		setPendingFile(file);
 		if (inputRef.current) inputRef.current.value = "";
 	};
 
@@ -125,8 +113,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				toast.error("Please drop a video or audio file.");
 				return;
 			}
-			if (isAudioFile(file)) void processFile(file);
-			else setPendingFile(file);
+			setPendingFile(file);
 		},
 		[processFile],
 	);

@@ -665,6 +665,22 @@
     "uploadFile": "Fayl yuklash",
     "uploadFileDesc": "Qurilmangizdan video fayl yuklang",
     "loom": "Loom",
-    "loomDesc": "Loom havolasi orqali import qiling yoki CSV orqali ommaviy yuklang"
+    "loomDesc": "Loom havolasi orqali import qiling yoki CSV orqali ommaviy yuklang",
+    "trim": {
+      "title": "Videoni kesish",
+      "titleAudio": "Audioni kesish",
+      "quick": "Tez — sifat o'zgarmaydi",
+      "exact": "Aniq — biroz sekinroq",
+      "upload": "Yuklash",
+      "cutUpload": "Kesib yuklash",
+      "working": "Bajarilyapti…",
+      "loading": "Tayyorlanyapti…",
+      "cutting": "Kesilyapti…",
+      "original": "To'liq uzunlik",
+      "afterCut": "Kesilgandan keyin",
+      "save": "tejaysiz",
+      "cancel": "Bekor qilish",
+      "tooBigAudio": "Bu audio bu yerda kesish uchun juda katta, shuning uchun to'liq fayl yuklandi."
+    }
   }
 }

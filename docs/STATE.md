@@ -1,10 +1,17 @@
 # Ustoz (Cap fork) — Project STATE
 
-> 🧭 **HOLAT 2026-07-06 (sessiya yakuni) — 4 fix JONLI, 3.5-flash qarori halol berildi. Ochiq ish YO'Q.**
-> - ✅ **CHAT-OVERLAP JONLI (`9928d30`):** `shrink-0` (flex-siqилиб matn toshardi). Autoresearch+jonli render bilan isbotlangan.
-> - ✅ **FREEZE-FIX JONLI (`580d99d`):** "Arzon"/Batch o'chirildi — `validateVideo`да cheap→fast majburiy. Muzlаган `awaq...` video null'ga reset → owner "AI tahlil" bosса resume-fix qolган 1 bo'lakни tugatadi.
-> - ✅ **B — TRIM "hammasида" JONLI (`ae5d968`, health 200):** trim-oyna doim ochiladi (500MB-skip olib tashlandi); kesилган+kichik(<100MB)→brauzer ffmpeg; kesилган+katta→asl yuklab **server-trim** (`saveVideoEdits`/`editVideoWorkflow`). Race-bug (upload-qator "processing"да → saveVideoEdits rad) **client-retry** bilan hал (6×1.5s fon, redirect bloklanmaydi; fail→to'liq video fallback). ⏳ Owner katta videoни kesиб tekshirsин.
-> - ✅ **A3 — 3.5-flash QARORI: O'ZGARTIRMASLIK (fakt-asosлi).** (1) bepul t'arif = Google train qiladi + inson o'qiydi → mijoz videolari uchun QAT'IY YO'Q; (2) `gemini-3.5-flash` real(GA) lekin **3x qimmat** ($1.50/$9 vs $0.50/$3) → narx bir xil emas; (3) 2.5-flash arzonroq lekin audio narxi bir xil = tejash ~10% + uz/ru sifat-xavf. Hozirgi `gemini-3-flash-preview` optimal; asosiy tejash retry-fix bilan qilinди. **⚠️ OWNER TODO (maxfiylik):** Google AI Studio'да loyiha **billing YOQILGAN**ми tekshir — faqat pulliда Google train qilmaydi.
+> 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
+>
+> 🧭 **HOLAT 2026-07-06 (sessiya yakuni) — 8 ish JONLI (origin/qa-fixes HEAD=`6f77e62`). Ochiq: owner-verify + free-tier live-o'lchov.**
+> - ✅ **retry-resume + byudjet $100** (`fc659f1`): retry tugаган bo'lakни qaytarmaydi (token-isrof yo'q).
+> - ✅ **chat-overlap** (`9928d30` shrink-0 + `10a549b` UUID): matn ustма-ust yo'q (autoresearch+jonli render isbot).
+> - ✅ **freeze-fix** (`580d99d`): "Arzon"/Batch o'chirildi (async `after()` muzlatardi) → `validateVideo` cheap→fast. Muzlаган `awaq...` null'ga reset.
+> - ✅ **trim "hammasида"** (`ae5d968`): trim-oyna doim; kichik<100MB→brauzer, katta→server-trim (client-retry race-fix).
+> - ✅ **free-tier-first** (`96d2ec1`): `GEMINI_API_KEY_FREE` (Railway'да set) → transkripsiya avval bepul gemini-3.5-flash ($0) → xato/limit → hozirgi pulли. env-gated (kalitsiz=eski). ⏳ **LIVE O'LCHOV kerak:** 3.5 sifati + `ai_usage_events`да $0 yozuv. Sifat yomon→kalitни Railway'дан o'chir=darhol revert.
+> - ✅ **folder-assignment** (Codex, men finalize `26b0944`): video org/space papkага to'g'ri (`sharedVideos`/`spaceVideos`) yoziladi → papkада ko'rinadi. tsc0·4test·build.
+> - ✅ **audio import** (`6f77e62`): import endi audio (mp3/wav/m4a…) qabul qiladi; audio trim-oynani o'tkazиб yuboradi, to'g'ridan transkripsiya. Follow-up: pleer audioда bo'sh kadr (kosmetik) + audio-trim.
+> - **⚠️ OWNER TODO (verify, telefonда):** (a) chat 2-3 savol→ustма-ust yo'q; (b) fail videoда retry→tez; (c) katta video kesиб yukla→trim; (d) yangi video AI→3.5 sifati; (e) audio yukla→transkript; (f) org/space papkага yukla→ko'rinadi. + Google AI Studio'да free-kalit loyihаси billing-OFF ekanини tasdiqla.
+> - **Pre-existing (meniki emas):** `upload-progress-playback.test.ts` fail (eski upload-fix bilan bog'liq) — alohida ko'rilsин.
 
 
 > 🎯 **AI-CHAT OVERLAP HAQIQIY TUB-SABAB (2026-07-06, autoresearch + jonli render) — FIX TAYYOR, DEPLOY qilinмоqда.** Owner: UUID-fix'дан keyin ham "ikkinchi javob birinchisi ustiga". UUID (dublikat-key) HAQIQIY sabab EMAS edi. **Asl sabab (jonli browser-render bilan o'lchandi):** chat-ro'yxat `flex flex-col max-h-64` + xabar-div'lар `flex-shrink:1`+`min-height:0` → kontent max-h'дан oshса item'lар SIQILADI (clientH 83, scrollH 317) → matn box'дан toshиб keyingi xabar ustига chiziladi (container `overflow-y-auto` ishlaмaydi, chunki item'lар siqilиб sig'adi). **FIX = xabar-div'larга `shrink-0`** → item'lар tabiiy balandlikда → container scroll qiladi → 0 overflow (dbg-render: anyTextOverflow true→false, containerScrolls true). UUID-fix (10a549b) foydali gigiyena bo'lиб qoldi (dublikat-key latent bug), lekin ko'ringan overlap'ни shrink-0 hал qildi.

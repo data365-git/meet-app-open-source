@@ -19,13 +19,22 @@ export function isMp4Source(fileType: string, fileName: string): boolean {
 	return fileType === "video/mp4" || /\.mp4$/i.test(fileName);
 }
 
+/** Is the source an audio file? */
+export function isAudioSource(fileType: string, fileName: string): boolean {
+	return (
+		fileType.startsWith("audio/") ||
+		/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(fileName)
+	);
+}
+
 /**
- * When the user hasn't narrowed the range AND the source is already MP4, skip
- * the in-browser ffmpeg pass and upload the file as-is. ffmpeg-wasm loads the
- * ENTIRE file into wasm memory, so on a large file (or a memory-constrained
- * mobile browser) the untrimmed pass is slow and can crash the tab — leaving a
- * created video row with no bytes ever reaching storage. Uploading the original
- * directly restores the fast "pick → upload" path for the common no-trim case.
+ * When the user hasn't narrowed the range AND the source is already MP4 or
+ * audio, skip the in-browser ffmpeg pass and upload the file as-is.
+ * ffmpeg-wasm loads the ENTIRE file into wasm memory, so on a large file (or a
+ * memory-constrained mobile browser) the untrimmed pass is slow and can crash
+ * the tab — leaving a created video row with no bytes ever reaching storage.
+ * Uploading the original directly restores the fast "pick → upload" path for
+ * the common no-trim case.
  */
 export function shouldUploadOriginal(args: {
 	inSec: number;
@@ -36,6 +45,7 @@ export function shouldUploadOriginal(args: {
 }): boolean {
 	return (
 		isFullSelection(args.inSec, args.outSec, args.duration) &&
-		isMp4Source(args.fileType, args.fileName)
+		(isMp4Source(args.fileType, args.fileName) ||
+			isAudioSource(args.fileType, args.fileName))
 	);
 }

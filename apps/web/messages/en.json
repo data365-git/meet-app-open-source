@@ -665,6 +665,22 @@
     "uploadFile": "Upload File",
     "uploadFileDesc": "Upload a video file from your device",
     "loom": "Loom",
-    "loomDesc": "Import a Loom share link or bulk import from CSV"
+    "loomDesc": "Import a Loom share link or bulk import from CSV",
+    "trim": {
+      "title": "Cut your video",
+      "titleAudio": "Cut your audio",
+      "quick": "Quick — same quality",
+      "exact": "Exact — a bit slower",
+      "upload": "Upload",
+      "cutUpload": "Cut and upload",
+      "working": "Working…",
+      "loading": "Getting ready…",
+      "cutting": "Cutting…",
+      "original": "Full length",
+      "afterCut": "After cut",
+      "save": "you save",
+      "cancel": "Cancel",
+      "tooBigAudio": "This audio is too big to cut here, so the whole file was uploaded."
+    }
   }
 }
