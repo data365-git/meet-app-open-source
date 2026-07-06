@@ -24,6 +24,17 @@ import { PreUploadTrimmer } from "@/components/PreUploadTrimmer";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { uploadWithTarget } from "@/utils/upload-target";
 
+// Audio-only imports skip the pre-upload trimmer: the trimmer's <video>/ffmpeg
+// path is video-oriented (and large-audio server-trim via editVideoWorkflow is
+// unproven), so audio uploads straight through and is transcribed as-is. Audio
+// trimming can be added later.
+function isAudioFile(file: File): boolean {
+	return (
+		file.type.startsWith("audio/") ||
+		/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(file.name)
+	);
+}
+
 export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const { user, activeOrganization } = useDashboardContext();
 	const router = useRouter();
@@ -92,7 +103,8 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file) return;
-		setPendingFile(file);
+		if (isAudioFile(file)) void processFile(file);
+		else setPendingFile(file);
 		if (inputRef.current) inputRef.current.value = "";
 	};
 
@@ -103,16 +115,20 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			const file = e.dataTransfer.files[0];
 			if (!file) return;
 
-			const isVideo =
+			const isMedia =
 				file.type.startsWith("video/") ||
-				/\.(mov|mp4|avi|mkv|webm|m4v)$/i.test(file.name);
-			if (!isVideo) {
-				toast.error("Please drop a video file.");
+				file.type.startsWith("audio/") ||
+				/\.(mov|mp4|avi|mkv|webm|m4v|mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(
+					file.name,
+				);
+			if (!isMedia) {
+				toast.error("Please drop a video or audio file.");
 				return;
 			}
-			setPendingFile(file);
+			if (isAudioFile(file)) void processFile(file);
+			else setPendingFile(file);
 		},
-		[],
+		[processFile],
 	);
 
 	const handleBrowseClick = () => {
@@ -203,10 +219,10 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 						</span>
 						<span className="flex flex-col items-center gap-1">
 							<span className="text-sm font-medium text-gray-12">
-								Drag and drop your video here
+								Drag and drop your video or audio here
 							</span>
 							<span className="text-xs text-gray-10">
-								MP4, MOV, AVI, MKV, WebM up to any size
+								Video (MP4, MOV, MKV, WebM) or audio (MP3, WAV, M4A) — any size
 							</span>
 						</span>
 						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
@@ -219,7 +235,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			<input
 				ref={inputRef}
 				type="file"
-				accept="video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
+				accept="video/*,audio/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.mp3,.MP3,.wav,.WAV,.m4a,.M4A,.aac,.AAC,.ogg,.OGG,.oga,.opus,.flac,.FLAC"
 				onChange={handleFileChange}
 				className="hidden"
 			/>
