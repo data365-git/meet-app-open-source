@@ -2,7 +2,7 @@
 
 import { buildEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { Folder } from "@cap/web-domain";
+import { Folder, Video } from "@cap/web-domain";
 import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useStore } from "@tanstack/react-store";
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { markUploadFailed } from "@/actions/video/mark-upload-failed";
 import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
+import { saveVideoEdits } from "@/actions/videos/save-edits";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
 import {
@@ -36,7 +37,10 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 
 	const processFile = useCallback(
-		async (file: File) => {
+		async (
+			file: File,
+			serverTrim?: { inSec: number; outSec: number; duration: number },
+		) => {
 			if (!user || !activeOrganization) return;
 
 			if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
@@ -44,16 +48,43 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				return;
 			}
 
-			const ok = await uploadVideoForServerProcessing(
+			const createdId = await uploadVideoForServerProcessing(
 				file,
 				folderId ? Folder.FolderId.make(folderId) : undefined,
 				activeOrganization.organization.id,
 				setUploadStatus,
 			);
-			if (ok)
+			if (createdId) {
+				if (serverTrim) {
+					const trimId = createdId as Video.VideoId;
+					const editSpec = {
+						version: 1 as const,
+						sourceDuration: serverTrim.duration,
+						keepRanges: [{ start: serverTrim.inSec, end: serverTrim.outSec }],
+					};
+					// The just-uploaded video's videoUploads row is still being cleared
+					// by background processing, and saveVideoEdits refuses while an
+					// upload/processing phase is active. Retry (in the background, so the
+					// redirect isn't blocked) until that row clears, then the trim runs.
+					void (async () => {
+						for (let attempt = 0; attempt < 6; attempt++) {
+							try {
+								const res = await saveVideoEdits(trimId, editSpec);
+								if (res.ok) return;
+							} catch (err) {
+								console.error("Server trim attempt failed:", err);
+							}
+							await new Promise((r) => setTimeout(r, 1500));
+						}
+						toast.error(
+							"Trim didn't start on the server; the full video was uploaded instead.",
+						);
+					})();
+				}
 				router.push(
 					folderId ? `/dashboard/folder/${folderId}` : "/dashboard/caps",
 				);
+			}
 		},
 		[user, activeOrganization, setUploadStatus, router, folderId],
 	);
@@ -61,12 +92,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file) return;
-		const maxSize = 500 * 1024 * 1024;
-		if (file.size > maxSize) {
-			void processFile(file);
-		} else {
-			setPendingFile(file);
-		}
+		setPendingFile(file);
 		if (inputRef.current) inputRef.current.value = "";
 	};
 
@@ -84,14 +110,9 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				toast.error("Please drop a video file.");
 				return;
 			}
-			const maxSize = 500 * 1024 * 1024;
-			if (file.size > maxSize) {
-				void processFile(file);
-			} else {
-				setPendingFile(file);
-			}
+			setPendingFile(file);
 		},
-		[processFile],
+		[],
 	);
 
 	const handleBrowseClick = () => {
@@ -211,9 +232,9 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			{pendingFile && (
 				<PreUploadTrimmer
 					file={pendingFile}
-					onConfirm={(trimmed) => {
+					onConfirm={(trimmed, serverTrim) => {
 						setPendingFile(null);
-						void processFile(trimmed);
+						void processFile(trimmed, serverTrim);
 					}}
 					onCancel={() => setPendingFile(null)}
 				/>
@@ -376,14 +397,14 @@ async function uploadVideoForServerProcessing(
 			console.error("Failed to trigger processing:", triggerError);
 			toast.error("Failed to start video processing. Please try again.");
 			setUploadStatus(undefined);
-			return false;
+			return null;
 		}
 
 		setUploadStatus(undefined);
 		toast.success(
 			"Video uploaded! Processing will continue in the background.",
 		);
-		return true;
+		return uploadId;
 	} catch (err) {
 		console.error("Video upload failed", err);
 
@@ -408,5 +429,5 @@ async function uploadVideoForServerProcessing(
 	}
 
 	setUploadStatus(undefined);
-	return false;
+	return null;
 }

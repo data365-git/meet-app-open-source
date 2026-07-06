@@ -18,9 +18,15 @@ function fmtBytes(bytes: number): string {
 	return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+// Above this size, ffmpeg-wasm OOMs on mobile → trim on server instead.
+const MAX_CLIENT_TRIM_BYTES = 100 * 1024 * 1024; // ~100MB
+
 type Props = {
 	file: File;
-	onConfirm: (trimmedFile: File) => void;
+	onConfirm: (
+		file: File,
+		serverTrim?: { inSec: number; outSec: number; duration: number },
+	) => void;
 	onCancel: () => void;
 };
 
@@ -79,6 +85,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 		fileType: file.type,
 		fileName: file.name,
 	});
+	const serverTrimLarge = !uploadingOriginal && file.size > MAX_CLIENT_TRIM_BYTES;
 
 	const handleConfirm = useCallback(async () => {
 		setError(null);
@@ -94,6 +101,10 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			})
 		) {
 			onConfirm(file);
+			return;
+		}
+		if (file.size > MAX_CLIENT_TRIM_BYTES) {
+			onConfirm(file, { inSec, outSec, duration });
 			return;
 		}
 		setTrimming(true);
@@ -235,7 +246,9 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 							? "Working…"
 							: uploadingOriginal
 								? "Upload video"
-								: "Upload trimmed video"}
+								: serverTrimLarge
+									? "Upload & trim on server"
+									: "Upload trimmed video"}
 					</Button>
 				</div>
 			</div>
