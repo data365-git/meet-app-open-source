@@ -799,7 +799,15 @@ function chunkTranscriptWithTimestamps(
 // instruction dramatically better than 2.5-flash (A/B on a real 53-min uz call:
 // clean flowing prose vs. residual chat-cruft) AND emits ~4x fewer output tokens
 // for the same content — so the refined pass is both cleaner and ~75% cheaper.
-const GEMINI_SUMMARY_MODEL = "gemini-3-flash-preview";
+// Fallback chain mirrors GEMINI_TRANSCRIBE_MODELS: the primary is a PREVIEW
+// build and Google has retired one before (gemini-2.0-flash started 404ing) —
+// without a fallback every summary/refine call would brick instantly.
+const GEMINI_SUMMARY_MODELS = [
+	"gemini-3-flash-preview",
+	"gemini-2.5-flash",
+	"gemini-flash-latest",
+] as const;
+const GEMINI_SUMMARY_MODEL = GEMINI_SUMMARY_MODELS[0];
 
 interface AiApiResult {
 	content: string;
@@ -820,16 +828,49 @@ async function callAiApi(
 		return { content: "{}", model: "unknown", inputTokens: 0, outputTokens: 0 };
 	}
 
+	// Try each model in order; a model that errors out (retired preview →
+	// 404, sustained overload after withGeminiRetry's own retries) falls
+	// through to the next. Budget errors abort immediately — trying another
+	// model would not make the budget bigger.
+	let lastError: unknown;
+	for (const model of GEMINI_SUMMARY_MODELS) {
+		try {
+			const result = await callAiApiWithModel(model, prompt, json, apiKey, context);
+			if (model !== GEMINI_SUMMARY_MODEL) {
+				console.warn(`[generate-ai] summary fell back to ${model}`);
+			}
+			return { ...result, model };
+		} catch (error) {
+			if (error instanceof BudgetExceededError) throw error;
+			lastError = error;
+			console.warn(
+				`[generate-ai] summary model ${model} failed; trying next fallback`,
+				error instanceof Error ? error.message : error,
+			);
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error("All summary models failed");
+}
+
+async function callAiApiWithModel(
+	model: string,
+	prompt: string,
+	json: boolean,
+	apiKey: string,
+	context: AiCallContext,
+): Promise<Omit<AiApiResult, "model">> {
 	const result = await withCostGuard({
 		orgId: context.orgId,
 		userId: context.userId,
 		videoId: context.videoId,
 		operation: "summary",
-		model: GEMINI_SUMMARY_MODEL,
+		model,
 		fn: async () => {
 			const { data } = await withGeminiRetry(async () => {
 				const res = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SUMMARY_MODEL}:generateContent?key=${apiKey}`,
+					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -898,7 +939,7 @@ async function callAiApi(
 		},
 	});
 
-	return { ...result, model: GEMINI_SUMMARY_MODEL };
+	return result;
 }
 
 function cleanJsonResponse(content: string): string {

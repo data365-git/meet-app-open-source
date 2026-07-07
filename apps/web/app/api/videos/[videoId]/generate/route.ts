@@ -10,6 +10,10 @@ import { requestAiGenerationAfterTranscription } from "@/lib/ai-generation-reque
 import { startAiGeneration } from "@/lib/generate-ai";
 import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
 import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
+import {
+  recordReprocessAttempt,
+  REPROCESS_RATE_LIMIT_CODE,
+} from "@/lib/reprocess-rate-limit";
 import { transcribeVideo } from "@/lib/transcribe";
 
 export const dynamic = "force-dynamic";
@@ -96,6 +100,15 @@ export async function POST(
 
     if (!hasPermission) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    // D8: forced reprocesses are limited to 3/hour per video (in-memory,
+    // per-instance). Checked after auth so unauthenticated users can't probe.
+    if (reprocess && !recordReprocessAttempt(videoId)) {
+      return Response.json(
+        { error: REPROCESS_RATE_LIMIT_CODE },
+        { status: 429 },
+      );
     }
 
     // If transcription is still running, remember the user's explicit AI

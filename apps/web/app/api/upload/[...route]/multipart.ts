@@ -468,6 +468,10 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
+					// D3a: if we still can't verify the S3 object after retries, fail the
+					// request instead of proceeding — otherwise we'd mark the upload
+					// complete in the DB while the underlying file may not exist
+					// (a DB-row-without-file / "NoSuchKey" bug).
 					yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((headResult) =>
 							Effect.log(
@@ -478,8 +482,8 @@ app.post(
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
 						}),
-						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+						Effect.tapError((headError) =>
+							Effect.logError(`Unable to verify object: ${headError}`),
 						),
 					);
 
