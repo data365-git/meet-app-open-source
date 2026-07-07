@@ -1,12 +1,14 @@
 # Ustoz (Cap fork) — Project STATE
 
+_Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
+
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-07 /clear-oldi). MUHIM: 2 LOKAL UN-PUSHED COMMIT + working-tree'да YARIM-QOLGAN AGENT-ISHI bor — origin HALI eski!**
+> 🚨 **RESUME (2026-07-07 kech). ✅ 4 commit PUSH bo'ldi (`fe8a024`) — avto-deploy KETDI. Origin endi to'liq yangi.**
 >
-> **1) LOKAL commit'lар (push QILINMAGAN, gate'siz deploy taqiqlanган):** `design(sidebar)` — TEAM-karta B-variant (solid gray, owner tanladi) + Xotira-karta ixcham + guruh-zichlash; docs/STATE. **Push FAQAT quyidagi (2) tugab, TO'LIQ gate (typecheck+vitest+build) o'tgach.**
+> **1) ✅ PUSHED + gate o'tgan (bu sessiya):** `7e0bccd` design(sidebar) TEAM-karta B-variant + Xotira ixcham · `d7f660d` docs(state) · `8920339` **feat(import): 1-step import** — Caps'даги "Import video" tugmasi endi to'g'ridan fayl-picker ochadi (trim→upload, caps'да qoladi, UploadPlaceholderCard progress ko'rsatadi) + ▾ "Loom'dan import" menyu; upload-mantiq `useImportUpload.ts`ga ajratildi (ImportFilePage bilan bayt-bayt bir xil, `onUploadStarted` opt-out orqali eski redirect saqlangan) · `fe8a024` **chore(settings): aiSpeedMode UI-karta o'chirildi** (backend hali resolve qiladi=default fast; faqat o'lik org-picker UI ketди). **GATE: typecheck 0 · vitest 798/798 · build SUCCESS. Review: extraction 1:1, blast-radius (folderId·Pro-gate·Loom-route·UploadingContext) hammasi tekshirildi.**
 >
-> **2) YARIM ISH — "import 1-step + settings-supurish" (Sonnet-agent /clear'да o'ladi, ishi working-tree'да M/??):** `useImportUpload.ts` (yangi, ImportFilePage'дан ajratilgan upload-mantiq) · `Caps.tsx` (Import tugmasi endi to'g'ridan fayl-picker + ▾ "Loom'dan import" menyu; caps'да qolganда navigate qilmaslik) · `ImportFilePage.tsx` (extracted-modulni iste'mol qiladi, xatti-harakat o'zgarmas) · `AiSpeedModeCard.tsx` O'CHIRILGAN + `GeneralPage.tsx`/`settings.ts`-action/`organization-settings.ts`/3 json (aiSpeed* kalitlар) supurilgan. **KEYINGI SESSIYA:** diff'ни review qil (blast-radius: folderId-import, Pro-gate, UploadPlaceholderCard, Loom-yo'l) → tsc+vitest+build → bo'lsa commit(feat:import-1step + chore:settings-sweep)+push; buzuq bo'lsa spec shu blokда — qayta qur.
+> **2) KEYINGI SESSIYA TEKSHIR:** (a) deploy SUCCESS bo'ldimi (Railway health 200) + owner Caps'да "Import video" bosиб jonli sinasин (fayl-picker→trim→upload→progress karta) + ▾ Loom-menyu ochилаdими. (b) Railway "Wait for CI" hali noma'lum — yoqилмаган bo'lsa CI-siz deploy ketди.
 >
 > **3) TELEGRAM-ALERT (yarim ulangan):** token GH-secret + Railway'да SET. **chat_id YO'Q** — owner botga "salom" yozgach: `curl getUpdates` → chat_id → `gh secret set TELEGRAM_ALERT_CHAT_ID` + `railway variables --service @cap/web --set TELEGRAM_ALERT_CHAT_ID=...` → sinov-xabar yubor (isbot). Token: railway var'дан o'qiladi (chatда qayta so'rama).
 >
