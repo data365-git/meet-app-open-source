@@ -83,7 +83,6 @@ export function StorageIndicator() {
 
 	const pct = Math.min(100, data.percentUsed);
 	const usedPct = pct < 0.5 ? 0 : pct;
-	const usedStr = pct < 0.5 ? "0" : Math.round(pct).toString();
 
 	return (
 		<Link
@@ -104,9 +103,11 @@ export function StorageIndicator() {
 					style={{ width: `${usedPct}%` }}
 				/>
 			</div>
-			<p className="mt-1 text-[11px] text-gray-10">
-				{pct >= 99 ? t("quotaFull") : t("storageUsed", { percent: usedStr })}
-			</p>
+			{/* Percent line only when it carries a WARNING — the bar + numbers
+			    already say the rest. Saves a sidebar line (option-1 compacting). */}
+			{pct >= 99 && (
+				<p className="mt-1 text-[11px] text-red-10">{t("quotaFull")}</p>
+			)}
 		</Link>
 	);
 }

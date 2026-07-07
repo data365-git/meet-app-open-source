@@ -208,10 +208,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								duration: 0.2,
 							}}
 							className={clsx(
+								// Owner picked variant B (2026-07-07): solid neutral gray so the
+								// card separates from the white sidebar without adding a second
+								// blue accent (the record button owns the accent).
 								"mx-auto rounded-xl border cursor-pointer transition-colors",
 								open
-									? "bg-gray-3 border-gray-3"
-									: "border-gray-3/60 bg-gray-2/60 hover:bg-gray-2 hover:border-gray-4",
+									? "bg-gray-4 border-gray-5"
+									: "border-gray-4 bg-gray-3 hover:bg-gray-4 hover:border-gray-5",
 								sidebarCollapsed ? "w-fit px-2 py-1" : "w-full px-3 py-2.5",
 								toggleMobileNav ? "mt-0 mb-4" : "mt-2 mb-2",
 							)}
@@ -377,7 +380,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							className={clsx(
 								"flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--brand)] px-3 text-[13px] font-semibold text-[var(--brand-fg)] shadow-sm shadow-blue-950/10 transition-opacity hover:opacity-90",
 								sidebarCollapsed && "mx-auto size-11 px-0",
-								toggleMobileNav ? "mb-6 min-h-12 py-3" : "mb-5 min-h-11 py-2.5",
+								toggleMobileNav ? "mb-6 min-h-12 py-3" : "mb-4 min-h-11 py-2.5",
 							)}
 						>
 							<Video className="size-4 shrink-0" strokeWidth={2.4} />
@@ -394,7 +397,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						if (items.length === 0) return null;
 
 						return (
-							<div key={group.label} className="mb-4 w-full">
+							<div key={group.label} className="mb-3 w-full">
 								{!sidebarCollapsed && (
 									<p className="mb-2 px-3 text-[10.5px] font-semibold font-mono uppercase tracking-[0.12em] text-gray-10">
 										{group.label}
