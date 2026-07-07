@@ -2,7 +2,14 @@
 
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-07 kech, HEAD=`29e8d90` push=avto-deploy KETDI, jonli-verify KUTILMOQDA):**
+> 🚨 **RESUME (2026-07-07 tun, HEAD=`293c7a2`): SENIOR-AUDIT+REMEDIATSIYA REJIMI.**
+> - **Audit:** `docs/audits/SENIOR_AUDIT_2026-07-07.md` (16 topilma). **Reja (owner bilan grill, D0-D8 qulflangan):** `docs/plans/2026-07-07-remediation.md` — o'qi, hamma qaror o'sha yerda.
+> - **✅ WAVE 1 DEPLOY KETDI (`293c7a2`):** CI endi vitest yuritadi + suite TARIXDA ILK BOR to'liq yashil (776/776, stale 90s-test 3621e0f-spec'ga tuzatildi) · D3a multipart verify-fail (NoSuchKey tug'ilish joyi yopildi) · D4b summary model-fallback zanjiri · D8 reprocess 3/soat limit.
+> - **⚠️ OWNER TODO (CI-darvoza to'liq ishlashi uchun, 2 daqiqa):** Railway dashboard → capweb servis → Settings → **"Wait for CI"** (Check Suites) yoqish — shunda qizil CI deploy'ni to'xtatadi. Men buni CLI'дан qila olmayman.
+> - **KEYINGI = WAVE 2:** D1-C recover-cron avto-retry · D3b tungi DB↔S3 solishtiruv · D5 login-fix (pool+throttle+xato-ajratish, security-gate + jonli login-loop). Keyin WAVE 3 (backup·Telegram-alert[BotFather token kerak]·extension-buffer·golden-eval).
+> - **Oldingi deploy'lar verify kutmoqda:** AI narx-tasdiq UI · refined sub-slicing (o'lchandi: 0.19→0.41 ratio, 2/19→faqat fon-stat yo'qoldi) · audio-placeholder (backfill: qaysi video audio — owner aytsin) · 125% scale fix.
+>
+> 🗂️ **Oldingi holat (kunduzi):**
 > - **Oxirgi 2 commit (deploy pishmoqda):** `091c75e` **audio-placeholder** (qora to'rtburchak o'rniga brand-gradient + nom + AudioLines + AUDIO-pill; karta `VideoThumbnail` + pleer `CapVideoPlayer` overlay pointer-events-none; import `metadata.isAudio` yozadi) · `29e8d90` **AI narx-tasdiq + refined-fix** (owner so'radi: "qo'li tegib ketsa boshlayvermasin" — 3 trigger ham amber-ogohlantirish+Ha/Bekor orqali; refined sub-slicing ~6k-char = E12; bob-zichlik 3-6min prompt-talab 2 prompt'da; refine ratio+fallback log). GATE: tsc0 · 7/7 test · build ✓.
 > - **DEPLOY'дан keyin MEN qilaman:** (a) jonli verify (probe bilan share-sahifa confirm-UI + audio-karta); (b) eski audio-video **backfill**: `rtxdx58e3107p9c` ("data365 Upload - 7 July", dur/width NULL — audio-kandidat, LEKIN 100% ishonch yo'q → owner tasdiqласин yoki o'zi ochib ko'rsин, keyin `metadata.isAudio=true` UPDATE).
 > - **NAVBATDAGI QURILISH (reja qulflangan, owner tasdiqladi):** upload-oqim qisqartirish — dashboard "Import video" tugmasi DARHOL fayl-picker ochadi → trim → upload (sahifasiz); yonида ▾ menyu "Loom'dan import" (eski sahifa). Yo'l: upload-mantiqni `ImportFilePage`дан umumiy modulga chiqarish → `Caps.tsx` tugmasiга ulash.
