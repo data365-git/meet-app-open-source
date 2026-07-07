@@ -9,6 +9,8 @@ import {
 import {
 	clampStartSec,
 	collapseRepeatedCues,
+	computeFollowScrollTop,
+	isNearActiveRow,
 } from "../utils/transcript-utils";
 import { renderMarkdownBold } from "./markdownBold";
 
@@ -383,15 +385,79 @@ export function TranscriptPanel({
 		new Set(cues.map((c) => c.speaker).filter((s): s is string => s !== null)),
 	);
 
+	// --- Auto-follow active row, scoped to this panel's own scroll container ---
+	// `containerRef` (the panel root) is always rendered as the direct child of
+	// SharePanel's `overflow-y-auto` tabpanel div — that ancestor is the true
+	// scroll container, NOT the page. We scroll it via scrollTop math instead of
+	// `scrollIntoView`, which would otherwise drag every scrollable ancestor
+	// (including the page/viewport) along with it.
+	const followingRef = useRef(true);
+	const programmaticScrollRef = useRef(false);
+
+	function getScrollContainer(): HTMLElement | null {
+		return containerRef.current?.parentElement ?? null;
+	}
+
+	function scrollToActiveRow(behavior: ScrollBehavior) {
+		const container = getScrollContainer();
+		const row = activeRef.current;
+		if (!container || !row) return;
+		const target = computeFollowScrollTop({
+			rowOffsetTop: row.offsetTop,
+			rowHeight: row.offsetHeight,
+			containerScrollTop: container.scrollTop,
+			containerClientHeight: container.clientHeight,
+			containerScrollHeight: container.scrollHeight,
+		});
+		if (target === container.scrollTop) return;
+		programmaticScrollRef.current = true;
+		container.scrollTo({ top: target, behavior });
+	}
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCueId drives which DOM node activeRef points to; re-running when it changes is intentional
 	useEffect(() => {
-		if (activeRef.current) {
-			activeRef.current.scrollIntoView({
-				behavior: "smooth",
-				block: "nearest",
-			});
+		if (followingRef.current) {
+			scrollToActiveRow("smooth");
 		}
 	}, [activeCueId]);
+
+	// Detect user-initiated scroll on the panel's own container: any 'scroll'
+	// event not flagged as our own programmatic scroll means the user touched
+	// the panel (wheel/touch/scrollbar all surface as native 'scroll' events).
+	// Stop following on such input; resume once they scroll back near the
+	// active row (checked on the same event, after the flag is cleared).
+	useEffect(() => {
+		const container = getScrollContainer();
+		if (!container) return;
+
+		function handleScroll() {
+			if (programmaticScrollRef.current) {
+				programmaticScrollRef.current = false;
+				return;
+			}
+			// Genuine user scroll.
+			const row = activeRef.current;
+			if (!container || !row) {
+				followingRef.current = false;
+				return;
+			}
+			followingRef.current = isNearActiveRow({
+				rowOffsetTop: row.offsetTop,
+				rowHeight: row.offsetHeight,
+				containerScrollTop: container.scrollTop,
+				containerClientHeight: container.clientHeight,
+			});
+		}
+
+		container.addEventListener("scroll", handleScroll, { passive: true });
+		return () => container.removeEventListener("scroll", handleScroll);
+	}, []);
+
+	// Seeking via cue click re-enables follow and jumps straight to that row.
+	function handleCueSeek(seconds: number) {
+		followingRef.current = true;
+		onVideoJump?.(seconds);
+	}
 
 	// --- Search state ---
 	const [searchQuery, setSearchQuery] = useState("");
@@ -892,7 +958,7 @@ export function TranscriptPanel({
 			>
 				<button
 					type="button"
-					onClick={() => onVideoJump?.(cue.startSeconds)}
+					onClick={() => handleCueSeek(cue.startSeconds)}
 					title={t("jumpToTime", { time: cue.timestamp })}
 					aria-label={t("jumpToTime", { time: cue.timestamp })}
 					style={{

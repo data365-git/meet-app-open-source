@@ -61,6 +61,78 @@ export function collapseRepeatedCues<T>(cues: T[], getText: (c: T) => string): T
 	return out;
 }
 
+// Auto-follow decision for the transcript panel's active-row scrolling
+// (see plan: TranscriptPanel must never yank the page, only its own scroll
+// container, and must stop following once the user manually scrolls away).
+// Pure math on offsets — no DOM — so it's unit-testable in isolation.
+
+/**
+ * Target scrollTop that centers/aligns the active row's TOP with the
+ * container's TOP-most comfortable position, matching `block: "nearest"`-like
+ * behavior but scoped to a single container instead of every scrollable
+ * ancestor. Clamped into [0, scrollHeight - clientHeight].
+ */
+export function computeFollowScrollTop(params: {
+	rowOffsetTop: number;
+	rowHeight: number;
+	containerScrollTop: number;
+	containerClientHeight: number;
+	containerScrollHeight: number;
+}): number {
+	const {
+		rowOffsetTop,
+		rowHeight,
+		containerScrollTop,
+		containerClientHeight,
+		containerScrollHeight,
+	} = params;
+	const rowBottom = rowOffsetTop + rowHeight;
+	const viewTop = containerScrollTop;
+	const viewBottom = containerScrollTop + containerClientHeight;
+
+	let target = containerScrollTop;
+	if (rowOffsetTop < viewTop) {
+		// Row is above the visible area: scroll up so its top is flush with the view.
+		target = rowOffsetTop;
+	} else if (rowBottom > viewBottom) {
+		// Row is below the visible area: scroll down so its bottom is flush with the view.
+		target = rowBottom - containerClientHeight;
+	}
+
+	const maxScrollTop = Math.max(0, containerScrollHeight - containerClientHeight);
+	return Math.min(Math.max(target, 0), maxScrollTop);
+}
+
+/**
+ * Whether the transcript panel should (re)enable auto-follow given the
+ * user's current scroll position relative to the active row. Used both to
+ * decide whether a user scroll should suppress follow, and whether a
+ * subsequent scroll back near the active row should resume it.
+ *
+ * "Near" = within `thresholdRowHeights` row-heights of the active row's
+ * position, measured as the offset between the row's vertical center and
+ * the container's current viewport center.
+ */
+export function isNearActiveRow(params: {
+	rowOffsetTop: number;
+	rowHeight: number;
+	containerScrollTop: number;
+	containerClientHeight: number;
+	thresholdRowHeights?: number;
+}): boolean {
+	const {
+		rowOffsetTop,
+		rowHeight,
+		containerScrollTop,
+		containerClientHeight,
+		thresholdRowHeights = 1.5,
+	} = params;
+	const rowCenter = rowOffsetTop + rowHeight / 2;
+	const viewCenter = containerScrollTop + containerClientHeight / 2;
+	const distance = Math.abs(rowCenter - viewCenter);
+	return distance <= rowHeight * thresholdRowHeights;
+}
+
 // Defensive display-time clamp mirroring the backend sanitizeStartSec.
 // Existing videos may have a chapter startSec stored in the wrong unit
 // (~x60 inflated). Recover the common x60 case, otherwise clamp into
