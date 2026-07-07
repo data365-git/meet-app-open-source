@@ -34,7 +34,6 @@ interface GenerateAiPanelProps {
 	aiGenerationStatus: AiGenerationStatus | null | undefined;
 	aiProcessingStep?: AiProcessingStep | null;
 	duration?: number | null;
-	aiSpeedMode?: "fast" | "cheap";
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
 	aiIncomplete?: boolean;
@@ -57,16 +56,12 @@ export function GenerateAiPanel({
 	aiGenerationStatus,
 	aiProcessingStep,
 	duration,
-	aiSpeedMode = "fast",
 	aiIncomplete = false,
 	onStarted,
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// The speed (Arzon/Tez) chooser only appears after the owner presses the
-	// first "AI tahlil" button, so starting analysis is a deliberate two-step.
-	const [showChooser, setShowChooser] = useState(false);
 	const inFlightRef = useRef(false);
 	const isRunning =
 		transcriptionStatus === "PROCESSING" ||
@@ -88,11 +83,12 @@ export function GenerateAiPanel({
 
 	// Fire AI generation directly on click — one click is enough. No second
 	// confirmation dialog (AI is admin-only and the panel already states it uses
-	// extra time + budget). Each price-chooser option IS the one click.
-	const requestStart = (reprocess = false, speedMode?: "fast" | "cheap") => {
+	// extra time + budget). No speed chooser: the server always takes the
+	// reliable synchronous path (free-tier key first, paid fallback).
+	const requestStart = (reprocess = false) => {
 		// Synchronous in-flight guard: a very fast double-click can fire before the
-		// `loading` state re-renders the disabled buttons, sending two POSTs (with
-		// possibly different speedModes). The ref blocks the second call instantly.
+		// `loading` state re-renders the disabled buttons, sending two POSTs.
+		// The ref blocks the second call instantly.
 		if (inFlightRef.current) return;
 		inFlightRef.current = true;
 		setLoading(true);
@@ -102,7 +98,7 @@ export function GenerateAiPanel({
 				const res = await fetch(`/api/videos/${videoId}/generate`, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ reprocess, speedMode }),
+					body: JSON.stringify({ reprocess }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -353,62 +349,14 @@ export function GenerateAiPanel({
 					</p>
 				)}
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				{!showChooser && (
-					<button
-						type="button"
-						onClick={() => setShowChooser(true)}
-						className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90"
-					>
-						{tShare("aiStartAnalysis")}
-					</button>
-				)}
-				{showChooser && (
-					<>
-						<p className="text-xs font-medium text-gray-11">
-							{tShare("aiSpeedChooserTitle")}
-						</p>
-						<div role="radiogroup" className="flex flex-col gap-2 sm:flex-row">
-							<button
-								type="button"
-								role="radio"
-								aria-checked={aiSpeedMode === "cheap"}
-								disabled={loading}
-								onClick={() => requestStart(false, "cheap")}
-								className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
-									aiSpeedMode === "cheap"
-										? "border-[var(--brand)] bg-[var(--brand-wash)]"
-										: "border-blue-6 bg-blue-2 hover:bg-blue-3"
-								}`}
-							>
-								<span className="block text-sm font-medium text-gray-12">
-									{tShare("aiSpeedChooserCheapLabel")}
-								</span>
-								<span className="block text-xs text-gray-10">
-									{tShare("aiSpeedChooserCheapHint")}
-								</span>
-							</button>
-							<button
-								type="button"
-								role="radio"
-								aria-checked={aiSpeedMode === "fast"}
-								disabled={loading}
-								onClick={() => requestStart(false, "fast")}
-								className={`flex-1 rounded-lg border px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
-									aiSpeedMode === "fast"
-										? "border-[var(--brand)] bg-[var(--brand-wash)]"
-										: "border-blue-6 bg-blue-2 hover:bg-blue-3"
-								}`}
-							>
-								<span className="block text-sm font-medium text-gray-12">
-									{tShare("aiSpeedChooserFastLabel")}
-								</span>
-								<span className="block text-xs text-gray-10">
-									{tShare("aiSpeedChooserFastHint")}
-								</span>
-							</button>
-						</div>
-					</>
-				)}
+				<button
+					type="button"
+					disabled={loading}
+					onClick={() => requestStart(false)}
+					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+				>
+					{tShare("aiStartAnalysis")}
+				</button>
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
 				)}

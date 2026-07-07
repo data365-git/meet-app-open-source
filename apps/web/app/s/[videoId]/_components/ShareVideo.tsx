@@ -25,7 +25,6 @@ import { getTranscript } from "@/actions/videos/get-transcript";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
-import { resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import type { VideoData } from "../types";
 import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -777,7 +776,6 @@ export const ShareVideo = forwardRef<
 									aiProcessingStep={effectiveAiProcessingStep}
 									aiIncomplete={aiIncomplete}
 									duration={data.duration}
-									aiSpeedMode={resolveAiSpeedMode(data.orgSettings?.aiSpeedMode)}
 									onStarted={handleAiStarted}
 								/>
 								<span className="mb-3 inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand)]">
