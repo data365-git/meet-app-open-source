@@ -79,3 +79,6 @@ analysis/plans/
 .ralphy
 tmp/
 tmp-qa/
+
+# Never commit local secrets worksheets
+/docs/DEPLOY_SECRETS.md
