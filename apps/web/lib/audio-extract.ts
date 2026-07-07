@@ -444,9 +444,12 @@ export async function checkHasAudioTrack(
 			const hasVideo = /Stream #\d+:\d+.*Video:/.test(stderr);
 			const hasAudio = /Stream #\d+:\d+.*Audio:/.test(stderr);
 
-			if (!hasVideo) {
+			// Audio-only files are VALID input (audio import): an OGG/WAV has no
+			// video stream at all, and mp3/m4a only "had" one via attached cover
+			// art. Reject only when ffmpeg found no streams of either kind.
+			if (!hasVideo && !hasAudio) {
 				console.error(
-					`[checkHasAudioTrack] No video stream found — ffmpeg may not be able to read the file. stderr: ${stderr.substring(0, 500)}`,
+					`[checkHasAudioTrack] No streams found — ffmpeg may not be able to read the file. stderr: ${stderr.substring(0, 500)}`,
 				);
 				reject(
 					new Error(`ffmpeg could not read video file: no streams detected`),
