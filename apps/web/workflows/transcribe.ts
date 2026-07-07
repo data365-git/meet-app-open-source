@@ -79,8 +79,16 @@ interface ExtractedAudio {
 // than the paid default; on any failure the paid path takes over.
 const FREE_TRANSCRIBE_MODEL = "gemini-3.5-flash";
 
-const LONG_AUDIO_CHUNK_DURATION_SEC = 15 * 60;
-const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 30 * 60;
+// Chunk length is the ceiling on transcript↔audio drift: Gemini estimates (does
+// not force-align) timestamps, so cues run progressively ahead within a chunk and
+// only re-anchor at the next chunk's absolute start offset. Shorter chunks reset
+// that drift more often. 6 min keeps enough context for speaker/term accuracy
+// while capping worst-case drift far below the old 15-min value. Total audio sent
+// to Gemini is unchanged (chunks don't overlap), so cost is ~flat — only the
+// per-call prompt repeats. Threshold sits just above the chunk size so mid-length
+// audios (which were previously one un-reset chunk) also get split.
+const LONG_AUDIO_CHUNK_DURATION_SEC = 6 * 60;
+const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 8 * 60;
 
 export async function transcribeVideoWorkflow(
 	payload: TranscribeWorkflowPayload,
