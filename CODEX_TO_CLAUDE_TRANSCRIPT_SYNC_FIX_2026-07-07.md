@@ -56,4 +56,23 @@ Ran from `apps/web` using existing local binaries, no install:
 - `tsc --noEmit`
   - passed.
 
-No commit, push, or deploy was performed.
+## Live Deploy Follow-Up
+
+After the owner asked to make the fix live:
+
+- Committed as `9204a64` (`fix transcript playback sync`).
+- Pushed to `origin/qa-fixes`.
+- Railway auto-deployed `@cap/web` deployment
+  `bc6095fe-6a2f-4376-a3f8-067471b70138`.
+- Deployment status: `SUCCESS`.
+- Live smoke checks passed:
+  - `/api/health` returned 200 with `db=ok` and `storage=ok`.
+  - `/s/xg7yh84kpggh4q8` returned 200.
+
+Pre-deploy job check: one `PROCESSING` row existed, but it was for a
+soft-deleted video (`deletedAt` set). Active non-deleted transcription jobs
+were 0 before pushing.
+
+Local Codex skill follow-up: installed `autoresearch` from
+`github/awesome-copilot/skills/autoresearch`. Codex needs restart before it
+appears as an available skill in future sessions.
