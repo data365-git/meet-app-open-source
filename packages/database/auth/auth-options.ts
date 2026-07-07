@@ -11,6 +11,11 @@ import type { Provider } from "next-auth/providers/index";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import {
+	checkLoginAllowed,
+	clearLoginFailures,
+	recordLoginFailure,
+} from "./login-throttle.ts";
+import {
 	organizationInvites,
 	organizationMembers,
 	users,
@@ -81,26 +86,53 @@ export const authOptions = (): NextAuthOptions => {
 						if (!credentials?.email || !credentials?.password) return null;
 						const email = credentials.email.trim().toLowerCase();
 
-						const [user] = await db()
-							.select({
-								id: users.id,
-								email: users.email,
-								name: users.name,
-								image: users.image,
-								passwordHash: users.passwordHash,
-							})
-							.from(users)
-							.where(eq(users.email, email))
-							.limit(1);
+						// Brute-force throttle BEFORE any DB/bcrypt work.
+						if (!checkLoginAllowed(email)) throw new Error("rate_limited");
 
-						if (!user || !user.passwordHash) return null;
+						// A DB failure must surface as a SERVICE error, never as
+						// "wrong password" (returning null) — that lie made transient
+						// connection drops look like the user mistyping.
+						let user:
+							| {
+									id: string;
+									email: string;
+									name: string | null;
+									image: string | null;
+									passwordHash: string | null;
+							  }
+							| undefined;
+						try {
+							[user] = await db()
+								.select({
+									id: users.id,
+									email: users.email,
+									name: users.name,
+									image: users.image,
+									passwordHash: users.passwordHash,
+								})
+								.from(users)
+								.where(eq(users.email, email))
+								.limit(1);
+						} catch (error) {
+							console.error("[auth] credentials DB lookup failed", error);
+							throw new Error("service_unavailable");
+						}
+
+						if (!user || !user.passwordHash) {
+							recordLoginFailure(email);
+							return null;
+						}
 
 						const valid = await bcrypt.compare(
 							credentials.password,
 							user.passwordHash,
 						);
-						if (!valid) return null;
+						if (!valid) {
+							recordLoginFailure(email);
+							return null;
+						}
 
+						clearLoginFailures(email);
 						return {
 							id: user.id,
 							email: user.email,

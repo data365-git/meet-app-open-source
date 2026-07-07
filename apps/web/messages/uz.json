@@ -164,7 +164,8 @@
     "loginHere": "Bu yerda kiring",
     "forgotPassword": "Parolni unutdingizmi?",
     "termsNoticeSignin": "Tizimga kirish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz.",
-    "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz."
+    "termsNoticeSignup": "Hisob yaratish orqali siz data365'ning <terms>Foydalanish shartlari</terms> va <privacy>Maxfiylik siyosati</privacy> bilan tanishganingizni va roziligingizni tasdiqlaysiz.",
+    "errorRateLimited": "Urinishlar juda ko'p. 5 daqiqa kutib, qayta urining."
   },
   "recorder": {
     "recordInBrowser": "Yangi yozuv",

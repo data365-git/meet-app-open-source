@@ -60,6 +60,7 @@
 	"exports": {
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
+		"./auth/login-throttle": "./auth/login-throttle.ts",
 		"./auth/session": "./auth/session.ts",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",

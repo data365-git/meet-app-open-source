@@ -68,7 +68,11 @@ export function LoginForm() {
         return;
       }
 
-      setError(t("errorInvalid"));
+      // authorize() throws distinct codes so a DB outage or a throttle hit
+      // is never mislabeled as a wrong password.
+      if (res?.error === "service_unavailable") setError(t("errorGeneric"));
+      else if (res?.error === "rate_limited") setError(t("errorRateLimited"));
+      else setError(t("errorInvalid"));
     } catch {
       setError(t("errorGeneric"));
     } finally {

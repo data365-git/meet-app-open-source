@@ -164,7 +164,8 @@
     "loginHere": "Log in here",
     "forgotPassword": "Forgot your password?",
     "termsNoticeSignin": "By signing in, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
-    "termsNoticeSignup": "By creating an account, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>."
+    "termsNoticeSignup": "By creating an account, you acknowledge that you have both read and agree to data365's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
+    "errorRateLimited": "Too many attempts. Please wait 5 minutes and try again."
   },
   "recorder": {
     "recordInBrowser": "New recording",
