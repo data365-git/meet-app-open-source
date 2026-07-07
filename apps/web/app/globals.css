@@ -328,7 +328,12 @@ a.bg-primary:hover {
 	mask-composite: exclude;
 }
 
-@media all and (max-width: 1024px) {
+/* 1023.98px (not 1024px): Tailwind's `lg:` is min-width:1024px, so at exactly
+   1024px both this mobile grid AND the lg: desktop sidebar applied at once —
+   the sidebar lost its named grid area and the main column collapsed to
+   0 height (blank dashboard at Windows 125% scale, where a 1280px-wide
+   window lands on exactly 1024 CSS px). */
+@media all and (max-width: 1023.98px) {
 	.dashboard-grid {
 		grid-template-columns: 1fr;
 		grid-template-rows: 1fr;
