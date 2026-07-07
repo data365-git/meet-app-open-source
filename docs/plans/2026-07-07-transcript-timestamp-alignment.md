@@ -34,10 +34,26 @@ past ~4 calls; the remaining ~20 chunks auto-fall-back to paid gemini-3-flash-pr
 A full 2h re-transcribe runs in ~7–10 min. So chunk COUNT does not raise $ (audio
 tokens fixed), only free-tier throughput — the paid fallback absorbs it.
 
-**Verification metric:** `cue-in-silence %` — fraction of transcript cue-time that
-overlaps detected silence (higher = transcript not lined up with speech). Baseline
-(6-min, pre-silence-anchor) = **18.1%** (audio is 19% silent → ≈ chance = poorly
-aligned). After silence-anchored re-transcribe = **[PENDING measurement]**.
+**Verification metric:** best is `cross-correlation lag` — shift the transcript's
+cue-active signal against the audio's speech signal; the lag that maximizes
+overlap = how many seconds the transcript is shifted (lag>0 = AHEAD). Measured on
+the 2h audio (`bbzt2424z6vvy6t`):
+- Baseline (6-min, pre-silence-anchor): **+22s ahead** (corr 0.75).
+- Silence-anchored re-transcribe: **+12s ahead** (corr 0.74).
+
+So silence-anchoring roughly **halved** the systematic lead (22s → 12s) — a real
+improvement — but **~12s of ahead-drift remains**, i.e. NOT "completely gone".
+(A weaker `cue-in-silence %` metric was ~flat 18.1%→18.6% because silences are
+scattered; the cross-corr lag is the reliable measure.)
+
+**Cost/latency of silence-anchoring:** the full 2h re-transcribe took ~11 min vs
+~7.5 min for plain fixed 6-min chunks — the silencedetect full-decode pass + 20
+sequential span extractions add local ffmpeg time. Background job, so users don't
+wait synchronously, but it is a real slowdown.
+
+**Verdict:** Stage 1 helps (22→12s) but does not fully fix. Owner decides:
+(a) accept ~12s, (b) shrink chunks to ~3 min (~6s drift, but ~2× calls + slower),
+(c) Stage 2 forced alignment (~0s, big infra).
 
 ## Stage 2 — forced alignment (PROPOSAL — owner approval needed; "2-katta ish")
 Only pursue if Stage 1's measured result still shows unacceptable drift / the
