@@ -63,6 +63,10 @@ export interface VideoMetadata {
 	aiGenerationRequestedAt?: string;
 	aiGenerationRequestedBy?: string;
 	aiGenerationError?: string;
+	/** ISO timestamp set when transcription starts; used by recover-stale-ai-jobs to detect staleness. */
+	processingStartedAt?: string;
+	/** ISO timestamp set when AI generation starts; used by recover-stale-ai-jobs to detect staleness. */
+	aiProcessingStartedAt?: string;
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 	isDemo?: boolean;
 	aiSummary?: AiSummary | null;
@@ -93,6 +97,10 @@ export interface VideoMetadata {
 	preferredLanguage?: ShareLanguage;
 	/** True when the imported file was audio-only (no video track). */
 	isAudio?: boolean;
+	/** Count of automatic re-kicks recover-stale-ai-jobs has performed for this video (D1-C). */
+	autoRecoverAttempts?: number;
+	/** Set when the nightly storage reconciliation cron could not find this video's S3 object (D3b). */
+	storageMissing?: boolean;
 }
 
 export type VideoEditRange = {

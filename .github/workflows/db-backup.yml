@@ -1,0 +1,121 @@
+name: Nightly DB backup
+
+# Dumps the production database and uploads it to R2 with 30-day retention.
+# Requires the repo secret BACKUP_DATABASE_URL (mysql:// connection string) plus
+# R2_ENDPOINT / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BACKUP_BUCKET.
+# Until BACKUP_DATABASE_URL is set, the whole job skips gracefully (no failures).
+
+on:
+  schedule:
+    - cron: "0 22 * * *" # nightly at 22:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secret is configured
+        id: gate
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: |
+          if [ -z "$BACKUP_DATABASE_URL" ]; then
+            echo "BACKUP_DATABASE_URL secret not set yet — skipping backup."
+            echo "Add it in: repo Settings -> Secrets and variables -> Actions -> New repository secret."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install mysql-client and awscli
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mysql-client awscli
+
+      - name: Dump, compress, and upload to R2
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          set -e
+
+          # Parse mysql://user:pass@host:port/dbname into parts.
+          url="$BACKUP_DATABASE_URL"
+          url="${url#mysql://}"
+          userpass="${url%%@*}"
+          rest="${url#*@}"
+          DB_USER="${userpass%%:*}"
+          DB_PASS="${userpass#*:}"
+          hostportdb="${rest}"
+          hostport="${hostportdb%%/*}"
+          DB_NAME="${hostportdb#*/}"
+          DB_NAME="${DB_NAME%%\?*}"
+          DB_HOST="${hostport%%:*}"
+          if [[ "$hostport" == *:* ]]; then
+            DB_PORT="${hostport##*:}"
+          else
+            DB_PORT="3306"
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          DUMP_FILE="data365-${DATE}.sql"
+          GZ_FILE="${DUMP_FILE}.gz"
+
+          mysqldump --single-transaction --quick --no-tablespaces \
+            --host="$DB_HOST" --port="$DB_PORT" \
+            --user="$DB_USER" --password="$DB_PASS" \
+            "$DB_NAME" > "$DUMP_FILE"
+
+          gzip "$DUMP_FILE"
+
+          aws s3 cp "$GZ_FILE" "s3://${R2_BACKUP_BUCKET}/db-backups/${GZ_FILE}" \
+            --endpoint-url "$R2_ENDPOINT"
+
+      - name: Prune backups older than 30 days
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          set -e
+          cutoff=$(date -u -d "30 days ago" +%Y-%m-%d)
+
+          keys=$(aws s3api list-objects-v2 \
+            --endpoint-url "$R2_ENDPOINT" \
+            --bucket "$R2_BACKUP_BUCKET" \
+            --prefix "db-backups/" \
+            --query "Contents[].Key" --output text || echo "")
+
+          for key in $keys; do
+            fname=$(basename "$key")
+            # Expect data365-YYYY-MM-DD.sql.gz
+            file_date=$(echo "$fname" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' || echo "")
+            if [ -z "$file_date" ]; then
+              continue
+            fi
+            if [[ "$file_date" < "$cutoff" ]]; then
+              echo "Deleting old backup: $key"
+              aws s3 rm "s3://${R2_BACKUP_BUCKET}/${key}" --endpoint-url "$R2_ENDPOINT"
+            fi
+          done
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_ALERT_CHAT_ID" ]; then
+            echo "Telegram secrets not set — skipping alert."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_ALERT_CHAT_ID}" \
+            -d text="Nightly DB backup workflow FAILED — check GitHub Actions logs." || true

@@ -2,19 +2,48 @@ import { timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import type { Video } from "@cap/web-domain";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { sendOpsAlert } from "@/lib/ops-alert";
+import { startAiGeneration } from "@/lib/generate-ai";
+import { transcribeVideo } from "@/lib/transcribe";
 
 export const dynamic = "force-dynamic";
 
 const STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
+const MAX_AUTO_RETRY_ATTEMPTS = 2;
 
-function getAffectedRows(result: unknown): number {
-	if (Array.isArray(result)) {
-		return (result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+/** Pure decision: does this video still get an automatic re-kick, or has it used up its retries? */
+export function shouldAutoRetry(attempts: number | undefined): boolean {
+	return (attempts ?? 0) < MAX_AUTO_RETRY_ATTEMPTS;
 }
+
+/** Metadata after incrementing the auto-recover attempt counter, resetting the stale processing markers. */
+export function withIncrementedAutoRecoverAttempts(
+	metadata: VideoMetadata,
+): VideoMetadata {
+	return {
+		...metadata,
+		autoRecoverAttempts: (metadata.autoRecoverAttempts ?? 0) + 1,
+		processingStartedAt: undefined,
+		aiProcessingStartedAt: undefined,
+	};
+}
+
+type StaleTranscriptionCandidate = {
+	id: Video.VideoId;
+	ownerId: string;
+	name: string;
+	metadata: VideoMetadata | null;
+};
+
+type StaleAiCandidate = {
+	id: Video.VideoId;
+	ownerId: string;
+	name: string;
+	metadata: VideoMetadata | null;
+};
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -38,8 +67,13 @@ export async function GET(request: Request) {
 	const staleBefore = new Date(Date.now() - STALE_JOB_THRESHOLD_MS);
 	const staleBeforeIso = staleBefore.toISOString();
 
-	const transcriptionCandidates = await db()
-		.select({ id: videos.id })
+	const transcriptionCandidates: StaleTranscriptionCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
 		.from(videos)
 		.where(
 			and(
@@ -49,8 +83,13 @@ export async function GET(request: Request) {
 			),
 		);
 
-	const aiGenerationCandidates = await db()
-		.select({ id: videos.id })
+	const aiGenerationCandidates: StaleAiCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
 		.from(videos)
 		.where(
 			and(
@@ -60,38 +99,78 @@ export async function GET(request: Request) {
 			),
 		);
 
-	const transcriptionResult =
-		transcriptionCandidates.length > 0
-			? await db()
+	let retried = 0;
+	let gaveUp = 0;
+
+	for (const candidate of transcriptionCandidates) {
+		const metadata = candidate.metadata ?? {};
+		try {
+			if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
+				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
+				await db()
+					.update(videos)
+					.set({ transcriptionStatus: null, metadata: nextMetadata })
+					.where(eq(videos.id, candidate.id));
+				await transcribeVideo(candidate.id, candidate.ownerId, true);
+				retried++;
+			} else {
+				await db()
 					.update(videos)
 					.set({ transcriptionStatus: "ERROR" })
-					.where(
-						inArray(
-							videos.id,
-							transcriptionCandidates.map((candidate) => candidate.id),
-						),
-					)
-			: null;
+					.where(eq(videos.id, candidate.id));
+				await sendOpsAlert(
+					`AI job dead after 2 auto-retries: ${candidate.id} (${candidate.name})`,
+				);
+				gaveUp++;
+			}
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to recover transcription for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
 
-	const aiGenerationResult =
-		aiGenerationCandidates.length > 0
-			? await db()
+	for (const candidate of aiGenerationCandidates) {
+		const metadata = candidate.metadata ?? {};
+		try {
+			if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
+				const nextMetadata: VideoMetadata = {
+					...withIncrementedAutoRecoverAttempts(metadata),
+					aiGenerationStatus: undefined,
+				};
+				await db()
+					.update(videos)
+					.set({ metadata: nextMetadata })
+					.where(eq(videos.id, candidate.id));
+				await startAiGeneration(candidate.id, candidate.ownerId, {
+					force: true,
+				});
+				retried++;
+			} else {
+				await db()
 					.update(videos)
 					.set({
 						metadata: sql<VideoMetadata>`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
 					})
-					.where(
-						inArray(
-							videos.id,
-							aiGenerationCandidates.map((candidate) => candidate.id),
-						),
-					)
-			: null;
+					.where(eq(videos.id, candidate.id));
+				await sendOpsAlert(
+					`AI job dead after 2 auto-retries: ${candidate.id} (${candidate.name})`,
+				);
+				gaveUp++;
+			}
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to recover AI generation for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
 
 	return NextResponse.json({
 		success: true,
 		staleBefore: staleBefore.toISOString(),
-		transcriptionReset: getAffectedRows(transcriptionResult),
-		aiGenerationReset: getAffectedRows(aiGenerationResult),
+		retried,
+		gaveUp,
 	});
 }
