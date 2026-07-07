@@ -1,9 +1,14 @@
 "use client";
 
-import { useTranslations } from "next-intl";
 import { Play } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
-import { formatTimeMinutes } from "../utils/transcript-utils";
+import {
+	clampStartSec,
+	computeFollowScrollTop,
+	formatTimeMinutes,
+	isNearActiveRow,
+} from "../utils/transcript-utils";
 import { renderMarkdownBold } from "./markdownBold";
 
 interface RefinedTranscriptPanelProps {
@@ -27,6 +32,7 @@ export function RefinedTranscriptPanel({
 }: RefinedTranscriptPanelProps) {
 	const t = useTranslations("share");
 	const [closedChapters, setClosedChapters] = useState<Set<number>>(new Set());
+	const containerRef = useRef<HTMLDivElement>(null);
 	const activeSectionRef = useRef<HTMLElement>(null);
 
 	function toggleChapter(startSec: number) {
@@ -41,29 +47,85 @@ export function RefinedTranscriptPanel({
 		});
 	}
 
-	// Active chapter = the one with the largest effective startSec <= currentTime.
-	let activeStartSec: number | null = null;
-	if (refinedTranscript && currentTime > 0) {
-		for (const chapter of refinedTranscript.chapters) {
-			const startSec = formatPanelStartSec(chapter.startSec, duration);
-			if (
-				startSec <= currentTime &&
-				(activeStartSec === null || startSec > activeStartSec)
-			) {
-				activeStartSec = chapter.startSec;
-			}
-		}
+	const activeStartSec = getActiveRefinedChapterStartSec(
+		refinedTranscript?.chapters ?? [],
+		currentTime,
+		duration,
+	);
+
+	// --- Auto-follow active chapter, scoped to this panel's own scroll container ---
+	// Same pattern as TranscriptPanel: `containerRef` (the panel root) is always
+	// rendered as the direct child of SharePanel's `overflow-y-auto` tabpanel div
+	// — that ancestor is the true scroll container, NOT the page. We scroll it
+	// via scrollTop math instead of `scrollIntoView`, which would otherwise drag
+	// every scrollable ancestor (including the page/viewport) along with it.
+	const followingRef = useRef(true);
+	const programmaticScrollRef = useRef(false);
+
+	function getScrollContainer(): HTMLElement | null {
+		return containerRef.current?.parentElement ?? null;
+	}
+
+	function scrollToActiveSection(behavior: ScrollBehavior) {
+		const container = getScrollContainer();
+		const row = activeSectionRef.current;
+		if (!container || !row) return;
+		const target = computeFollowScrollTop({
+			rowOffsetTop: row.offsetTop,
+			rowHeight: row.offsetHeight,
+			containerScrollTop: container.scrollTop,
+			containerClientHeight: container.clientHeight,
+			containerScrollHeight: container.scrollHeight,
+		});
+		if (target === container.scrollTop) return;
+		programmaticScrollRef.current = true;
+		container.scrollTo({ top: target, behavior });
 	}
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeStartSec drives which DOM node activeSectionRef points to; re-running when it changes is intentional
 	useEffect(() => {
-		if (activeSectionRef.current) {
-			activeSectionRef.current.scrollIntoView({
-				behavior: "smooth",
-				block: "nearest",
-			});
+		if (followingRef.current) {
+			scrollToActiveSection("smooth");
 		}
 	}, [activeStartSec]);
+
+	// Detect user-initiated scroll on the panel's own container: any 'scroll'
+	// event not flagged as our own programmatic scroll means the user touched
+	// the panel (wheel/touch/scrollbar all surface as native 'scroll' events).
+	// Stop following on such input; resume once they scroll back near the
+	// active section (checked on the same event, after the flag is cleared).
+	useEffect(() => {
+		const container = getScrollContainer();
+		if (!container) return;
+
+		function handleScroll() {
+			if (programmaticScrollRef.current) {
+				programmaticScrollRef.current = false;
+				return;
+			}
+			// Genuine user scroll.
+			const row = activeSectionRef.current;
+			if (!container || !row) {
+				followingRef.current = false;
+				return;
+			}
+			followingRef.current = isNearActiveRow({
+				rowOffsetTop: row.offsetTop,
+				rowHeight: row.offsetHeight,
+				containerScrollTop: container.scrollTop,
+				containerClientHeight: container.clientHeight,
+			});
+		}
+
+		container.addEventListener("scroll", handleScroll, { passive: true });
+		return () => container.removeEventListener("scroll", handleScroll);
+	}, []);
+
+	// Seeking via chapter click re-enables follow and jumps straight to it.
+	function handleChapterSeek(seconds: number) {
+		followingRef.current = true;
+		onVideoJump?.(seconds);
+	}
 
 	if (!refinedTranscript || refinedTranscript.chapters.length === 0) {
 		return (
@@ -94,7 +156,7 @@ export function RefinedTranscriptPanel({
 	}
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div ref={containerRef} className="flex flex-col gap-4">
 			{refinedTranscript.chapters.map((chapter) => {
 				const startSec = formatPanelStartSec(chapter.startSec, duration);
 				const isOpen = !closedChapters.has(chapter.startSec);
@@ -116,7 +178,7 @@ export function RefinedTranscriptPanel({
 						<div className="mb-3 flex items-center gap-2">
 							<button
 								type="button"
-								onClick={() => onVideoJump?.(startSec)}
+								onClick={() => handleChapterSeek(startSec)}
 								className="rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors"
 								style={{
 									background: "var(--brand-wash)",
@@ -160,7 +222,7 @@ export function RefinedTranscriptPanel({
 							</button>
 							<button
 								type="button"
-								onClick={() => onVideoJump?.(startSec)}
+								onClick={() => handleChapterSeek(startSec)}
 								className="flex-1 text-left text-base font-bold text-gray-12"
 								style={{
 									background: "transparent",
@@ -173,7 +235,7 @@ export function RefinedTranscriptPanel({
 							</button>
 							<button
 								type="button"
-								onClick={() => onVideoJump?.(startSec)}
+								onClick={() => handleChapterSeek(startSec)}
 								aria-label={t("playFromChapter", { title: chapter.title })}
 								className="flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors"
 								style={{
@@ -207,8 +269,27 @@ function formatPanelStartSec(
 	startSec: number,
 	duration?: number | null,
 ): number {
-	if (!duration || duration <= 0) return startSec;
-	if (startSec <= duration) return startSec;
-	if (startSec / 60 <= duration) return Math.round(startSec / 60);
-	return duration;
+	return clampStartSec(startSec, duration ?? undefined);
+}
+
+export function getActiveRefinedChapterStartSec(
+	chapters: Array<{ startSec: number }>,
+	currentTime: number,
+	duration?: number | null,
+): number | null {
+	let activeRawStartSec: number | null = null;
+	let activeDisplayStartSec = Number.NEGATIVE_INFINITY;
+
+	for (const chapter of chapters) {
+		const displayStartSec = formatPanelStartSec(chapter.startSec, duration);
+		if (
+			displayStartSec <= currentTime &&
+			displayStartSec > activeDisplayStartSec
+		) {
+			activeRawStartSec = chapter.startSec;
+			activeDisplayStartSec = displayStartSec;
+		}
+	}
+
+	return activeRawStartSec;
 }

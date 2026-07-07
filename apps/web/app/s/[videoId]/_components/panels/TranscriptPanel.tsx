@@ -68,7 +68,7 @@ export function parseVTTCues(vttContent: string): Cue[] {
 
 			// The end timestamp runs up to the first ']', '**', or cue setting
 			// (position/align/line keywords). Take only the time token.
-			const endTokenMatch = afterArrow.match(/^[\s]*([\d:.]+)/);
+			const endTokenMatch = afterArrow.match(/^[\s]*([\d:.,]+)/);
 			const endRaw = endTokenMatch?.[1]?.trim() ?? "";
 
 			const startSeconds = vttTimeToSeconds(startRaw);
@@ -133,7 +133,32 @@ export function parseVTTCues(vttContent: string): Cue[] {
 }
 
 function vttTimeToSeconds(timeStr: string): number | null {
-	const parts = timeStr.split(":");
+	const trimmed = timeStr.trim();
+	const colonMs = trimmed.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2}):(\d{3})$/);
+	if (colonMs) {
+		const hours = colonMs[1] ? parseInt(colonMs[1], 10) : 0;
+		const minutes = parseInt(colonMs[2] ?? "0", 10);
+		const seconds = parseInt(colonMs[3] ?? "0", 10);
+		const ms = parseInt(colonMs[4] ?? "0", 10);
+		return hours * 3600 + minutes * 60 + seconds + ms / 1000;
+	}
+
+	let msValue = 0;
+	let core = trimmed;
+	const decimalMs = core.match(/^(.*)[.,](\d{1,3})$/);
+	if (decimalMs) {
+		core = decimalMs[1] ?? "";
+		msValue = parseInt((decimalMs[2] ?? "").padEnd(3, "0"), 10) / 1000;
+	}
+
+	const parts = core.split(":");
+	if (parts.length === 2) {
+		const [m, s] = parts;
+		const minutes = parseInt(m ?? "0", 10);
+		const seconds = parseFloat(s ?? "0");
+		if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null;
+		return minutes * 60 + seconds + msValue;
+	}
 	if (parts.length === 3) {
 		const [h, m, s] = parts;
 		const hours = parseInt(h ?? "0", 10);
@@ -141,14 +166,7 @@ function vttTimeToSeconds(timeStr: string): number | null {
 		const seconds = parseFloat(s ?? "0");
 		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
 			return null;
-		return hours * 3600 + minutes * 60 + seconds;
-	}
-	if (parts.length === 2) {
-		const [m, s] = parts;
-		const minutes = parseInt(m ?? "0", 10);
-		const seconds = parseFloat(s ?? "0");
-		if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null;
-		return minutes * 60 + seconds;
+		return hours * 3600 + minutes * 60 + seconds + msValue;
 	}
 	return null;
 }
@@ -290,8 +308,17 @@ function highlightMatch(text: string, query: string): React.ReactNode {
 	);
 }
 
-function isActive(cue: Cue, currentTime: number): boolean {
-	return currentTime >= cue.startSeconds && currentTime < cue.endSeconds;
+export function getActiveTranscriptCueId(
+	cues: Array<{ id: number; startSeconds: number; endSeconds: number }>,
+	currentTime: number,
+): number | null {
+	let activeCueId: number | null = null;
+	for (const cue of cues) {
+		if (currentTime >= cue.startSeconds && currentTime < cue.endSeconds) {
+			activeCueId = cue.id;
+		}
+	}
+	return activeCueId;
 }
 
 /**
@@ -378,7 +405,7 @@ export function TranscriptPanel({
 			)
 		: [];
 
-	const activeCueId = cues.find((c) => isActive(c, currentTime))?.id ?? null;
+	const activeCueId = getActiveTranscriptCueId(cues, currentTime);
 
 	const hasAnySpeaker = cues.some((c) => c.speaker !== null);
 	const distinctSpeakers = Array.from(
