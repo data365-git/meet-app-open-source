@@ -2,7 +2,12 @@
 
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-07, HEAD=`00011fd` push=deploy KETDI): WAVE 2+3 TO'LIQ CHIQDI + kunlik fixlar.**
+> 🚨 **RESUME (2026-07-07 yakun, HEAD=`56d77c3`, deploy `36d07b94` SUCCESS): WAVE 2+3 JONLI + D5 ISBOTLANDI.**
+> - **✅ D5 LOGIN JONLI-GATE O'TDI:** 20/20 to'g'ri-parol login (pool fix isbot; oldin ~1/3 yiqilardi) · throttle 10-xatoda yondi · qulf paytida to'g'ri parol ham bloklandi. QA-userlар prod'да qoldi (mening test-artefaktlarim, o'chirilmadi — owner xohlasa o'chiradi): `qa0pool0loop000` (qa.pool.loop@data365-test.uz) + signup-urinish emaili.
+> - **✅ OGG-fix E2E:** transkripsiya OQMOQDA (Gemini real tokenlар; deploy'дан keyin retry ishladi). ℹ️ Kuzatuv: transcription PAID 3-flash ishlatdi — free-tier-first nima uchun urilmagani ALOHIDA tekshirilsin (kalit limiti? xato?).
+> - **✅ QOIDA 11 (~/.claude, owner pinned):** blast-radius-first — har o'zgarishdan oldin bog'liqlar xaritasi + birga moslash; model-mustaqil workflow (karpathy→grill→autoresearch→blast-radius→live-verify).
+> - **✅ JARVIS ko'chma-zip yaratildi+yuborildi** (`D:\vibecoding\JARVIS_BACKUP_2026-07-07.zip`, 704 fayl; RESTORE_README ichida). Akkaunt-almashish shu kompyuterда tizimni BUZMAYDI (fayllar Windows-profilда).
+> - **Harness'lар (untracked, foydali):** `_probe-dashboard.mjs` (viewport/scale probe) · `_login-loop-test.mjs` (login-gate) · tracked: `scripts/eval-refined.mjs`.
 > - **Bugungi qo'shimcha fixlar (owner so'radi):** ✅ OGG-audio "failed" ILDIZ+FIX jonli (`781c61c`: checkHasAudioTrack video-stream'ni SHART qilardi — E14 proxy-gate saboq; OGG retry ketdi, natijani tekshirish kerak) · ✅ transcript auto-scroll endi sahifani sudramaydi (E15; **Matn/Refined tabда ham xuddi shu bug BOR — chip/backlog**) · ✅ audio-video `rtxdx58e3107p9c` isAudio backfill qilindi.
 > - **WAVE 2+3 (hammasi `00011fd`gacha, gate: typecheck0·795/795·build✓):** D5 login (pool+halol-xato+throttle, ⏳ jonli login-loop test deploy'дан keyin) · D1-C recover-cron AVTO-RETRY (max2, keyin ERROR+alert) · D3b tungi reconcile-cron · D7a tungi mysqldump→R2 (GH-secrets O'RNATILDI: BACKUP_DATABASE_URL+R2_*; ⏳ restore-mashq) · D7b ops-alert (Telegram, ⏳ owner BotFather token) · D6a extension buffer-persist+zip qayta (⏳ owner qayta-o'rnatsin) · D4a golden-eval (`scripts/eval-refined.mjs` + `docs/qa/GOLDEN_EVAL.md`).
 > - **🔒 REPO PRIVATE QILINDI** (PUBLIC ekan — audit-hujjat zaifliklar bilan ochiq yotardi; Railway-integratsiya ishlashini kuzat — keyingi deploy tasdiqlaydi).
