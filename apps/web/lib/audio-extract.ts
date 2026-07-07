@@ -127,17 +127,179 @@ export async function extractAudioFromUrl(
 	});
 }
 
-export async function extractAudioChunksFromUrl(
+export interface SilenceInterval {
+	start: number;
+	end: number;
+}
+
+export interface ChunkSpec {
+	startSec: number;
+	durationSec: number;
+}
+
+function round3(value: number): number {
+	return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * Turns detected silence intervals into chunk boundaries that land on speech
+ * onsets (a silence's `end`) instead of a fixed nominal offset. Gemini ignores
+ * leading silence within a chunk when estimating timestamps, so a chunk that
+ * starts mid-silence makes the transcript run ahead of the audio — anchoring
+ * cuts to real speech onsets keeps `startSec` truthful.
+ *
+ * Pure/no I/O. Falls back to fixed `targetChunkSec` boundaries (same shape as
+ * the old nominal `index * targetChunkSec` behavior) when there's no useful
+ * silence data near a boundary.
+ */
+export function computeSilenceAnchoredCuts(
+	silences: SilenceInterval[],
+	totalDurationSec: number,
+	targetChunkSec: number,
+): ChunkSpec[] {
+	const sorted = silences
+		.filter((s) => s.end > s.start)
+		.sort((a, b) => a.start - b.start);
+
+	const WINDOW = targetChunkSec * 0.4;
+	const MIN_CHUNK = 60;
+
+	const first = sorted[0];
+	const firstOnset = first && first.start <= 1.0 ? first.end : 0;
+
+	const boundaries: number[] = [firstOnset];
+	let pos = firstOnset;
+
+	while (totalDurationSec - pos > targetChunkSec + WINDOW) {
+		const target = pos + targetChunkSec;
+
+		let candidate: SilenceInterval | null = null;
+		let candidateDist = Infinity;
+		for (const s of sorted) {
+			if (s.end < target - WINDOW || s.end > target + WINDOW) continue;
+			const dist = Math.abs(s.end - target);
+			if (dist < candidateDist) {
+				candidateDist = dist;
+				candidate = s;
+			}
+		}
+
+		let cutAt = candidate ? candidate.end : target;
+		if (cutAt - pos < MIN_CHUNK) {
+			cutAt = pos + targetChunkSec;
+		}
+
+		boundaries.push(cutAt);
+		pos = cutAt;
+	}
+
+	return boundaries.map((start, i) => {
+		const next = boundaries[i + 1];
+		const end = next !== undefined ? next : totalDurationSec;
+		return { startSec: round3(start), durationSec: round3(end - start) };
+	});
+}
+
+function parseSilenceIntervals(
+	stderr: string,
+	totalDurationSec: number,
+): SilenceInterval[] {
+	const starts = [...stderr.matchAll(/silence_start:\s*(-?\d+(?:\.\d+)?)/g)].map(
+		(m) => Number(m[1]),
+	);
+	const ends = [...stderr.matchAll(/silence_end:\s*(-?\d+(?:\.\d+)?)/g)].map(
+		(m) => Number(m[1]),
+	);
+
+	return starts.map((start, i) => ({
+		start,
+		end: ends[i] ?? totalDurationSec,
+	}));
+}
+
+function runFfmpegCapture(
+	ffmpeg: string,
+	args: string[],
+): Promise<{ code: number | null; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const proc = spawn(ffmpeg, args, { stdio: ["pipe", "pipe", "pipe"] });
+		let stderr = "";
+
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err: Error) => {
+			reject(err);
+		});
+
+		proc.on("close", (code: number | null) => {
+			resolve({ code, stderr });
+		});
+	});
+}
+
+function extractSpanToFile(
+	ffmpeg: string,
 	videoUrl: string,
-	{
-		chunkDurationSec,
-		totalDurationSec,
-	}: {
-		chunkDurationSec: number;
-		totalDurationSec: number | null;
-	},
+	startSec: number,
+	durationSec: number,
+	outputPath: string,
+): Promise<void> {
+	const ffmpegArgs = [
+		"-ss",
+		String(Math.max(0, startSec)),
+		"-t",
+		String(durationSec),
+		"-i",
+		videoUrl,
+		"-vn",
+		"-ac",
+		"1",
+		"-ar",
+		"24000",
+		"-acodec",
+		"libmp3lame",
+		"-b:a",
+		DEFAULT_AUDIO_BITRATE,
+		"-f",
+		"mp3",
+		"-y",
+		outputPath,
+	];
+
+	return new Promise((resolve, reject) => {
+		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+		let stderr = "";
+
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err: Error) => {
+			reject(new Error(`Audio chunk extraction failed: ${err.message}`));
+		});
+
+		proc.on("close", (code: number | null) => {
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			reject(
+				new Error(`Audio chunk extraction failed with code ${code}: ${stderr}`),
+			);
+		});
+	});
+}
+
+/** Old fixed-interval implementation, preserved as the fallback used when the
+ * silencedetect pass fails/errors or the total duration can't be determined. */
+async function extractFixedIntervalChunks(
+	ffmpeg: string,
+	videoUrl: string,
+	chunkDurationSec: number,
+	totalDurationSec: number | null,
 ): Promise<AudioChunkExtractionResult> {
-	const ffmpeg = getFfmpegPath();
 	const dirPath = await fs.mkdtemp(join(tmpdir(), "audio-chunks-"));
 	const outputPattern = join(dirPath, "audio-%03d.mp3");
 
@@ -211,6 +373,92 @@ export async function extractAudioChunksFromUrl(
 						remaining == null ? null : Math.min(chunkDurationSec, remaining),
 				};
 			}),
+			mimeType: "audio/mpeg",
+			cleanup: async () => {
+				try {
+					await fs.rm(dirPath, { force: true, recursive: true });
+				} catch {}
+			},
+		};
+	} catch (error) {
+		await fs.rm(dirPath, { force: true, recursive: true }).catch(() => {});
+		throw error;
+	}
+}
+
+export async function extractAudioChunksFromUrl(
+	videoUrl: string,
+	{
+		chunkDurationSec,
+		totalDurationSec,
+	}: {
+		chunkDurationSec: number;
+		totalDurationSec: number | null;
+	},
+): Promise<AudioChunkExtractionResult> {
+	const ffmpeg = getFfmpegPath();
+
+	let silenceResult: { code: number | null; stderr: string } | null = null;
+	try {
+		silenceResult = await runFfmpegCapture(ffmpeg, [
+			"-i",
+			videoUrl,
+			"-vn",
+			"-af",
+			"silencedetect=noise=-30dB:d=0.35",
+			"-f",
+			"null",
+			"-",
+		]);
+	} catch {
+		// silencedetect pass itself failed to spawn — fall back below.
+	}
+
+	const resolvedDuration =
+		totalDurationSec ??
+		(silenceResult ? parseDurationFromStderr(silenceResult.stderr) : null);
+
+	if (!silenceResult || silenceResult.code !== 0 || resolvedDuration == null) {
+		return extractFixedIntervalChunks(
+			ffmpeg,
+			videoUrl,
+			chunkDurationSec,
+			totalDurationSec,
+		);
+	}
+
+	const silences = parseSilenceIntervals(silenceResult.stderr, resolvedDuration);
+	const specs = computeSilenceAnchoredCuts(
+		silences,
+		resolvedDuration,
+		chunkDurationSec,
+	);
+
+	const dirPath = await fs.mkdtemp(join(tmpdir(), "audio-chunks-"));
+
+	try {
+		const chunks: AudioChunkExtractionResult["chunks"] = [];
+		for (const [index, spec] of specs.entries()) {
+			const filePath = join(
+				dirPath,
+				`audio-${String(index).padStart(3, "0")}.mp3`,
+			);
+			await extractSpanToFile(
+				ffmpeg,
+				videoUrl,
+				spec.startSec,
+				spec.durationSec,
+				filePath,
+			);
+			chunks.push({
+				filePath,
+				startSec: spec.startSec,
+				durationSec: spec.durationSec,
+			});
+		}
+
+		return {
+			chunks,
 			mimeType: "audio/mpeg",
 			cleanup: async () => {
 				try {
@@ -402,7 +650,7 @@ export interface VideoProbeResult {
 	durationSec: number | null;
 }
 
-function parseDurationFromStderr(stderr: string): number | null {
+export function parseDurationFromStderr(stderr: string): number | null {
 	const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
 	if (!match) return null;
 	const [, h, m, s, cs] = match;

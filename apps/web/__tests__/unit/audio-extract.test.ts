@@ -31,11 +31,13 @@ class MockChildProcess extends EventEmitter {
 
 let mockProcess: MockChildProcess;
 let spawnArgs: { command: string; args: string[] }[] = [];
+let spawnedProcesses: MockChildProcess[] = [];
 
 vi.mock("node:child_process", () => ({
 	spawn: (command: string, args: string[]) => {
 		spawnArgs.push({ command, args });
 		mockProcess = new MockChildProcess();
+		spawnedProcesses.push(mockProcess);
 		return mockProcess;
 	},
 }));
@@ -44,6 +46,7 @@ describe("audio-extract", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		spawnArgs = [];
+		spawnedProcesses = [];
 	});
 
 	afterEach(() => {
@@ -213,7 +216,7 @@ describe("audio-extract", () => {
 	});
 
 	describe("extractAudioChunksFromUrl", () => {
-		it("uses ffmpeg segment output for long recordings", async () => {
+		it("runs a silencedetect pass then extracts each chunk as a fast-seek span, falling back to fixed spacing when no silence is found", async () => {
 			const { extractAudioChunksFromUrl } = await import("@/lib/audio-extract");
 
 			const resultPromise = extractAudioChunksFromUrl(
@@ -221,18 +224,67 @@ describe("audio-extract", () => {
 				{ chunkDurationSec: 900, totalDurationSec: 1900 },
 			);
 
-			setTimeout(() => {
-				mockProcess.emit("close", 0);
-			}, 10);
+			// 1st spawn: silencedetect pass — no silence markers, closes cleanly.
+			await vi.waitFor(() => expect(spawnedProcesses.length).toBe(1));
+			spawnedProcesses[0]?.emit("close", 0);
+
+			// 2nd spawn: fast-seek extraction of the first (fixed-fallback) span.
+			await vi.waitFor(() => expect(spawnedProcesses.length).toBe(2));
+			spawnedProcesses[1]?.emit("close", 0);
+
+			// 3rd spawn: fast-seek extraction of the second span.
+			await vi.waitFor(() => expect(spawnedProcesses.length).toBe(3));
+			spawnedProcesses[2]?.emit("close", 0);
 
 			const result = await resultPromise;
 
-			const args = spawnArgs[0]?.args ?? [];
-			expect(args).toContain("-f");
-			expect(args).toContain("segment");
-			expect(args).toContain("-segment_time");
-			expect(args).toContain("900");
-			expect(args).toContain("-reset_timestamps");
+			expect(spawnArgs[0]?.args).toContain("silencedetect=noise=-30dB:d=0.35");
+			expect(spawnArgs[1]?.args).toEqual(
+				expect.arrayContaining(["-ss", "0", "-t", "900"]),
+			);
+			expect(spawnArgs[2]?.args).toEqual(
+				expect.arrayContaining(["-ss", "900", "-t", "1000"]),
+			);
+			expect(result.chunks).toEqual([
+				{
+					filePath: expect.stringContaining("audio-000.mp3"),
+					startSec: 0,
+					durationSec: 900,
+				},
+				{
+					filePath: expect.stringContaining("audio-001.mp3"),
+					startSec: 900,
+					durationSec: 1000,
+				},
+			]);
+			await result.cleanup();
+			expect(mockRm).toHaveBeenCalled();
+		});
+
+		it("falls back to the old fixed-interval segment approach when the silencedetect pass errors", async () => {
+			const { extractAudioChunksFromUrl } = await import("@/lib/audio-extract");
+
+			const resultPromise = extractAudioChunksFromUrl(
+				"https://example.com/video.mp4",
+				{ chunkDurationSec: 900, totalDurationSec: 1900 },
+			);
+
+			// 1st spawn: silencedetect pass — errors, triggering the segment fallback.
+			await vi.waitFor(() => expect(spawnedProcesses.length).toBe(1));
+			spawnedProcesses[0]?.emit("error", new Error("silencedetect unsupported"));
+
+			// 2nd spawn: old fixed-interval `-f segment` extraction.
+			await vi.waitFor(() => expect(spawnedProcesses.length).toBe(2));
+			spawnedProcesses[1]?.emit("close", 0);
+
+			const result = await resultPromise;
+
+			const segmentArgs = spawnArgs[1]?.args ?? [];
+			expect(segmentArgs).toContain("-f");
+			expect(segmentArgs).toContain("segment");
+			expect(segmentArgs).toContain("-segment_time");
+			expect(segmentArgs).toContain("900");
+			expect(segmentArgs).toContain("-reset_timestamps");
 			expect(result.chunks).toEqual([
 				{
 					filePath: expect.stringContaining("audio-000.mp3"),
