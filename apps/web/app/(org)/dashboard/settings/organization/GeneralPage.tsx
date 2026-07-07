@@ -1,7 +1,6 @@
 "use client";
 
 import { AiBudgetCard } from "./components/AiBudgetCard";
-import { AiSpeedModeCard } from "./components/AiSpeedModeCard";
 import DeleteOrg from "./components/DeleteOrg";
 import { OrganizationDetailsCard } from "./components/OrganizationDetailsCard";
 
@@ -12,7 +11,6 @@ export function GeneralPage() {
 				<OrganizationDetailsCard />
 				<AiBudgetCard />
 			</div>
-			<AiSpeedModeCard />
 			<DeleteOrg />
 		</div>
 	);

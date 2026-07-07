@@ -60,9 +60,8 @@ export const preserveProSettings = (
 
 /**
  * Merges a partial settings update onto the organization's existing settings
- * JSON column, so callers that submit only a subset of keys (e.g.
- * AiSpeedModeCard sending only `{ aiSpeedMode }`) don't erase the rest.
- * `nextSettings` must contain only keys the caller explicitly set — no
+ * JSON column, so callers that submit only a subset of keys don't erase the
+ * rest. `nextSettings` must contain only keys the caller explicitly set — no
  * `key: undefined` entries — so this is a plain last-write-wins shallow merge.
  */
 export const mergeOrganizationSettings = (

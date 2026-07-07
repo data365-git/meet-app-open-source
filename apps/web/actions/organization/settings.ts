@@ -7,7 +7,6 @@ import { userIsPro } from "@cap/utils";
 import { isAiGenerationLanguage } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { isAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
 	mergeOrganizationSettings,
 	type OrganizationSettingsInput,
@@ -34,13 +33,6 @@ export async function updateOrganizationSettings(
 		!isAiGenerationLanguage(settings.aiGenerationLanguage)
 	) {
 		throw new Error("Unsupported AI generation language");
-	}
-
-	if (
-		settings.aiSpeedMode !== undefined &&
-		!isAiSpeedMode(settings.aiSpeedMode)
-	) {
-		throw new Error("Unsupported AI speed mode");
 	}
 
 	if (!user.activeOrganizationId) {
