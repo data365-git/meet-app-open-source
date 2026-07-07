@@ -67,7 +67,9 @@ scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
-/docs/
+# Upstream Cap ignored /docs/ wholesale; this fork tracks project docs
+# (STATE.md, plans, audits). Ignore only generated SEO junk inside it.
+/docs/seo/
 /.growth-agent/
 
 # OpenCode commands (local)
