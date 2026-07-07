@@ -2,7 +2,13 @@
 
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-07 tun, HEAD=`293c7a2`): SENIOR-AUDIT+REMEDIATSIYA REJIMI.**
+> 🚨 **RESUME (2026-07-07, HEAD=`00011fd` push=deploy KETDI): WAVE 2+3 TO'LIQ CHIQDI + kunlik fixlar.**
+> - **Bugungi qo'shimcha fixlar (owner so'radi):** ✅ OGG-audio "failed" ILDIZ+FIX jonli (`781c61c`: checkHasAudioTrack video-stream'ni SHART qilardi — E14 proxy-gate saboq; OGG retry ketdi, natijani tekshirish kerak) · ✅ transcript auto-scroll endi sahifani sudramaydi (E15; **Matn/Refined tabда ham xuddi shu bug BOR — chip/backlog**) · ✅ audio-video `rtxdx58e3107p9c` isAudio backfill qilindi.
+> - **WAVE 2+3 (hammasi `00011fd`gacha, gate: typecheck0·795/795·build✓):** D5 login (pool+halol-xato+throttle, ⏳ jonli login-loop test deploy'дан keyin) · D1-C recover-cron AVTO-RETRY (max2, keyin ERROR+alert) · D3b tungi reconcile-cron · D7a tungi mysqldump→R2 (GH-secrets O'RNATILDI: BACKUP_DATABASE_URL+R2_*; ⏳ restore-mashq) · D7b ops-alert (Telegram, ⏳ owner BotFather token) · D6a extension buffer-persist+zip qayta (⏳ owner qayta-o'rnatsin) · D4a golden-eval (`scripts/eval-refined.mjs` + `docs/qa/GOLDEN_EVAL.md`).
+> - **🔒 REPO PRIVATE QILINDI** (PUBLIC ekan — audit-hujjat zaifliklar bilan ochiq yotardi; Railway-integratsiya ishlashini kuzat — keyingi deploy tasdiqlaydi).
+> - **⏳ OCHIQ:** OGG retry natijasi · login-loop jonli test · JARVIS ko'chma-zip (owner so'radi) · extension pause/stop JONLI tekshiruv (Chrome-ulanish bo'lmadi; owner yangi zipни o'rnatganмi ANIQMAS — eng ehtimol sabab shu) · Matn-tab scroll-fix · owner TODO'lар: Railway "Wait for CI" · BotFather token · extension reinstall · telefon-verify'lар.
+>
+> 🗂️ Oldingi (kunduzi):
 > - **Audit:** `docs/audits/SENIOR_AUDIT_2026-07-07.md` (16 topilma). **Reja (owner bilan grill, D0-D8 qulflangan):** `docs/plans/2026-07-07-remediation.md` — o'qi, hamma qaror o'sha yerda.
 > - **✅ WAVE 1 DEPLOY KETDI (`293c7a2`):** CI endi vitest yuritadi + suite TARIXDA ILK BOR to'liq yashil (776/776, stale 90s-test 3621e0f-spec'ga tuzatildi) · D3a multipart verify-fail (NoSuchKey tug'ilish joyi yopildi) · D4b summary model-fallback zanjiri · D8 reprocess 3/soat limit.
 > - **⚠️ OWNER TODO (CI-darvoza to'liq ishlashi uchun, 2 daqiqa):** Railway dashboard → capweb servis → Settings → **"Wait for CI"** (Check Suites) yoqish — shunda qizil CI deploy'ni to'xtatadi. Men buni CLI'дан qila olmayman.
