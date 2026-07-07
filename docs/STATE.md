@@ -2,7 +2,21 @@
 
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-07 yakun, HEAD=`56d77c3`, deploy `36d07b94` SUCCESS): WAVE 2+3 JONLI + D5 ISBOTLANDI.**
+> 🚨 **RESUME (2026-07-07 /clear-oldi). MUHIM: 2 LOKAL UN-PUSHED COMMIT + working-tree'да YARIM-QOLGAN AGENT-ISHI bor — origin HALI eski!**
+>
+> **1) LOKAL commit'lар (push QILINMAGAN, gate'siz deploy taqiqlanган):** `design(sidebar)` — TEAM-karta B-variant (solid gray, owner tanladi) + Xotira-karta ixcham + guruh-zichlash; docs/STATE. **Push FAQAT quyidagi (2) tugab, TO'LIQ gate (typecheck+vitest+build) o'tgach.**
+>
+> **2) YARIM ISH — "import 1-step + settings-supurish" (Sonnet-agent /clear'да o'ladi, ishi working-tree'да M/??):** `useImportUpload.ts` (yangi, ImportFilePage'дан ajratilgan upload-mantiq) · `Caps.tsx` (Import tugmasi endi to'g'ridan fayl-picker + ▾ "Loom'dan import" menyu; caps'да qolganда navigate qilmaslik) · `ImportFilePage.tsx` (extracted-modulni iste'mol qiladi, xatti-harakat o'zgarmas) · `AiSpeedModeCard.tsx` O'CHIRILGAN + `GeneralPage.tsx`/`settings.ts`-action/`organization-settings.ts`/3 json (aiSpeed* kalitlар) supurilgan. **KEYINGI SESSIYA:** diff'ни review qil (blast-radius: folderId-import, Pro-gate, UploadPlaceholderCard, Loom-yo'l) → tsc+vitest+build → bo'lsa commit(feat:import-1step + chore:settings-sweep)+push; buzuq bo'lsa spec shu blokда — qayta qur.
+>
+> **3) TELEGRAM-ALERT (yarim ulangan):** token GH-secret + Railway'да SET. **chat_id YO'Q** — owner botga "salom" yozgach: `curl getUpdates` → chat_id → `gh secret set TELEGRAM_ALERT_CHAT_ID` + `railway variables --service @cap/web --set TELEGRAM_ALERT_CHAT_ID=...` → sinov-xabar yubor (isbot). Token: railway var'дан o'qiladi (chatда qayta so'rama).
+>
+> **4) TEKSHIRISHLAR:** (a) OGG `rtxdx58e3107p9c` — deploy uni o'ldirgan edi, YANGI avto-retry cron (~30-60min) tiklashi kerak — transcriptionStatus COMPLETE bo'ldimi? (D1-C birinchi dala-sinovi!) (b) yangi videoда free-3.5 ishlayaptimi (`ai_usage_events`да $0 yozuv) — bugun paid ketgan, sabab ANIQLANMAGAN. (c) Railway-integratsiya private-repo'дан keyin deploy qilyaptimi (oxirgi push deploy bo'ldi = ha).
+>
+> **OWNER TODO:** (a) botga "salom" yozish (alert ulanishi uchun) · (b) Railway "Wait for CI" tugmasi (holati noma'lum) · (c) extension yangi zip qayta-o'rnatish + Meet pause/stop sinovi (holati noma'lum) · (d) ✅ telefon-verify QILINDI (owner aytdi).
+>
+> **BACKLOG:** Matn-tab (Refined) scroll-fix (yon-sessiya o'chirilgan — qayta qilinsin, naqsh: TranscriptPanel'даги follow-fix E15) · worker-servis (D1-A) · import-multipart (D3c) · backup restore-mashq · golden-set 10-min videoni re-baseline · QA test-userlар (`qa0pool0loop000`, qa.pool.loop@) prod'да — owner xohlasa o'chirсин · sidebar UX-2 chuqurroq (agar 1-variant yetмаса).
+>
+> 🗂️ **Oldingi (kun bo'yi):**
 > - **✅ D5 LOGIN JONLI-GATE O'TDI:** 20/20 to'g'ri-parol login (pool fix isbot; oldin ~1/3 yiqilardi) · throttle 10-xatoda yondi · qulf paytida to'g'ri parol ham bloklandi. QA-userlар prod'да qoldi (mening test-artefaktlarim, o'chirilmadi — owner xohlasa o'chiradi): `qa0pool0loop000` (qa.pool.loop@data365-test.uz) + signup-urinish emaili.
 > - **✅ OGG-fix E2E:** transkripsiya OQMOQDA (Gemini real tokenlар; deploy'дан keyin retry ishladi). ℹ️ Kuzatuv: transcription PAID 3-flash ishlatdi — free-tier-first nima uchun urilmagani ALOHIDA tekshirilsin (kalit limiti? xato?).
 > - **✅ QOIDA 11 (~/.claude, owner pinned):** blast-radius-first — har o'zgarishdan oldin bog'liqlar xaritasi + birga moslash; model-mustaqil workflow (karpathy→grill→autoresearch→blast-radius→live-verify).
