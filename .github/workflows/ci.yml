@@ -29,6 +29,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Unit tests (vitest)
+        run: pnpm --filter @cap/web run test
+
       - name: Lint (Biome)
         run: pnpm exec biome check
 

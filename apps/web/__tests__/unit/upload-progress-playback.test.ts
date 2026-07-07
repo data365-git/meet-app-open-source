@@ -167,11 +167,14 @@ describe("shouldDeferPlaybackSource", () => {
 
 	it("detects processing that never actually started", () => {
 		const t = (key: string) => key;
+		// Threshold was deliberately raised 90s -> 5min (commit 3621e0f: 90s
+		// flashed a false "processing failed" on merely-queued videos), so the
+		// fixture must exceed 5 minutes.
 		expect(
 			getStalledProcessingMessage(
 				{
 					phase: "processing",
-					updatedAt: new Date(Date.now() - 91_000),
+					updatedAt: new Date(Date.now() - 301_000),
 					processingProgress: 0,
 				},
 				t,
