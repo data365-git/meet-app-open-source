@@ -18,6 +18,79 @@ interface RetryItem {
 
 let inMemoryBuffer: Uint8Array = new Uint8Array(0);
 
+// ── Pending-buffer persistence (D6a: survive MV3 service-worker eviction) ──
+//
+// `inMemoryBuffer` above lives only in the SW's JS heap. Chrome can evict an
+// idle MV3 service worker (or the browser can be closed) at any time between
+// message deliveries; on respawn all module-level state resets to its
+// initial value, silently dropping up to MIN_PART_SIZE (~5MB) of recording
+// tail that had not yet been flushed into an uploaded part. Persisting the
+// buffer to chrome.storage.local — throttled so we don't thrash storage on
+// every small chunk — lets a respawned SW restore it before continuing.
+const PENDING_BUFFER_KEY_PREFIX = "pendingBuffer:";
+const PENDING_BUFFER_PERSIST_INTERVAL_MS = 2000;
+const PENDING_BUFFER_PERSIST_GROWTH_BYTES = 1 * 1024 * 1024;
+
+let lastPersistedForUploadId: string | undefined;
+let lastPersistAt = 0;
+let lastPersistedLength = 0;
+
+function pendingBufferKey(uploadId: string): string {
+	return `${PENDING_BUFFER_KEY_PREFIX}${uploadId}`;
+}
+
+async function persistPendingBuffer(uploadId: string): Promise<void> {
+	await chrome.storage.local.set({
+		[pendingBufferKey(uploadId)]: bytesToBase64(inMemoryBuffer),
+	});
+	lastPersistedForUploadId = uploadId;
+	lastPersistAt = Date.now();
+	lastPersistedLength = inMemoryBuffer.length;
+}
+
+/** Persist the current buffer if enough time or growth has passed since the last persist. */
+async function maybePersistPendingBuffer(uploadId: string): Promise<void> {
+	const now = Date.now();
+	const grew = inMemoryBuffer.length - lastPersistedLength;
+	const isNewUpload = lastPersistedForUploadId !== uploadId;
+
+	if (
+		isNewUpload ||
+		now - lastPersistAt >= PENDING_BUFFER_PERSIST_INTERVAL_MS ||
+		grew >= PENDING_BUFFER_PERSIST_GROWTH_BYTES
+	) {
+		await persistPendingBuffer(uploadId);
+	}
+}
+
+async function clearPendingBuffer(uploadId: string): Promise<void> {
+	await chrome.storage.local.remove(pendingBufferKey(uploadId));
+	if (lastPersistedForUploadId === uploadId) {
+		lastPersistedForUploadId = undefined;
+		lastPersistAt = 0;
+		lastPersistedLength = 0;
+	}
+}
+
+/**
+ * Restore a persisted pending buffer into `inMemoryBuffer` for the given
+ * upload if the in-memory copy is empty (i.e. this SW instance never saw
+ * the buffered bytes — a fresh respawn after eviction). Safe to call
+ * unconditionally at the top of any buffer-touching entry point.
+ */
+async function restorePendingBufferIfNeeded(uploadId: string): Promise<void> {
+	if (inMemoryBuffer.length > 0) return;
+
+	const result = await chrome.storage.local.get(pendingBufferKey(uploadId));
+	const stored = result[pendingBufferKey(uploadId)] as string | undefined;
+	if (!stored) return;
+
+	inMemoryBuffer = base64ToBytes(stored);
+	lastPersistedForUploadId = uploadId;
+	lastPersistAt = Date.now();
+	lastPersistedLength = inMemoryBuffer.length;
+}
+
 interface PartRetryPayload {
 	partNumber: number;
 	videoId: string;
@@ -323,8 +396,16 @@ export async function initializeUpload(
 	});
 
 	inMemoryBuffer = new Uint8Array(0);
+	lastPersistedForUploadId = undefined;
+	lastPersistAt = 0;
+	lastPersistedLength = 0;
 
 	return { videoId, uploadId };
+}
+
+/** Discard any pending-buffer persistence for an aborted/cancelled upload. */
+export async function abortUpload(uploadId: string): Promise<void> {
+	await clearPendingBuffer(uploadId);
 }
 
 export async function handleChunk(
@@ -335,6 +416,8 @@ export async function handleChunk(
 	const state = await getState();
 	if (state.kind !== "recording") return;
 
+	await restorePendingBufferIfNeeded(state.uploadId);
+
 	const data = new Uint8Array(chunk);
 	appendToBuffer(data);
 
@@ -342,6 +425,7 @@ export async function handleChunk(
 
 	if (inMemoryBuffer.length >= MIN_PART_SIZE) {
 		const partData = drainBuffer();
+		await clearPendingBuffer(state.uploadId);
 		const settings = await requireSettings();
 
 		try {
@@ -387,6 +471,7 @@ export async function handleChunk(
 			}
 		}
 	} else {
+		await maybePersistPendingBuffer(state.uploadId);
 		await setState({ ...state, totalBytes: newTotalBytes });
 	}
 }
@@ -406,9 +491,22 @@ export async function finalizeUpload(): Promise<void> {
 		"uploadedBytes" in state ? (state.uploadedBytes as number) : 0;
 	const { videoId, uploadId } = state;
 
+	// Restore any pending buffer an evicted-then-respawned SW never saw, BEFORE
+	// computing durable bytes below — otherwise those bytes would look "lost"
+	// even though they are still recoverable from chrome.storage.local.
+	await restorePendingBufferIfNeeded(uploadId);
+
+	// MIN_VIABLE_BYTES must count DURABLE bytes only: bytes already in
+	// uploaded parts (uploadedBytes) plus whatever is still sitting in the
+	// pending buffer right now (restored above if applicable). `totalBytes` is
+	// a running counter that also includes bytes from a buffer that could have
+	// been evicted before persistence caught up — using it here would let a
+	// recording with genuinely-lost tail bytes pass the viability check.
+	const durableBytes = uploadedBytes + inMemoryBuffer.length;
+
 	const MIN_VIABLE_BYTES = 10 * 1024; // header-only mp4 is ~1.2KB; a real recording is far larger
-	if (totalBytes < MIN_VIABLE_BYTES) {
-		console.error(`[upload] Recording too small (${totalBytes} bytes) — refusing to publish a broken video.`);
+	if (durableBytes < MIN_VIABLE_BYTES) {
+		console.error(`[upload] Recording too small (${durableBytes} durable bytes) — refusing to publish a broken video.`);
 		await setState({
 			kind: "error",
 			reason:
@@ -431,6 +529,10 @@ export async function finalizeUpload(): Promise<void> {
 	}
 
 	const remaining = drainBuffer();
+	// The buffer's bytes are now either about to be uploaded directly or
+	// handed to the retry queue (itself durable in chrome.storage.local) below
+	// — either way they no longer need the separate pending-buffer copy.
+	await clearPendingBuffer(uploadId);
 	if (remaining.length > 0) {
 		try {
 			const completedPart = await uploadPart(

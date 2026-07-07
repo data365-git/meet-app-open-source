@@ -3,6 +3,7 @@ import type { ExtensionSettings, ExtensionState } from "./state";
 import { getSettings, getState, setSettings, setState } from "./state";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
 import {
+	abortUpload,
 	finalizeUpload,
 	handleChunk,
 	initializeUpload,
@@ -600,6 +601,9 @@ async function handleMessage(
 				);
 			}
 			await closeOffscreenDocument();
+			if (cancelState.kind === "recording") {
+				await abortUpload(cancelState.uploadId);
+			}
 			await setState({ kind: "idle" });
 			updateBadge({ kind: "idle" });
 			return { ok: true };
