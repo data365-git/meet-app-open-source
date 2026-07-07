@@ -2,10 +2,17 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import {
+  faChevronDown,
   faFolderPlus,
   faInfoCircle,
   faUpload,
@@ -17,6 +24,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { IMPORT_FILE_ACCEPT, useImportUpload } from "@/app/(org)/dashboard/import/file/useImportUpload";
+import { PreUploadTrimmer } from "@/components/PreUploadTrimmer";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
@@ -110,6 +120,19 @@ export const Caps = ({
   const bulkDeleteToastRef = useRef<string | number | undefined>(undefined);
   const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
+
+  // Stay on /dashboard/caps after starting an upload here (UploadPlaceholderCard
+  // below shows progress) instead of the file page's own redirect-after-start.
+  const {
+    inputRef: importInputRef,
+    upgradeModalOpen: importUpgradeModalOpen,
+    setUpgradeModalOpen: setImportUpgradeModalOpen,
+    pendingFile: importPendingFile,
+    setPendingFile: setImportPendingFile,
+    processFile: processImportFile,
+    handleFileChange: handleImportFileChange,
+    openFilePicker: openImportFilePicker,
+  } = useImportUpload({ onUploadStarted: () => {} });
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -298,16 +321,57 @@ export const Caps = ({
       />
       <div className="flex flex-wrap gap-3 items-center mb-10 w-full">
         <WebRecorderDialog />
-        <Link href="/dashboard/import">
+        <div className="flex items-stretch w-fit rounded-full">
           <Button
             size="sm"
             variant="white"
-            className="flex gap-2 items-center w-fit"
+            className="flex gap-2 items-center rounded-r-none border-r-0 w-fit"
+            onClick={openImportFilePicker}
           >
             <FontAwesomeIcon className="size-3" icon={faUpload} />
             Import video
           </Button>
-        </Link>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="white"
+                className="flex items-center px-2 rounded-l-none w-fit"
+                aria-label="More import options"
+              >
+                <FontAwesomeIcon className="size-3" icon={faChevronDown} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem asChild className="rounded-lg">
+                <Link href="/dashboard/import/loom">
+                  {t("importFromLoom")}
+                </Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept={IMPORT_FILE_ACCEPT}
+          onChange={handleImportFileChange}
+          className="hidden"
+        />
+        <UpgradeModal
+          open={importUpgradeModalOpen}
+          onOpenChange={setImportUpgradeModalOpen}
+        />
+        {importPendingFile && (
+          <PreUploadTrimmer
+            file={importPendingFile}
+            onConfirm={(trimmed, serverTrim) => {
+              setImportPendingFile(null);
+              void processImportFile(trimmed, serverTrim);
+            }}
+            onCancel={() => setImportPendingFile(null)}
+          />
+        )}
         <Button
           size="sm"
           variant="white"
