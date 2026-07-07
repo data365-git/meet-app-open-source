@@ -1064,6 +1064,40 @@ export function splitReadableParagraphs(text: string): string[] {
 		.map((p) => p.replace(/^[-•]\s+/, ""));
 }
 
+/**
+ * Cap on the transcript text fed to ONE readable-refine call. Measured on a
+ * real 28-min video: a ~14-minute slice (~15k chars) made the model drift into
+ * SUMMARIZING (output ≈ 0.25× input vs the prompted 0.5–0.66×) and drop
+ * specifics. ~4–6 minutes of speech stays in "clean rewrite" territory.
+ */
+const REFINE_SLICE_CHAR_BUDGET = 6000;
+
+/**
+ * Split segments into consecutive groups whose combined text stays within
+ * `budget` chars (a group always takes at least one segment). Order and
+ * coverage are preserved: concatenating the groups yields the input.
+ */
+export function groupSegmentsForRefine(
+	segments: VttSegment[],
+	budget: number = REFINE_SLICE_CHAR_BUDGET,
+): VttSegment[][] {
+	const groups: VttSegment[][] = [];
+	let current: VttSegment[] = [];
+	let currentChars = 0;
+	for (const segment of segments) {
+		const len = segment.text.length + 1;
+		if (current.length > 0 && currentChars + len > budget) {
+			groups.push(current);
+			current = [];
+			currentChars = 0;
+		}
+		current.push(segment);
+		currentChars += len;
+	}
+	if (current.length > 0) groups.push(current);
+	return groups;
+}
+
 async function generateReadableRefined(
 	segments: VttSegment[],
 	context: AiCallContext,
@@ -1073,46 +1107,66 @@ async function generateReadableRefined(
 	inputTokens: number;
 	outputTokens: number;
 }> {
-	const lines = buildRefinedTranscriptLines(segments);
-	if (lines.length === 0) {
+	if (buildRefinedTranscriptLines(segments).length === 0) {
 		return { paragraphs: [], inputTokens: 0, outputTokens: 0 };
 	}
 
-	const transcript = lines.map((l) => l.text).join("\n");
+	// Long slices are refined in sub-slices so the model rewrites instead of
+	// summarizing. A failed sub-slice falls back to ITS raw paragraphs only —
+	// the rest of the slice still gets cleaned.
+	const groups = groupSegmentsForRefine(segments);
 
 	let inputTokens = 0;
 	let outputTokens = 0;
 
-	try {
-		const result = await callAiApi(
-			buildReadableRefinePrompt(transcript),
-			{ json: false },
-			context,
-		);
-		inputTokens += result.inputTokens;
-		outputTokens += result.outputTokens;
+	const groupResults = await mapWithConcurrency(
+		groups,
+		AI_CHUNK_CONCURRENCY,
+		async (group, index) => {
+			const lines = buildRefinedTranscriptLines(group);
+			if (lines.length === 0) return [] as string[];
+			const transcript = lines.map((l) => l.text).join("\n");
+			const label = `${logLabel} sub=${index + 1}/${groups.length}`;
 
-		const { text: guardedText, runaway } = stripRunawayRepetition(
-			result.content,
-		);
-		if (runaway) {
-			console.warn(
-				`[generate-ai] readable refine runaway truncated (${logLabel})`,
-			);
-		}
+			try {
+				const result = await callAiApi(
+					buildReadableRefinePrompt(transcript),
+					{ json: false },
+					context,
+				);
+				inputTokens += result.inputTokens;
+				outputTokens += result.outputTokens;
 
-		return {
-			paragraphs: splitReadableParagraphs(guardedText),
-			inputTokens,
-			outputTokens,
-		};
-	} catch (error) {
-		console.warn(
-			`[generate-ai] readable refine failed; falling back to raw slice (${logLabel})`,
-			error,
-		);
-		return { paragraphs: [], inputTokens, outputTokens };
-	}
+				const { text: guardedText, runaway } = stripRunawayRepetition(
+					result.content,
+				);
+				if (runaway) {
+					console.warn(
+						`[generate-ai] readable refine runaway truncated (${label})`,
+					);
+				}
+
+				const paragraphs = splitReadableParagraphs(guardedText);
+				// Observability: per-call compression ratio (target ~0.5–0.66).
+				console.info(
+					`[generate-ai] refine ok (${label}) in=${transcript.length}ch out=${guardedText.length}ch ratio=${(guardedText.length / Math.max(1, transcript.length)).toFixed(2)}`,
+				);
+				return paragraphs;
+			} catch (error) {
+				console.warn(
+					`[generate-ai] refine-fallback: raw sub-slice used (${label})`,
+					error,
+				);
+				return buildRawRefinedParagraphs(group);
+			}
+		},
+	);
+
+	return {
+		paragraphs: groupResults.flat(),
+		inputTokens,
+		outputTokens,
+	};
 }
 
 async function generateSingleChunk(
@@ -1158,6 +1212,7 @@ ${schemaExample}
 
 Rules:
 - "start" and "startSec" are INTEGER SECONDS from the start of the video — NOT minutes and NOT "mm:ss". A transcript label like [1:40] means start=100; [7:07] means start=427. Every value MUST be a whole number between 0 and ${videoDuration}, and must NEVER exceed ${videoDuration}.
+- Chapters must be GRANULAR: one chapter roughly every 3–6 minutes of content. This ${videoDuration}-second video needs AT LEAST ${Math.max(2, Math.round(videoDuration / 360))} chapters (only a genuinely single-topic video may have fewer). Do NOT lump long stretches into one chapter.
 - tasks[].priority must be "high", "medium", or "low"
 - tasks[].done is always false unless explicitly resolved in the transcript
 - Keep ALL JSON property names exactly as shown
@@ -1615,6 +1670,7 @@ ${schemaExample}
 
 Rules:
 - aiSummary.chapters[].startSec must be INTEGER SECONDS (not minutes, not mm:ss) between 0 and ${videoDuration}; e.g. the label [1:40] means startSec=100. Use the section timestamps provided above and never exceed ${videoDuration}.
+- Chapters must be GRANULAR: one chapter roughly every 3–6 minutes of content. This ${videoDuration}-second video needs AT LEAST ${Math.max(2, Math.round(videoDuration / 360))} chapters (only a genuinely single-topic video may have fewer). Do NOT lump long stretches into one chapter.
 - tasks[].priority must be "high", "medium", or "low"
 - refinedTranscript.chapters may be left as an empty array — it is handled separately
 - Keep ALL JSON property names exactly as shown

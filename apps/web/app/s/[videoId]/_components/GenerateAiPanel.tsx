@@ -62,6 +62,9 @@ export function GenerateAiPanel({
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Cost-confirmation step: starting analysis spends real Gemini API money,
+	// so an accidental tap must not fire it. null = no pending request.
+	const [confirm, setConfirm] = useState<{ reprocess: boolean } | null>(null);
 	const inFlightRef = useRef(false);
 	const isRunning =
 		transcriptionStatus === "PROCESSING" ||
@@ -81,16 +84,17 @@ export function GenerateAiPanel({
 		transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
 	const aiNotice = getAiAnalysisNotice(duration);
 
-	// Fire AI generation directly on click — one click is enough. No second
-	// confirmation dialog (AI is admin-only and the panel already states it uses
-	// extra time + budget). No speed chooser: the server always takes the
-	// reliable synchronous path (free-tier key first, paid fallback).
+	// Fires the (paid) generation POST. Reached ONLY via the cost-confirmation
+	// block below — every start/re-analyze trigger first sets `confirm`, so an
+	// accidental tap never spends Gemini API money. No speed chooser: the server
+	// always takes the reliable synchronous path.
 	const requestStart = (reprocess = false) => {
 		// Synchronous in-flight guard: a very fast double-click can fire before the
 		// `loading` state re-renders the disabled buttons, sending two POSTs.
 		// The ref blocks the second call instantly.
 		if (inFlightRef.current) return;
 		inFlightRef.current = true;
+		setConfirm(null);
 		setLoading(true);
 		setError(null);
 		void (async () => {
@@ -114,6 +118,33 @@ export function GenerateAiPanel({
 			}
 		})();
 	};
+
+	// Shared cost-confirmation block: rendered in place of a trigger button
+	// whenever `confirm` is set, across all three start/re-analyze entry points.
+	const costConfirm = confirm ? (
+		<div className="flex flex-col gap-2">
+			<p className="text-xs font-medium text-amber-600 dark:text-amber-500">
+				{tShare("aiCostWarning")}
+			</p>
+			<div className="flex gap-2">
+				<button
+					type="button"
+					disabled={loading}
+					onClick={() => requestStart(confirm.reprocess)}
+					className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+				>
+					{tShare("aiConfirmStart")}
+				</button>
+				<button
+					type="button"
+					onClick={() => setConfirm(null)}
+					className="rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4"
+				>
+					{tShare("aiConfirmCancel")}
+				</button>
+			</div>
+		</div>
+	) : null;
 
 	// ── Running state: persisted pipeline stage ──────────────────────────────
 	if (isRunning) {
@@ -295,20 +326,31 @@ export function GenerateAiPanel({
 				<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-3">
 					<p className="text-xs text-gray-10">{tShare("aiIncompleteHint")}</p>
 					{error && <p className="text-xs text-red-10">{error}</p>}
-					<button
-						type="button"
-						disabled={loading}
-						onClick={() => requestStart(true)}
-						className="self-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
-					>
-						{loading ? tShare("aiStarting") : tShare("aiReanalyze")}
-					</button>
+					{confirm ? (
+						costConfirm
+					) : (
+						<button
+							type="button"
+							disabled={loading}
+							onClick={() => setConfirm({ reprocess: true })}
+							className="self-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
+						>
+							{loading ? tShare("aiStarting") : tShare("aiReanalyze")}
+						</button>
+					)}
 				</div>
 			);
 		}
 
 		// Good analysis: don't alarm the owner with a panel — tuck re-analyze
 		// into a discreet overflow menu instead.
+		if (confirm) {
+			return (
+				<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-3">
+					{costConfirm}
+				</div>
+			);
+		}
 		return (
 			<div className="flex justify-end">
 				<DropdownMenu>
@@ -324,7 +366,7 @@ export function GenerateAiPanel({
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem
 							disabled={loading}
-							onClick={() => requestStart(true)}
+							onClick={() => setConfirm({ reprocess: true })}
 						>
 							{tShare("aiReanalyze")}
 						</DropdownMenuItem>
@@ -349,14 +391,18 @@ export function GenerateAiPanel({
 					</p>
 				)}
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				<button
-					type="button"
-					disabled={loading}
-					onClick={() => requestStart(false)}
-					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
-				>
-					{tShare("aiStartAnalysis")}
-				</button>
+				{confirm ? (
+					costConfirm
+				) : (
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => setConfirm({ reprocess: false })}
+						className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+					>
+						{tShare("aiStartAnalysis")}
+					</button>
+				)}
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
 				)}
