@@ -41,11 +41,13 @@ export async function createVideoForServerProcessing({
 	resolution,
 	folderId,
 	orgId,
+	isAudio,
 }: {
 	duration?: number;
 	resolution?: string;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
+	isAudio?: boolean;
 }): Promise<CreateForProcessingResult> {
 	const user = await getCurrentUser();
 
@@ -96,6 +98,7 @@ export async function createVideoForServerProcessing({
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			...(isAudio ? { metadata: { isAudio: true } } : {}),
 			...(folderAssignment.type === "video"
 				? { folderId: folderAssignment.folderId }
 				: {}),

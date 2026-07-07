@@ -91,6 +91,8 @@ export interface VideoMetadata {
 	aiTranslationStatus?: Partial<Record<ShareLanguage, TranslationStatus>>;
 	/** Per-video default display language, set by owner/org member. */
 	preferredLanguage?: ShareLanguage;
+	/** True when the imported file was audio-only (no video track). */
+	isAudio?: boolean;
 }
 
 export type VideoEditRange = {

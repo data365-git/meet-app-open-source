@@ -747,6 +747,8 @@ export const CapCard = ({
                 uploadProgress.status !== "failed" &&
                 uploadProgress.status !== "error"
               }
+              isAudio={cap.metadata?.isAudio}
+              videoName={cap.name}
             />
             {effectivePasswordProtected && (
               <div

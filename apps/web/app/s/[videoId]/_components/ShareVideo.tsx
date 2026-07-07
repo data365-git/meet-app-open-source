@@ -584,6 +584,8 @@ export const ShareVideo = forwardRef<
 								enableCrossOrigin={enableCrossOrigin}
 								hasActiveUpload={data.hasActiveUpload}
 								autoplay
+								isAudio={data.metadata?.isAudio}
+								videoName={data.name}
 							/>
 							<div className="absolute inset-0 z-20">
 								<RecordingInProgressOverlay
@@ -634,6 +636,8 @@ export const ShareVideo = forwardRef<
 											title: ch.title,
 										}))
 							}
+							isAudio={data.metadata?.isAudio}
+							videoName={data.name}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

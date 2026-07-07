@@ -1,6 +1,7 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
+import { AudioLines } from "lucide-react";
 import Image from "next/image";
 import type { CSSProperties } from "react";
 import { memo, useEffect, useRef, useState } from "react";
@@ -27,6 +28,8 @@ interface VideoThumbnailProps {
 	imageStatus: ImageLoadingStatus;
 	setImageStatus: (status: ImageLoadingStatus) => void;
 	hasActiveUpload?: boolean;
+	isAudio?: boolean;
+	videoName?: string;
 }
 
 const formatDuration = (durationSecs: number) => {
@@ -85,8 +88,13 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		imageStatus,
 		setImageStatus,
 		hasActiveUpload = false,
+		isAudio = false,
+		videoName,
 	}) => {
-		const thumbnailUrl = useThumnailQuery(videoId, !hasActiveUpload);
+		const thumbnailUrl = useThumnailQuery(
+			videoId,
+			!hasActiveUpload && !isAudio,
+		);
 		const containerRef = useRef<HTMLDivElement>(null);
 		const imageRef = useRef<HTMLImageElement>(null);
 		const latestVideoId = useRef(videoId);
@@ -161,52 +169,68 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 				)}
 				style={{ backgroundImage: placeholderGradient }}
 			>
-				{showFallbackLayer && ownerId && (
-					<div className="absolute inset-0 z-0">
-						<VideoFrameFallback
-							videoId={videoId}
-							ownerId={ownerId}
-							className="rounded-t-xl"
-							objectFit="cover"
-						/>
+				{isAudio ? (
+					<div className="flex absolute inset-0 flex-col justify-center items-center p-3 w-full h-full bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] rounded-t-xl">
+						<span className="absolute top-2 left-2 text-[9px] font-semibold tracking-wider text-white uppercase bg-white/20 rounded-full px-1.5 py-0.5">
+							Audio
+						</span>
+						<AudioLines className="mb-2 text-white/80 size-7" />
+						{videoName && (
+							<p className="text-sm font-semibold text-center text-white line-clamp-2 px-3">
+								{videoName}
+							</p>
+						)}
 					</div>
-				)}
-				{thumbnailUrl.data && (
-					<Image
-						ref={imageRef}
-						src={thumbnailUrl.data}
-						unoptimized
-						fill={true}
-						sizes="(max-width: 768px) 100vw, 33vw"
-						alt={alt}
-						key={videoId}
-						style={{ objectFit }}
-						className={clsx(
-							"w-full h-full rounded-t-xl",
-							imageClass,
-							imageStatus === "loading" && "opacity-0",
+				) : (
+					<>
+						{showFallbackLayer && ownerId && (
+							<div className="absolute inset-0 z-0">
+								<VideoFrameFallback
+									videoId={videoId}
+									ownerId={ownerId}
+									className="rounded-t-xl"
+									objectFit="cover"
+								/>
+							</div>
 						)}
-						onLoad={() => setImageStatus("success")}
-						onError={() => setImageStatus("error")}
-					/>
-				)}
-				{showPreview && (
-					<Image
-						key={`${videoId}-preview`}
-						src={getPreviewGifSrc(videoId)}
-						alt=""
-						aria-hidden="true"
-						unoptimized
-						fill={true}
-						loading="lazy"
-						sizes="(max-width: 768px) 100vw, 33vw"
-						className={clsx(
-							"object-cover absolute inset-0 z-20 w-full h-full rounded-t-xl transition-opacity duration-150",
-							previewStatus === "success" ? "opacity-100" : "opacity-0",
+						{thumbnailUrl.data && (
+							<Image
+								ref={imageRef}
+								src={thumbnailUrl.data}
+								unoptimized
+								fill={true}
+								sizes="(max-width: 768px) 100vw, 33vw"
+								alt={alt}
+								key={videoId}
+								style={{ objectFit }}
+								className={clsx(
+									"w-full h-full rounded-t-xl",
+									imageClass,
+									imageStatus === "loading" && "opacity-0",
+								)}
+								onLoad={() => setImageStatus("success")}
+								onError={() => setImageStatus("error")}
+							/>
 						)}
-						onLoad={() => setCurrentPreviewStatus("success")}
-						onError={() => setCurrentPreviewStatus("error")}
-					/>
+						{showPreview && (
+							<Image
+								key={`${videoId}-preview`}
+								src={getPreviewGifSrc(videoId)}
+								alt=""
+								aria-hidden="true"
+								unoptimized
+								fill={true}
+								loading="lazy"
+								sizes="(max-width: 768px) 100vw, 33vw"
+								className={clsx(
+									"object-cover absolute inset-0 z-20 w-full h-full rounded-t-xl transition-opacity duration-150",
+									previewStatus === "success" ? "opacity-100" : "opacity-0",
+								)}
+								onLoad={() => setCurrentPreviewStatus("success")}
+								onError={() => setCurrentPreviewStatus("error")}
+							/>
+						)}
+					</>
 				)}
 				{videoDuration && (
 					<p

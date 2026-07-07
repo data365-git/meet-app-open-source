@@ -8,11 +8,12 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon, InfoIcon } from "lucide-react";
+import { AlertTriangleIcon, AudioLines, InfoIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { useThumnailQuery } from "@/components/VideoThumbnail";
 import CommentStamp from "./CommentStamp";
 import { getActiveCaptionText } from "./caption-cues";
 import {
@@ -33,7 +34,6 @@ import {
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
-import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -131,6 +131,8 @@ interface Props {
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
 	chapters?: { startSec: number; title: string }[];
+	isAudio?: boolean;
+	videoName?: string;
 }
 
 export function CapVideoPlayer({
@@ -160,6 +162,8 @@ export function CapVideoPlayer({
 	showFloatingVolumeControl = false,
 	onUploadComplete,
 	chapters = [],
+	isAudio = false,
+	videoName,
 }: Props) {
 	const t = useTranslations("share");
 	const getProgressStatusText = (
@@ -745,6 +749,16 @@ export function CapVideoPlayer({
 						/>
 					)}
 				</MediaPlayerVideo>
+			)}
+			{isAudio && (
+				<div className="flex absolute inset-0 z-[5] flex-col justify-center items-center p-6 pointer-events-none bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] rounded-xl">
+					<AudioLines className="mb-3 text-white/80 size-12" />
+					{videoName && (
+						<p className="text-base sm:text-lg font-semibold text-center text-white line-clamp-2 max-w-[80%]">
+							{videoName}
+						</p>
+					)}
+				</div>
 			)}
 			<AnimatePresence>
 				{(blockPlaybackDuringProcessing || !videoLoaded) &&

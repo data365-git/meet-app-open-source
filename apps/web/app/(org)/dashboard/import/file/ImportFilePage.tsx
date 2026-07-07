@@ -246,6 +246,13 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	);
 };
 
+function isAudioFile(file: File) {
+	return (
+		file.type.startsWith("audio/") ||
+		/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(file.name)
+	);
+}
+
 async function uploadVideoForServerProcessing(
 	file: File,
 	folderId: Folder.FolderId | undefined,
@@ -290,6 +297,7 @@ async function uploadVideoForServerProcessing(
 			resolution,
 			folderId,
 			orgId,
+			isAudio: isAudioFile(file),
 		});
 
 		const uploadId = videoData.id;
