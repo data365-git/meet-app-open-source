@@ -1,0 +1,55 @@
+TASK: Implement Wave-2c — the durable, cron-driven Gemini Batch step for cheap ("Arzon") mode in this repo (Cap fork, app=apps/web). This builds ON TOP of the Wave-2 spine (per-job aiMode/aiJobStartedAt in VideoMetadata, mode-aware patient free-tier, recover-cron ladder with 4h auto-paid flip) which is already in the tree — DO NOT undo the spine.
+
+=========================================================================
+HANDOFF STATUS (2026-07-08, updated by main Opus before stopping on budget):
+CHOSEN DESIGN = ONE-AT-A-TIME (simplest correct; cheap mode uses concurrency 1;
+on the first quota-blocked chunk submit ONE batch job, throw, let the cron
+complete+merge+re-kick, then the next chunk repeats). Do NOT do the parallel
+multi-job version — it needs SQL atomic array-append and races; not worth it.
+
+ALREADY DONE (committed 0709ce0, gates green, additive + UNUSED so far):
+ - lib/gemini-batch-transcribe.ts: `submitChunkBatch(audioUrl,{apiKey,knownSpeakers,videoId})
+   -> {batchName,fileName}` (upload+submit, NO poll, NO file delete) and
+   `collectBatchResult(batchName,{apiKey,fileName,audioDurationSec})
+   -> {status:'succeeded',transcriptVtt,tokens...} | {status:'pending'} | {status:'failed',reason}`
+   (polls ONCE; on success unwrap+normalizeToWebVtt+deleteBatchFile). USE THESE.
+ - packages/database/types/metadata.ts: `aiBatchJobs?: Array<{batchName,fileName,startSec,durationSec,submittedAt}>`.
+
+REMAINING (this is the work): exact anchor points in workflows/transcribe.ts —
+ - top catch is at ~line 175 (`if (isAiQuotaWaitError(error) && videoData.aiSpeedMode === "cheap") markQuotaWaiting`).
+ - the cheap-mode quota THROW is at ~line 627 (`throw new AiQuotaWaitError(...)` inside the free-tier block of transcribeAudio).
+ - the chunk worker `processChunk` is ~724-769; the concurrent map is `mapWithConcurrency(audio.chunks.slice(1), AI_CHUNK_CONCURRENCY, ...)` ~line 791.
+ - checkpoint: `loadPartialTranscription(videoId,video)`, `savePartialTranscription(...)` (~1342/1361), and `mergeChunkedWebVtt([{vtt,offsetSec}...])` — merge a batch chunk via `mergeChunkedWebVtt([{vtt:partial,offsetSec:0},{vtt:batchVtt,offsetSec:startSec}])`.
+ - recover cron `app/api/cron/recover-stale-ai-jobs/route.ts` has `continueAiJobOnPaid` in `lib/ai-job-control.ts` (the 4h flip). Make it ALSO clear `aiBatchJobs` when flipping to paid.
+STEPS:
+ 1. transcribe.ts: for cheap mode force chunk concurrency to 1 (pass 1 instead of AI_CHUNK_CONCURRENCY when context.aiSpeedMode==='cheap'). In processChunk, when transcribeChunk throws a quota error (isAiQuotaWaitError) AND cheap mode: call submitChunkBatch(chunk.url,{apiKey:paid GEMINI_API_KEY,knownSpeakers,videoId}); append the job {batchName,fileName,startSec:chunk.startSec,durationSec:chunk.durationSec??0,submittedAt:new Date().toISOString()} to metadata.aiBatchJobs (read-modify-write is safe because concurrency=1); then rethrow AiQuotaWaitError (existing top-catch marks PROCESSING). If submitChunkBatch itself throws, just rethrow AiQuotaWaitError (fall back to patient free-wait). Get the paid key the same way the workflow already decrypts/reads GEMINI_API_KEY.
+ 2. NEW cron `app/api/cron/poll-batch-jobs/route.ts` (mirror recover-stale-ai-jobs auth: CRON_SECRET timingSafeEqual + force-dynamic). Select videos with a non-empty metadata.aiBatchJobs. For each job: collectBatchResult(job.batchName,{apiKey,fileName:job.fileName,audioDurationSec:job.durationSec}). succeeded -> load partial, mergeChunkedWebVtt([{vtt:partial||'WEBVTT\\n\\n',offsetSec:0},{vtt:result.transcriptVtt,offsetSec:job.startSec}]), save partial, record batch-rate usage (withCostGuard batch:true), drop the job. failed -> drop the job (chunk re-done next kick). pending -> keep. After processing a video: if aiBatchJobs is now empty -> re-kick transcribeVideo(videoId,ownerId,true,false,'cheap') so it resumes from the fuller checkpoint (batch chunk now covered -> skipped -> continues / finalizes). Skip videos whose aiMode is no longer 'cheap' (4h flip already took them to paid) and clear their stray aiBatchJobs.
+ 3. continueAiJobOnPaid (lib/ai-job-control.ts): add aiBatchJobs: undefined to nextMetadata (abandon pending batch on the 4h paid flip; the paid re-kick finishes remaining chunks from checkpoint).
+ 4. Update the IGNORED built dist declaration packages/database/dist/types/metadata.d.ts to mirror the new aiBatchJobs field (web typecheck reads the package-reference declaration — the spine hit this; without it tsc fails once aiBatchJobs is USED by app code).
+ 5. Register the new cron schedule wherever recover-stale-ai-jobs is scheduled (search for its path in any railway/vercel config or cron list; if none found, note it for the human to wire in Railway).
+
+READ FIRST:
+- docs/plans/2026-07-08-cost-tier-plan.md (Wave-2c section) + docs/adr/2026-07-08-ai-cost-tier-and-scribe-timing.md
+- lib/gemini-batch-transcribe.ts (REUSE its primitives: submitBatch, uploadAudioForBatch, unwrapBatchResponse, mapBatchState, extractBatchState, buildBatchRequestBody, TERMINAL_BATCH_STATES, isTerminalBatchState). Note its OLD design polled IN-PROCESS (BATCH_POLL_INTERVAL_MS / BATCH_TIMEOUT_MS=30min) inside the workflow — THAT is what froze jobs. We are replacing the in-process poll with cron polling.
+- workflows/transcribe.ts (the cheap-mode path + free-tier block + checkpoint transcription-partial.vtt merge via existing loadPartialTranscription / isChunkCoveredByPartial), app/api/cron/recover-stale-ai-jobs/route.ts (the spine's cron), packages/database/types VideoMetadata.
+
+WHY THIS IS SAFE NOW (context, not optional): the batch API itself never froze anything; the 30-min IN-PROCESS poll inside the dying after()/step did. Moving polling to the cron eliminates the freeze. Do NOT reintroduce any in-process wait/poll longer than a single request.
+
+BEHAVIOR TO BUILD:
+1. **Submit, don't wait.** In cheap mode, when the free-tier attempt for a chunk hits quota (429/RESOURCE_EXHAUSTED) — instead of only throwing for a later free retry (spine behavior) — SUBMIT that chunk to the Gemini Batch API (reuse uploadAudioForBatch + buildBatchRequestBody + submitBatch). Store per-chunk batch state in VideoMetadata, e.g. `aiBatchJobs?: Array<{ chunkIndex: number; batchName: string; submittedAt: string; audioKey: string; startSec: number }>`. Then the workflow RETURNS without in-process polling (job stays transcriptionStatus=PROCESSING). NEVER poll in-process here.
+2. **Cron polls + collects.** Extend recover-stale-ai-jobs (or a dedicated cron route app/api/cron/poll-batch-jobs/route.ts wired the same authenticated way — prefer a NEW route to keep concerns clean, mirror the CRON_SECRET auth + force-dynamic of the existing one). For each video with pending aiBatchJobs:
+   - Poll each batch id (mapBatchState/extractBatchState). Succeeded → unwrapBatchResponse → produce that chunk's VTT → MERGE into the checkpoint partial (reuse the existing partial-merge/coverage machinery so it composes with resume) → drop that job from aiBatchJobs. Failed → drop it and let the chunk be re-done (sync on the next kick). Pending → leave it.
+   - When all chunks are covered (no pending batch jobs AND partial complete) → re-kick the workflow so it finalizes (fillTranscriptGaps → scribe timing → save), OR finalize inline if that's how the pipeline resumes. Reuse the spine's re-kick path.
+3. **4h flip still wins.** If aiJobStartedAt > 4h and batch jobs are still pending, the spine's 4h auto-paid flip takes over: cancel reliance on pending batch (leave/ignore them), set aiMode=fast, re-kick → paid finishes remaining uncovered chunks from checkpoint. (Batch results that already merged stay; don't redo covered chunks.)
+4. **Cost**: record batch-rate usage (the existing batch path used `batch: true` in withCostGuard) for chunks completed via batch.
+5. **Remove the dead in-process path** in workflows/transcribe.ts: the old cheap→batch inline call with 30-min timeout (transcribeChunkWithBatch usage) should no longer run in-process. Keep the pure helper functions + their unit tests; only remove the in-process orchestration that this cron replaces. If unsure whether a helper is pure, keep it.
+
+RULES:
+- Do NOT commit. Leave in the working tree. Surgical; match existing style; no unrelated refactors; do NOT delegate to sub-agents.
+- Additive metadata only (JSON fields on VideoMetadata type; no SQL migration).
+- Preserve fast-mode behavior exactly. Preserve the spine's patient-free + 4h flip.
+- If Railway cron scheduling config exists (e.g. a vercel.json/railway config or a cron list), add the new poll route there mirroring the existing recover cron entry; if you cannot find where crons are scheduled, note it in the report for the human to wire.
+
+GATES (run + report numbers): pnpm --filter @cap/web exec tsc --noEmit ; pnpm --filter @cap/web run test -- --reporter=dot --silent ; pnpm --filter @cap/web build. Add focused unit tests: submit-on-quota decision (cheap+429 → submit batch, records aiBatchJobs), cron poll decision (succeeded→merge+drop, failed→drop, pending→keep), 4h flip supersedes pending batch. Reuse existing gemini-batch pure-helper tests; don't break them.
+
+FINAL REPORT: files changed/created, gate outputs with numbers, deviations + reasons, confirmation that NO in-process batch poll remains, and where (if anywhere) the human must wire the cron schedule.

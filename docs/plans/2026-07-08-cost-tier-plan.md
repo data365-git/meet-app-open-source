@@ -40,6 +40,25 @@ Behavior contracts (implementer maps to existing schema/patterns — discover, d
    existing stage cards. Show the continue-fast button here.
    Blast-radius: get-status consumers, i18n files, ai_usage_events dashboards.
 
+### Wave 2c — Gemini Batch step (owner: do it now, 2026-07-08; built AFTER the spine)
+Owner pushed: batch now, not deferred. Why it's safe this time: the OLD batch froze
+jobs because it polled IN-PROCESS for 30 min inside an `after()` task that died
+(`lib/gemini-batch-transcribe.ts` BATCH_TIMEOUT_MS=30min). The cron-durable design
+removes that — SUBMIT the batch, store its id in metadata, and let the CRON poll
+(not in-process). Reusable primitives already exist: `submitBatch`,
+`uploadAudioForBatch`, `unwrapBatchResponse`, `mapBatchState`, `extractBatchState`,
+`buildBatchRequestBody`, `TERMINAL_BATCH_STATES`.
+- On cheap-mode free-quota exhaustion (instead of only waiting for free to refresh):
+  submit remaining chunks to Batch → store `aiBatchJobs` (per-chunk batch name +
+  submittedAt) in metadata → workflow returns (no in-process poll).
+- Cron polls stored batch ids: succeeded → unwrap → merge into checkpoint VTT →
+  advance; failed → sync-retry that chunk; still-pending past the 4h mark → 4h flip
+  finishes remainder on paid.
+- Remove the in-process poll/`after()` reliance; delete or bypass BATCH_TIMEOUT sync
+  fallback in favor of the durable cron. Keep pure helpers + their tests.
+- Blast-radius: interleaves with patient-free + 4h flip (build on the spine's mode +
+  cron ladder); partial/checkpoint merge; ai_usage_events batch-rate cost.
+
 ### Wave 3 — bigger chunks (MEASUREMENT-GATED, last)
 Raise `LONG_AUDIO_CHUNK_DURATION_SEC` 6min → 15-20min (2h ≈ 5-7 calls, owner "max 7").
 Timing no longer depends on Gemini (Scribe rewrites it) — but TEXT quality must be
