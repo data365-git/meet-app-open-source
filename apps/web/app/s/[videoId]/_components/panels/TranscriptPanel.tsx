@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
 	normalizeWebVttVoiceText,
 	stripRenderedVttTags,
@@ -245,6 +245,27 @@ export function groupCuesIntoCards(cues: Cue[]): TranscriptCard[] {
 	return cards;
 }
 
+/**
+ * Active card = the LAST card whose `startSeconds <= currentTime` (same
+ * "most recently started" rule as `getActiveRefinedChapterStartSec`). Once
+ * playback passes the first card's start, exactly one card is always active
+ * (gaps included), so small per-cue timestamp drift never de-highlights the
+ * whole block. Returns `null` before the first card starts, or when there
+ * are no cards.
+ */
+export function getActiveTranscriptCardIndex(
+	cards: Array<{ startSeconds: number }>,
+	currentTime: number,
+): number | null {
+	let activeIndex: number | null = null;
+	cards.forEach((card, index) => {
+		if (card.startSeconds <= currentTime) {
+			activeIndex = index;
+		}
+	});
+	return activeIndex;
+}
+
 // --- Feature helpers ---
 
 function secondsToSRTTime(sec: number): string {
@@ -321,47 +342,6 @@ export function getActiveTranscriptCueId(
 	return activeCueId;
 }
 
-/**
- * Word-level karaoke for the ACTIVE cue only: split the cue text into word
- * tokens (preserving `**bold**` emphasis) and interpolate each word's start
- * time within [startSeconds, endSeconds] by cumulative character position.
- * Words whose interpolated start has been reached are tinted; the rest keep
- * the normal text color.
- */
-function renderKaraokeText(cue: Cue, currentTime: number): React.ReactNode {
-	const parts = cue.text.split(/\*\*(.+?)\*\*/g); // odd indices = bold
-	const tokens: { text: string; bold: boolean }[] = [];
-	parts.forEach((part, i) => {
-		if (!part) return;
-		const bold = i % 2 === 1;
-		for (const piece of part.split(/(\s+)/)) {
-			if (piece) tokens.push({ text: piece, bold });
-		}
-	});
-	const totalChars = tokens.reduce((n, tok) => n + tok.text.length, 0);
-	if (totalChars === 0) return renderMarkdownBold(cue.text);
-	const cueDuration = Math.max(cue.endSeconds - cue.startSeconds, 0.001);
-	let charsBefore = 0;
-	return tokens.map((tok, i) => {
-		const wordStart = cue.startSeconds + cueDuration * (charsBefore / totalChars);
-		charsBefore += tok.text.length;
-		if (/^\s+$/.test(tok.text)) return tok.text;
-		const sung = currentTime >= wordStart;
-		return (
-			<span
-				key={`kw-${i}`}
-				className={tok.bold ? "font-semibold" : undefined}
-				style={{
-					color: sung ? "var(--blue-11)" : undefined,
-					transition: "color 120ms linear",
-				}}
-			>
-				{tok.text}
-			</span>
-		);
-	});
-}
-
 function normalizeCueTimes(cues: Cue[], duration?: number | null): Cue[] {
 	if (!duration || duration <= 0) return cues;
 
@@ -405,8 +385,6 @@ export function TranscriptPanel({
 			)
 		: [];
 
-	const activeCueId = getActiveTranscriptCueId(cues, currentTime);
-
 	const hasAnySpeaker = cues.some((c) => c.speaker !== null);
 	const distinctSpeakers = Array.from(
 		new Set(cues.map((c) => c.speaker).filter((s): s is string => s !== null)),
@@ -440,13 +418,6 @@ export function TranscriptPanel({
 		programmaticScrollRef.current = true;
 		container.scrollTo({ top: target, behavior });
 	}
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCueId drives which DOM node activeRef points to; re-running when it changes is intentional
-	useEffect(() => {
-		if (followingRef.current) {
-			scrollToActiveRow("smooth");
-		}
-	}, [activeCueId]);
 
 	// Detect user-initiated scroll on the panel's own container: any 'scroll'
 	// event not flagged as our own programmatic scroll means the user touched
@@ -544,6 +515,22 @@ export function TranscriptPanel({
 		const matchesSpeaker = speakerFilter ? c.speaker === speakerFilter : true;
 		return matchesQuery && matchesSpeaker;
 	});
+
+	// Group filtered cues into speaker cards and find the active (highlighted)
+	// block. cueIdToCardIndex lets renderRow look up its own card cheaply.
+	const cards = useMemo(() => groupCuesIntoCards(filteredCues), [filteredCues]);
+	const activeCardIndex = getActiveTranscriptCardIndex(cards, currentTime);
+	const cueIdToCardIndex = new Map<number, number>();
+	cards.forEach((card, idx) => {
+		for (const c of card.cues) cueIdToCardIndex.set(c.id, idx);
+	});
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCardIndex drives which DOM node activeRef points to; re-running when it changes is intentional
+	useEffect(() => {
+		if (followingRef.current) {
+			scrollToActiveRow("smooth");
+		}
+	}, [activeCardIndex]);
 
 	// Shared panel header (search + copy + download)
 	function renderHeader() {
@@ -963,8 +950,14 @@ export function TranscriptPanel({
 
 	// Flat conversation row: TIME | SPEAKER (only when it changes) | TEXT.
 	// The speaker cell keeps its width even when blank so text stays aligned.
-	function renderRow(cue: Cue, prevSpeaker: string | null) {
-		const active = cue.id === activeCueId;
+	function renderRow(
+		cue: Cue,
+		prevSpeaker: string | null,
+		prevCardIndex: number | undefined,
+	) {
+		const cardIndex = cueIdToCardIndex.get(cue.id);
+		const active = cardIndex !== undefined && cardIndex === activeCardIndex;
+		const isFirstOfCard = cardIndex !== prevCardIndex;
 		const matches =
 			!!trimmedQuery && cue.text.toLowerCase().includes(trimmedQuery.toLowerCase());
 		const showSpeaker = hasAnySpeaker && cue.speaker !== prevSpeaker;
@@ -972,7 +965,7 @@ export function TranscriptPanel({
 		return (
 			<div
 				key={`row-${cue.id}`}
-				ref={active ? activeRef : undefined}
+				ref={active && isFirstOfCard ? activeRef : undefined}
 				style={{
 					display: "flex",
 					gap: "12px",
@@ -1031,9 +1024,7 @@ export function TranscriptPanel({
 				>
 					{matches
 						? highlightMatch(cue.text, trimmedQuery)
-						: active
-							? renderKaraokeText(cue, currentTime)
-							: renderMarkdownBold(cue.text)}
+						: renderMarkdownBold(cue.text)}
 				</span>
 			</div>
 		);
@@ -1044,7 +1035,11 @@ export function TranscriptPanel({
 		<div ref={containerRef} className="flex flex-col p-4">
 			{renderHeader()}
 			{filteredCues.map((cue, i) =>
-				renderRow(cue, i > 0 ? (filteredCues[i - 1]?.speaker ?? null) : null),
+				renderRow(
+					cue,
+					i > 0 ? (filteredCues[i - 1]?.speaker ?? null) : null,
+					i > 0 ? cueIdToCardIndex.get(filteredCues[i - 1]?.id ?? -1) : undefined,
+				),
 			)}
 		</div>
 	);

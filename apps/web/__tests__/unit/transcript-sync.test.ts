@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getActiveRefinedChapterStartSec } from "@/app/s/[videoId]/_components/panels/RefinedTranscriptPanel";
 import {
+	getActiveTranscriptCardIndex,
 	getActiveTranscriptCueId,
 	parseVTTCues,
 } from "@/app/s/[videoId]/_components/panels/TranscriptPanel";
@@ -35,6 +36,30 @@ Opening cue
 		);
 
 		expect(activeCueId).toBe(2);
+	});
+});
+
+describe("getActiveTranscriptCardIndex", () => {
+	const cards = [{ startSeconds: 0 }, { startSeconds: 10 }, { startSeconds: 30 }];
+
+	it("returns null before the first card starts", () => {
+		expect(getActiveTranscriptCardIndex(cards, -1)).toBeNull();
+	});
+
+	it("returns the containing card's index", () => {
+		expect(getActiveTranscriptCardIndex(cards, 5)).toBe(0);
+	});
+
+	it("returns the earlier (last-started) card in a gap between cards", () => {
+		expect(getActiveTranscriptCardIndex(cards, 20)).toBe(1);
+	});
+
+	it("returns the newly-started card exactly at its boundary", () => {
+		expect(getActiveTranscriptCardIndex(cards, 10)).toBe(1);
+	});
+
+	it("returns null for an empty card list", () => {
+		expect(getActiveTranscriptCardIndex([], 100)).toBeNull();
 	});
 });
 
