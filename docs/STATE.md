@@ -2,9 +2,18 @@
 
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
+> ✅ **WAVE-1 + WAVE-2a QURILDI, REVIEW O'TDI, LOKAL COMMIT (deploy YO'Q).** Codex qurdi (2 parallel), main-sessiya har diff'ni o'qib tekshirdi.
+> - **Wave-1 (Scribe vaqt-integratsiya):** `lib/eleven-scribe.ts` (Scribe API-mijoz) + `lib/vtt-timing-transfer.ts` (sof DP-algoritm porti) + `transcribe.ts` ulanishi (gap-fill'dan keyin, save'dan oldin; faqat >1 bo'lak + `ELEVENLABS_API_KEY` bo'lsa; har xato'da Gemini-vaqt saqlanadi; resume'ga tegmaydi) + `aiUsageEvents` narx-yozuv ($0.22/soat). **GROUND-TRUTH VERIFY: port haqiqiy bbzt (1463 karta) da isbotlangan POC chiqishi bilan 0.00s farq — drifted 27.99s → 0s.** Kalitsiz = o'chiq (byte-identik).
+> - **Wave-2a (bepul summary/refine):** `generate-ai.ts` `callAiApi` endi `GEMINI_API_KEY_FREE` (gemini-3.5-flash) birinchi, xato/bo'sh/JSON-buzuq bo'lsa pullik zanjirga tushadi; $0 yoziladi (`free:true` real param, tasdiqlandi). Eng katta pul-tejov (ilgari doim pullik edi).
+> - **GATE (toza daraxt, main o'zi):** tsc 0 · vitest 826 pass (26 skip) · next build SUCCESS. Verify-harness: `scripts/scribe-poc/_verify-port.mts`.
+> - **⏳ QOLDI:** Wave-2 (Arzon/Tez tanlov UI + sabrli-free→batch→paid cron-ladder + progress-UI + admin "tez davom et" tugma) — reja `docs/plans/2026-07-08-cost-tier-plan.md`. Deploy = owner OK + `ELEVENLABS_API_KEY` Railway'ga.
+>
+
 > 🎯 **MAQSAD:** o'zbek video/audio → transkript + AI-xulosa mahsuloti; toza dizayn, arzon narx, senior-ship. (Videolar OWNER-ники, mijozники EMAS — free-tier maxfiylik-e'tirozini yumshatadi.)
 >
-> 🚨 **RESUME (2026-07-08 kech) — TRANSKRIPT-VAQT DRIFT HAL BO'LDI (jonli), NAVBATDA: doimiy qilish.**
+> 🚨 **RESUME (2026-07-08 kech-2) — OWNER-GRILL O'TDI: NARX-TIER QARORI QULFLANDI.** ADR: `docs/adr/2026-07-08-ai-cost-tier-and-scribe-timing.md` — (1) "pul ketadi" ogohlantirish o'rniga **Tez/Arzon tanlov**; (2) **Arzon = sabrli free-tier** (429'da kutib qayta uradi, cron-durable; free summary/refine'ga ham kengayadi); (3) **4 soatda bitmasa avto-pullik davom** (checkpoint'dan, qayta boshlamaydi) + istalgan payt qo'lda "Pullikda tez davom et" tugma; (4) **Scribe ikkala rejimda** (uzun >8min, ~$0.44/2h); (5) **bo'lak 15-20min'ga qaytadi** (2h≈5-7 chaqiruv, owner "max 7") — golden-eval sifat-gate SHART (Scribe vaqtni tuzatgani uchun drift-sabab yo'qoldi); (6) **eski videolar tuzatilmaydi** (faqat bbzt + yangilar); (7) progress-UI rejim/qism/kvota-kutish/tugmani ko'rsatadi. **Owner GO berdi + yangi qoida: "codex limitim bor, undan ham foydalan" → Codex endi QURUVCHI ham (Claude-limit tejaladi), review main-sessiyada.** Qurilish rejasi (3 wave): `docs/plans/2026-07-08-cost-tier-plan.md`. **Wave-1 + Wave-2a QILINDI (yuqoridagi ✅ blok).** Wave-2 (Arzon/Tez tier) navbatda. Wave-3 (bo'lak 15-20min) faqat golden-eval sifat-gate o'tsa.
+>
+> _(eski sarlavha: TRANSKRIPT-VAQT DRIFT HAL BO'LDI (jonli), navbatda doimiy qilish — quyida.)_
 >
 > **⭐ ENG MUHIM KEYINGI ISH (owner "doimiy shunday qilamiz" dedi, `/clear`dan KEYIN qil):** yangi uzun videolarga **Scribe timing-transfer** ni pipeline'ga ulash → to'liq reja + isbotlangan algoritm + narx-qarori: [`docs/plans/2026-07-08-scribe-timing-transfer.md`](docs/plans/2026-07-08-scribe-timing-transfer.md). POC-skriptlar + bbzt Scribe-ma'lumoti `apps/web/scripts/scribe-poc/` (scratchpad'дан ko'chirildi, `/clear`da yo'qolmaydi). Owner kaliti Railway'га qo'yilishi kerak (rejada). **Bu = MAIN ish. Boshqa hamma narsa quyида zaxira/tarix.**
 >

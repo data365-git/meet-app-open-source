@@ -808,6 +808,7 @@ const GEMINI_SUMMARY_MODELS = [
 	"gemini-flash-latest",
 ] as const;
 const GEMINI_SUMMARY_MODEL = GEMINI_SUMMARY_MODELS[0];
+const FREE_SUMMARY_MODEL = "gemini-3.5-flash";
 
 interface AiApiResult {
 	content: string;
@@ -816,16 +817,68 @@ interface AiApiResult {
 	outputTokens: number;
 }
 
-async function callAiApi(
+interface AiApiModelResult extends Omit<AiApiResult, "model"> {
+	emptyResponse: boolean;
+}
+
+function assertFreeAiResultUsable(
+	result: AiApiModelResult,
+	json: boolean,
+): void {
+	if (result.emptyResponse) {
+		throw new Error("Free Gemini summary returned an empty response");
+	}
+	if (json) {
+		JSON.parse(cleanJsonResponse(result.content).trim());
+	}
+}
+
+export async function callAiApi(
 	prompt: string,
 	options: { json?: boolean },
 	context: AiCallContext,
 ): Promise<AiApiResult> {
 	const { json = true } = options;
-	const apiKey = serverEnv().GEMINI_API_KEY;
+	const env = serverEnv();
+	const apiKey = env.GEMINI_API_KEY;
+	const freeKey = env.GEMINI_API_KEY_FREE;
+	let freeInputTokens = 0;
+	let freeOutputTokens = 0;
+
+	if (freeKey) {
+		try {
+			const freeResult = await callAiApiWithModel(
+				FREE_SUMMARY_MODEL,
+				prompt,
+				json,
+				freeKey,
+				context,
+				{ free: true },
+			);
+			freeInputTokens = freeResult.inputTokens;
+			freeOutputTokens = freeResult.outputTokens;
+			assertFreeAiResultUsable(freeResult, json);
+			return {
+				content: freeResult.content,
+				model: FREE_SUMMARY_MODEL,
+				inputTokens: freeResult.inputTokens,
+				outputTokens: freeResult.outputTokens,
+			};
+		} catch (error) {
+			console.warn(
+				`[generate-ai] free-tier (${FREE_SUMMARY_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	if (!apiKey) {
 		console.warn("[generate-ai] GEMINI_API_KEY not set, skipping AI call");
-		return { content: "{}", model: "unknown", inputTokens: 0, outputTokens: 0 };
+		return {
+			content: "{}",
+			model: "unknown",
+			inputTokens: freeInputTokens,
+			outputTokens: freeOutputTokens,
+		};
 	}
 
 	// Try each model in order; a model that errors out (retired preview →
@@ -839,7 +892,12 @@ async function callAiApi(
 			if (model !== GEMINI_SUMMARY_MODEL) {
 				console.warn(`[generate-ai] summary fell back to ${model}`);
 			}
-			return { ...result, model };
+			return {
+				content: result.content,
+				model,
+				inputTokens: freeInputTokens + result.inputTokens,
+				outputTokens: freeOutputTokens + result.outputTokens,
+			};
 		} catch (error) {
 			if (error instanceof BudgetExceededError) throw error;
 			lastError = error;
@@ -860,13 +918,15 @@ async function callAiApiWithModel(
 	json: boolean,
 	apiKey: string,
 	context: AiCallContext,
-): Promise<Omit<AiApiResult, "model">> {
+	options: { free?: boolean } = {},
+): Promise<AiApiModelResult> {
 	const result = await withCostGuard({
 		orgId: context.orgId,
 		userId: context.userId,
 		videoId: context.videoId,
 		operation: "summary",
 		model,
+		...(options.free ? { free: true } : {}),
 		fn: async () => {
 			const { data } = await withGeminiRetry(async () => {
 				const res = await fetch(
@@ -931,11 +991,12 @@ async function callAiApiWithModel(
 					{ json, outputTokens: data.usageMetadata?.candidatesTokenCount ?? 0 },
 				);
 			}
+			const emptyResponse = !rawText?.trim();
 			const content = rawText ?? "{}";
 			const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
 			const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
-			return { content, inputTokens, outputTokens };
+			return { content, inputTokens, outputTokens, emptyResponse };
 		},
 	});
 

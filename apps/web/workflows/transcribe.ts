@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
 import { decrypt } from "@cap/database/crypto";
+import { nanoId } from "@cap/database/helpers";
 import {
+	aiUsageEvents,
 	organizations,
 	users,
 	videos,
@@ -10,7 +12,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
@@ -38,11 +40,13 @@ import {
 	mergeChunkedWebVtt,
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
+import { fetchScribeWordTimes } from "@/lib/eleven-scribe";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { restoreRussianScript } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
+import { transferVttTimingWithStats } from "@/lib/vtt-timing-transfer";
 
 interface TranscribeWorkflowPayload {
 	videoId: string;
@@ -62,14 +66,14 @@ interface VideoData {
 	aiSpeedMode: AiSpeedMode;
 }
 
-interface ExtractedAudioChunk {
+export interface ExtractedAudioChunk {
 	key: string;
 	url: string;
 	startSec: number;
 	durationSec: number | null;
 }
 
-interface ExtractedAudio {
+export interface ExtractedAudio {
 	chunks: ExtractedAudioChunk[];
 	totalDurationSec: number | null;
 }
@@ -89,6 +93,7 @@ const FREE_TRANSCRIBE_MODEL = "gemini-3.5-flash";
 // audios (which were previously one un-reset chunk) also get split.
 const LONG_AUDIO_CHUNK_DURATION_SEC = 6 * 60;
 const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 8 * 60;
+const ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR = 220_000;
 
 export async function transcribeVideoWorkflow(
 	payload: TranscribeWorkflowPayload,
@@ -150,11 +155,18 @@ export async function transcribeVideoWorkflow(
 			totalDurationSec: audio.totalDurationSec,
 		});
 
+		const finalTranscription = await applyScribeTimingTransfer(
+			audio,
+			gapFill.transcription,
+			videoId,
+			{ userId, orgId: videoData.orgId },
+		);
+
 		await saveTranscription(
 			videoId,
 			userId,
 			videoData.video,
-			gapFill.transcription,
+			finalTranscription,
 			gapFill.remainingGaps,
 			audio.totalDurationSec == null,
 		);
@@ -171,6 +183,81 @@ export async function transcribeVideoWorkflow(
 	}
 
 	return { success: true, message: "Transcription completed successfully" };
+}
+
+export async function applyScribeTimingTransfer(
+	audio: ExtractedAudio,
+	transcription: string,
+	videoId: string,
+	context?: { userId: string; orgId: string },
+): Promise<string> {
+	"use step";
+
+	if (audio.chunks.length <= 1 || !serverEnv().ELEVENLABS_API_KEY) {
+		return transcription;
+	}
+
+	try {
+		const words = await fetchScribeWordTimes(audio.chunks);
+		await recordScribeTimingUsage(audio, videoId, context).catch((error) => {
+			console.log("[transcribe] scribe-transfer usage record failed", error);
+		});
+		const result = transferVttTimingWithStats(transcription, words);
+		console.log(
+			`[transcribe] scribe-transfer: ${result.stats.shiftedCueCount} cues shifted, mean ${result.stats.meanShiftSec.toFixed(1)}s, ${result.stats.denseMatches} dense matches`,
+		);
+		return result.vtt;
+	} catch (error) {
+		console.log(
+			`[transcribe] scribe-transfer failed for ${videoId}; keeping Gemini-timed VTT`,
+			error,
+		);
+		return transcription;
+	}
+}
+
+async function recordScribeTimingUsage(
+	audio: ExtractedAudio,
+	videoId: string,
+	context?: { userId: string; orgId: string },
+): Promise<void> {
+	if (!context) return;
+	const durationSec = scribeBillableDurationSec(audio);
+	if (durationSec == null || durationSec <= 0) return;
+
+	await db()
+		.insert(aiUsageEvents)
+		.values({
+			id: nanoId(),
+			orgId: context.orgId as Organisation.OrganisationId,
+			userId: context.userId as User.UserId,
+			videoId: videoId as Video.VideoId,
+			operation: "transcription",
+			model: "elevenlabs-scribe-v1",
+			inputTokens: 0,
+			outputTokens: 0,
+			costUsdMicros: Math.round(
+				(durationSec / 3600) * ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR,
+			),
+			billingMonth: currentBillingMonth(),
+		});
+}
+
+function scribeBillableDurationSec(audio: ExtractedAudio): number | null {
+	if (audio.totalDurationSec != null) return audio.totalDurationSec;
+	let total = 0;
+	for (const chunk of audio.chunks) {
+		if (chunk.durationSec == null) return null;
+		total += chunk.durationSec;
+	}
+	return total;
+}
+
+function currentBillingMonth(): string {
+	const now = new Date();
+	const year = now.getUTCFullYear();
+	const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+	return `${year}-${month}`;
 }
 
 async function validateVideo(

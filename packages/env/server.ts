@@ -103,6 +103,10 @@ function createServerEnv() {
 				.describe(
 					"Optional Gemini key on a free-tier (billing-off) project. When set, transcription tries it first (gemini-3.5-flash, $0) and falls back to GEMINI_API_KEY on any failure/quota.",
 				),
+			ELEVENLABS_API_KEY: z
+				.string()
+				.optional()
+				.describe("Optional ElevenLabs Scribe key for long-video word timing transfer"),
 			DEEPGRAM_API_KEY: z
 				.string()
 				.optional()
