@@ -26,6 +26,7 @@ type AiGenerationStatus =
 	| "SKIPPED";
 
 type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
+type AiSpeedMode = "fast" | "cheap";
 
 interface GenerateAiPanelProps {
 	videoId: Video.VideoId;
@@ -33,6 +34,8 @@ interface GenerateAiPanelProps {
 	transcriptionStatus: TranscriptionStatus | null | undefined;
 	aiGenerationStatus: AiGenerationStatus | null | undefined;
 	aiProcessingStep?: AiProcessingStep | null;
+	aiMode?: AiSpeedMode | null;
+	aiQuotaWaiting?: boolean;
 	duration?: number | null;
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
@@ -55,15 +58,18 @@ export function GenerateAiPanel({
 	transcriptionStatus,
 	aiGenerationStatus,
 	aiProcessingStep,
+	aiMode,
+	aiQuotaWaiting = false,
 	duration,
 	aiIncomplete = false,
 	onStarted,
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
+	const [continuingPaid, setContinuingPaid] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Cost-confirmation step: starting analysis spends real Gemini API money,
-	// so an accidental tap must not fire it. null = no pending request.
+	// Mode chooser step: starting analysis can spend real Gemini API money, so an
+	// accidental tap must not fire it. null = no pending request.
 	const [confirm, setConfirm] = useState<{ reprocess: boolean } | null>(null);
 	const inFlightRef = useRef(false);
 	const isRunning =
@@ -84,11 +90,10 @@ export function GenerateAiPanel({
 		transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
 	const aiNotice = getAiAnalysisNotice(duration);
 
-	// Fires the (paid) generation POST. Reached ONLY via the cost-confirmation
-	// block below — every start/re-analyze trigger first sets `confirm`, so an
-	// accidental tap never spends Gemini API money. No speed chooser: the server
-	// always takes the reliable synchronous path.
-	const requestStart = (reprocess = false) => {
+	// Fires the generation POST. Reached ONLY via the mode chooser block below —
+	// every start/re-analyze trigger first sets `confirm`, so an accidental tap
+	// never starts the job.
+	const requestStart = (reprocess = false, speedMode: AiSpeedMode) => {
 		// Synchronous in-flight guard: a very fast double-click can fire before the
 		// `loading` state re-renders the disabled buttons, sending two POSTs.
 		// The ref blocks the second call instantly.
@@ -102,7 +107,7 @@ export function GenerateAiPanel({
 				const res = await fetch(`/api/videos/${videoId}/generate`, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ reprocess }),
+					body: JSON.stringify({ reprocess, speedMode }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -119,26 +124,67 @@ export function GenerateAiPanel({
 		})();
 	};
 
-	// Shared cost-confirmation block: rendered in place of a trigger button
+	const requestContinuePaid = () => {
+		if (inFlightRef.current) return;
+		inFlightRef.current = true;
+		setContinuingPaid(true);
+		setError(null);
+		void (async () => {
+			try {
+				const res = await fetch(`/api/videos/${videoId}/continue-paid`, {
+					method: "POST",
+				});
+				if (!res.ok) {
+					const body = await res.json().catch(() => ({}));
+					setError((body as { error?: string }).error ?? "An error occurred");
+				} else {
+					onStarted?.();
+				}
+			} catch {
+				setError("An error occurred");
+			} finally {
+				setContinuingPaid(false);
+				inFlightRef.current = false;
+			}
+		})();
+	};
+
+	// Shared mode chooser block: rendered in place of a trigger button
 	// whenever `confirm` is set, across all three start/re-analyze entry points.
-	const costConfirm = confirm ? (
+	const modeConfirm = confirm ? (
 		<div className="flex flex-col gap-2">
-			<p className="text-xs font-medium text-amber-600 dark:text-amber-500">
-				{tShare("aiCostWarning")}
+			<p className="text-xs font-medium text-gray-10">
+				{tShare("aiChooseMode")}
 			</p>
-			<div className="flex gap-2">
+			<div className="grid gap-2 sm:grid-cols-2">
 				<button
 					type="button"
 					disabled={loading}
-					onClick={() => requestStart(confirm.reprocess)}
-					className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+					onClick={() => requestStart(confirm.reprocess, "fast")}
+					className="flex flex-col items-start rounded-lg bg-[var(--brand)] px-4 py-2 text-left text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
 				>
-					{tShare("aiConfirmStart")}
+					<span>{tShare("aiModeFast")}</span>
+					<span className="text-xs font-medium opacity-85">
+						{tShare("aiModeFastHint")}
+					</span>
 				</button>
 				<button
 					type="button"
+					disabled={loading}
+					onClick={() => requestStart(confirm.reprocess, "cheap")}
+					className="flex flex-col items-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-left text-sm font-semibold text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
+				>
+					<span>{tShare("aiModeCheap")}</span>
+					<span className="text-xs font-medium text-gray-10">
+						{tShare("aiModeCheapHint")}
+					</span>
+				</button>
+			</div>
+			<div>
+				<button
+					type="button"
 					onClick={() => setConfirm(null)}
-					className="rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4"
+					className="rounded-lg px-3 py-1.5 text-xs font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
 				>
 					{tShare("aiConfirmCancel")}
 				</button>
@@ -195,6 +241,11 @@ export function GenerateAiPanel({
 		});
 
 		const etaMin = Math.max(1, Math.round((duration ?? 120) / 120));
+		const currentMode: AiSpeedMode = aiMode === "cheap" ? "cheap" : "fast";
+		const modeLabel =
+			currentMode === "cheap"
+				? tShare("aiModeCheapShort")
+				: tShare("aiModeFastShort");
 
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 px-4 py-4">
@@ -209,6 +260,34 @@ export function GenerateAiPanel({
 							{tShare("aiEta", { minutes: etaMin })}
 						</span>
 					)}
+				</div>
+
+				<div className="flex flex-col gap-1 rounded-lg border border-gray-4 bg-gray-1 px-3 py-2">
+					<p className="text-xs font-semibold text-gray-12">
+						{tShare("aiModeLabel", { mode: modeLabel })}
+					</p>
+					{currentMode === "cheap" && (
+						<p className="text-xs text-gray-10">
+							{tShare(
+								aiQuotaWaiting
+									? "aiModeCheapQuotaWaiting"
+									: "aiModeCheapRunningHint",
+							)}
+						</p>
+					)}
+					{canGenerate && currentMode === "cheap" && (
+						<button
+							type="button"
+							disabled={continuingPaid}
+							onClick={requestContinuePaid}
+							className="mt-1 self-start rounded-lg border border-gray-5 bg-gray-3 px-3 py-1.5 text-xs font-semibold text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
+						>
+							{continuingPaid
+								? tShare("aiContinuingPaid")
+								: tShare("aiContinuePaid")}
+						</button>
+					)}
+					{error && <p className="text-xs text-red-10">{error}</p>}
 				</div>
 
 				{/* Stepper */}
@@ -301,14 +380,18 @@ export function GenerateAiPanel({
 						: tShare("aiGenerationError")}
 				</p>
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				<button
-					type="button"
-					disabled={loading}
-					onClick={() => requestStart(false)}
-					className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-				>
-					{loading ? tShare("aiStarting") : tShare("aiRetry")}
-				</button>
+				{confirm ? (
+					modeConfirm
+				) : (
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => setConfirm({ reprocess: false })}
+						className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+					>
+						{loading ? tShare("aiStarting") : tShare("aiRetry")}
+					</button>
+				)}
 			</div>
 		);
 	}
@@ -327,7 +410,7 @@ export function GenerateAiPanel({
 					<p className="text-xs text-gray-10">{tShare("aiIncompleteHint")}</p>
 					{error && <p className="text-xs text-red-10">{error}</p>}
 					{confirm ? (
-						costConfirm
+						modeConfirm
 					) : (
 						<button
 							type="button"
@@ -347,7 +430,7 @@ export function GenerateAiPanel({
 		if (confirm) {
 			return (
 				<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-3">
-					{costConfirm}
+					{modeConfirm}
 				</div>
 			);
 		}
@@ -392,7 +475,7 @@ export function GenerateAiPanel({
 				)}
 				{error && <p className="text-xs text-red-10">{error}</p>}
 				{confirm ? (
-					costConfirm
+					modeConfirm
 				) : (
 					<button
 						type="button"

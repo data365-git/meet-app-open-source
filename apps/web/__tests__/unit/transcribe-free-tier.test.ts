@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Free-tier-first transcription: when GEMINI_API_KEY_FREE is set, transcribeAudio
-// tries the free key (gemini-3.5-flash, recorded at $0) and falls back to the paid
-// key/model on ANY failure. Mocks mirror transcribe-batch-mode.test.ts.
+// tries the free key (gemini-3.5-flash, recorded at $0). Fast mode falls back
+// to paid on any free-key failure; cheap mode waits on quota failures.
 
 const H = vi.hoisted(() => ({
 	serverEnv: vi.fn(),
@@ -54,6 +54,7 @@ vi.mock("@/lib/gemini-transcribe", () => ({
 import { transcribeAudio } from "@/workflows/transcribe";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1", aiSpeedMode: "fast" as const };
+const CHEAP_CTX = { ...CTX, aiSpeedMode: "cheap" as const };
 const FREE_RESULT = { transcriptVtt: "WEBVTT\n\nFREE", inputTokens: 10, outputTokens: 5, audioInTokens: 3 };
 const PAID_RESULT = { transcriptVtt: "WEBVTT\n\nPAID", inputTokens: 20, outputTokens: 8, audioInTokens: 6 };
 
@@ -85,7 +86,7 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(guardOpt.model).toBe("gemini-3.5-flash");
 	});
 
-	it("free key set + free FAILS: falls back to the paid key/model", async () => {
+	it("fast mode + free quota failure: falls back to the paid key/model", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini
 			.mockRejectedValueOnce(new Error("429 RESOURCE_EXHAUSTED"))
@@ -101,6 +102,34 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(paidOpt.models).toBeUndefined();
 		expect((H.withCostGuard.mock.calls[0]?.[0] as GuardOpt).free).toBe(true);
 		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBeFalsy();
+	});
+
+	it("cheap mode + free quota failure: throws instead of falling back to paid", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini.mockRejectedValueOnce(
+			new Error("429 RESOURCE_EXHAUSTED"),
+		);
+
+		await expect(
+			transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX),
+		).rejects.toMatchObject({ name: "AiQuotaWaitError" });
+
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect((H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey).toBe("free-key");
+		expect(H.withCostGuard).toHaveBeenCalledTimes(1);
+	});
+
+	it("cheap mode + non-quota free error: falls back to the paid key/model", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("free model returned malformed VTT"))
+			.mockResolvedValueOnce(PAID_RESULT);
+
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
+
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
 	});
 
 	it("no free key: paid path only, never a free attempt (regression)", async () => {

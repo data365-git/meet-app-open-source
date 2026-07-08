@@ -18,6 +18,12 @@ import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { z } from "zod";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
+import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
+import {
+	AiQuotaWaitError,
+	isAiQuotaWaitError,
+	isQuotaLikeAiError,
+} from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
@@ -38,12 +44,14 @@ interface GenerateAiWorkflowPayload {
 	 * — no re-upload / re-transcription.
 	 */
 	force?: boolean;
+	speedModeOverride?: AiSpeedMode;
 }
 
 interface VideoData {
 	video: typeof videos.$inferSelect;
 	metadata: VideoMetadata;
 	aiGenerationLanguage: AiGenerationLanguage;
+	aiSpeedMode: AiSpeedMode;
 }
 
 interface VttSegment {
@@ -75,6 +83,7 @@ interface AiCallContext {
 	orgId: string;
 	userId: string;
 	videoId: string;
+	aiSpeedMode?: AiSpeedMode;
 }
 
 interface AiResult {
@@ -179,9 +188,13 @@ export function shouldReplaceVideoTitle({
 export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 	"use workflow";
 
-	const { videoId, userId, force } = payload;
+	const { videoId, userId, force, speedModeOverride } = payload;
 
-	const videoData = await validateAndSetProcessing(videoId, force ?? false);
+	const videoData = await validateAndSetProcessing(
+		videoId,
+		force ?? false,
+		speedModeOverride,
+	);
 
 	const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
@@ -199,6 +212,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 			orgId: videoData.video.orgId,
 			userId,
 			videoId,
+			aiSpeedMode: videoData.aiSpeedMode,
 		});
 	} catch (error) {
 		if (error instanceof BudgetExceededError) {
@@ -219,6 +233,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 async function validateAndSetProcessing(
 	videoId: string,
 	force = false,
+	speedModeOverride?: AiSpeedMode,
 ): Promise<VideoData> {
 	"use step";
 
@@ -238,6 +253,10 @@ async function validateAndSetProcessing(
 
 	const { video } = query[0];
 	const metadata = (video.metadata as VideoMetadata) || {};
+	const aiSpeedMode =
+		speedModeOverride ??
+		resolveAiSpeedMode(metadata.aiMode ?? query[0]?.orgSettings?.aiSpeedMode);
+	const now = new Date().toISOString();
 
 	if (video.transcriptionStatus !== "COMPLETE") {
 		throw new FatalError("Transcription not complete");
@@ -252,8 +271,11 @@ async function validateAndSetProcessing(
 		.set({
 			metadata: {
 				...metadata,
+				aiMode: aiSpeedMode,
+				aiJobStartedAt: metadata.aiJobStartedAt ?? now,
+				aiQuotaWaiting: false,
 				aiGenerationStatus: "PROCESSING",
-				aiProcessingStartedAt: new Date().toISOString(),
+				aiProcessingStartedAt: now,
 				aiProcessingStep: "summary",
 			} as VideoMetadata,
 		})
@@ -265,6 +287,7 @@ async function validateAndSetProcessing(
 		aiGenerationLanguage: parseAiGenerationLanguage(
 			query[0]?.orgSettings?.aiGenerationLanguage,
 		),
+		aiSpeedMode,
 	};
 }
 
@@ -630,6 +653,7 @@ export function buildSaveResultsPatch(
 		// instead of leaving a message from an older run lying around.
 		aiGenerationError: finalUsable ? undefined : AI_EMPTY_RESULT_ERROR,
 		aiProcessingStep: finalUsable ? "done" : current.aiProcessingStep,
+		aiQuotaWaiting: undefined,
 	};
 }
 
@@ -865,6 +889,14 @@ export async function callAiApi(
 				outputTokens: freeResult.outputTokens,
 			};
 		} catch (error) {
+			if (
+				context.aiSpeedMode === "cheap" &&
+				isQuotaLikeAiError(error)
+			) {
+				throw new AiQuotaWaitError(
+					`Free-tier summary quota exhausted for video=${context.videoId}`,
+				);
+			}
 			console.warn(
 				`[generate-ai] free-tier (${FREE_SUMMARY_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 			);
@@ -1255,6 +1287,7 @@ async function generateReadableRefined(
 				);
 				return paragraphs;
 			} catch (error) {
+				if (isAiQuotaWaitError(error)) throw error;
 				console.warn(
 					`[generate-ai] refine-fallback: raw sub-slice used (${label})`,
 					error,
@@ -1447,6 +1480,7 @@ async function generateChapterAlignedRefined(
 				outputTokens += refined.outputTokens;
 				paragraphs = refined.paragraphs;
 			} catch (error) {
+				if (isAiQuotaWaitError(error)) throw error;
 				console.error(
 					"[generate-ai] chapter-aligned refine failed for chapter; using raw slice",
 					{ startSec: range.startSec, error },
@@ -1696,6 +1730,7 @@ ${chunk.text}`;
 					paragraphs,
 				});
 			} catch (error) {
+				if (isAiQuotaWaitError(error)) throw error;
 				console.warn(
 					`[generate-ai] Refined transcript chunk ${i + 1}/${chunks.length} failed; using raw text`,
 					error,

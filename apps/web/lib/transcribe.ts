@@ -14,6 +14,7 @@ import {
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
 import type { AiSpeedMode } from "@/lib/ai-speed-mode";
+import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
@@ -210,10 +211,17 @@ export async function transcribeVideo(
 			// payload stays exactly {videoId, userId, aiGenerationEnabled}.
 			...(speedModeOverride ? { speedModeOverride } : {}),
 		}).catch((err) => {
-			console.error(
-				`[transcribeVideo] Inline workflow failed for video ${videoId}:`,
-				err,
-			);
+			if (isAiQuotaWaitError(err)) {
+				console.warn(
+					`[transcribeVideo] Cheap transcription waiting for free quota for video ${videoId}:`,
+					err,
+				);
+			} else {
+				console.error(
+					`[transcribeVideo] Inline workflow failed for video ${videoId}:`,
+					err,
+				);
+			}
 		});
 		try { after(runTranscribe); } catch { void runTranscribe(); }
 

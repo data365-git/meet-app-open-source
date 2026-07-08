@@ -98,6 +98,8 @@ export async function GET(request: NextRequest) {
 					chapters: metadata.chapters ?? null,
 					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					aiMode: metadata.aiMode ?? null,
+					aiQuotaWaiting: metadata.aiQuotaWaiting === true,
 				},
 				{ status: 200 },
 			);
@@ -116,6 +118,8 @@ export async function GET(request: NextRequest) {
 					message: "AI metadata generation in progress",
 					aiGenerationStatus: metadata.aiGenerationStatus,
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					aiMode: metadata.aiMode ?? null,
+					aiQuotaWaiting: metadata.aiQuotaWaiting === true,
 				},
 				{ status: 200 },
 			);
@@ -132,6 +136,8 @@ export async function GET(request: NextRequest) {
 				processing: false,
 				aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 				aiProcessingStep: metadata.aiProcessingStep ?? null,
+				aiMode: metadata.aiMode ?? null,
+				aiQuotaWaiting: metadata.aiQuotaWaiting === true,
 			},
 			{ status: 200 },
 		);

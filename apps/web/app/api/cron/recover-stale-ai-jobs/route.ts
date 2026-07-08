@@ -5,17 +5,46 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { continueAiJobOnPaid } from "@/lib/ai-job-control";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
 
 export const dynamic = "force-dynamic";
 
-const STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
+const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
+const CHEAP_STALE_JOB_THRESHOLD_MS = 20 * 60 * 1000;
+const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
 const MAX_AUTO_RETRY_ATTEMPTS = 2;
 
+export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {
+	return metadata.aiMode === "cheap"
+		? CHEAP_STALE_JOB_THRESHOLD_MS
+		: FAST_STALE_JOB_THRESHOLD_MS;
+}
+
+export function shouldAutoFlipCheapJobToPaid(
+	metadata: VideoMetadata,
+	nowMs = Date.now(),
+): boolean {
+	if (metadata.aiMode !== "cheap") return false;
+	if (!metadata.aiJobStartedAt) return false;
+	const startedMs = Date.parse(metadata.aiJobStartedAt);
+	return Number.isFinite(startedMs) && nowMs - startedMs > CHEAP_AUTO_PAID_AFTER_MS;
+}
+
+export function shouldCountStaleJobTowardDeath(
+	metadata: VideoMetadata,
+): boolean {
+	return !(metadata.aiMode === "cheap" && metadata.aiQuotaWaiting === true);
+}
+
 /** Pure decision: does this video still get an automatic re-kick, or has it used up its retries? */
-export function shouldAutoRetry(attempts: number | undefined): boolean {
+export function shouldAutoRetry(
+	attempts: number | undefined,
+	metadata: VideoMetadata = {},
+): boolean {
+	if (!shouldCountStaleJobTowardDeath(metadata)) return true;
 	return (attempts ?? 0) < MAX_AUTO_RETRY_ATTEMPTS;
 }
 
@@ -23,12 +52,15 @@ export function shouldAutoRetry(attempts: number | undefined): boolean {
 export function withIncrementedAutoRecoverAttempts(
 	metadata: VideoMetadata,
 ): VideoMetadata {
-	return {
+	const next: VideoMetadata = {
 		...metadata,
-		autoRecoverAttempts: (metadata.autoRecoverAttempts ?? 0) + 1,
 		processingStartedAt: undefined,
 		aiProcessingStartedAt: undefined,
 	};
+	if (shouldCountStaleJobTowardDeath(metadata)) {
+		next.autoRecoverAttempts = (metadata.autoRecoverAttempts ?? 0) + 1;
+	}
+	return next;
 }
 
 type StaleTranscriptionCandidate = {
@@ -64,8 +96,11 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const staleBefore = new Date(Date.now() - STALE_JOB_THRESHOLD_MS);
-	const staleBeforeIso = staleBefore.toISOString();
+	const now = Date.now();
+	const fastStaleBefore = new Date(now - FAST_STALE_JOB_THRESHOLD_MS);
+	const cheapStaleBefore = new Date(now - CHEAP_STALE_JOB_THRESHOLD_MS);
+	const fastStaleBeforeIso = fastStaleBefore.toISOString();
+	const cheapStaleBeforeIso = cheapStaleBefore.toISOString();
 
 	const transcriptionCandidates: StaleTranscriptionCandidate[] = await db()
 		.select({
@@ -79,7 +114,13 @@ export async function GET(request: Request) {
 			and(
 				eq(videos.transcriptionStatus, "PROCESSING"),
 				isNull(videos.deletedAt),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')) <= ${staleBeforeIso}`,
+				sql`(
+					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
+						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')) <= ${cheapStaleBeforeIso})
+					OR
+					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
+						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')) <= ${fastStaleBeforeIso})
+				)`,
 			),
 		);
 
@@ -95,17 +136,38 @@ export async function GET(request: Request) {
 			and(
 				isNull(videos.deletedAt),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) IN ('PROCESSING', 'QUEUED')`,
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${staleBeforeIso}`,
+				sql`(
+					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
+						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${cheapStaleBeforeIso})
+					OR
+					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
+						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${fastStaleBeforeIso})
+				)`,
 			),
 		);
 
 	let retried = 0;
 	let gaveUp = 0;
+	let flippedToPaid = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
 		try {
-			if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
+			if (shouldAutoFlipCheapJobToPaid(metadata, now)) {
+				console.warn(
+					`[recover-stale-ai-jobs] Cheap transcription job exceeded 4h; continuing on paid: ${candidate.id}`,
+				);
+				const result = await continueAiJobOnPaid({
+					videoId: candidate.id,
+					ownerId: candidate.ownerId,
+					phase: "transcription",
+				});
+				if (!result.success) {
+					throw new Error(result.message);
+				}
+				flippedToPaid++;
+				retried++;
+			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
 				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
 				await db()
 					.update(videos)
@@ -134,7 +196,21 @@ export async function GET(request: Request) {
 	for (const candidate of aiGenerationCandidates) {
 		const metadata = candidate.metadata ?? {};
 		try {
-			if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
+			if (shouldAutoFlipCheapJobToPaid(metadata, now)) {
+				console.warn(
+					`[recover-stale-ai-jobs] Cheap AI generation job exceeded 4h; continuing on paid: ${candidate.id}`,
+				);
+				const result = await continueAiJobOnPaid({
+					videoId: candidate.id,
+					ownerId: candidate.ownerId,
+					phase: "generation",
+				});
+				if (!result.success) {
+					throw new Error(result.message);
+				}
+				flippedToPaid++;
+				retried++;
+			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
 				const nextMetadata: VideoMetadata = {
 					...withIncrementedAutoRecoverAttempts(metadata),
 					aiGenerationStatus: undefined,
@@ -169,8 +245,10 @@ export async function GET(request: Request) {
 
 	return NextResponse.json({
 		success: true,
-		staleBefore: staleBefore.toISOString(),
+		staleBefore: fastStaleBefore.toISOString(),
+		cheapStaleBefore: cheapStaleBefore.toISOString(),
 		retried,
 		gaveUp,
+		flippedToPaid,
 	});
 }

@@ -246,6 +246,11 @@ export const ShareVideo = forwardRef<
 
 		const effectiveAiProcessingStep =
 			aiStatusQuery.data?.aiProcessingStep ?? data.metadata?.aiProcessingStep ?? null;
+		const effectiveAiMode =
+			aiStatusQuery.data?.aiMode ?? data.metadata?.aiMode ?? null;
+		const effectiveAiQuotaWaiting =
+			aiStatusQuery.data?.aiQuotaWaiting ??
+			(data.metadata?.aiQuotaWaiting === true);
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
@@ -778,6 +783,8 @@ export const ShareVideo = forwardRef<
 									}
 									aiGenerationStatus={effectiveAiStatus}
 									aiProcessingStep={effectiveAiProcessingStep}
+									aiMode={effectiveAiMode}
+									aiQuotaWaiting={effectiveAiQuotaWaiting}
 									aiIncomplete={aiIncomplete}
 									duration={data.duration}
 									onStarted={handleAiStarted}

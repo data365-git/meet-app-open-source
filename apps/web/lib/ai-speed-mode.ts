@@ -1,7 +1,8 @@
 /**
  * Org-level transcription speed/cost mode.
  *   fast  = synchronous Gemini generateContent (default; lowest latency).
- *   cheap = Gemini Batch API (~50% cheaper, slower — minutes not seconds).
+ *   cheap = patient free-tier first; quota waits are retried by cron, then
+ *           auto-continue on paid after the configured patience window.
  *
  * Stored in `organizations.settings.aiSpeedMode`. Read once at workflow start
  * and threaded through the transcription steps as a plain string (the workflow

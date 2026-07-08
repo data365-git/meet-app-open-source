@@ -43,7 +43,8 @@ vi.mock("workflow", () => ({
 
 // vi.mock factories are hoisted above all top-level code, so anything they
 // reference must live in a vi.hoisted() block (which is hoisted with them).
-// BatchFallbackError is shared between the mock and the test assertions.
+// BatchFallbackError stays in the mock because workflows/transcribe used to
+// import it; the current spine asserts the batch function is not called.
 const H = vi.hoisted(() => {
 	class BatchFallbackError extends Error {
 		constructor(message: string) {
@@ -78,7 +79,7 @@ vi.mock("@/lib/gemini-transcribe", () => ({
 		chunks.map((c) => c.vtt).join(""),
 }));
 
-const { BatchFallbackError, withCostGuard, transcribeChunkWithBatch, transcribeWithGemini } = H;
+const { withCostGuard, transcribeChunkWithBatch, transcribeWithGemini } = H;
 
 // ─── Import AFTER mocks ───────────────────────────────────────────────────────
 import { transcribeAudio } from "@/workflows/transcribe";
@@ -90,13 +91,6 @@ const SYNC_RESULT = {
 	outputTokens: 5,
 	audioInTokens: 3,
 };
-const BATCH_RESULT = {
-	transcriptVtt: "WEBVTT\n\nBATCH",
-	inputTokens: 100,
-	outputTokens: 50,
-	audioInTokens: 30,
-};
-
 // withCostGuard normally runs fn() and returns its value plus token fields; the
 // stub reproduces that contract so the code under test behaves realistically.
 function costGuardRunsFn() {
@@ -147,85 +141,19 @@ describe("transcribeAudio speed-mode routing", () => {
 		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 
-	it("mode=cheap: uses the BATCH path and passes batch:true to the cost guard", async () => {
+	it("mode=cheap: uses the synchronous patient-free path and does NOT pass batch:true", async () => {
 		costGuardRunsFn();
-		transcribeChunkWithBatch.mockResolvedValue(BATCH_RESULT);
+		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
 
 		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
 			...CTX_BASE,
 			aiSpeedMode: "cheap",
 		});
 
-		expect(out).toBe("WEBVTT\n\nBATCH");
-		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
-		expect(transcribeWithGemini).not.toHaveBeenCalled();
+		expect(out).toBe("WEBVTT\n\nSYNC");
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(transcribeChunkWithBatch).not.toHaveBeenCalled();
 		expect(withCostGuard).toHaveBeenCalledTimes(1);
-		expect(costGuardCall(0).batch).toBe(true);
-	});
-
-	it("mode=cheap + BatchFallbackError: falls back to SYNC for that chunk (video not failed)", async () => {
-		costGuardRunsFn();
-		transcribeChunkWithBatch.mockRejectedValue(
-			new BatchFallbackError("timed out"),
-		);
-		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
-
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
-			...CTX_BASE,
-			aiSpeedMode: "cheap",
-		});
-
-		// Fell back to sync output rather than throwing.
-		expect(out).toBe("WEBVTT\n\nSYNC");
-		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
-		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
-		// Two cost-guard calls: the batch attempt (batch:true) then the sync
-		// fallback (batch falsy). The recorded fallback cost uses SYNC rates.
-		expect(withCostGuard).toHaveBeenCalledTimes(2);
-		expect(costGuardCall(0).batch).toBe(true);
-		expect(costGuardCall(1).batch).toBeFalsy();
-	});
-
-	it("mode=cheap + inline/plain error: falls back to SYNC (single-chunk videos must not fail outright)", async () => {
-		costGuardRunsFn();
-		// A non-fallback error (e.g. inline RESOURCE_EXHAUSTED surfaced by unwrap).
-		// The single-chunk path calls transcribeAudio directly with no retry
-		// wrapper, so this must fall back to sync rather than rethrow.
-		transcribeChunkWithBatch.mockRejectedValue(
-			new Error("Batch inline request error: RESOURCE_EXHAUSTED"),
-		);
-		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
-
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
-			...CTX_BASE,
-			aiSpeedMode: "cheap",
-		});
-
-		expect(out).toBe("WEBVTT\n\nSYNC");
-		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
-		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
-		// Two cost-guard calls: the batch attempt (batch:true) then the sync
-		// fallback (batch falsy).
-		expect(withCostGuard).toHaveBeenCalledTimes(2);
-		expect(costGuardCall(0).batch).toBe(true);
-		expect(costGuardCall(1).batch).toBeFalsy();
-	});
-
-	it("mode=cheap + sync fallback ALSO fails: that error propagates to the caller's retry path", async () => {
-		costGuardRunsFn();
-		transcribeChunkWithBatch.mockRejectedValue(
-			new Error("Batch inline request error: RESOURCE_EXHAUSTED"),
-		);
-		transcribeWithGemini.mockRejectedValue(new Error("sync also failed"));
-
-		await expect(
-			transcribeAudio("https://a/x.mp3", 300, null, {
-				...CTX_BASE,
-				aiSpeedMode: "cheap",
-			}),
-		).rejects.toThrow(/sync also failed/);
-
-		expect(transcribeChunkWithBatch).toHaveBeenCalledTimes(1);
-		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 });

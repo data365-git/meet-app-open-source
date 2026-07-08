@@ -5,7 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { type AiSpeedMode, isAiSpeedMode } from "@/lib/ai-speed-mode";
+import { type AiSpeedMode, isAiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { requestAiGenerationAfterTranscription } from "@/lib/ai-generation-request";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
@@ -117,12 +117,18 @@ export async function POST(
     // uses that status to mean a real AI workflow has already been launched.
     if (video.transcriptionStatus === "PROCESSING") {
       const metadata = (video.metadata as VideoMetadata) || {};
+      const now = new Date().toISOString();
+      const aiMode = speedMode ?? resolveAiSpeedMode(metadata.aiMode);
       await db()
         .update(videos)
         .set({
           metadata: requestAiGenerationAfterTranscription({
-            metadata,
-            requestedAt: new Date().toISOString(),
+            metadata: {
+              ...metadata,
+              aiMode,
+              aiJobStartedAt: metadata.aiJobStartedAt ?? now,
+            },
+            requestedAt: now,
             requestedBy: user.id,
           }),
         })
@@ -160,6 +166,7 @@ export async function POST(
       // start/retry AI generation on the existing transcript.
       const result = await startAiGeneration(videoId, video.ownerId, {
         force: reprocess,
+        speedModeOverride: speedMode,
       });
       if (!result.success) {
         return Response.json({ error: result.message }, { status: 500 });

@@ -49,6 +49,7 @@ vi.mock("server-only", () => ({}));
 import { callAiApi } from "@/workflows/generate-ai";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
+const CHEAP_CTX = { ...CTX, aiSpeedMode: "cheap" as const };
 
 type GuardOpt = { model?: string; free?: boolean; fn: () => Promise<unknown> };
 
@@ -165,7 +166,7 @@ describe("callAiApi free-tier-first", () => {
 		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBeFalsy();
 	});
 
-	it("free key set + HTTP failure: falls back to the paid model chain", async () => {
+	it("fast mode + free HTTP 429: falls back to the paid model chain", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -181,6 +182,38 @@ describe("callAiApi free-tier-first", () => {
 		expect(H.fetch).toHaveBeenCalledTimes(2);
 		expect(fetchUrl(0)).toContain("/models/gemini-3.5-flash:generateContent");
 		expect(fetchUrl(1)).toContain("/models/gemini-3-flash-preview:generateContent");
+	});
+
+	it("cheap mode + free HTTP 429: throws instead of falling back to paid", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		H.fetch.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"));
+
+		await expect(callAiApi("prompt", {}, CHEAP_CTX)).rejects.toMatchObject({
+			name: "AiQuotaWaitError",
+		});
+
+		expect(H.fetch).toHaveBeenCalledTimes(1);
+		expect(fetchUrl(0)).toContain("/models/gemini-3.5-flash:generateContent");
+	});
+
+	it("cheap mode + non-quota free error: falls back to paid", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		H.fetch
+			.mockResolvedValueOnce(geminiOk('{"bad":', 11, 7))
+			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+
+		const out = await callAiApi("prompt", {}, CHEAP_CTX);
+
+		expect(out.content).toBe('{"paid":true}');
+		expect(out.model).toBe("gemini-3-flash-preview");
+		expect(H.fetch).toHaveBeenCalledTimes(2);
+		expect(fetchUrl(1)).toContain("key=paid-key");
 	});
 
 	it("no free key: paid path only, exactly one call", async () => {

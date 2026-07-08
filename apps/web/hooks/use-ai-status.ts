@@ -9,11 +9,14 @@ export type AiGenerationStatus =
 	| "SKIPPED";
 
 export type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
+export type AiSpeedMode = "fast" | "cheap";
 
 type AiStatusResult = {
 	processing: boolean;
 	aiGenerationStatus: AiGenerationStatus | null;
 	aiProcessingStep: AiProcessingStep | null;
+	aiMode: AiSpeedMode | null;
+	aiQuotaWaiting: boolean;
 	hasContent: boolean;
 };
 
@@ -30,6 +33,8 @@ export const useAiStatus = (videoId: Video.VideoId, enabled: boolean) => {
 				processing: !!body.processing,
 				aiGenerationStatus: body.aiGenerationStatus ?? null,
 				aiProcessingStep: body.aiProcessingStep ?? null,
+				aiMode: body.aiMode ?? null,
+				aiQuotaWaiting: body.aiQuotaWaiting === true,
 				hasContent: !!(body.summary || body.chapters),
 			};
 		},

@@ -6,6 +6,8 @@ import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
+import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
+import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -17,7 +19,7 @@ type GenerateAiResult = {
 export async function startAiGeneration(
 	videoId: Video.VideoId,
 	userId: string,
-	opts?: { force?: boolean },
+	opts?: { force?: boolean; speedModeOverride?: AiSpeedMode },
 ): Promise<GenerateAiResult> {
 	const force = opts?.force ?? false;
 	if (!userId || !videoId) {
@@ -72,6 +74,8 @@ export async function startAiGeneration(
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};
+	const aiSpeedMode =
+		opts?.speedModeOverride ?? resolveAiSpeedMode(metadata.aiMode);
 
 	if (
 		metadata.aiGenerationStatus === "PROCESSING" ||
@@ -107,19 +111,35 @@ export async function startAiGeneration(
 			.set({
 				metadata: {
 					...metadata,
+					aiMode: aiSpeedMode,
+					aiJobStartedAt:
+						metadata.aiJobStartedAt ?? new Date().toISOString(),
+					aiQuotaWaiting: false,
 					aiGenerationStatus: "QUEUED",
 					aiProcessingStartedAt: new Date().toISOString(),
 				} as VideoMetadata,
 			})
 			.where(eq(videos.id, videoId));
 
-		const runGen = () => generateAiWorkflow({ videoId, userId, force }).catch(async (err) => {
-			console.error(
-				`[startAiGeneration] Inline workflow failed for video ${videoId}:`,
-				err,
-			);
-			// Mark ERROR so the UI shows a retryable error instead of a forever
-			// spinner (the workflow sets PROCESSING but never ERROR on async failure).
+		const runGen = () => generateAiWorkflow({
+			videoId,
+			userId,
+			force,
+			speedModeOverride: aiSpeedMode,
+		}).catch(async (err) => {
+			if (isAiQuotaWaitError(err)) {
+				console.warn(
+					`[startAiGeneration] Cheap AI generation waiting for free quota for video ${videoId}:`,
+					err,
+				);
+			} else {
+				console.error(
+					`[startAiGeneration] Inline workflow failed for video ${videoId}:`,
+					err,
+				);
+			}
+			// Mark ERROR for real failures so the UI shows a retryable error instead
+			// of a forever spinner. Cheap quota waits intentionally stay PROCESSING.
 			try {
 				const [current] = await db()
 					.select({ metadata: videos.metadata })
@@ -130,6 +150,21 @@ export async function startAiGeneration(
 				// Don't clobber a concurrent success: if another run already
 				// finished, leave COMPLETE in place instead of overwriting ERROR.
 				if (currentMeta.aiGenerationStatus === "COMPLETE") {
+					return;
+				}
+				if (
+					isAiQuotaWaitError(err) &&
+					currentMeta.aiMode === "cheap"
+				) {
+					await db()
+						.update(videos)
+						.set({
+							metadata: {
+								...currentMeta,
+								aiQuotaWaiting: true,
+							} as VideoMetadata,
+						})
+						.where(eq(videos.id, videoId));
 					return;
 				}
 				await db()

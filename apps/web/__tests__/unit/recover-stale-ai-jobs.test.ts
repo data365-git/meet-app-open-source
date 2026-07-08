@@ -48,6 +48,10 @@ vi.mock("@/lib/ops-alert", () => ({
 	sendOpsAlert: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock("@/lib/ai-job-control", () => ({
+	continueAiJobOnPaid: vi.fn(() => Promise.resolve({ success: true })),
+}));
+
 vi.mock("@/lib/generate-ai", () => ({
 	startAiGeneration: vi.fn(() => Promise.resolve({ success: true })),
 }));
@@ -56,9 +60,12 @@ vi.mock("@/lib/transcribe", () => ({
 	transcribeVideo: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
-const { shouldAutoRetry, withIncrementedAutoRecoverAttempts } = await import(
-	"@/app/api/cron/recover-stale-ai-jobs/route"
-);
+const {
+	shouldAutoFlipCheapJobToPaid,
+	shouldAutoRetry,
+	staleThresholdMsForMetadata,
+	withIncrementedAutoRecoverAttempts,
+} = await import("@/app/api/cron/recover-stale-ai-jobs/route");
 
 describe("shouldAutoRetry", () => {
 	it("retries when there is no prior attempt", () => {
@@ -75,6 +82,12 @@ describe("shouldAutoRetry", () => {
 
 	it("gives up beyond 2 prior attempts", () => {
 		expect(shouldAutoRetry(5)).toBe(false);
+	});
+
+	it("keeps retrying cheap quota waits even after the normal death limit", () => {
+		expect(
+			shouldAutoRetry(5, { aiMode: "cheap", aiQuotaWaiting: true }),
+		).toBe(true);
 	});
 });
 
@@ -99,5 +112,66 @@ describe("withIncrementedAutoRecoverAttempts", () => {
 		expect(result.autoRecoverAttempts).toBe(2);
 		expect(result.aiProcessingStartedAt).toBeUndefined();
 		expect(result.sourceName).toBe("Meet tab");
+	});
+
+	it("does not increment attempts for cheap quota waits", () => {
+		const result = withIncrementedAutoRecoverAttempts({
+			aiMode: "cheap",
+			aiQuotaWaiting: true,
+			autoRecoverAttempts: 2,
+			processingStartedAt: "2026-01-01T00:00:00.000Z",
+		});
+
+		expect(result.autoRecoverAttempts).toBe(2);
+		expect(result.processingStartedAt).toBeUndefined();
+	});
+});
+
+describe("shouldAutoFlipCheapJobToPaid", () => {
+	it("flips cheap jobs after 4 hours", () => {
+		const now = Date.parse("2026-07-08T12:00:00.000Z");
+		expect(
+			shouldAutoFlipCheapJobToPaid(
+				{
+					aiMode: "cheap",
+					aiJobStartedAt: "2026-07-08T07:59:59.000Z",
+				},
+				now,
+			),
+		).toBe(true);
+	});
+
+	it("does not flip cheap jobs before 4 hours or fast jobs", () => {
+		const now = Date.parse("2026-07-08T12:00:00.000Z");
+		expect(
+			shouldAutoFlipCheapJobToPaid(
+				{
+					aiMode: "cheap",
+					aiJobStartedAt: "2026-07-08T08:30:00.000Z",
+				},
+				now,
+			),
+		).toBe(false);
+		expect(
+			shouldAutoFlipCheapJobToPaid(
+				{
+					aiMode: "fast",
+					aiJobStartedAt: "2026-07-08T07:00:00.000Z",
+				},
+				now,
+			),
+		).toBe(false);
+	});
+});
+
+describe("staleThresholdMsForMetadata", () => {
+	it("uses 20 minutes for cheap and 60 minutes for fast/default", () => {
+		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBe(
+			20 * 60 * 1000,
+		);
+		expect(staleThresholdMsForMetadata({ aiMode: "fast" })).toBe(
+			60 * 60 * 1000,
+		);
+		expect(staleThresholdMsForMetadata({})).toBe(60 * 60 * 1000);
 	});
 });
