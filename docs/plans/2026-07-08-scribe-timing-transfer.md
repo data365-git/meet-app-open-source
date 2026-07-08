@@ -88,6 +88,13 @@ Input: Gemini VTT (good text, drifted times) + Scribe word list `[{word,start,en
   BUT: needs a Python worker infra build, CPU is "impractically slow" for 2h (may need
   GPU $), and Uzbek alignment model (MMS via HF) needs setup + verification. Break-even
   vs $0.44/video is ~50-100+ long videos/month.
+- **Gemini free/batch does NOT work for timing** (owner asked 2026-07-08): Gemini
+  ESTIMATES timestamps → the 18s drift IS a Gemini property, identical across free
+  tier, Batch API (50% off, same model), and paid. Changing Gemini tier cannot fix
+  drift. Accurate timing needs a frame-level aligner (Scribe / self-host), not Gemini.
+  Note the fix adds NO Gemini cost: Gemini still provides the TEXT (free-tier-first);
+  only Scribe timing ($0.44/long video) is the added cost. (Separately, moving Gemini
+  transcription to the Batch API could cut TEXT cost — unrelated to timing.)
 - **Recommendation**: ship ElevenLabs batch now ($0.44/long video — negligible at
   low/moderate volume). Revisit self-hosting only if long-video volume gets high.
 
