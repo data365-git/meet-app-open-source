@@ -70,30 +70,41 @@ describe("groupCuesIntoCards", () => {
 		expect(cards).toHaveLength(1);
 	});
 
-	it("starts a new card when the accumulated span would exceed 60s", () => {
+	it("starts a new card when the accumulated span would exceed 20s", () => {
 		const cards = groupCuesIntoCards([
 			cue(0, "Alisher", 0, 3),
 			cue(1, "Alisher", 5, 8), // span 8s
-			cue(2, "Alisher", 10, 61), // span 61s > 60s → new card
+			cue(2, "Alisher", 10, 21), // span 21s > 20s → new card
 		]);
 		expect(cards).toHaveLength(2);
 		expect(cards[0]?.cues.map((c) => c.id)).toEqual([0, 1]);
 		expect(cards[1]?.cues.map((c) => c.id)).toEqual([2]);
 	});
 
-	it("keeps a run together when its span is exactly 60s (inclusive bound)", () => {
+	it("keeps a run together when its span is exactly 20s (inclusive bound)", () => {
 		// Every inter-cue gap is 2s (≤ 6s); only the accumulated span grows to
-		// exactly 60s on the last cue, so the span bound (not the gap bound) is
-		// what is under test.
+		// exactly 20s on the last cue, so the span bound (not the gap bound) is
+		// what is under test. Only 2 cues, so the cue-count cap (3) isn't hit.
 		const cards = groupCuesIntoCards([
 			cue(0, "Alisher", 0, 10),
-			cue(1, "Alisher", 12, 22), // gap 2s, span 22s
-			cue(2, "Alisher", 24, 34), // gap 2s, span 34s
-			cue(3, "Alisher", 36, 46), // gap 2s, span 46s
-			cue(4, "Alisher", 48, 60), // gap 2s, span = 60 - 0 = 60s, still ≤ 60
+			cue(1, "Alisher", 12, 20), // gap 2s, span = 20 - 0 = 20s, still ≤ 20
 		]);
 		expect(cards).toHaveLength(1);
-		expect(cards[0]?.cues).toHaveLength(5);
+		expect(cards[0]?.cues).toHaveLength(2);
+	});
+
+	it("starts a new card once a card already holds 3 cues (max cues per card)", () => {
+		// Gaps and span all stay comfortably within bounds; only the 4th
+		// consecutive same-speaker cue should be forced into a new card.
+		const cards = groupCuesIntoCards([
+			cue(0, "Alisher", 0, 1),
+			cue(1, "Alisher", 2, 3),
+			cue(2, "Alisher", 4, 5),
+			cue(3, "Alisher", 6, 7), // 4th cue → new card
+		]);
+		expect(cards).toHaveLength(2);
+		expect(cards[0]?.cues.map((c) => c.id)).toEqual([0, 1, 2]);
+		expect(cards[1]?.cues.map((c) => c.id)).toEqual([3]);
 	});
 
 	it("groups no-speaker cues (speaker === null) into one card", () => {

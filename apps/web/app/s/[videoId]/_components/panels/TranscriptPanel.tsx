@@ -200,10 +200,12 @@ function formatTimestamp(seconds: number): string {
 	return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-// Card grouping bounds (see plan Task P2): consecutive same-speaker cues merge
-// into one card while the inter-cue gap and the accumulated span stay small.
+// Card grouping bounds: consecutive same-speaker cues merge into one compact
+// card while the inter-cue gap, the accumulated span, and the cue count stay
+// small — the goal is a card that reads as ~2-3 rows, not a sprawling block.
 const MAX_CARD_GAP_SEC = 6;
-const MAX_CARD_SPAN_SEC = 60;
+const MAX_CARD_SPAN_SEC = 20;
+const MAX_CARD_CUES = 3;
 
 export interface TranscriptCard {
 	speaker: string | null;
@@ -216,8 +218,9 @@ export interface TranscriptCard {
  * Group consecutive cues into speaker cards. A running card keeps absorbing the
  * next cue while ALL hold: (a) same speaker, (b) inter-cue gap
  * (next.start − prev.end) ≤ 6s, (c) accumulated span (next.end − card.start)
- * ≤ 60s. Any violation starts a new card. The card's timestamp is its first
- * cue's start. Pure + deterministic so it can be unit-tested in isolation.
+ * ≤ 20s, (d) the card has fewer than 3 cues so far. Any violation starts a new
+ * card. The card's timestamp is its first cue's start. Pure + deterministic so
+ * it can be unit-tested in isolation.
  */
 export function groupCuesIntoCards(cues: Cue[]): TranscriptCard[] {
 	const cards: TranscriptCard[] = [];
@@ -230,8 +233,9 @@ export function groupCuesIntoCards(cues: Cue[]): TranscriptCard[] {
 		const spanOk =
 			current != null &&
 			cue.endSeconds - current.startSeconds <= MAX_CARD_SPAN_SEC;
+		const countOk = current != null && current.cues.length < MAX_CARD_CUES;
 
-		if (current && sameSpeaker && gapOk && spanOk) {
+		if (current && sameSpeaker && gapOk && spanOk && countOk) {
 			current.cues.push(cue);
 		} else {
 			cards.push({
@@ -517,13 +521,9 @@ export function TranscriptPanel({
 	});
 
 	// Group filtered cues into speaker cards and find the active (highlighted)
-	// block. cueIdToCardIndex lets renderRow look up its own card cheaply.
+	// block.
 	const cards = useMemo(() => groupCuesIntoCards(filteredCues), [filteredCues]);
 	const activeCardIndex = getActiveTranscriptCardIndex(cards, currentTime);
-	const cueIdToCardIndex = new Map<number, number>();
-	cards.forEach((card, idx) => {
-		for (const c of card.cues) cueIdToCardIndex.set(c.id, idx);
-	});
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCardIndex drives which DOM node activeRef points to; re-running when it changes is intentional
 	useEffect(() => {
@@ -950,14 +950,8 @@ export function TranscriptPanel({
 
 	// Flat conversation row: TIME | SPEAKER (only when it changes) | TEXT.
 	// The speaker cell keeps its width even when blank so text stays aligned.
-	function renderRow(
-		cue: Cue,
-		prevSpeaker: string | null,
-		prevCardIndex: number | undefined,
-	) {
-		const cardIndex = cueIdToCardIndex.get(cue.id);
-		const active = cardIndex !== undefined && cardIndex === activeCardIndex;
-		const isFirstOfCard = cardIndex !== prevCardIndex;
+	// Active-card highlighting lives on the card wrapper (see below), not here.
+	function renderRow(cue: Cue, prevSpeaker: string | null) {
 		const matches =
 			!!trimmedQuery && cue.text.toLowerCase().includes(trimmedQuery.toLowerCase());
 		const showSpeaker = hasAnySpeaker && cue.speaker !== prevSpeaker;
@@ -965,15 +959,12 @@ export function TranscriptPanel({
 		return (
 			<div
 				key={`row-${cue.id}`}
-				ref={active && isFirstOfCard ? activeRef : undefined}
 				style={{
 					display: "flex",
 					gap: "12px",
 					padding: "10px 2px",
 					borderBottom: "1px solid var(--ds-border, var(--gray-4))",
 					alignItems: "baseline",
-					background: active ? "var(--brand-wash)" : "transparent",
-					borderRadius: active ? "8px" : undefined,
 				}}
 			>
 				<button
@@ -1030,17 +1021,30 @@ export function TranscriptPanel({
 		);
 	}
 
-	// Single flat list of rows — chapters are grouped in the Summary tab, not here.
+	// Cards render as one wrapper per speaker block, so the active highlight
+	// reads as a single compact lit block rather than several separately-lit
+	// rows. Chapters are grouped in the Summary tab, not here.
 	return (
 		<div ref={containerRef} className="flex flex-col p-4">
 			{renderHeader()}
-			{filteredCues.map((cue, i) =>
-				renderRow(
-					cue,
-					i > 0 ? (filteredCues[i - 1]?.speaker ?? null) : null,
-					i > 0 ? cueIdToCardIndex.get(filteredCues[i - 1]?.id ?? -1) : undefined,
-				),
-			)}
+			{cards.map((card, cardIndex) => {
+				const active = cardIndex === activeCardIndex;
+				return (
+					<div
+						key={`card-${card.cues[0]?.id ?? cardIndex}`}
+						ref={active ? activeRef : undefined}
+						style={{
+							background: active ? "var(--brand-wash)" : undefined,
+							borderRadius: active ? "8px" : undefined,
+							padding: active ? "2px 4px" : undefined,
+						}}
+					>
+						{card.cues.map((cue, i) =>
+							renderRow(cue, i > 0 ? (card.cues[i - 1]?.speaker ?? null) : null),
+						)}
+					</div>
+				);
+			})}
 		</div>
 	);
 }
