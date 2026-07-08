@@ -98,6 +98,20 @@ Input: Gemini VTT (good text, drifted times) + Scribe word list `[{word,start,en
 - **Recommendation**: ship ElevenLabs batch now ($0.44/long video — negligible at
   low/moderate volume). Revisit self-hosting only if long-video volume gets high.
 
+## SEPARATE cost-optimization backlog (owner asked 2026-07-08 — NOT the timing work)
+Owner wants to cut Gemini/AI cost. Findings:
+- **Gemini Batch API = 50% off, BUT up to 24h turnaround** (target 24h, usually
+  faster, no guarantee). The transcription / summary / refined-transcript steps are
+  all on the USER-WAITING path (user uploads/clicks and waits) → 24h latency is an
+  unacceptable UX regression. So Batch is NOT usable on the critical path; only for
+  background non-urgent re-processing of old videos.
+- Transcription already uses **free-tier-first** (gemini-3.5-flash, $0) → paid
+  fallback only on rate-limit. The bigger paid spend is **summary + refined-transcript**
+  which ALWAYS use paid gemini-3-flash-preview (no free-tier there).
+- **Best cost lever (no UX cost)**: extend free-tier-first (and/or a 2nd free key /
+  better rate-limit backoff) to the summary + refine calls too. Investigate before
+  reaching for Batch. This is its own task — do only if the owner prioritizes cost.
+
 ## Verify (next session)
 - Reuse `scripts/scribe-poc/eleven-words.json` + `grid-localize.mjs` to re-check the
   algorithm without spending Scribe $.
