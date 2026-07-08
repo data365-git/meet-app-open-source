@@ -111,6 +111,15 @@ Owner wants to cut Gemini/AI cost. Findings:
 - **Best cost lever (no UX cost)**: extend free-tier-first (and/or a 2nd free key /
   better rate-limit backoff) to the summary + refine calls too. Investigate before
   reaching for Batch. This is its own task — do only if the owner prioritizes cost.
+- **Multi-account free-key POOL (owner's idea 2026-07-08)**: rotating 2-3 free Gemini
+  keys round-robin multiplies free quota ~Nx. WORKS technically (extend the existing
+  free-key→paid-fallback into a free-POOL→paid-fallback). ⚠️ RISK: using multiple
+  accounts specifically to circumvent free-tier limits typically violates Google's
+  ToS → keys/accounts can be BANNED. Owner acknowledged it's "cheating". If pursued:
+  use the owner's OWN real accounts (not throwaways) AND ALWAYS keep the paid fallback
+  so a banned/throttled key degrades gracefully (no outage). Do NOT architect critical
+  reliance on it. Fully-safe alternative = legit free-tier on summary/refine + paid
+  overflow. Owner's call — warn, don't auto-implement without explicit go.
 
 ## Verify (next session)
 - Reuse `scripts/scribe-poc/eleven-words.json` + `grid-localize.mjs` to re-check the
