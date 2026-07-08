@@ -417,6 +417,92 @@ export class BatchFallbackError extends Error {
  *
  * `sleepFn`/`nowFn` are injectable for tests; production uses real timers.
  */
+// ─── Durable submit / collect (cron-driven; NO in-process poll) ─────────────────
+// The pair below splits the old in-process transcribeChunkWithBatch into two
+// steps so a batch can outlive the request that started it: the workflow SUBMITS
+// (and returns), a cron later COLLECTS. This is what makes "Arzon" batch safe —
+// the 30-min in-process poll that used to freeze jobs is gone.
+
+export interface SubmittedBatchChunk {
+	batchName: string;
+	/** Files API object name — kept alive until collect; the caller stores it so
+	 * the collector can delete it after the result is retrieved. */
+	fileName: string;
+}
+
+/** Upload + submit one chunk to the Batch API and return immediately. Does NOT
+ * poll and does NOT delete the uploaded file (the collector deletes it). */
+export async function submitChunkBatch(
+	audioUrl: string,
+	options: { apiKey: string; knownSpeakers?: string[]; videoId?: string },
+): Promise<SubmittedBatchChunk> {
+	const { apiKey, knownSpeakers, videoId } = options;
+	const uploaded = await uploadAudioForBatch(audioUrl, apiKey);
+	const body = buildBatchRequestBody({
+		model: BATCH_TRANSCRIBE_MODEL,
+		mimeType: uploaded.mimeType,
+		fileUri: uploaded.fileUri,
+		knownSpeakers,
+		displayName: `cap-batch-${videoId ?? "chunk"}-${Date.now()}`,
+	});
+	const batchName = await submitBatch(body, apiKey);
+	console.log(
+		`[gemini-batch] durable submit ${batchName} for video=${videoId ?? "?"} audioUrl=${audioUrl.split("?")[0]}`,
+	);
+	return { batchName, fileName: uploaded.fileName };
+}
+
+export type CollectBatchResult =
+	| {
+			status: "succeeded";
+			transcriptVtt: string;
+			inputTokens: number;
+			outputTokens: number;
+			audioInTokens: number;
+	  }
+	| { status: "pending" }
+	| { status: "failed"; reason: string };
+
+/** Poll a submitted batch ONCE. On success, unwrap + normalize + delete the
+ * uploaded file. On terminal failure / inline error / empty output, delete the
+ * file and report "failed" (the chunk gets re-done on the next kick). Still
+ * running → "pending". Never throws for expected states (poll network errors do
+ * throw so the cron logs + retries next tick). */
+export async function collectBatchResult(
+	batchName: string,
+	options: { apiKey: string; fileName?: string; audioDurationSec?: number },
+): Promise<CollectBatchResult> {
+	const { apiKey, fileName, audioDurationSec = 300 } = options;
+	const polled = await getBatch(batchName, apiKey);
+	const cls = mapBatchState(extractBatchState(polled));
+
+	if (cls === "pending") return { status: "pending" };
+
+	if (cls === "failed") {
+		if (fileName) await deleteBatchFile(fileName, apiKey);
+		return { status: "failed", reason: `terminal state for ${batchName}` };
+	}
+
+	try {
+		const unwrapped = unwrapBatchResponse(polled);
+		const transcriptVtt = normalizeToWebVtt(unwrapped.rawText, audioDurationSec);
+		if (fileName) await deleteBatchFile(fileName, apiKey);
+		return {
+			status: "succeeded",
+			transcriptVtt,
+			inputTokens: unwrapped.inputTokens,
+			outputTokens: unwrapped.outputTokens,
+			audioInTokens: unwrapped.audioInTokens,
+		};
+	} catch (error) {
+		if (fileName) await deleteBatchFile(fileName, apiKey);
+		return {
+			status: "failed",
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 export async function transcribeChunkWithBatch(
 	audioUrl: string,
 	options: {

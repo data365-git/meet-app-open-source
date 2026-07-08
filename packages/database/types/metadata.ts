@@ -67,6 +67,22 @@ export interface VideoMetadata {
 	processingStartedAt?: string;
 	/** ISO timestamp set when AI generation starts; used by recover-stale-ai-jobs to detect staleness. */
 	aiProcessingStartedAt?: string;
+	/** Per-job AI cost mode. */
+	aiMode?: "fast" | "cheap";
+	/** ISO timestamp of the first AI job start; used by the cheap -> paid ladder. */
+	aiJobStartedAt?: string;
+	/** True while a cheap job is waiting for free-tier quota to refresh. */
+	aiQuotaWaiting?: boolean;
+	/** Cheap-mode chunks submitted to the Gemini Batch API, awaiting collection by
+	 * the poll-batch-jobs cron. Each entry is dropped once merged into the partial
+	 * checkpoint (succeeded) or abandoned (failed / 4h paid flip). */
+	aiBatchJobs?: Array<{
+		batchName: string;
+		fileName: string;
+		startSec: number;
+		durationSec: number;
+		submittedAt: string;
+	}>;
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 	isDemo?: boolean;
 	aiSummary?: AiSummary | null;
