@@ -1,7 +1,10 @@
 import type { UploadStatus } from "../../UploadingContext";
 import type { ChunkUploadState, VideoId } from "./web-recorder-types";
 
-const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
+// R2 requires every non-trailing multipart part to be the SAME size (and each
+// >= 5 MiB). Stream parts at a fixed size so completeMultipart never trips
+// R2's "All non-trailing parts must have the same length" (InvalidPart) error.
+const STREAM_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const MAX_PART_UPLOAD_ATTEMPTS = 3;
 const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
@@ -353,7 +356,7 @@ export class InstantRecordingUploader {
 		this.bufferedChunks.push(blob);
 		this.bufferedBytes += blob.size;
 
-		if (this.bufferedBytes >= MIN_PART_SIZE_BYTES) {
+		if (this.bufferedBytes >= STREAM_PART_SIZE_BYTES) {
 			this.flushBuffer();
 		}
 	}
@@ -364,14 +367,26 @@ export class InstantRecordingUploader {
 			return;
 		}
 
-		if (this.bufferedBytes === 0) return;
-		if (!force && this.bufferedBytes < MIN_PART_SIZE_BYTES) return;
+		// Slice the buffer into fixed STREAM_PART_SIZE_BYTES parts so every
+		// non-trailing part is byte-for-byte the same size (R2 requirement).
+		// The remainder is carried forward; the trailing (smaller) part is only
+		// flushed on force (finalize). Mirrors flushDriveBuffer.
+		while (this.bufferedBytes > 0) {
+			if (!force && this.bufferedBytes < STREAM_PART_SIZE_BYTES) return;
 
-		const chunk = new Blob(this.bufferedChunks, { type: this.mimeType });
-		this.bufferedChunks = [];
-		this.bufferedBytes = 0;
+			const partSize =
+				force && this.bufferedBytes <= STREAM_PART_SIZE_BYTES
+					? this.bufferedBytes
+					: STREAM_PART_SIZE_BYTES;
+			const { part, remainingChunks, remainingBytes } =
+				this.takeBufferedPart(partSize);
 
-		this.enqueueUpload(chunk);
+			this.bufferedChunks = remainingChunks;
+			this.bufferedBytes = remainingBytes;
+			this.enqueueUpload(part);
+
+			if (partSize < STREAM_PART_SIZE_BYTES) return;
+		}
 	}
 
 	private flushDriveBuffer(force = false) {
