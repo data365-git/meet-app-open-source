@@ -11,8 +11,14 @@ const H = vi.hoisted(() => ({
 	updateSet: vi.fn(),
 	cancelBatch: vi.fn(async (_n: string, _k: string) => {}),
 	deleteBatchFile: vi.fn(async (_n: string, _k: string) => {}),
-	transcribeVideo: vi.fn(async (..._a: unknown[]) => ({ success: true, message: "t" })),
-	startAiGeneration: vi.fn(async (..._a: unknown[]) => ({ success: true, message: "g" })),
+	transcribeVideo: vi.fn(async (..._a: unknown[]) => ({
+		success: true,
+		message: "t",
+	})),
+	startAiGeneration: vi.fn(async (..._a: unknown[]) => ({
+		success: true,
+		message: "g",
+	})),
 	geminiKey: "server-paid-key" as string | undefined,
 }));
 
@@ -29,7 +35,9 @@ vi.mock("@cap/database", () => ({
 	}),
 }));
 vi.mock("@cap/database/schema", () => ({ videos: { id: "videos.id" } }));
-vi.mock("@cap/env", () => ({ serverEnv: () => ({ GEMINI_API_KEY: H.geminiKey }) }));
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({ GEMINI_API_KEY: H.geminiKey }),
+}));
 vi.mock("@cap/web-domain", () => ({}));
 vi.mock("drizzle-orm", () => ({ eq: (f: unknown, v: unknown) => ({ f, v }) }));
 vi.mock("@/lib/gemini-batch-transcribe", () => ({
@@ -67,8 +75,12 @@ beforeEach(() => {
 	H.updateSet.mockReset();
 	H.cancelBatch.mockReset().mockResolvedValue(undefined);
 	H.deleteBatchFile.mockReset().mockResolvedValue(undefined);
-	H.transcribeVideo.mockReset().mockResolvedValue({ success: true, message: "t" });
-	H.startAiGeneration.mockReset().mockResolvedValue({ success: true, message: "g" });
+	H.transcribeVideo
+		.mockReset()
+		.mockResolvedValue({ success: true, message: "t" });
+	H.startAiGeneration
+		.mockReset()
+		.mockResolvedValue({ success: true, message: "g" });
 	H.geminiKey = "server-paid-key";
 });
 
@@ -91,8 +103,14 @@ describe("abandonPendingBatchJobs", () => {
 		await abandonPendingBatchJobs({ aiBatchJobs: [JOB_A, JOB_B] });
 		expect(H.cancelBatch).toHaveBeenCalledWith("batches/a", "server-paid-key");
 		expect(H.cancelBatch).toHaveBeenCalledWith("batches/b", "server-paid-key");
-		expect(H.deleteBatchFile).toHaveBeenCalledWith("files/a", "server-paid-key");
-		expect(H.deleteBatchFile).toHaveBeenCalledWith("files/b", "server-paid-key");
+		expect(H.deleteBatchFile).toHaveBeenCalledWith(
+			"files/a",
+			"server-paid-key",
+		);
+		expect(H.deleteBatchFile).toHaveBeenCalledWith(
+			"files/b",
+			"server-paid-key",
+		);
 	});
 
 	it("never throws even if a cleanup call rejects", async () => {
@@ -118,7 +136,13 @@ describe("continueAiJobOnPaid", () => {
 
 	it("transcription: abandons the pending Batch, clears aiBatchJobs, flips to fast, re-runs transcription", async () => {
 		H.selectResult = [
-			{ metadata: { aiMode: "cheap", aiQuotaWaiting: true, aiBatchJobs: [JOB_A] } },
+			{
+				metadata: {
+					aiMode: "cheap",
+					aiQuotaWaiting: true,
+					aiBatchJobs: [JOB_A],
+				},
+			},
 		];
 
 		const out = await continueAiJobOnPaid({
@@ -129,12 +153,19 @@ describe("continueAiJobOnPaid", () => {
 
 		// The stray Batch is cancelled + its file deleted (no orphan spend).
 		expect(H.cancelBatch).toHaveBeenCalledWith("batches/a", "server-paid-key");
-		expect(H.deleteBatchFile).toHaveBeenCalledWith("files/a", "server-paid-key");
+		expect(H.deleteBatchFile).toHaveBeenCalledWith(
+			"files/a",
+			"server-paid-key",
+		);
 
 		// The persisted metadata drops the batch jobs + quota wait and flips to fast.
 		const setArg = H.updateSet.mock.calls[0]?.[0] as {
 			transcriptionStatus: unknown;
-			metadata: { aiMode?: string; aiBatchJobs?: unknown; aiQuotaWaiting?: unknown };
+			metadata: {
+				aiMode?: string;
+				aiBatchJobs?: unknown;
+				aiQuotaWaiting?: unknown;
+			};
 		};
 		expect(setArg.transcriptionStatus).toBeNull();
 		expect(setArg.metadata.aiMode).toBe("fast");
@@ -142,7 +173,13 @@ describe("continueAiJobOnPaid", () => {
 		expect(setArg.metadata.aiQuotaWaiting).toBeUndefined();
 
 		// Paid Standard transcription resumes from the checkpoint (fast, not cheap).
-		expect(H.transcribeVideo).toHaveBeenCalledWith("v1", "u1", true, false, "fast");
+		expect(H.transcribeVideo).toHaveBeenCalledWith(
+			"v1",
+			"u1",
+			true,
+			false,
+			"fast",
+		);
 		expect(H.startAiGeneration).not.toHaveBeenCalled();
 		expect(out.success).toBe(true);
 	});
@@ -157,7 +194,11 @@ describe("continueAiJobOnPaid", () => {
 		});
 
 		const setArg = H.updateSet.mock.calls[0]?.[0] as {
-			metadata: { aiBatchJobs?: unknown; aiGenerationStatus?: unknown; aiMode?: string };
+			metadata: {
+				aiBatchJobs?: unknown;
+				aiGenerationStatus?: unknown;
+				aiMode?: string;
+			};
 		};
 		expect(setArg.metadata.aiBatchJobs).toBeUndefined();
 		expect(setArg.metadata.aiGenerationStatus).toBeUndefined();

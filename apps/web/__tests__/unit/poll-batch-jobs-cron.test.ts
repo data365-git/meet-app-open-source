@@ -46,19 +46,24 @@ vi.mock("@cap/database", () => ({
 }));
 vi.mock("@cap/database/schema", () => ({
 	aiUsageEvents: { id: "aiUsageEvents.id" },
-	videos: { id: "videos.id", metadata: "videos.metadata", deletedAt: "videos.deletedAt" },
+	videos: {
+		id: "videos.id",
+		metadata: "videos.metadata",
+		deletedAt: "videos.deletedAt",
+	},
 }));
-vi.mock("@cap/env", () => ({ serverEnv: () => ({ GEMINI_API_KEY: H.geminiKey }) }));
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({ GEMINI_API_KEY: H.geminiKey }),
+}));
 vi.mock("@cap/utils", () => ({ priceForMicros: () => 1234 }));
 vi.mock("@cap/web-domain", () => ({}));
 vi.mock("drizzle-orm", () => ({
 	and: (...a: unknown[]) => a,
 	eq: (f: unknown, v: unknown) => ({ f, v }),
 	isNull: (f: unknown) => ({ isNull: f }),
-	sql: Object.assign(
-		(s: TemplateStringsArray, ...v: unknown[]) => ({ s, v }),
-		{ raw: (s: string) => s },
-	),
+	sql: Object.assign((s: TemplateStringsArray, ...v: unknown[]) => ({ s, v }), {
+		raw: (s: string) => s,
+	}),
 }));
 vi.mock("effect", () => ({
 	Option: { isNone: (o: { _tag?: string }) => o?._tag === "None" },
@@ -89,28 +94,31 @@ vi.mock("@/lib/transcribe", () => ({
 	transcribeVideo: (...a: unknown[]) => H.transcribeVideo(...a),
 }));
 vi.mock("@/lib/video-metadata", () => ({
-	patchVideoMetadata: (id: string, updater: (m: Record<string, unknown>) => unknown) =>
-		H.patchVideoMetadata(id, updater),
+	patchVideoMetadata: (
+		id: string,
+		updater: (m: Record<string, unknown>) => unknown,
+	) => H.patchVideoMetadata(id, updater),
 }));
 vi.mock("@/lib/video-storage", () => ({
 	getStorageAccessForVideo: () => ({
-		pipe: () => Promise.resolve([
-			{
-				getObject: (k: string) => {
-					H.getObject(k);
-					return {
-						pipe: () =>
-							H.getObjectThrows
-								? Promise.reject(new Error("storage read boom"))
-								: Promise.resolve(H.getObjectResult),
-					};
+		pipe: () =>
+			Promise.resolve([
+				{
+					getObject: (k: string) => {
+						H.getObject(k);
+						return {
+							pipe: () =>
+								H.getObjectThrows
+									? Promise.reject(new Error("storage read boom"))
+									: Promise.resolve(H.getObjectResult),
+						};
+					},
+					putObject: (k: string, body: string, opts: unknown) => {
+						H.putObject(k, body, opts);
+						return { pipe: () => Promise.resolve(undefined) };
+					},
 				},
-				putObject: (k: string, body: string, opts: unknown) => {
-					H.putObject(k, body, opts);
-					return { pipe: () => Promise.resolve(undefined) };
-				},
-			},
-		]),
+			]),
 	}),
 }));
 
@@ -160,10 +168,12 @@ beforeEach(() => {
 	H.insertUsage.mockReset().mockResolvedValue(undefined);
 	H.updateVideo.mockReset().mockResolvedValue(undefined);
 	// Default: patch applies the updater to the candidate's metadata and returns it.
-	H.patchVideoMetadata.mockReset().mockImplementation(
-		async (_id: string, updater: (m: Record<string, unknown>) => unknown) =>
-			updater(H.currentMetadata),
-	);
+	H.patchVideoMetadata
+		.mockReset()
+		.mockImplementation(
+			async (_id: string, updater: (m: Record<string, unknown>) => unknown) =>
+				updater(H.currentMetadata),
+		);
 });
 
 describe("poll-batch-jobs GET — auth + config guards", () => {
@@ -201,7 +211,10 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 		const body = await bodyOf(res);
 
 		expect(H.cancelBatch).toHaveBeenCalledWith("batches/a", "server-paid-key");
-		expect(H.deleteBatchFile).toHaveBeenCalledWith("files/a", "server-paid-key");
+		expect(H.deleteBatchFile).toHaveBeenCalledWith(
+			"files/a",
+			"server-paid-key",
+		);
 		// aiBatchJobs cleared to undefined via the patch updater.
 		const patched = H.patchVideoMetadata.mock.results[0]?.value;
 		await expect(patched).resolves.toMatchObject({ aiBatchJobs: undefined });
@@ -238,7 +251,9 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 		const body = await bodyOf(res);
 
 		// Partial read at the partial key, merged content written back.
-		expect(H.getObject).toHaveBeenCalledWith("owner1/v1/transcription-partial.vtt");
+		expect(H.getObject).toHaveBeenCalledWith(
+			"owner1/v1/transcription-partial.vtt",
+		);
 		expect(H.putObject).toHaveBeenCalledWith(
 			"owner1/v1/transcription-partial.vtt",
 			"WEBVTT\n\nMERGED",
@@ -247,7 +262,13 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 		// Batch-rate usage recorded.
 		expect(H.insertUsage).toHaveBeenCalledTimes(1);
 		// All jobs resolved → re-kick the cheap workflow from the fuller checkpoint.
-		expect(H.transcribeVideo).toHaveBeenCalledWith("v1", "owner1", true, true, "cheap");
+		expect(H.transcribeVideo).toHaveBeenCalledWith(
+			"v1",
+			"owner1",
+			true,
+			true,
+			"cheap",
+		);
 		expect(body.succeeded).toBe(1);
 		expect(body.retried).toBe(1);
 	});
@@ -307,7 +328,13 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 		const body = await bodyOf(res);
 
 		expect(H.putObject).not.toHaveBeenCalled();
-		expect(H.transcribeVideo).toHaveBeenCalledWith("v1", "owner1", true, true, "cheap");
+		expect(H.transcribeVideo).toHaveBeenCalledWith(
+			"v1",
+			"owner1",
+			true,
+			true,
+			"cheap",
+		);
 		expect(body.failed).toBe(1);
 		expect(body.retried).toBe(1);
 	});

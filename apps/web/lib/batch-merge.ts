@@ -72,7 +72,9 @@ export function mergeBatchChunkIntoPartial(
 		if (!present.has(sig)) keptBlocks.push(cue.block);
 	}
 	const filteredBatchVtt =
-		keptBlocks.length > 0 ? `WEBVTT\n\n${keptBlocks.join("\n\n")}` : "WEBVTT\n\n";
+		keptBlocks.length > 0
+			? `WEBVTT\n\n${keptBlocks.join("\n\n")}`
+			: "WEBVTT\n\n";
 	return mergeChunkedWebVtt([
 		{ vtt: partialVtt, offsetSec: 0 },
 		{ vtt: filteredBatchVtt, offsetSec: startSec },

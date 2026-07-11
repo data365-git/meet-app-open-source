@@ -8,14 +8,10 @@ import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { NextResponse } from "next/server";
+import { mergeBatchChunkIntoPartial, removeBatchJob } from "@/lib/batch-merge";
 import {
-	type BatchJob,
-	mergeBatchChunkIntoPartial,
-	removeBatchJob,
-} from "@/lib/batch-merge";
-import {
-	cancelBatch,
 	type CollectBatchResult,
+	cancelBatch,
 	collectBatchResult,
 	deleteBatchFile,
 } from "@/lib/gemini-batch-transcribe";
@@ -145,9 +141,8 @@ export async function GET(request: Request) {
 				// so we never overwrite a real partial after an ambiguous read failure.
 				let partialVtt: string;
 				try {
-					const [bucket] = await getStorageAccessForVideo(video).pipe(
-						runPromise,
-					);
+					const [bucket] =
+						await getStorageAccessForVideo(video).pipe(runPromise);
 					const content = await bucket
 						.getObject(partialKeyFor(video.ownerId, video.id))
 						.pipe(runPromise);
