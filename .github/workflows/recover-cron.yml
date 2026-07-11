@@ -52,3 +52,21 @@ jobs:
             echo "Recovery ping failed"
             exit 1
           fi
+      - name: Ping poll-batch-jobs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://capweb-production-dd85.up.railway.app
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET secret not set yet — skipping."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/batch.txt -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/poll-batch-jobs")
+          echo "HTTP $code"
+          cat /tmp/batch.txt || true
+          if [ "$code" != "200" ]; then
+            echo "Batch collector ping failed"
+            exit 1
+          fi

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildBatchRequestBody,
+	collectBatchResult,
 	extractInlinedResponse,
 	isTerminalBatchState,
 	mapBatchState,
@@ -179,9 +180,10 @@ describe("buildBatchRequestBody", () => {
 
 		const req = body.batch.input_config.requests.requests[0].request;
 		expect(req).toBeTruthy();
-		// Same generationConfig the sync path uses.
+		// Same generationConfig the sync path uses — including the aligned 24k
+		// runaway-cost cap (spec §5 C1); the old value was 65,536.
 		expect(req.generationConfig.temperature).toBe(0.1);
-		expect(req.generationConfig.maxOutputTokens).toBe(65536);
+		expect(req.generationConfig.maxOutputTokens).toBe(24000);
 		expect(req.generationConfig.thinkingConfig.thinkingBudget).toBe(0);
 		// fileData part carries the uploaded audio.
 		const fileDataPart = req.contents[0].parts.find((p: any) => p.fileData);
@@ -190,5 +192,65 @@ describe("buildBatchRequestBody", () => {
 		// The English transcription prompt is included as a text part.
 		const textPart = req.contents[0].parts.find((p: any) => typeof p.text === "string");
 		expect(textPart.text).toContain("WebVTT");
+	});
+});
+
+// ─── Collector applies the sync runaway-repetition guard (spec §5 C1, test #17) ─
+describe("collectBatchResult runaway guard", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const succeededBatchWith = (rawText: string) => ({
+		state: "BATCH_STATE_SUCCEEDED",
+		response: {
+			inlinedResponses: {
+				inlinedResponses: [
+					{
+						response: {
+							candidates: [
+								{ content: { parts: [{ text: rawText }] }, finishReason: "STOP" },
+							],
+							usageMetadata: {
+								promptTokenCount: 100,
+								candidatesTokenCount: 5000,
+								promptTokensDetails: [{ modality: "AUDIO", tokenCount: 80 }],
+							},
+						},
+					},
+				],
+			},
+		},
+	});
+
+	it("collapses a repetition-loop tail instead of persisting hundreds of copies", async () => {
+		// 40 identical non-timestamp lines = a runaway loop the sync path strips.
+		const runawayLine = "This is a runaway repeated line of transcript.";
+		const rawText = Array.from({ length: 40 }, () => runawayLine).join("\n");
+
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			// getBatch (GET) → the succeeded batch; deleteBatchFile (DELETE) → ok.
+			if (init?.method === "DELETE") {
+				return new Response("{}", { status: 200 });
+			}
+			return new Response(JSON.stringify(succeededBatchWith(rawText)), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await collectBatchResult("batches/abc", {
+			apiKey: "test-key",
+			fileName: "files/xyz",
+			audioDurationSec: 120,
+		});
+
+		expect(result.status).toBe("succeeded");
+		if (result.status !== "succeeded") return;
+		// Without the guard this VTT would carry ~40 identical cues; the guard keeps
+		// only the clean prefix, so the repeated line appears just a few times.
+		const occurrences = result.transcriptVtt.split(runawayLine).length - 1;
+		expect(occurrences).toBeLessThanOrEqual(5);
 	});
 });

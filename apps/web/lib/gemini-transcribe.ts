@@ -448,7 +448,7 @@ const GEMINI_TRANSCRIBE_MODELS = [
 // whole cap (measured: one 2.5-flash chunk hit 65537 out-tokens and cost $0.19 of
 // garbage on a video that should have cost ~$0.07). 24k keeps generous headroom
 // for a dense chunk while cutting a runaway's blast radius ~2.7x.
-const TRANSCRIBE_MAX_OUTPUT_TOKENS = 24000;
+export const TRANSCRIBE_MAX_OUTPUT_TOKENS = 24000;
 
 // Detect a repetition-loop runaway (the model repeating one line over and over)
 // and truncate the garbage tail, keeping the clean prefix. Legit transcripts
@@ -491,14 +491,36 @@ export function stripRunawayRepetition(text: string): {
 	return { text: lines.slice(0, cutIdx).join("\n"), runaway: true };
 }
 
+/** Sleep `ms`, waking immediately (and rejecting) if `signal` aborts — so a
+ * bounded free probe never blocks in a file-activation poll past its deadline. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason ?? new Error("aborted"));
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener?.("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason ?? new Error("aborted"));
+		};
+		signal?.addEventListener?.("abort", onAbort, { once: true });
+	});
+}
+
 async function pollUntilActive(
 	fileName: string,
 	apiKey: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const maxAttempts = 30;
 	for (let i = 0; i < maxAttempts; i++) {
 		const res = await fetch(
 			`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`,
+			{ signal },
 		);
 		if (!res.ok) {
 			throw new Error(`Gemini file poll failed: ${res.status}`);
@@ -508,7 +530,7 @@ async function pollUntilActive(
 		if (data.state === "FAILED") {
 			throw new Error("Gemini file processing failed");
 		}
-		await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+		await abortableSleep(2000, signal);
 	}
 	throw new Error("Gemini file never reached ACTIVE state");
 }
@@ -602,12 +624,20 @@ export async function transcribeWithGemini(
 		/** Override the model list (e.g. a single free-tier model). Defaults to
 		 * GEMINI_TRANSCRIBE_MODELS. */
 		models?: readonly string[];
+		/** Abort signal for the Tez free probe deadline. Threaded into every
+		 * fetch so an abort actually cancels in-flight work (spec §4). Cleanup
+		 * still runs best-effort with a fresh request even when aborted. */
+		signal?: AbortSignal;
+		/** Retry-attempt override. Tez free probe passes 1 (single attempt, no
+		 * backoff); the paid path keeps the default 5. */
+		maxAttempts?: number;
 	},
 ): Promise<GeminiTranscribeResult> {
-	const { apiKey, audioDurationSec = 300, knownSpeakers } = options;
+	const { apiKey, audioDurationSec = 300, knownSpeakers, signal } = options;
+	const maxAttempts = options.maxAttempts ?? 5;
 	const transcribeModels = options.models ?? GEMINI_TRANSCRIBE_MODELS;
 
-	const audioResponse = await fetch(audioUrl);
+	const audioResponse = await fetch(audioUrl, { signal });
 	if (!audioResponse.ok) {
 		throw new Error(
 			`Audio URL not accessible: ${audioResponse.status} ${audioResponse.statusText}`,
@@ -619,50 +649,60 @@ export async function transcribeWithGemini(
 	const mimeType = detectMimeType(audioUrl);
 	const displayName = `cap-audio-${Date.now()}`;
 
-	const uploadUrl = await withGeminiRetry(async () => {
-		const initRes = await fetch(
-			`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
-			{
-				method: "POST",
-				headers: {
-					"X-Goog-Upload-Protocol": "resumable",
-					"X-Goog-Upload-Command": "start",
-					"X-Goog-Upload-Header-Content-Length": String(audioBytes.byteLength),
-					"X-Goog-Upload-Header-Content-Type": mimeType,
-					"Content-Type": "application/json",
+	const uploadUrl = await withGeminiRetry(
+		async () => {
+			const initRes = await fetch(
+				`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
+				{
+					method: "POST",
+					headers: {
+						"X-Goog-Upload-Protocol": "resumable",
+						"X-Goog-Upload-Command": "start",
+						"X-Goog-Upload-Header-Content-Length": String(audioBytes.byteLength),
+						"X-Goog-Upload-Header-Content-Type": mimeType,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ file: { display_name: displayName } }),
+					signal,
 				},
-				body: JSON.stringify({ file: { display_name: displayName } }),
-			},
-		);
+			);
 
-		if (!initRes.ok) {
-			throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
-		}
+			if (!initRes.ok) {
+				throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
+			}
 
-		const url = initRes.headers.get("x-goog-upload-url");
-		if (!url) {
-			throw new Error("No upload URL from Gemini Files API");
-		}
-		return url;
-	});
+			const url = initRes.headers.get("x-goog-upload-url");
+			if (!url) {
+				throw new Error("No upload URL from Gemini Files API");
+			}
+			return url;
+		},
+		maxAttempts,
+		signal,
+	);
 
-	const fileData = await withGeminiRetry(async () => {
-		const uploadRes = await fetch(uploadUrl, {
-			method: "PUT",
-			headers: {
-				"X-Goog-Upload-Offset": "0",
-				"X-Goog-Upload-Command": "upload, finalize",
-				"Content-Length": String(audioBytes.byteLength),
-			},
-			body: audioBytes,
-		});
+	const fileData = await withGeminiRetry(
+		async () => {
+			const uploadRes = await fetch(uploadUrl, {
+				method: "PUT",
+				headers: {
+					"X-Goog-Upload-Offset": "0",
+					"X-Goog-Upload-Command": "upload, finalize",
+					"Content-Length": String(audioBytes.byteLength),
+				},
+				body: audioBytes,
+				signal,
+			});
 
-		if (!uploadRes.ok) {
-			throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
-		}
+			if (!uploadRes.ok) {
+				throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
+			}
 
-		return (await uploadRes.json()) as GeminiFileResponse;
-	});
+			return (await uploadRes.json()) as GeminiFileResponse;
+		},
+		maxAttempts,
+		signal,
+	);
 	const { name: fileName, uri: fileUri, state } = fileData.file;
 
 	if (!fileUri || !fileName) {
@@ -672,7 +712,11 @@ export async function transcribeWithGemini(
 	}
 
 	if (state !== "ACTIVE") {
-		await withGeminiRetry(() => pollUntilActive(fileName, apiKey));
+		await withGeminiRetry(
+			() => pollUntilActive(fileName, apiKey, signal),
+			maxAttempts,
+			signal,
+		);
 	}
 
 	type GenData = {
@@ -687,118 +731,128 @@ export async function transcribeWithGemini(
 		error?: { message: string };
 	};
 
-	let genRes!: Response;
-	let genData!: GenData;
-	for (let mi = 0; mi < transcribeModels.length; mi++) {
-		const model = transcribeModels[mi];
-		try {
-			({ genRes, genData } = await withGeminiRetry(async () => {
-				const res = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							contents: [
-								{
-									parts: [
-										{
-											fileData: {
-												mimeType,
-												fileUri,
+	// Best-effort cleanup of the uploaded Files API object. Runs on the normal
+	// return AND on any throw/abort mid-generation via the finally below, always
+	// with a fresh request (spec §4).
+	const cleanupUploadedFile = () => {
+		fetch(
+			`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`,
+			{ method: "DELETE" },
+		).catch(() => {});
+	};
+
+	try {
+		let genRes!: Response;
+		let genData!: GenData;
+		for (let mi = 0; mi < transcribeModels.length; mi++) {
+			const model = transcribeModels[mi];
+			try {
+				({ genRes, genData } = await withGeminiRetry(async () => {
+					const res = await fetch(
+						`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								contents: [
+									{
+										parts: [
+											{
+												fileData: {
+													mimeType,
+													fileUri,
+												},
 											},
-										},
-										{ text: buildTranscriptionPrompt({ knownSpeakers }) },
-									],
+											{ text: buildTranscriptionPrompt({ knownSpeakers }) },
+										],
+									},
+								],
+								generationConfig: {
+									temperature: 0.1,
+									maxOutputTokens: TRANSCRIBE_MAX_OUTPUT_TOKENS,
+									thinkingConfig: { thinkingBudget: 0 },
 								},
-							],
-							generationConfig: {
-								temperature: 0.1,
-								maxOutputTokens: TRANSCRIBE_MAX_OUTPUT_TOKENS,
-								thinkingConfig: { thinkingBudget: 0 },
-							},
-						}),
-					},
-				);
+							}),
+							signal,
+						},
+					);
 
-				const data = (await res.json()) as GenData;
+					const data = (await res.json()) as GenData;
 
-				if (!res.ok) {
-					const errMsg = `Gemini generateContent failed (HTTP ${res.status}): ${data.error?.message ?? "unknown"}`;
-					if (isTransientGeminiError(res.status, data.error?.message ?? "")) {
-						throw new Error(errMsg);
+					if (!res.ok) {
+						const errMsg = `Gemini generateContent failed (HTTP ${res.status}): ${data.error?.message ?? "unknown"}`;
+						if (isTransientGeminiError(res.status, data.error?.message ?? "")) {
+							throw new Error(errMsg);
+						}
+						// Non-transient: throw a special marker so withGeminiRetry skips retries
+						const e = new Error(errMsg);
+						(e as Error & { permanent?: boolean }).permanent = true;
+						throw e;
 					}
-					// Non-transient: throw a special marker so withGeminiRetry skips retries
-					const e = new Error(errMsg);
-					(e as Error & { permanent?: boolean }).permanent = true;
-					throw e;
-				}
 
-				return { genRes: res, genData: data };
-			}));
-			break; // primary model succeeded
-		} catch (err) {
-			const isPermanent = (err as { permanent?: boolean })?.permanent === true;
-			const isLastModel = mi === transcribeModels.length - 1;
-			if (isPermanent || isLastModel) throw err;
-			const nextModel = transcribeModels[mi + 1];
-			console.warn(
-				`[gemini-transcribe] model ${model} overloaded, falling back to ${nextModel}`,
+					return { genRes: res, genData: data };
+				}, maxAttempts, signal));
+				break; // primary model succeeded
+			} catch (err) {
+				const isPermanent = (err as { permanent?: boolean })?.permanent === true;
+				const isLastModel = mi === transcribeModels.length - 1;
+				if (isPermanent || isLastModel) throw err;
+				const nextModel = transcribeModels[mi + 1];
+				console.warn(
+					`[gemini-transcribe] model ${model} overloaded, falling back to ${nextModel}`,
+				);
+			}
+		}
+
+		if (!genRes.ok) {
+			throw new Error(
+				`Gemini generateContent failed: ${genData.error?.message ?? genRes.status}`,
 			);
 		}
-	}
 
-	if (!genRes.ok) {
-		throw new Error(
-			`Gemini generateContent failed: ${genData.error?.message ?? genRes.status}`,
+		const rawText = genData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+		const inputTokens = genData.usageMetadata?.promptTokenCount ?? 0;
+		const outputTokens = genData.usageMetadata?.candidatesTokenCount ?? 0;
+		const audioInTokens =
+			genData.usageMetadata?.promptTokensDetails?.find(
+				(d) => d.modality === "AUDIO",
+			)?.tokenCount ?? 0;
+
+		// [diag] long-audio near-empty transcript — tells us whether Gemini itself
+		// returned little (finishReason / 0 output) or our parser dropped cues
+		// (rawText long but saved VTT tiny). Remove after the 10-min case is fixed.
+		const finishReason = (
+			genData.candidates?.[0] as { finishReason?: string } | undefined
+		)?.finishReason;
+		console.log(
+			`[gemini-transcribe] rawText.length=${rawText.length} outputTokens=${outputTokens} finishReason=${finishReason} durationSec=${audioDurationSec} preview=${JSON.stringify(rawText.slice(0, 220))}`,
 		);
+
+		// Always normalize Gemini's raw output into STANDARD WebVTT before saving,
+		// regardless of the shape it returns (inline cues, single timestamps, etc.).
+		// This keeps the AI workflow's parser happy and keeps HTML <track> captions valid.
+		const { text: guardedText, runaway } = stripRunawayRepetition(rawText);
+		if (runaway) {
+			console.warn(
+				`[gemini-transcribe] RUNAWAY repetition detected (outputTokens=${outputTokens}, finishReason=${finishReason}); truncated garbage tail, kept clean prefix`,
+			);
+		}
+
+		if (guardedText.trim().length === 0) {
+			throw new Error(
+				`[gemini-transcribe] empty transcript from Gemini (finishReason=${finishReason}); not saving as complete`,
+			);
+		}
+
+		const transcriptVtt = normalizeToWebVtt(guardedText, audioDurationSec);
+		if (!transcriptVtt.includes("-->")) {
+			console.warn(
+				"[gemini-transcribe] Gemini did not return usable WEBVTT timestamps; fabricated approximate timestamps from plain text fallback.",
+			);
+		}
+
+		return { transcriptVtt, inputTokens, outputTokens, audioInTokens };
+	} finally {
+		cleanupUploadedFile();
 	}
-
-	const rawText = genData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-	const inputTokens = genData.usageMetadata?.promptTokenCount ?? 0;
-	const outputTokens = genData.usageMetadata?.candidatesTokenCount ?? 0;
-	const audioInTokens =
-		genData.usageMetadata?.promptTokensDetails?.find(
-			(d) => d.modality === "AUDIO",
-		)?.tokenCount ?? 0;
-
-	// [diag] long-audio near-empty transcript — tells us whether Gemini itself
-	// returned little (finishReason / 0 output) or our parser dropped cues
-	// (rawText long but saved VTT tiny). Remove after the 10-min case is fixed.
-	const finishReason = (
-		genData.candidates?.[0] as { finishReason?: string } | undefined
-	)?.finishReason;
-	console.log(
-		`[gemini-transcribe] rawText.length=${rawText.length} outputTokens=${outputTokens} finishReason=${finishReason} durationSec=${audioDurationSec} preview=${JSON.stringify(rawText.slice(0, 220))}`,
-	);
-
-	fetch(
-		`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`,
-		{ method: "DELETE" },
-	).catch(() => {});
-
-	// Always normalize Gemini's raw output into STANDARD WebVTT before saving,
-	// regardless of the shape it returns (inline cues, single timestamps, etc.).
-	// This keeps the AI workflow's parser happy and keeps HTML <track> captions valid.
-	const { text: guardedText, runaway } = stripRunawayRepetition(rawText);
-	if (runaway) {
-		console.warn(
-			`[gemini-transcribe] RUNAWAY repetition detected (outputTokens=${outputTokens}, finishReason=${finishReason}); truncated garbage tail, kept clean prefix`,
-		);
-	}
-
-	if (guardedText.trim().length === 0) {
-		throw new Error(
-			`[gemini-transcribe] empty transcript from Gemini (finishReason=${finishReason}); not saving as complete`,
-		);
-	}
-
-	const transcriptVtt = normalizeToWebVtt(guardedText, audioDurationSec);
-	if (!transcriptVtt.includes("-->")) {
-		console.warn(
-			"[gemini-transcribe] Gemini did not return usable WEBVTT timestamps; fabricated approximate timestamps from plain text fallback.",
-		);
-	}
-
-	return { transcriptVtt, inputTokens, outputTokens, audioInTokens };
 }

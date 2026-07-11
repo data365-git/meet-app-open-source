@@ -3,14 +3,34 @@ const PRICES: Record<
 	{ textInPerMillion: number; audioInPerMillion: number; outputPerMillion: number }
 > = {
 	"gemini-3-flash-preview": {
-		textInPerMillion: 0.3,
+		// Current official rates (2026-07-11 spec §6): text-in $0.50/M,
+		// audio-in $1.00/M, output $3.00/M. Batch halves via the 0.5 factor.
+		textInPerMillion: 0.5,
 		audioInPerMillion: 1.0,
-		outputPerMillion: 2.5,
+		outputPerMillion: 3.0,
+	},
+	"gemini-3.5-flash": {
+		// Current official rates (2026-07-11 spec §6): input $1.50/M (text and
+		// audio alike), output $9.00/M. Used for the Tez free-first probe; a paid
+		// 3.5 fallback (if ever recorded) must not be under-priced.
+		textInPerMillion: 1.5,
+		audioInPerMillion: 1.5,
+		outputPerMillion: 9.0,
 	},
 	"gemini-2.5-flash": {
 		textInPerMillion: 0.3,
 		audioInPerMillion: 1.0,
 		outputPerMillion: 2.5,
+	},
+	// Last-resort fallback alias in the model chains. It currently resolves to
+	// gemini-3.5-flash (spec §6), so price it at 3.5 rates rather than letting it
+	// fall through to the cheaper DEFAULT and under-report a paid fallback. The
+	// alias target can drift; if it moves to a cheaper model this only over-prices
+	// (the safe direction), and the pinned primaries stay explicit.
+	"gemini-flash-latest": {
+		textInPerMillion: 1.5,
+		audioInPerMillion: 1.5,
+		outputPerMillion: 9.0,
 	},
 	"gemini-embedding-001": {
 		textInPerMillion: 0,

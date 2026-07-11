@@ -25,6 +25,7 @@ import {
 	isQuotaLikeAiError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
+import { withDeadline } from "@/lib/deadline";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
 import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
@@ -654,6 +655,10 @@ export function buildSaveResultsPatch(
 		aiGenerationError: finalUsable ? undefined : AI_EMPTY_RESULT_ERROR,
 		aiProcessingStep: finalUsable ? "done" : current.aiProcessingStep,
 		aiQuotaWaiting: undefined,
+		// Terminal success drops the job's 4h clock so a later brand-new analysis
+		// starts fresh (spec §5 C6, bug #8); an ERROR keeps it so a retry/flip
+		// still counts from the original start.
+		aiJobStartedAt: finalUsable ? undefined : current.aiJobStartedAt,
 	};
 }
 
@@ -834,6 +839,12 @@ const GEMINI_SUMMARY_MODELS = [
 const GEMINI_SUMMARY_MODEL = GEMINI_SUMMARY_MODELS[0];
 const FREE_SUMMARY_MODEL = "gemini-3.5-flash";
 
+// Tez (fast) free-probe deadline for one summary/refine text call. Fast mode
+// makes exactly ONE free attempt (no backoff) under this deadline, then falls to
+// the paid Standard chain. Cheap mode stays patient (cron handles the wait).
+// Initial value per spec §1; measured-p75 tuning is a blocked Phase-A follow-up.
+const FREE_SUMMARY_PROBE_MS = 8_000;
+
 interface AiApiResult {
 	content: string;
 	model: string;
@@ -871,14 +882,21 @@ export async function callAiApi(
 
 	if (freeKey) {
 		try {
-			const freeResult = await callAiApiWithModel(
-				FREE_SUMMARY_MODEL,
-				prompt,
-				json,
-				freeKey,
-				context,
-				{ free: true },
-			);
+			// Tez: one bounded free attempt (no backoff) under a real deadline that
+			// aborts the in-flight fetch. Arzon: patient — default retries, no
+			// deadline (the recover cron handles the quota wait).
+			const isFast = context.aiSpeedMode !== "cheap";
+			const freeResult = isFast
+				? await withDeadline(FREE_SUMMARY_PROBE_MS, (signal) =>
+						callAiApiWithModel(FREE_SUMMARY_MODEL, prompt, json, freeKey, context, {
+							free: true,
+							maxAttempts: 1,
+							signal,
+						}),
+					)
+				: await callAiApiWithModel(FREE_SUMMARY_MODEL, prompt, json, freeKey, context, {
+						free: true,
+					});
 			freeInputTokens = freeResult.inputTokens;
 			freeOutputTokens = freeResult.outputTokens;
 			assertFreeAiResultUsable(freeResult, json);
@@ -950,7 +968,7 @@ async function callAiApiWithModel(
 	json: boolean,
 	apiKey: string,
 	context: AiCallContext,
-	options: { free?: boolean } = {},
+	options: { free?: boolean; signal?: AbortSignal; maxAttempts?: number } = {},
 ): Promise<AiApiModelResult> {
 	const result = await withCostGuard({
 		orgId: context.orgId,
@@ -960,12 +978,14 @@ async function callAiApiWithModel(
 		model,
 		...(options.free ? { free: true } : {}),
 		fn: async () => {
-			const { data } = await withGeminiRetry(async () => {
+			const { data } = await withGeminiRetry(
+				async () => {
 				const res = await fetch(
 					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
+						signal: options.signal,
 						body: JSON.stringify({
 							contents: [{ parts: [{ text: prompt }] }],
 							generationConfig: {
@@ -1007,7 +1027,10 @@ async function callAiApiWithModel(
 				}
 
 				return { data };
-			});
+				},
+				options.maxAttempts ?? 5,
+				options.signal,
+			);
 
 			const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 			if (!rawText) {

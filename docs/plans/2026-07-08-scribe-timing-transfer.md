@@ -61,8 +61,8 @@ Input: Gemini VTT (good text, drifted times) + Scribe word list `[{word,start,en
    transfer → replace times. On ANY failure, keep Gemini times (log + continue).
    Do NOT touch partial/resume (`transcription-partial.vtt`) — timing pass is final
    VTT only.
-4. **Env**: set `ELEVENLABS_API_KEY` in Railway (@cap/web). Owner's key:
-   `sk_d436b52e0bdf6560b3707d9155ea0152fff5d05a0f1cfb4d` (or owner rotates).
+4. **Env**: set `ELEVENLABS_API_KEY` in Railway (@cap/web). Exposed key was here — REVOKE & rotate; set a fresh key out-of-band:
+   `<ROTATED_KEY_SET_OUT_OF_BAND>` (or owner rotates).
    `railway variables --service @cap/web --set ELEVENLABS_API_KEY=...`
 5. **Cost/observability**: log `[transcribe] scribe-transfer: N cues shifted, mean Xs,
    Y dense matches`. Emit an ai_usage-style record if the project tracks spend.

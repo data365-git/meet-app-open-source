@@ -61,11 +61,47 @@ vi.mock("@/lib/transcribe", () => ({
 }));
 
 const {
+	hasPendingBatchJobs,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	staleThresholdMsForMetadata,
 	withIncrementedAutoRecoverAttempts,
 } = await import("@/app/api/cron/recover-stale-ai-jobs/route");
+
+describe("hasPendingBatchJobs (recovery skips the collector's jobs)", () => {
+	const job = {
+		batchName: "batches/a",
+		fileName: "files/a",
+		startSec: 0,
+		durationSec: 900,
+		submittedAt: "t1",
+	};
+
+	it("is true only when aiBatchJobs is a non-empty array", () => {
+		expect(hasPendingBatchJobs({ aiBatchJobs: [job] })).toBe(true);
+		expect(hasPendingBatchJobs({ aiBatchJobs: [] })).toBe(false);
+		expect(hasPendingBatchJobs({})).toBe(false);
+	});
+
+	it("skips a cheap job with a pending Batch BEFORE 4h, but the 4h flip still wins after", () => {
+		const nowMs = Date.parse("2026-07-11T12:00:00.000Z");
+		const twoHoursAgo = new Date(nowMs - 2 * 60 * 60 * 1000).toISOString();
+		const fiveHoursAgo = new Date(nowMs - 5 * 60 * 60 * 1000).toISOString();
+
+		const beforeFlip = {
+			aiMode: "cheap" as const,
+			aiJobStartedAt: twoHoursAgo,
+			aiBatchJobs: [job],
+		};
+		// Before 4h: not flipping, but has a pending Batch → recovery skips it.
+		expect(shouldAutoFlipCheapJobToPaid(beforeFlip, nowMs)).toBe(false);
+		expect(hasPendingBatchJobs(beforeFlip)).toBe(true);
+
+		const afterFlip = { ...beforeFlip, aiJobStartedAt: fiveHoursAgo };
+		// After 4h: the flip check (evaluated first in the loop) wins over the skip.
+		expect(shouldAutoFlipCheapJobToPaid(afterFlip, nowMs)).toBe(true);
+	});
+});
 
 describe("shouldAutoRetry", () => {
 	it("retries when there is no prior attempt", () => {

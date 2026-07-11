@@ -71,6 +71,45 @@ describe("priceForMicros", () => {
 		expect(unknown).toBe(known);
 	});
 
+	it("prices gemini-3-flash-preview at its 2026-07 official rates", () => {
+		// 1M text-in @ $0.50 + 1M audio-in @ $1.00 + 1M output @ $3.00 = $4.50
+		const micros = priceForMicros("gemini-3-flash-preview", {
+			textInTokens: 1_000_000,
+			audioInTokens: 1_000_000,
+			outputTokens: 1_000_000,
+			batch: false,
+		});
+		expect(micros).toBe(4_500_000);
+	});
+
+	it("applies the 0.5 Batch factor to gemini-3-flash-preview (the cheap-mode rate)", () => {
+		const sync = priceForMicros("gemini-3-flash-preview", {
+			textInTokens: 1_000_000,
+			audioInTokens: 1_000_000,
+			outputTokens: 1_000_000,
+			batch: false,
+		});
+		const batch = priceForMicros("gemini-3-flash-preview", {
+			textInTokens: 1_000_000,
+			audioInTokens: 1_000_000,
+			outputTokens: 1_000_000,
+			batch: true,
+		});
+		expect(batch).toBe(Math.round(sync / 2));
+		expect(batch).toBe(2_250_000);
+	});
+
+	it("prices gemini-3.5-flash at its 2026-07 official rates", () => {
+		// 1M text-in @ $1.50 + 1M audio-in @ $1.50 + 1M output @ $9.00 = $12.00
+		const micros = priceForMicros("gemini-3.5-flash", {
+			textInTokens: 1_000_000,
+			audioInTokens: 1_000_000,
+			outputTokens: 1_000_000,
+			batch: false,
+		});
+		expect(micros).toBe(12_000_000);
+	});
+
 	it("prices the embedding model at zero", () => {
 		const micros = priceForMicros("gemini-embedding-001", {
 			textInTokens: 1_000_000,

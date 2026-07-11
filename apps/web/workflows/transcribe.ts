@@ -25,6 +25,7 @@ import {
 	isQuotaLikeAiError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
+import { withDeadline } from "@/lib/deadline";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -36,11 +37,13 @@ import {
 	extractAudioFromUrl,
 	extractAudioSpanFromUrl,
 } from "@/lib/audio-extract";
+import { submitChunkBatch } from "@/lib/gemini-batch-transcribe";
 import {
 	extractSpeakerLabels,
 	mergeChunkedWebVtt,
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
+import { patchVideoMetadata } from "@/lib/video-metadata";
 import { fetchScribeWordTimes } from "@/lib/eleven-scribe";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { restoreRussianScript } from "@/lib/restore-russian-script";
@@ -83,6 +86,13 @@ export interface ExtractedAudio {
 // gemini-3.5-flash is free-of-charge on a billing-off project and higher quality
 // than the paid default; on any failure the paid path takes over.
 const FREE_TRANSCRIBE_MODEL = "gemini-3.5-flash";
+
+// Tez (fast) free-probe deadline for one transcription chunk (Files API
+// upload + activation + generation). Fast mode makes exactly ONE free attempt
+// (no retry backoff) under this deadline; on the deadline or any failure it
+// falls straight to the paid path. Cheap mode ignores this — it stays patient.
+// Initial value per spec §1; measured-p75 tuning is a blocked Phase-A follow-up.
+const FREE_TRANSCRIBE_PROBE_MS = 30_000;
 
 // Chunk length is the ceiling on transcript↔audio drift: Gemini estimates (does
 // not force-align) timestamps, so cues run progressively ahead within a chunk and
@@ -604,12 +614,21 @@ export async function transcribeAudio(
 					model: FREE_TRANSCRIBE_MODEL,
 					free: true,
 					fn: async () => {
-						const res = await transcribeWithGemini(audioUrl, {
-							apiKey: freeKey,
-							audioDurationSec: audioDurationSec ?? undefined,
-							knownSpeakers,
-							models: [FREE_TRANSCRIBE_MODEL],
-						});
+						// Tez: exactly one free attempt, no backoff, under a real
+						// deadline that aborts the in-flight fetches. Arzon: patient —
+						// default retries, no deadline (cron handles the quota wait).
+						const isFast = context.aiSpeedMode !== "cheap";
+						const runFree = (signal?: AbortSignal) =>
+							transcribeWithGemini(audioUrl, {
+								apiKey: freeKey,
+								audioDurationSec: audioDurationSec ?? undefined,
+								knownSpeakers,
+								models: [FREE_TRANSCRIBE_MODEL],
+								...(isFast ? { maxAttempts: 1, signal } : {}),
+							});
+						const res = isFast
+							? await withDeadline(FREE_TRANSCRIBE_PROBE_MS, runFree)
+							: await runFree();
 						return {
 							transcriptVtt: res.transcriptVtt,
 							inputTokens: res.inputTokens,
@@ -660,6 +679,76 @@ export async function transcribeAudio(
 	return runSync();
 }
 
+/**
+ * One-at-a-time cheap-mode durable Batch submit (spec §5 C2). On a cheap free
+ * quota failure for a chunk, submit that ONE uncovered chunk to the paid Gemini
+ * Batch API using the SERVER paid key (never an owner key — the collector must
+ * resolve the same project), persist the job with a read-modify-write so
+ * unrelated metadata survives, and return so the caller can rethrow the quota
+ * wait. Submits at most one job per video: if a job is already pending, or the
+ * submit itself fails, it does nothing and the patient free retry stays live.
+ */
+async function submitCheapChunkBatch(
+	chunk: { url: string; startSec: number; durationSec: number | null },
+	videoId: string,
+	knownSpeakers: string[],
+): Promise<void> {
+	// This helper must NEVER throw: the caller rethrows the ORIGINAL quota wait so
+	// the workflow parks in PROCESSING + aiQuotaWaiting. Any failure here (no key,
+	// db hiccup, submit error) is logged and swallowed so the patient free retry
+	// stays live and a transient problem never escalates a quota wait to ERROR.
+	try {
+		const paidKey = serverEnv().GEMINI_API_KEY;
+		if (!paidKey) {
+			console.warn(
+				`[transcribe] cheap quota but no paid GEMINI_API_KEY set; staying on patient free wait for video=${videoId}`,
+			);
+			return;
+		}
+
+		// One Batch job at a time per video — never submit while one is pending.
+		const [row] = await db()
+			.select({ metadata: videos.metadata })
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId))
+			.limit(1);
+		const existingJobs = ((row?.metadata as VideoMetadata) ?? {}).aiBatchJobs;
+		if (Array.isArray(existingJobs) && existingJobs.length > 0) {
+			return;
+		}
+
+		const submitted = await submitChunkBatch(chunk.url, {
+			apiKey: paidKey,
+			knownSpeakers,
+			videoId,
+		});
+		await patchVideoMetadata(videoId, (current) => {
+			const jobs = Array.isArray(current.aiBatchJobs)
+				? current.aiBatchJobs
+				: [];
+			// Race guard (should not trigger at cheap concurrency 1): if another
+			// job appeared under the row lock, leave it — one at a time.
+			if (jobs.length > 0) return current;
+			return {
+				...current,
+				aiBatchJobs: [
+					{
+						batchName: submitted.batchName,
+						fileName: submitted.fileName,
+						startSec: chunk.startSec,
+						durationSec: chunk.durationSec ?? 0,
+						submittedAt: new Date().toISOString(),
+					},
+				],
+			};
+		});
+	} catch (error) {
+		console.warn(
+			`[transcribe] cheap-mode Batch submit failed for video=${videoId}; keeping patient free wait: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
 export async function transcribeAudioChunks(
 	audio: ExtractedAudio,
 	ownerEncryptedGeminiKey: string | null,
@@ -668,17 +757,46 @@ export async function transcribeAudioChunks(
 	onProgress?: (p: { transcribedChunks: Array<{ vtt: string; offsetSec: number }>; completed: number; total: number }) => Promise<void>,
 	existingPartialVtt?: string,
 ): Promise<string> {
+	// Partial checkpoint present + non-empty (a prior run or a collected Batch
+	// chunk). Shared by the single-chunk and multi-chunk paths.
+	const hasUsablePartial =
+		typeof existingPartialVtt === "string" &&
+		existingPartialVtt.trim().length > 0 &&
+		!/^WEBVTT\s*$/.test(existingPartialVtt.trim());
+
 	if (audio.chunks.length === 1) {
 		const chunk = audio.chunks[0];
 		if (!chunk) return "WEBVTT\n\n";
-		return restoreRussianScript(
-			await transcribeAudio(
-				chunk.url,
-				chunk.durationSec ?? audio.totalDurationSec,
-				ownerEncryptedGeminiKey,
-				context,
-			),
-		);
+		const chunkDurationSec = chunk.durationSec ?? audio.totalDurationSec ?? 0;
+		// After a Batch collection re-kick the single chunk is already covered by
+		// the saved partial — reuse it instead of re-transcribing (spec §5 C2).
+		if (
+			hasUsablePartial &&
+			isChunkCoveredByPartial(
+				existingPartialVtt as string,
+				chunk.startSec,
+				chunkDurationSec,
+			)
+		) {
+			return restoreRussianScript(existingPartialVtt as string);
+		}
+		try {
+			return restoreRussianScript(
+				await transcribeAudio(
+					chunk.url,
+					chunk.durationSec ?? audio.totalDurationSec,
+					ownerEncryptedGeminiKey,
+					context,
+				),
+			);
+		} catch (error) {
+			// Cheap-mode quota: submit this chunk to the durable paid Batch and
+			// rethrow so the workflow parks in PROCESSING + aiQuotaWaiting.
+			if (context.aiSpeedMode === "cheap" && isAiQuotaWaitError(error)) {
+				await submitCheapChunkBatch(chunk, context.videoId, []);
+			}
+			throw error;
+		}
 	}
 
 	let failedChunkCount = 0;
@@ -688,14 +806,11 @@ export async function transcribeAudioChunks(
 		audio.chunks.length,
 	);
 
-	// Retry resume: an earlier interrupted run may have saved a partial merged
-	// transcript. Seed the result with it (offsetSec 0 = already absolute, the
-	// same pattern fillTranscriptGaps uses) so every chunk it already covers can
-	// be skipped below — a retry never re-bills Gemini for work that succeeded.
-	const hasPartial =
-		typeof existingPartialVtt === "string" &&
-		existingPartialVtt.trim().length > 0 &&
-		!/^WEBVTT\s*$/.test(existingPartialVtt.trim());
+	// Retry resume: an earlier interrupted run (or a collected Batch chunk) may
+	// have saved a partial merged transcript. Seed the result with it (offsetSec
+	// 0 = already absolute, the same pattern fillTranscriptGaps uses) so every
+	// chunk it already covers is skipped below — a retry never re-bills Gemini.
+	const hasPartial = hasUsablePartial;
 	const seedParts: Array<{ vtt: string; offsetSec: number }> = hasPartial
 		? [{ vtt: existingPartialVtt as string, offsetSec: 0 }]
 		: [];
@@ -751,6 +866,15 @@ export async function transcribeAudioChunks(
 			});
 			result = { vtt, offsetSec: chunk.startSec };
 		} catch (error) {
+			// Cheap-mode quota is NOT a missing chunk (spec §5 C2, bug #1): submit
+			// this ONE chunk to the durable paid Batch, then rethrow so the whole
+			// workflow parks in PROCESSING + aiQuotaWaiting and the collector cron
+			// finishes it. Must run BEFORE the generic fault tolerance below, which
+			// would otherwise swallow the quota wait into an empty gap.
+			if (context.aiSpeedMode === "cheap" && isAiQuotaWaitError(error)) {
+				await submitCheapChunkBatch(chunk, context.videoId, knownSpeakers);
+				throw error;
+			}
 			// FAULT TOLERANCE (long-video fix): a single bad chunk must NOT discard the
 			// whole transcript. Previously one failed chunk threw -> the outer catch marked
 			// the ENTIRE video ERROR and dropped every successful chunk (root cause of
@@ -788,9 +912,14 @@ export async function transcribeAudioChunks(
 		}
 	}
 
+	// Cheap mode transcribes one chunk at a time (spec §5 C2): the first quota
+	// failure submits exactly one Batch job and rethrows, so parallel chunks must
+	// not race to submit several. Fast mode keeps the normal concurrency.
+	const chunkConcurrency =
+		context.aiSpeedMode === "cheap" ? 1 : AI_CHUNK_CONCURRENCY;
 	await mapWithConcurrency(
 		audio.chunks.slice(1),
-		AI_CHUNK_CONCURRENCY,
+		chunkConcurrency,
 		(chunk, sliceIndex) => processChunk(chunk, sliceIndex + 1, knownSpeakers),
 	);
 
@@ -1418,6 +1547,10 @@ async function saveTranscription(
 	delete (md as any).transcriptionChunksCompleted;
 	delete (md as any).transcriptionChunksTotal;
 	delete md.aiQuotaWaiting;
+	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
+	// analysis does not inherit this completed job's timestamp and immediately
+	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.
+	delete md.aiJobStartedAt;
 	if (remainingGaps.length > 0) {
 		md.transcriptionGaps = remainingGaps.map((g) => ({
 			startSec: Math.round(g.startSec),

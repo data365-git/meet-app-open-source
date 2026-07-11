@@ -1,8 +1,9 @@
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import {
 	buildTranscriptionPrompt,
-	type GeminiTranscribeResult,
 	normalizeToWebVtt,
+	stripRunawayRepetition,
+	TRANSCRIBE_MAX_OUTPUT_TOKENS,
 } from "@/lib/gemini-transcribe";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -25,9 +26,10 @@ export const TERMINAL_BATCH_STATES = [
 
 export type BatchStateClass = "succeeded" | "failed" | "pending";
 
-/** Poll interval and overall timeout. Batch jobs run server-side; we only poll. */
-export const BATCH_POLL_INTERVAL_MS = 30_000; // 30s (spec: every 30-60s)
-export const BATCH_TIMEOUT_MS = 30 * 60_000; // 30 min → fall back to sync
+/** Overall timeout budget used by the pure `shouldFallbackToSync` decision. The
+ * in-process poller that consumed it was removed (cron-driven collect replaces
+ * it); the pure helper + its tests are kept. */
+export const BATCH_TIMEOUT_MS = 30 * 60_000; // 30 min
 
 // ─── Pure helpers (network-free — unit tested) ────────────────────────────────
 
@@ -195,7 +197,10 @@ export function buildBatchRequestBody(params: {
 		],
 		generationConfig: {
 			temperature: 0.1,
-			maxOutputTokens: 65536,
+			// Aligned with the sync path's runaway-cost cap (spec §5 C1). The old
+			// 65,536 let a repetition loop burn the whole budget; sync caps at 24k
+			// and the collector applies the same stripRunawayRepetition guard.
+			maxOutputTokens: TRANSCRIBE_MAX_OUTPUT_TOKENS,
 			thinkingConfig: { thinkingBudget: 0 },
 		},
 	};
@@ -378,9 +383,9 @@ async function getBatch(batchName: string, apiKey: string): Promise<unknown> {
 	});
 }
 
-async function cancelBatch(batchName: string, apiKey: string): Promise<void> {
-	// Best-effort — never throw. Cancels a batch that blew the timeout so we
-	// don't pay for output we'll discard in favour of the sync fallback.
+/** Best-effort cancel — never throws. Used by the paid four-hour flip and the
+ * "no longer cheap" cron branch to stop a still-running Batch we will abandon. */
+export async function cancelBatch(batchName: string, apiKey: string): Promise<void> {
 	await fetch(`${GL_BASE}/${batchName}:cancel?key=${apiKey}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -388,35 +393,13 @@ async function cancelBatch(batchName: string, apiKey: string): Promise<void> {
 	}).catch(() => {});
 }
 
-async function deleteBatchFile(fileName: string, apiKey: string): Promise<void> {
+/** Best-effort delete of an uploaded Files API input object — never throws. */
+export async function deleteBatchFile(fileName: string, apiKey: string): Promise<void> {
 	await fetch(`${GL_BASE}/${fileName}?key=${apiKey}`, {
 		method: "DELETE",
 	}).catch(() => {});
 }
 
-/** Signalled by the batch runner when the job did not finish usefully in time
- * (timeout, terminal-failure, or empty output). The caller MUST catch this and
- * fall back to the synchronous path for this chunk. */
-export class BatchFallbackError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "BatchFallbackError";
-	}
-}
-
-/**
- * Transcribe one chunk via the Gemini Batch API. Uploads the audio, submits the
- * batch, LOGS the returned batch name before polling (crash-safe re-attach at
- * least via logs), polls until terminal or the 30-min timeout, then unwraps.
- *
- * Failure policy — this NEVER silently drops a chunk:
- *   - timeout            → best-effort cancel, throw BatchFallbackError
- *   - terminal FAILED/…  → throw BatchFallbackError
- *   - inline error / empty output → unwrap throws → caller's retry path handles it
- * The uploaded Files API object is ALWAYS deleted in `finally`.
- *
- * `sleepFn`/`nowFn` are injectable for tests; production uses real timers.
- */
 // ─── Durable submit / collect (cron-driven; NO in-process poll) ─────────────────
 // The pair below splits the old in-process transcribeChunkWithBatch into two
 // steps so a batch can outlive the request that started it: the workflow SUBMITS
@@ -445,9 +428,20 @@ export async function submitChunkBatch(
 		knownSpeakers,
 		displayName: `cap-batch-${videoId ?? "chunk"}-${Date.now()}`,
 	});
-	const batchName = await submitBatch(body, apiKey);
+	let batchName: string;
+	try {
+		batchName = await submitBatch(body, apiKey);
+	} catch (error) {
+		// Upload succeeded but submission failed — the Files API object would leak
+		// (no collector will ever see it since no job was persisted). Best-effort
+		// delete it, then rethrow so the caller keeps the patient-free wait.
+		await deleteBatchFile(uploaded.fileName, apiKey);
+		throw error;
+	}
+	// Do NOT log the audio URL (it is a signed storage URL); batch name + video id
+	// are enough to re-attach from logs.
 	console.log(
-		`[gemini-batch] durable submit ${batchName} for video=${videoId ?? "?"} audioUrl=${audioUrl.split("?")[0]}`,
+		`[gemini-batch] durable submit ${batchName} for video=${videoId ?? "?"}`,
 	);
 	return { batchName, fileName: uploaded.fileName };
 }
@@ -485,7 +479,11 @@ export async function collectBatchResult(
 
 	try {
 		const unwrapped = unwrapBatchResponse(polled);
-		const transcriptVtt = normalizeToWebVtt(unwrapped.rawText, audioDurationSec);
+		// Same runaway-repetition guard the sync path applies before normalizing
+		// (spec §5 C1) — a Batch chunk can loop just like a sync one, and the 24k
+		// cap alone does not remove the garbage tail.
+		const { text: guardedText } = stripRunawayRepetition(unwrapped.rawText);
+		const transcriptVtt = normalizeToWebVtt(guardedText, audioDurationSec);
 		if (fileName) await deleteBatchFile(fileName, apiKey);
 		return {
 			status: "succeeded",
@@ -500,103 +498,5 @@ export async function collectBatchResult(
 			status: "failed",
 			reason: error instanceof Error ? error.message : String(error),
 		};
-	}
-}
-
-export async function transcribeChunkWithBatch(
-	audioUrl: string,
-	options: {
-		apiKey: string;
-		audioDurationSec?: number;
-		knownSpeakers?: string[];
-		videoId?: string;
-		pollIntervalMs?: number;
-		timeoutMs?: number;
-		sleepFn?: (ms: number) => Promise<void>;
-		nowFn?: () => number;
-	},
-): Promise<GeminiTranscribeResult> {
-	const {
-		apiKey,
-		audioDurationSec = 300,
-		knownSpeakers,
-		videoId,
-		pollIntervalMs = BATCH_POLL_INTERVAL_MS,
-		timeoutMs = BATCH_TIMEOUT_MS,
-		sleepFn = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
-		nowFn = () => Date.now(),
-	} = options;
-
-	const uploaded = await uploadAudioForBatch(audioUrl, apiKey);
-	const displayName = `cap-batch-${videoId ?? "chunk"}-${Date.now()}`;
-
-	try {
-		const body = buildBatchRequestBody({
-			model: BATCH_TRANSCRIBE_MODEL,
-			mimeType: uploaded.mimeType,
-			fileUri: uploaded.fileUri,
-			knownSpeakers,
-			displayName,
-		});
-
-		const batchName = await submitBatch(body, apiKey);
-		// Persist the batch name BEFORE polling (spike gotcha: batch jobs are not
-		// idempotent). Logs are the crash-safe re-attach record.
-		console.log(
-			`[gemini-batch] submitted batch ${batchName} for video=${videoId ?? "?"} audioUrl=${audioUrl.split("?")[0]}`,
-		);
-
-		const startedAt = nowFn();
-		let lastState: string | undefined;
-		// Poll loop. The first poll happens after one interval — batch jobs take
-		// minutes, so an immediate poll is wasted.
-		for (;;) {
-			await sleepFn(pollIntervalMs);
-			const polled = await getBatch(batchName, apiKey);
-			lastState = extractBatchState(polled);
-			const cls = mapBatchState(lastState);
-
-			if (cls === "succeeded") {
-				const unwrapped = unwrapBatchResponse(polled);
-				const transcriptVtt = normalizeToWebVtt(
-					unwrapped.rawText,
-					audioDurationSec,
-				);
-				console.log(
-					`[gemini-batch] batch ${batchName} SUCCEEDED (rawText.length=${unwrapped.rawText.length}, outputTokens=${unwrapped.outputTokens})`,
-				);
-				return {
-					transcriptVtt,
-					inputTokens: unwrapped.inputTokens,
-					outputTokens: unwrapped.outputTokens,
-					audioInTokens: unwrapped.audioInTokens,
-				};
-			}
-
-			if (cls === "failed") {
-				throw new BatchFallbackError(
-					`Batch ${batchName} reached terminal non-success state ${lastState}`,
-				);
-			}
-
-			// Still pending — timeout check.
-			if (
-				shouldFallbackToSync({
-					state: lastState,
-					elapsedMs: nowFn() - startedAt,
-					timeoutMs,
-				})
-			) {
-				console.warn(
-					`[gemini-batch] batch ${batchName} timed out after ${Math.round((nowFn() - startedAt) / 1000)}s (state=${lastState}); cancelling and falling back to sync`,
-				);
-				await cancelBatch(batchName, apiKey);
-				throw new BatchFallbackError(
-					`Batch ${batchName} did not finish within ${timeoutMs}ms`,
-				);
-			}
-		}
-	} finally {
-		await deleteBatchFile(uploaded.fileName, apiKey);
 	}
 }

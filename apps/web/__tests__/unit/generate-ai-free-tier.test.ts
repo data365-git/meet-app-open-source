@@ -216,6 +216,54 @@ describe("callAiApi free-tier-first", () => {
 		expect(fetchUrl(1)).toContain("key=paid-key");
 	});
 
+	it("fast free probe threads an abort signal into the free call; cheap does not", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		H.fetch.mockResolvedValue(geminiOk('{"ok":true}', 11, 7));
+
+		await callAiApi("prompt", {}, CTX);
+		const fastOpt = H.fetch.mock.calls[0]?.[1] as { signal?: AbortSignal };
+		expect(fastOpt.signal).toBeInstanceOf(AbortSignal);
+
+		H.fetch.mockClear();
+		await callAiApi("prompt", {}, CHEAP_CTX);
+		const cheapOpt = H.fetch.mock.calls[0]?.[1] as { signal?: AbortSignal };
+		expect(cheapOpt.signal).toBeUndefined();
+	});
+
+	it("fast free deadline: aborts the free probe and falls back to paid once", async () => {
+		vi.useFakeTimers();
+		try {
+			H.serverEnv.mockReturnValue({
+				GEMINI_API_KEY: "paid-key",
+				GEMINI_API_KEY_FREE: "free-key",
+			});
+			// Free fetch hangs until its abort signal fires (the 8s probe deadline).
+			H.fetch.mockImplementationOnce(
+				(_url: string, opts: { signal?: AbortSignal }) =>
+					new Promise((_resolve, reject) => {
+						opts.signal?.addEventListener("abort", () =>
+							reject(new Error("aborted")),
+						);
+					}),
+			);
+			H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+
+			const promise = callAiApi("prompt", {}, CTX);
+			await vi.advanceTimersByTimeAsync(8_100);
+			const out = await promise;
+
+			expect(out.content).toBe('{"paid":true}');
+			expect(out.model).toBe("gemini-3-flash-preview");
+			expect(H.fetch).toHaveBeenCalledTimes(2);
+			expect(fetchUrl(1)).toContain("key=paid-key");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("no free key: paid path only, exactly one call", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
 		H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));

@@ -39,6 +39,13 @@ export function shouldCountStaleJobTowardDeath(
 	return !(metadata.aiMode === "cheap" && metadata.aiQuotaWaiting === true);
 }
 
+/** A cheap job with a pending durable Batch is owned by the poll-batch-jobs
+ * collector, not this recovery cron. Skip the normal stale re-kick for it —
+ * EXCEPT the four-hour paid flip, which is checked first and always wins. */
+export function hasPendingBatchJobs(metadata: VideoMetadata): boolean {
+	return Array.isArray(metadata.aiBatchJobs) && metadata.aiBatchJobs.length > 0;
+}
+
 /** Pure decision: does this video still get an automatic re-kick, or has it used up its retries? */
 export function shouldAutoRetry(
 	attempts: number | undefined,
@@ -149,6 +156,7 @@ export async function GET(request: Request) {
 	let retried = 0;
 	let gaveUp = 0;
 	let flippedToPaid = 0;
+	let skippedForBatch = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -167,6 +175,10 @@ export async function GET(request: Request) {
 				}
 				flippedToPaid++;
 				retried++;
+			} else if (hasPendingBatchJobs(metadata)) {
+				// The poll-batch-jobs collector owns this cheap job's pending Batch;
+				// re-kicking here would create a duplicate non-idempotent Batch.
+				skippedForBatch++;
 			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
 				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
 				await db()
@@ -250,5 +262,6 @@ export async function GET(request: Request) {
 		retried,
 		gaveUp,
 		flippedToPaid,
+		skippedForBatch,
 	});
 }

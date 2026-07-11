@@ -60,6 +60,10 @@ const PAID_RESULT = { transcriptVtt: "WEBVTT\n\nPAID", inputTokens: 20, outputTo
 
 type GuardOpt = { model?: string; free?: boolean; fn: () => Promise<unknown> };
 type GeminiOpt = { apiKey?: string; models?: readonly string[] };
+type FreeProbeOpt = GeminiOpt & {
+	signal?: AbortSignal;
+	maxAttempts?: number;
+};
 
 describe("transcribeAudio free-tier-first", () => {
 	beforeEach(() => {
@@ -130,6 +134,58 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(out).toBe("WEBVTT\n\nPAID");
 		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
 		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+	});
+
+	it("fast free probe is bounded: single attempt (maxAttempts=1) with an abort signal", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini.mockResolvedValue(FREE_RESULT);
+
+		await transcribeAudio("https://a/x.mp3", 300, null, CTX);
+
+		const opt = H.transcribeWithGemini.mock.calls[0]?.[1] as FreeProbeOpt;
+		expect(opt.maxAttempts).toBe(1);
+		expect(opt.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it("cheap free attempt stays patient: no probe deadline or attempt cap", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini.mockResolvedValue(FREE_RESULT);
+
+		await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
+
+		const opt = H.transcribeWithGemini.mock.calls[0]?.[1] as FreeProbeOpt;
+		expect(opt.maxAttempts).toBeUndefined();
+		expect(opt.signal).toBeUndefined();
+	});
+
+	it("fast free deadline: aborts the probe and falls back to paid exactly once", async () => {
+		vi.useFakeTimers();
+		try {
+			H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+			// Free hangs until its abort signal fires (the probe deadline), proving
+			// the deadline — not a mock rejection — is what triggers the fallback.
+			H.transcribeWithGemini.mockImplementationOnce(
+				(_u: string, o: FreeProbeOpt) =>
+					new Promise((_resolve, reject) => {
+						o.signal?.addEventListener("abort", () =>
+							reject(o.signal?.reason ?? new Error("aborted")),
+						);
+					}),
+			);
+			H.transcribeWithGemini.mockResolvedValueOnce(PAID_RESULT);
+
+			const promise = transcribeAudio("https://a/x.mp3", 300, null, CTX);
+			await vi.advanceTimersByTimeAsync(31_000);
+			const out = await promise;
+
+			expect(out).toBe("WEBVTT\n\nPAID");
+			// One free attempt (aborted), then exactly one paid fallback — never two.
+			expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+			expect((H.transcribeWithGemini.mock.calls[0]?.[1] as FreeProbeOpt).apiKey).toBe("free-key");
+			expect((H.transcribeWithGemini.mock.calls[1]?.[1] as FreeProbeOpt).apiKey).toBe("paid-key");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("no free key: paid path only, never a free attempt (regression)", async () => {
