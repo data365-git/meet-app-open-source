@@ -59,7 +59,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				</Link>
 				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Upload a video file from your device.
+					Upload a video or audio file from your device.
 				</p>
 			</div>
 

@@ -2,7 +2,7 @@
 
 import { buildEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { Folder, Video } from "@cap/web-domain";
+import { Folder, type Video } from "@cap/web-domain";
 import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
@@ -36,7 +36,9 @@ async function uploadVideoForServerProcessing(
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
-	let createdVideoId: Awaited<ReturnType<typeof createVideoForServerProcessing>>["id"] | undefined;
+	let createdVideoId:
+		| Awaited<ReturnType<typeof createVideoForServerProcessing>>["id"]
+		| undefined;
 
 	try {
 		setUploadStatus({ status: "parsing" });
@@ -74,6 +76,7 @@ async function uploadVideoForServerProcessing(
 			folderId,
 			orgId,
 			isAudio: isAudioFile(file),
+			mimeType: file.type || undefined,
 		});
 
 		const uploadId = videoData.id;
@@ -221,7 +224,7 @@ async function uploadVideoForServerProcessing(
 
 /**
  * Shared import-upload machinery used by both the standalone /dashboard/import/file
- * page and the one-step "Import video" button on /dashboard/caps.
+ * page and the one-step "Import file" button on /dashboard/caps.
  *
  * `onUploadStarted` lets each caller decide navigation after the upload kicks off
  * (the file page always redirects; the Caps page stays put unless a folderId is set).
@@ -297,7 +300,14 @@ export function useImportUpload({
 				}
 			}
 		},
-		[user, activeOrganization, setUploadStatus, router, folderId, onUploadStarted],
+		[
+			user,
+			activeOrganization,
+			setUploadStatus,
+			router,
+			folderId,
+			onUploadStarted,
+		],
 	);
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

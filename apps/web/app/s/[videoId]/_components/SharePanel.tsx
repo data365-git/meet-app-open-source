@@ -87,6 +87,12 @@ interface SharePanelProps {
 	transcript: React.ReactNode;
 	refined: React.ReactNode;
 	processing?: boolean;
+	/** False once transcription is done but the transcript is empty/missing —
+	 * matches what `ensureTranscriptIndex` (chat/route.ts) requires. */
+	transcriptReady?: boolean;
+	/** T9 prototype: "modal" hides this inline chat (the AIFab/AIChatPopup pair
+	 * renders instead, one level up in ShareVideo). Default "inline". */
+	chatVariant?: "modal" | "inline";
 }
 
 export function SharePanel({
@@ -97,6 +103,8 @@ export function SharePanel({
 	transcript,
 	refined,
 	processing,
+	transcriptReady = true,
+	chatVariant = "inline",
 }: SharePanelProps) {
 	const t = useTranslations("share");
 	const searchParams = useSearchParams();
@@ -184,7 +192,7 @@ export function SharePanel({
 	const sendMessage = useCallback(
 		async (text: string) => {
 			const trimmed = text.trim();
-			if (!trimmed || isStreaming) return;
+			if (!trimmed || isStreaming || !transcriptReady) return;
 
 			const userMsg: Message = {
 				id: nextMsgId(),
@@ -335,7 +343,7 @@ export function SharePanel({
 				abortRef.current = null;
 			}
 		},
-		[videoId, messages, isStreaming, t],
+		[videoId, messages, isStreaming, t, transcriptReady],
 	);
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -411,7 +419,7 @@ export function SharePanel({
 				{activeContent}
 			</div>
 
-			{messages.length > 0 && (
+			{chatVariant === "inline" && messages.length > 0 && (
 				<div className="shrink-0 border-t border-gray-4">
 					<div className="flex items-center justify-between px-4 pt-2.5">
 						<span className="inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--brand)]">
@@ -467,73 +475,77 @@ export function SharePanel({
 				</div>
 			)}
 
-			<div className="shrink-0 border-t border-gray-4 p-3">
-				{messages.length === 0 && (
-					<div className="mb-2.5 flex flex-col gap-1.5">
-						<span className="font-mono text-[11px] uppercase tracking-wide text-gray-9">
-							{t("suggestedQuestionsLabel")}
-						</span>
-						<div className="flex flex-wrap gap-1.5">
-							{[t("suggestedQ1"), t("suggestedQ2"), t("suggestedQ3")].map(
-								(q) => (
-									<button
-										key={q}
-										type="button"
-										onClick={() => sendMessage(q)}
-										className="rounded-[14px] border border-gray-5 bg-gray-2 px-2.5 py-1.5 text-[13px] text-gray-12 transition-colors hover:bg-gray-3"
-									>
-										{q}
-									</button>
-								),
-							)}
+			{chatVariant === "inline" && (
+				<div className="shrink-0 border-t border-gray-4 p-3">
+					{messages.length === 0 && (
+						<div className="mb-2.5 flex flex-col gap-1.5">
+							<span className="font-mono text-[11px] uppercase tracking-wide text-gray-9">
+								{t("suggestedQuestionsLabel")}
+							</span>
+							<div className="flex flex-wrap gap-1.5">
+								{[t("suggestedQ1"), t("suggestedQ2"), t("suggestedQ3")].map(
+									(q) => (
+										<button
+											key={q}
+											type="button"
+											onClick={() => sendMessage(q)}
+											className="rounded-[14px] border border-gray-5 bg-gray-2 px-2.5 py-1.5 text-[13px] text-gray-12 transition-colors hover:bg-gray-3"
+										>
+											{q}
+										</button>
+									),
+								)}
+							</div>
 						</div>
-					</div>
-				)}
-				<div className="flex items-end gap-2">
-					<textarea
-						ref={textareaRef}
-						rows={1}
-						placeholder={
-							processing
-								? t("aiInputDisabledPlaceholder")
-								: t("aiAskPlaceholder")
-						}
-						value={input}
-						onChange={(e) => {
-							setInput(e.target.value);
-							adjustTextarea();
-						}}
-						onKeyDown={handleKeyDown}
-						disabled={isStreaming || processing}
-						className="min-h-9 flex-1 resize-none rounded-[18px] border border-gray-5 bg-gray-2 px-4 py-2 text-[13px] text-gray-12 placeholder:text-gray-9 focus:border-[var(--brand)] focus:outline-none disabled:opacity-60"
-					/>
-					<button
-						type="button"
-						onClick={() => sendMessage(input)}
-						disabled={!input.trim() || isStreaming}
-						aria-label={t("aiSendAriaLabel")}
-						className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
-					>
-						<svg
-							width="15"
-							height="15"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2.4"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							aria-hidden="true"
+					)}
+					<div className="flex items-end gap-2">
+						<textarea
+							ref={textareaRef}
+							rows={1}
+							placeholder={
+								processing
+									? t("aiInputDisabledPlaceholder")
+									: !transcriptReady
+										? t("aiTranscriptNotReady")
+										: t("aiAskPlaceholder")
+							}
+							value={input}
+							onChange={(e) => {
+								setInput(e.target.value);
+								adjustTextarea();
+							}}
+							onKeyDown={handleKeyDown}
+							disabled={isStreaming || processing || !transcriptReady}
+							className="min-h-9 flex-1 resize-none rounded-[18px] border border-gray-5 bg-gray-2 px-4 py-2 text-[13px] text-gray-12 placeholder:text-gray-9 focus:border-[var(--brand)] focus:outline-none disabled:opacity-60"
+						/>
+						<button
+							type="button"
+							onClick={() => sendMessage(input)}
+							disabled={!input.trim() || isStreaming || !transcriptReady}
+							aria-label={t("aiSendAriaLabel")}
+							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
 						>
-							<path d="M12 20V5" />
-							<path d="m6 11 6-6 6 6" />
-						</svg>
-					</button>
+							<svg
+								width="15"
+								height="15"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.4"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M12 20V5" />
+								<path d="m6 11 6-6 6 6" />
+							</svg>
+						</button>
+					</div>
+					<p className="mt-1.5 px-1 text-[10.5px] text-gray-9">
+						{t("aiDisclaimer")}
+					</p>
 				</div>
-				<p className="mt-1.5 px-1 text-[10.5px] text-gray-9">
-					{t("aiDisclaimer")}
-				</p>
-			</div>
+			)}
 		</div>
 	);
 }

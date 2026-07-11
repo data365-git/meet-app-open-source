@@ -42,12 +42,14 @@ export async function createVideoForServerProcessing({
 	folderId,
 	orgId,
 	isAudio,
+	mimeType,
 }: {
 	duration?: number;
 	resolution?: string;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
 	isAudio?: boolean;
+	mimeType?: string;
 }): Promise<CreateForProcessingResult> {
 	const user = await getCurrentUser();
 
@@ -68,11 +70,22 @@ export async function createVideoForServerProcessing({
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
 
+	// Storage key/pathway stays the video-shaped "raw-upload.mp4" for both media
+	// types — the S3 object's Content-Type metadata (below) carries the real
+	// audio format; downstream raw-file lookups (video-proxy, playlist,
+	// transcribe) only recognize the .mp4/.webm raw-upload keys, so an
+	// audio-specific extension here would break those fallbacks.
+	const contentType = isAudio
+		? mimeType?.startsWith("audio/")
+			? mimeType
+			: "audio/mpeg"
+		: "video/mp4";
+
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
 		rawFileKey,
 		{
-			contentType: "video/mp4",
+			contentType,
 			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
@@ -91,7 +104,7 @@ export async function createVideoForServerProcessing({
 	await db().transaction(async (tx) => {
 		await tx.insert(videos).values({
 			id: videoId,
-			name: `data365 Upload - ${formattedDate}`,
+			name: `data365 ${isAudio ? "Audio " : ""}Upload - ${formattedDate}`,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },

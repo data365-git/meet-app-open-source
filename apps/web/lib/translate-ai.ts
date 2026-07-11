@@ -10,9 +10,9 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { z } from "zod";
-import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import { withGeminiRetry } from "@/lib/gemini-retry";
+import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
 import {
 	restoreRussianScript,
 	restoreRussianScriptDeep,
@@ -351,14 +351,12 @@ ${JSON.stringify(compactInput)}`;
 	const translatedChapters = summary.refinedTranscript.chapters.map(
 		(originalChapter, i) => {
 			const count = paragraphCounts[i] ?? 0;
-			const paragraphs = translatedFlatParagraphs.slice(
-				cursor,
-				cursor + count,
-			);
+			const paragraphs = translatedFlatParagraphs.slice(cursor, cursor + count);
 			cursor += count;
 			return {
 				startSec: originalChapter.startSec,
-				title: compact.refinedTranscriptChapterTitles[i] ?? originalChapter.title,
+				title:
+					compact.refinedTranscriptChapterTitles[i] ?? originalChapter.title,
 				paragraphs,
 			};
 		},
@@ -391,7 +389,15 @@ ${JSON.stringify(compactInput)}`;
 		overview: compact.overview,
 		topics: compact.topics,
 		nextSteps: compact.nextSteps,
-		tasks: compact.tasks,
+		// category is language-neutral and not re-translated (the compact schema
+		// omits it); carry it over from the base task at the same index. The count
+		// mismatch guard above guarantees these arrays are the same length (T8).
+		tasks: compact.tasks.map((task, i) => ({
+			...task,
+			...(summary.tasks[i]?.category
+				? { category: summary.tasks[i].category }
+				: {}),
+		})),
 		chapters: compact.chapters.map((chapter, i) => ({
 			...chapter,
 			startSec: summary.chapters[i]?.startSec ?? chapter.startSec,

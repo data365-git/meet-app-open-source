@@ -41,16 +41,24 @@ export const BATCH_TIMEOUT_MS = 30 * 60_000; // 30 min
  * Case/format tolerant: matches on the trailing token so both
  * "BATCH_STATE_SUCCEEDED" and a bare "SUCCEEDED" resolve the same.
  */
-export function mapBatchState(state: string | undefined | null): BatchStateClass {
+export function mapBatchState(
+	state: string | undefined | null,
+): BatchStateClass {
 	const s = (state ?? "").toUpperCase();
 	if (s.includes("SUCCEEDED")) return "succeeded";
-	if (s.includes("FAILED") || s.includes("CANCELLED") || s.includes("EXPIRED")) {
+	if (
+		s.includes("FAILED") ||
+		s.includes("CANCELLED") ||
+		s.includes("EXPIRED")
+	) {
 		return "failed";
 	}
 	return "pending";
 }
 
-export function isTerminalBatchState(state: string | undefined | null): boolean {
+export function isTerminalBatchState(
+	state: string | undefined | null,
+): boolean {
 	return mapBatchState(state) !== "pending";
 }
 
@@ -161,10 +169,14 @@ export function unwrapBatchResponse(batch: unknown): UnwrappedBatchResult {
 	const rawText = gen.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 	const inputTokens = gen.usageMetadata?.promptTokenCount ?? 0;
 	const outputTokens = gen.usageMetadata?.candidatesTokenCount ?? 0;
+	const rawAudioInTokens =
+		gen.usageMetadata?.promptTokensDetails?.find((d) => d.modality === "AUDIO")
+			?.tokenCount ?? 0;
+	// Transcription input is essentially all audio. When the response omits
+	// promptTokensDetails (or lacks an AUDIO entry), don't silently bill the
+	// dominant cost at the cheaper text rate — treat the whole input as audio.
 	const audioInTokens =
-		gen.usageMetadata?.promptTokensDetails?.find(
-			(d) => d.modality === "AUDIO",
-		)?.tokenCount ?? 0;
+		rawAudioInTokens === 0 && inputTokens > 0 ? inputTokens : rawAudioInTokens;
 	const finishReason = gen.candidates?.[0]?.finishReason;
 
 	if (rawText.trim().length === 0) {
@@ -191,7 +203,11 @@ export function buildBatchRequestBody(params: {
 			{
 				parts: [
 					{ fileData: { mimeType: params.mimeType, fileUri: params.fileUri } },
-					{ text: buildTranscriptionPrompt({ knownSpeakers: params.knownSpeakers }) },
+					{
+						text: buildTranscriptionPrompt({
+							knownSpeakers: params.knownSpeakers,
+						}),
+					},
 				],
 			},
 		],
@@ -245,7 +261,8 @@ async function pollFileUntilActive(
 		if (!res.ok) throw new Error(`Gemini file poll failed: ${res.status}`);
 		const data = (await res.json()) as { state?: string };
 		if (data.state === "ACTIVE") return;
-		if (data.state === "FAILED") throw new Error("Gemini file processing failed");
+		if (data.state === "FAILED")
+			throw new Error("Gemini file processing failed");
 		await new Promise<void>((r) => setTimeout(r, 2000));
 	}
 	throw new Error("Gemini file never reached ACTIVE state");
@@ -385,7 +402,10 @@ async function getBatch(batchName: string, apiKey: string): Promise<unknown> {
 
 /** Best-effort cancel — never throws. Used by the paid four-hour flip and the
  * "no longer cheap" cron branch to stop a still-running Batch we will abandon. */
-export async function cancelBatch(batchName: string, apiKey: string): Promise<void> {
+export async function cancelBatch(
+	batchName: string,
+	apiKey: string,
+): Promise<void> {
 	await fetch(`${GL_BASE}/${batchName}:cancel?key=${apiKey}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -394,7 +414,10 @@ export async function cancelBatch(batchName: string, apiKey: string): Promise<vo
 }
 
 /** Best-effort delete of an uploaded Files API input object — never throws. */
-export async function deleteBatchFile(fileName: string, apiKey: string): Promise<void> {
+export async function deleteBatchFile(
+	fileName: string,
+	apiKey: string,
+): Promise<void> {
 	await fetch(`${GL_BASE}/${fileName}?key=${apiKey}`, {
 		method: "DELETE",
 	}).catch(() => {});

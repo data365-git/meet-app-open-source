@@ -12,6 +12,9 @@ export interface AiSummary {
 		priority: "high" | "medium" | "low";
 		deadline: string;
 		done: boolean;
+		/** Theme bucket for the Vazifalar grouping (T8). Language-neutral — the
+		 * base summary carries it; translations copy it over from the base. */
+		category?: string;
 	}[];
 	chapters: { startSec: number; title: string; body: string }[];
 	refinedTranscript: {
@@ -88,6 +91,13 @@ export interface VideoMetadata {
 	aiSummary?: AiSummary | null;
 	transcriptionChunksCompleted?: number;
 	transcriptionChunksTotal?: number;
+	/**
+	 * Per-stage chunk progress for the summary/refine AI passes (T3 fine-grained
+	 * status). Written from inside the generate-ai fan-out; reset at each stage
+	 * transition. Distinct from the transcription counters above.
+	 */
+	aiStageChunksCompleted?: number;
+	aiStageChunksTotal?: number;
 	/**
 	 * Holes (>120s) left in the final transcript after the gap-fill pass —
 	 * either genuine silence or a stretch the ASR persistently failed on.

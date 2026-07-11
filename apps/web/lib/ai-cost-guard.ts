@@ -173,7 +173,11 @@ export async function assertAiBudgetAvailable({
 				capMicros: effectiveBudgetCapOrgMicros,
 			})
 		) {
-			throw new BudgetExceededError("org", orgSpend, effectiveBudgetCapOrgMicros);
+			throw new BudgetExceededError(
+				"org",
+				orgSpend,
+				effectiveBudgetCapOrgMicros,
+			);
 		}
 	}
 
@@ -213,7 +217,9 @@ interface CostGuardOptions<T> {
 
 export async function withCostGuard<T>(
 	options: CostGuardOptions<T>,
-): Promise<T & { inputTokens: number; outputTokens: number; audioInTokens?: number }> {
+): Promise<
+	T & { inputTokens: number; outputTokens: number; audioInTokens?: number }
+> {
 	const billingMonth = currentBillingMonth();
 	const configuredCaps = await getAiBudgetCapsMicros({
 		orgId: options.orgId,
@@ -278,7 +284,17 @@ export async function withCostGuard<T>(
 
 	const result = await options.fn();
 
-	const audioInTokens = result.audioInTokens ?? 0;
+	const rawAudioInTokens = result.audioInTokens ?? 0;
+	// Transcription input is essentially all audio; when the caller couldn't
+	// determine an audio split (e.g. Gemini omitted promptTokensDetails), don't
+	// silently bill the dominant cost at the cheaper text rate. Summary/refine
+	// are genuinely text, so this only applies to transcription.
+	const audioInTokens =
+		options.operation === "transcription" &&
+		rawAudioInTokens === 0 &&
+		result.inputTokens > 0
+			? result.inputTokens
+			: rawAudioInTokens;
 	const costUsdMicros = options.free
 		? 0
 		: priceForMicros(options.model, {
@@ -290,95 +306,86 @@ export async function withCostGuard<T>(
 
 	try {
 		await db()
-		.insert(aiUsageEvents)
-		.values({
-			id: nanoId(),
-			orgId: options.orgId as Organisation.OrganisationId,
-			userId: options.userId as User.UserId,
-			videoId: (options.videoId as Video.VideoId) ?? null,
-			operation: options.operation,
-			model: options.model,
-			inputTokens: result.inputTokens,
-			outputTokens: result.outputTokens,
-			costUsdMicros,
-			billingMonth,
-		});
+			.insert(aiUsageEvents)
+			.values({
+				id: nanoId(),
+				orgId: options.orgId as Organisation.OrganisationId,
+				userId: options.userId as User.UserId,
+				videoId: (options.videoId as Video.VideoId) ?? null,
+				operation: options.operation,
+				model: options.model,
+				inputTokens: result.inputTokens,
+				outputTokens: result.outputTokens,
+				costUsdMicros,
+				billingMonth,
+			});
 
-	// Check budget thresholds and create alerts
-	if (budgetCapUserMicros != null && budgetCapUserMicros > 0) {
-		const currentSpend = await getMonthlySpendMicros(
-			"userId",
-			options.userId,
-			billingMonth,
-		);
-		const prevSpend = previousSpendBeforeRecordedEvent({
-			currentSpendMicros: currentSpend,
-			eventCostMicros: costUsdMicros,
-		});
-		const newSpend = currentSpend;
-
-		const prevPct = (prevSpend / budgetCapUserMicros) * 100;
-		const newPct = (newSpend / budgetCapUserMicros) * 100;
-
-		// 100% threshold crossed
-		if (prevPct < 100 && newPct >= 100) {
-			const amountFormatted = (newSpend / 1_000_000).toFixed(2);
-			const budgetFormatted = (budgetCapUserMicros / 1_000_000).toFixed(
-				2,
+		// Check budget thresholds and create alerts
+		if (budgetCapUserMicros != null && budgetCapUserMicros > 0) {
+			const currentSpend = await getMonthlySpendMicros(
+				"userId",
+				options.userId,
+				billingMonth,
 			);
-			console.log(
-				`[BUDGET_ALERT] User ${options.userId}: AI budget exceeded — new AI operations blocked until next month or budget raise ($${amountFormatted} of $${budgetFormatted})`,
-			);
+			const prevSpend = previousSpendBeforeRecordedEvent({
+				currentSpendMicros: currentSpend,
+				eventCostMicros: costUsdMicros,
+			});
+			const newSpend = currentSpend;
+
+			const prevPct = (prevSpend / budgetCapUserMicros) * 100;
+			const newPct = (newSpend / budgetCapUserMicros) * 100;
+
+			// 100% threshold crossed
+			if (prevPct < 100 && newPct >= 100) {
+				const amountFormatted = (newSpend / 1_000_000).toFixed(2);
+				const budgetFormatted = (budgetCapUserMicros / 1_000_000).toFixed(2);
+				console.log(
+					`[BUDGET_ALERT] User ${options.userId}: AI budget exceeded — new AI operations blocked until next month or budget raise ($${amountFormatted} of $${budgetFormatted})`,
+				);
+			}
+			// 80% threshold crossed
+			else if (prevPct < 80 && newPct >= 80) {
+				const amountFormatted = (newSpend / 1_000_000).toFixed(2);
+				const budgetFormatted = (budgetCapUserMicros / 1_000_000).toFixed(2);
+				console.log(
+					`[BUDGET_ALERT] User ${options.userId}: AI spend at 80% of monthly budget ($${amountFormatted} of $${budgetFormatted})`,
+				);
+			}
 		}
-		// 80% threshold crossed
-		else if (prevPct < 80 && newPct >= 80) {
-			const amountFormatted = (newSpend / 1_000_000).toFixed(2);
-			const budgetFormatted = (budgetCapUserMicros / 1_000_000).toFixed(
-				2,
+
+		if (budgetCapOrgMicros != null && budgetCapOrgMicros > 0) {
+			const currentSpend = await getMonthlySpendMicros(
+				"orgId",
+				options.orgId,
+				billingMonth,
 			);
-			console.log(
-				`[BUDGET_ALERT] User ${options.userId}: AI spend at 80% of monthly budget ($${amountFormatted} of $${budgetFormatted})`,
-			);
+			const prevSpend = previousSpendBeforeRecordedEvent({
+				currentSpendMicros: currentSpend,
+				eventCostMicros: costUsdMicros,
+			});
+			const newSpend = currentSpend;
+
+			const prevPct = (prevSpend / budgetCapOrgMicros) * 100;
+			const newPct = (newSpend / budgetCapOrgMicros) * 100;
+
+			// 100% threshold crossed
+			if (prevPct < 100 && newPct >= 100) {
+				const amountFormatted = (newSpend / 1_000_000).toFixed(2);
+				const budgetFormatted = (budgetCapOrgMicros / 1_000_000).toFixed(2);
+				console.log(
+					`[BUDGET_ALERT] Org ${options.orgId}: AI budget exceeded — new AI operations blocked until next month or budget raise ($${amountFormatted} of $${budgetFormatted})`,
+				);
+			}
+			// 80% threshold crossed
+			else if (prevPct < 80 && newPct >= 80) {
+				const amountFormatted = (newSpend / 1_000_000).toFixed(2);
+				const budgetFormatted = (budgetCapOrgMicros / 1_000_000).toFixed(2);
+				console.log(
+					`[BUDGET_ALERT] Org ${options.orgId}: AI spend at 80% of monthly budget ($${amountFormatted} of $${budgetFormatted})`,
+				);
+			}
 		}
-	}
-
-	if (budgetCapOrgMicros != null && budgetCapOrgMicros > 0) {
-		const currentSpend = await getMonthlySpendMicros(
-			"orgId",
-			options.orgId,
-			billingMonth,
-		);
-		const prevSpend = previousSpendBeforeRecordedEvent({
-			currentSpendMicros: currentSpend,
-			eventCostMicros: costUsdMicros,
-		});
-		const newSpend = currentSpend;
-
-		const prevPct = (prevSpend / budgetCapOrgMicros) * 100;
-		const newPct = (newSpend / budgetCapOrgMicros) * 100;
-
-		// 100% threshold crossed
-		if (prevPct < 100 && newPct >= 100) {
-			const amountFormatted = (newSpend / 1_000_000).toFixed(2);
-			const budgetFormatted = (budgetCapOrgMicros / 1_000_000).toFixed(
-				2,
-			);
-			console.log(
-				`[BUDGET_ALERT] Org ${options.orgId}: AI budget exceeded — new AI operations blocked until next month or budget raise ($${amountFormatted} of $${budgetFormatted})`,
-			);
-		}
-		// 80% threshold crossed
-		else if (prevPct < 80 && newPct >= 80) {
-			const amountFormatted = (newSpend / 1_000_000).toFixed(2);
-			const budgetFormatted = (budgetCapOrgMicros / 1_000_000).toFixed(
-				2,
-			);
-			console.log(
-				`[BUDGET_ALERT] Org ${options.orgId}: AI spend at 80% of monthly budget ($${amountFormatted} of $${budgetFormatted})`,
-			);
-		}
-	}
-
 	} catch (error) {
 		if (!options.recordUsageBestEffort) {
 			throw error;

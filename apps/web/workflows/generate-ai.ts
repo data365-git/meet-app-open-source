@@ -18,12 +18,12 @@ import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { z } from "zod";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
-import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
 	AiQuotaWaitError,
 	isAiQuotaWaitError,
 	isQuotaLikeAiError,
 } from "@/lib/ai-quota-wait";
+import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withDeadline } from "@/lib/deadline";
 import { withGeminiRetry } from "@/lib/gemini-retry";
@@ -95,6 +95,20 @@ interface AiResult {
 	_usage?: { model: string; inputTokens: number; outputTokens: number };
 }
 
+// Controlled vocabulary for task categories (T8). The AI assigns ONE of these
+// per task; anything else (or missing, e.g. a pre-T8 video) falls back to
+// "Boshqa" both at parse time (schema below) and at render time (TasksPanel).
+const TASK_CATEGORIES = [
+	"Sotuv",
+	"Marketing",
+	"Moliya",
+	"Texnik",
+	"HR",
+	"Operatsion",
+	"Strategiya",
+	"Boshqa",
+] as const;
+
 // Resilient by design: the AI's structured JSON is imperfect on long (2h+)
 // multi-chunk syntheses — a single item missing an inner field (e.g. a chapter
 // with no `body`) used to fail the WHOLE parse (parseAiSummary → null), which
@@ -121,6 +135,7 @@ const AiSummarySchema = z.object({
 				priority: z.enum(["high", "medium", "low"]).catch("medium"),
 				deadline: z.string().catch(""),
 				done: z.boolean().catch(false),
+				category: z.enum(TASK_CATEGORIES).catch("Boshqa"),
 			}),
 		)
 		.catch([]),
@@ -888,15 +903,29 @@ export async function callAiApi(
 			const isFast = context.aiSpeedMode !== "cheap";
 			const freeResult = isFast
 				? await withDeadline(FREE_SUMMARY_PROBE_MS, (signal) =>
-						callAiApiWithModel(FREE_SUMMARY_MODEL, prompt, json, freeKey, context, {
-							free: true,
-							maxAttempts: 1,
-							signal,
-						}),
+						callAiApiWithModel(
+							FREE_SUMMARY_MODEL,
+							prompt,
+							json,
+							freeKey,
+							context,
+							{
+								free: true,
+								maxAttempts: 1,
+								signal,
+							},
+						),
 					)
-				: await callAiApiWithModel(FREE_SUMMARY_MODEL, prompt, json, freeKey, context, {
-						free: true,
-					});
+				: await callAiApiWithModel(
+						FREE_SUMMARY_MODEL,
+						prompt,
+						json,
+						freeKey,
+						context,
+						{
+							free: true,
+						},
+					);
 			freeInputTokens = freeResult.inputTokens;
 			freeOutputTokens = freeResult.outputTokens;
 			assertFreeAiResultUsable(freeResult, json);
@@ -907,10 +936,7 @@ export async function callAiApi(
 				outputTokens: freeResult.outputTokens,
 			};
 		} catch (error) {
-			if (
-				context.aiSpeedMode === "cheap" &&
-				isQuotaLikeAiError(error)
-			) {
+			if (context.aiSpeedMode === "cheap" && isQuotaLikeAiError(error)) {
 				throw new AiQuotaWaitError(
 					`Free-tier summary quota exhausted for video=${context.videoId}`,
 				);
@@ -938,7 +964,13 @@ export async function callAiApi(
 	let lastError: unknown;
 	for (const model of GEMINI_SUMMARY_MODELS) {
 		try {
-			const result = await callAiApiWithModel(model, prompt, json, apiKey, context);
+			const result = await callAiApiWithModel(
+				model,
+				prompt,
+				json,
+				apiKey,
+				context,
+			);
 			if (model !== GEMINI_SUMMARY_MODEL) {
 				console.warn(`[generate-ai] summary fell back to ${model}`);
 			}
@@ -980,53 +1012,53 @@ async function callAiApiWithModel(
 		fn: async () => {
 			const { data } = await withGeminiRetry(
 				async () => {
-				const res = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						signal: options.signal,
-						body: JSON.stringify({
-							contents: [{ parts: [{ text: prompt }] }],
-							generationConfig: {
-								temperature: 0.2,
-								// Both calls can produce large output for long videos. The
-								// structured-summary JSON holds a chapter + a task + a topic PER
-								// agenda item, so a ~65-min meeting needs ~8.6k output tokens — the
-								// old 8192 cap TRUNCATED it mid-JSON (finishReason MAX_TOKENS),
-								// JSON.parse then threw and the error was swallowed, so
-								// summary/chapters/tasks came back empty while the (separate)
-								// refined-transcript call survived. Give BOTH calls the model's
-								// full output room (65536). Verified via repro: 8192 -> MAX_TOKENS
-								// + parse fail + 0 chapters/tasks; 65536 -> STOP + 30/30.
-								maxOutputTokens: 65536,
-								...(json ? { responseMimeType: "application/json" } : {}),
-								thinkingConfig: { thinkingBudget: 0 },
-							},
-						}),
-					},
-				);
-
-				const data = (await res.json()) as {
-					candidates?: Array<{
-						content: { parts: Array<{ text?: string }> };
-						finishReason?: string;
-					}>;
-					usageMetadata?: {
-						promptTokenCount?: number;
-						candidatesTokenCount?: number;
-					};
-					promptFeedback?: { blockReason?: string };
-					error?: { message: string };
-				};
-
-				if (!res.ok) {
-					throw new Error(
-						`Gemini generateContent failed (HTTP ${res.status}): ${data.error?.message ?? "unknown"}`,
+					const res = await fetch(
+						`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							signal: options.signal,
+							body: JSON.stringify({
+								contents: [{ parts: [{ text: prompt }] }],
+								generationConfig: {
+									temperature: 0.2,
+									// Both calls can produce large output for long videos. The
+									// structured-summary JSON holds a chapter + a task + a topic PER
+									// agenda item, so a ~65-min meeting needs ~8.6k output tokens — the
+									// old 8192 cap TRUNCATED it mid-JSON (finishReason MAX_TOKENS),
+									// JSON.parse then threw and the error was swallowed, so
+									// summary/chapters/tasks came back empty while the (separate)
+									// refined-transcript call survived. Give BOTH calls the model's
+									// full output room (65536). Verified via repro: 8192 -> MAX_TOKENS
+									// + parse fail + 0 chapters/tasks; 65536 -> STOP + 30/30.
+									maxOutputTokens: 65536,
+									...(json ? { responseMimeType: "application/json" } : {}),
+									thinkingConfig: { thinkingBudget: 0 },
+								},
+							}),
+						},
 					);
-				}
 
-				return { data };
+					const data = (await res.json()) as {
+						candidates?: Array<{
+							content: { parts: Array<{ text?: string }> };
+							finishReason?: string;
+						}>;
+						usageMetadata?: {
+							promptTokenCount?: number;
+							candidatesTokenCount?: number;
+						};
+						promptFeedback?: { blockReason?: string };
+						error?: { message: string };
+					};
+
+					if (!res.ok) {
+						throw new Error(
+							`Gemini generateContent failed (HTTP ${res.status}): ${data.error?.message ?? "unknown"}`,
+						);
+					}
+
+					return { data };
 				},
 				options.maxAttempts ?? 5,
 				options.signal,
@@ -1349,7 +1381,7 @@ async function generateSingleChunk(
     "overview": "A weekly sync covering roadmap and blockers.",
     "topics": [{"title": "Q3 Roadmap", "body": "The team aligned on three key priorities."}],
     "nextSteps": ["Share updated roadmap doc by Friday"],
-    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}],
+    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false, "category": "Marketing"}],
     "chapters": [{"startSec": 0, "title": "Intro", "body": "Brief intro and agenda."}, {"startSec": 45, "title": "Q3 Roadmap", "body": "Discussion of top priorities."}]
   }
 }`;
@@ -1372,6 +1404,7 @@ Rules:
 - "start" and "startSec" are INTEGER SECONDS from the start of the video — NOT minutes and NOT "mm:ss". A transcript label like [1:40] means start=100; [7:07] means start=427. Every value MUST be a whole number between 0 and ${videoDuration}, and must NEVER exceed ${videoDuration}.
 - Chapters must be GRANULAR: one chapter roughly every 3–6 minutes of content. This ${videoDuration}-second video needs AT LEAST ${Math.max(2, Math.round(videoDuration / 360))} chapters (only a genuinely single-topic video may have fewer). Do NOT lump long stretches into one chapter.
 - tasks[].priority must be "high", "medium", or "low"
+- tasks[].category must be exactly one of: Sotuv, Marketing, Moliya, Texnik, HR, Operatsion, Strategiya, Boshqa (use Boshqa if unclear)
 - tasks[].done is always false unless explicitly resolved in the transcript
 - Keep ALL JSON property names exactly as shown
 - In aiSummary.overview, topics[].title, topics[].body and nextSteps, use markdown **bold** VERY sparingly — bold at most the 1–2 single most important terms or names per field. Do NOT bold every foreign/technical word and do NOT copy the transcript's bold density.
@@ -1483,6 +1516,31 @@ async function generateChapterAlignedRefined(
 	let inputTokens = 0;
 	let outputTokens = 0;
 
+	// Per-range stage progress (T3-backend): reset at the start of this fan-out
+	// so a stale count from the summary stage never lingers, then advance by one
+	// on every range completion — mirrors the summary fan-out above.
+	let completedRangeCount = 0;
+	const reportRangeProgress = async (): Promise<void> => {
+		completedRangeCount++;
+		try {
+			await patchVideoMetadata(context.videoId, (current) => ({
+				...current,
+				aiStageChunksCompleted: completedRangeCount,
+				aiStageChunksTotal: ranges.length,
+			}));
+		} catch (e) {
+			console.error(
+				"[generate-ai] refine stage-progress write failed (non-fatal):",
+				e,
+			);
+		}
+	};
+	await patchVideoMetadata(context.videoId, (current) => ({
+		...current,
+		aiStageChunksCompleted: 0,
+		aiStageChunksTotal: ranges.length,
+	}));
+
 	const results = await mapWithConcurrency(
 		ranges,
 		AI_CHUNK_CONCURRENCY,
@@ -1490,7 +1548,10 @@ async function generateChapterAlignedRefined(
 			const slice = segments.filter(
 				(s) => s.start >= range.startSec && s.start < range.endSec,
 			);
-			if (slice.length === 0) return null;
+			if (slice.length === 0) {
+				await reportRangeProgress();
+				return null;
+			}
 
 			let paragraphs: string[] = [];
 			try {
@@ -1514,11 +1575,13 @@ async function generateChapterAlignedRefined(
 				paragraphs = buildRawRefinedParagraphs(slice);
 			}
 
-			return {
+			const rangeResult = {
 				startSec: range.startSec,
 				title: range.title,
 				paragraphs,
 			};
+			await reportRangeProgress();
+			return rangeResult;
 		},
 	);
 
@@ -1585,11 +1648,12 @@ interface RawTask {
 	priority: "high" | "medium" | "low";
 	deadline: string;
 	done: boolean;
+	category: (typeof TASK_CATEGORIES)[number];
 }
 
 // Read one task object defensively from an unknown LLM value. Returns null for
 // anything without a usable title so junk never reaches the tasks list.
-function readTask(value: unknown): RawTask | null {
+export function readTask(value: unknown): RawTask | null {
 	if (!isRecord(value)) return null;
 	const title = typeof value.title === "string" ? value.title.trim() : "";
 	if (!title) return null;
@@ -1597,12 +1661,18 @@ function readTask(value: unknown): RawTask | null {
 		value.priority === "high" || value.priority === "low"
 			? value.priority
 			: "medium";
+	const category =
+		typeof value.category === "string" &&
+		(TASK_CATEGORIES as readonly string[]).includes(value.category)
+			? (value.category as (typeof TASK_CATEGORIES)[number])
+			: "Boshqa";
 	return {
 		title,
 		assignee: typeof value.assignee === "string" ? value.assignee : "",
 		priority,
 		deadline: typeof value.deadline === "string" ? value.deadline : "",
 		done: value.done === true,
+		category,
 	};
 }
 
@@ -1646,11 +1716,40 @@ async function generateMultipleChunks(
 	let totalOutputTokens = 0;
 	let usedModel = "unknown";
 
+	// Per-chunk stage progress (T3-backend): reset at the start of this fan-out
+	// so a stale count from a previous stage never lingers, then advance by one
+	// on every chunk completion (success or failure) — mirrors the
+	// savePartialTranscription progress pattern in transcribe.ts.
+	let completedChunkCount = 0;
+	const reportChunkProgress = async (): Promise<void> => {
+		completedChunkCount++;
+		try {
+			await patchVideoMetadata(context.videoId, (current) => ({
+				...current,
+				aiStageChunksCompleted: completedChunkCount,
+				aiStageChunksTotal: chunks.length,
+			}));
+		} catch (e) {
+			console.error(
+				"[generate-ai] summary stage-progress write failed (non-fatal):",
+				e,
+			);
+		}
+	};
+	await patchVideoMetadata(context.videoId, (current) => ({
+		...current,
+		aiStageChunksCompleted: 0,
+		aiStageChunksTotal: chunks.length,
+	}));
+
 	const chunkResults = await mapWithConcurrency(
 		chunks,
 		AI_CHUNK_CONCURRENCY,
 		async (chunk, i) => {
-			if (!chunk) return null;
+			if (!chunk) {
+				await reportChunkProgress();
+				return null;
+			}
 
 			const chunkPrompt = `You are data365 AI, an expert at analyzing video content. This is section ${i + 1} of ${chunks.length} from a video that is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). This section covers timestamp ${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")} to ${Math.floor(chunk.endTime / 60)}:${String(chunk.endTime % 60).padStart(2, "0")}.
 
@@ -1659,7 +1758,7 @@ Analyze this section thoroughly and provide JSON:
   "summary": "string (detailed summary of this section - capture ALL key points, topics discussed, decisions made, or concepts explained. Include specific details like names, numbers, action items, and conclusions. This should be 3-6 sentences minimum.)",
   "keyPoints": ["string (specific key point or takeaway)", ...],
   "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}],
-  "tasks": [{"title": "string (a concrete action item, task, commitment, agreement, or next step someone must do)", "assignee": "string (who is responsible, or \\"\\" if unclear)", "priority": "high|medium|low", "deadline": "string (if mentioned, else \\"\\")", "done": false}]
+  "tasks": [{"title": "string (a concrete action item, task, commitment, agreement, or next step someone must do)", "assignee": "string (who is responsible, or \\"\\" if unclear)", "priority": "high|medium|low", "deadline": "string (if mentioned, else \\"\\")", "done": false, "category": "Sotuv|Marketing|Moliya|Texnik|HR|Operatsion|Strategiya|Boshqa (pick the closest fit, use Boshqa if unclear)"}]
 }
 
 ${languageInstruction}
@@ -1685,9 +1784,10 @@ ${chunk.text}`;
 					"[generate-ai] per-chunk summary FAILED after retry (chunk skipped)",
 					{ startTime: chunk.startTime, endTime: chunk.endTime },
 				);
+				await reportChunkProgress();
 				return null;
 			}
-			return {
+			const chunkResult = {
 				summary: (parsed.summary as string) || "",
 				keyPoints: (parsed.keyPoints as string[]) || [],
 				chapters: (parsed.chapters as { title: string; start: number }[]) || [],
@@ -1696,6 +1796,8 @@ ${chunk.text}`;
 				endTime: chunk.endTime,
 				rawText: chunk.text,
 			};
+			await reportChunkProgress();
+			return chunkResult;
 		},
 	);
 
@@ -1807,7 +1909,7 @@ ${chunk.text}`;
     "overview": "A weekly sync covering roadmap and blockers.",
     "topics": [{"title": "Q3 Roadmap", "body": "The team aligned on three key priorities."}],
     "nextSteps": ["Share updated roadmap doc by Friday"],
-    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}],
+    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false, "category": "Marketing"}],
     "chapters": [{"startSec": 0, "title": "Intro", "body": "Brief intro and agenda."}, {"startSec": 45, "title": "Q3 Roadmap", "body": "Discussion of top priorities."}],
     "refinedTranscript": {
       "chapters": [{"startSec": 0, "title": "Intro", "paragraphs": ["Welcome everyone.", "Today we cover roadmap and blockers."]}]
@@ -1832,6 +1934,7 @@ Rules:
 - aiSummary.chapters[].startSec must be INTEGER SECONDS (not minutes, not mm:ss) between 0 and ${videoDuration}; e.g. the label [1:40] means startSec=100. Use the section timestamps provided above and never exceed ${videoDuration}.
 - Chapters must be GRANULAR: one chapter roughly every 3–6 minutes of content. This ${videoDuration}-second video needs AT LEAST ${Math.max(2, Math.round(videoDuration / 360))} chapters (only a genuinely single-topic video may have fewer). Do NOT lump long stretches into one chapter.
 - tasks[].priority must be "high", "medium", or "low"
+- tasks[].category must be exactly one of: Sotuv, Marketing, Moliya, Texnik, HR, Operatsion, Strategiya, Boshqa (use Boshqa if unclear)
 - refinedTranscript.chapters may be left as an empty array — it is handled separately
 - Keep ALL JSON property names exactly as shown
 - In aiSummary.overview, topics[].title, topics[].body and nextSteps, use markdown **bold** VERY sparingly — bold at most the 1–2 single most important terms or names per field. Do NOT bold every foreign/technical word and do NOT copy the transcript's bold density.

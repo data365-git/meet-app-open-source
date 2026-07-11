@@ -1,3 +1,4 @@
+import { priceForMicros } from "@cap/utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildBatchRequestBody,
@@ -107,7 +108,14 @@ describe("extractInlinedResponse / unwrapBatchResponse", () => {
 	const goodGen = {
 		response: {
 			candidates: [
-				{ content: { parts: [{ text: "WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nhello\n\n" }] }, finishReason: "STOP" },
+				{
+					content: {
+						parts: [
+							{ text: "WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nhello\n\n" },
+						],
+					},
+					finishReason: "STOP",
+				},
 			],
 			usageMetadata: {
 				promptTokenCount: 25737,
@@ -143,15 +151,19 @@ describe("extractInlinedResponse / unwrapBatchResponse", () => {
 	});
 
 	it("throws when there are no inlined responses at all", () => {
-		expect(() => unwrapBatchResponse({ state: "BATCH_STATE_SUCCEEDED" })).toThrow(
-			/missing inlinedResponses/,
-		);
+		expect(() =>
+			unwrapBatchResponse({ state: "BATCH_STATE_SUCCEEDED" }),
+		).toThrow(/missing inlinedResponses/);
 		expect(extractInlinedResponse({})).toBeUndefined();
 	});
 
 	it("throws on an empty transcript (finishReason surfaced) so the chunk retries", () => {
 		const empty = doubledNested({
-			response: { candidates: [{ content: { parts: [{ text: "   " }] }, finishReason: "MAX_TOKENS" }] },
+			response: {
+				candidates: [
+					{ content: { parts: [{ text: "   " }] }, finishReason: "MAX_TOKENS" },
+				],
+			},
 		});
 		expect(() => unwrapBatchResponse(empty)).toThrow(/empty transcript/);
 		expect(() => unwrapBatchResponse(empty)).toThrow(/MAX_TOKENS/);
@@ -159,12 +171,57 @@ describe("extractInlinedResponse / unwrapBatchResponse", () => {
 
 	it("defaults token counts to 0 when usageMetadata is absent", () => {
 		const noUsage = doubledNested({
-			response: { candidates: [{ content: { parts: [{ text: "some words here" }] } }] },
+			response: {
+				candidates: [{ content: { parts: [{ text: "some words here" }] } }],
+			},
 		});
 		const out = unwrapBatchResponse(noUsage);
 		expect(out.inputTokens).toBe(0);
 		expect(out.outputTokens).toBe(0);
 		expect(out.audioInTokens).toBe(0);
+	});
+
+	it("treats all input as audio when promptTokensDetails is missing (T1 undercount fix)", () => {
+		// A real Batch response can omit promptTokensDetails entirely while still
+		// reporting a promptTokenCount — transcription input is essentially all
+		// audio, so the missing split must not fall back to 0 (which would bill
+		// the dominant cost at the cheaper text rate).
+		const noDetails = doubledNested({
+			response: {
+				candidates: [
+					{
+						content: { parts: [{ text: "hello world" }] },
+						finishReason: "STOP",
+					},
+				],
+				usageMetadata: {
+					promptTokenCount: 19196,
+					candidatesTokenCount: 500,
+					// no promptTokensDetails at all
+				},
+			},
+		});
+		const out = unwrapBatchResponse(noDetails);
+		expect(out.inputTokens).toBe(19196);
+		expect(out.audioInTokens).toBe(19196);
+
+		// Pricing assertion: the resulting cost must use the $1.00/M audio rate
+		// (halved by the 0.5 batch factor), not the $0.50/M text rate.
+		const textInTokens = Math.max(0, out.inputTokens - out.audioInTokens);
+		const costUsdMicros = priceForMicros("gemini-3-flash-preview", {
+			textInTokens,
+			audioInTokens: out.audioInTokens,
+			outputTokens: 0,
+			batch: true,
+		});
+		const expectedAudioRateCost = Math.round(
+			(19196 / 1_000_000) * 1.0 * 0.5 * 1_000_000,
+		);
+		const wrongTextRateCost = Math.round(
+			(19196 / 1_000_000) * 0.5 * 0.5 * 1_000_000,
+		);
+		expect(costUsdMicros).toBe(expectedAudioRateCost);
+		expect(costUsdMicros).not.toBe(wrongTextRateCost);
 	});
 });
 
@@ -190,7 +247,9 @@ describe("buildBatchRequestBody", () => {
 		expect(fileDataPart.fileData.fileUri).toBe("https://files/xyz");
 		expect(fileDataPart.fileData.mimeType).toBe("audio/mpeg");
 		// The English transcription prompt is included as a text part.
-		const textPart = req.contents[0].parts.find((p: any) => typeof p.text === "string");
+		const textPart = req.contents[0].parts.find(
+			(p: any) => typeof p.text === "string",
+		);
 		expect(textPart.text).toContain("WebVTT");
 	});
 });
@@ -209,7 +268,10 @@ describe("collectBatchResult runaway guard", () => {
 					{
 						response: {
 							candidates: [
-								{ content: { parts: [{ text: rawText }] }, finishReason: "STOP" },
+								{
+									content: { parts: [{ text: rawText }] },
+									finishReason: "STOP",
+								},
 							],
 							usageMetadata: {
 								promptTokenCount: 100,
@@ -228,16 +290,18 @@ describe("collectBatchResult runaway guard", () => {
 		const runawayLine = "This is a runaway repeated line of transcript.";
 		const rawText = Array.from({ length: 40 }, () => runawayLine).join("\n");
 
-		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-			// getBatch (GET) → the succeeded batch; deleteBatchFile (DELETE) → ok.
-			if (init?.method === "DELETE") {
-				return new Response("{}", { status: 200 });
-			}
-			return new Response(JSON.stringify(succeededBatchWith(rawText)), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+		const fetchMock = vi.fn(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				// getBatch (GET) → the succeeded batch; deleteBatchFile (DELETE) → ok.
+				if (init?.method === "DELETE") {
+					return new Response("{}", { status: 200 });
+				}
+				return new Response(JSON.stringify(succeededBatchWith(rawText)), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			},
+		);
 		vi.stubGlobal("fetch", fetchMock);
 
 		const result = await collectBatchResult("batches/abc", {

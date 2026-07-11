@@ -40,8 +40,45 @@ interface GenerateAiPanelProps {
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
 	aiIncomplete?: boolean;
+	/** Fine-grained transcription chunk progress ("Gemini'ga N/M audio yuborildi"). */
+	transcriptionChunksCompleted?: number | null;
+	transcriptionChunksTotal?: number | null;
+	/** Fine-grained summary/refine chunk progress, reset at each stage transition. */
+	aiStageChunksCompleted?: number | null;
+	aiStageChunksTotal?: number | null;
+	/** ISO timestamps used to compute a rate-based ETA for the active stage. */
+	processingStartedAt?: string | null;
+	aiProcessingStartedAt?: string | null;
 	/** Called after a successful POST so the parent can refetch status */
 	onStarted?: () => void;
+}
+
+// Rate-based ETA: (elapsed / completed) × remaining, in whole minutes.
+// Falls back to the crude duration/120 heuristic until a rate is available
+// (no chunks completed yet, or the stage start time is missing).
+function computeEtaMinutes({
+	now,
+	startedAt,
+	completed,
+	total,
+	fallbackDurationSec,
+}: {
+	now: number;
+	startedAt?: string | null;
+	completed?: number | null;
+	total?: number | null;
+	fallbackDurationSec?: number | null;
+}): number {
+	if (startedAt && completed && completed > 0 && total && total > completed) {
+		const startedMs = Date.parse(startedAt);
+		const elapsedMs = now - startedMs;
+		if (!Number.isNaN(startedMs) && elapsedMs > 0) {
+			const remaining = total - completed;
+			const etaMs = (elapsedMs / completed) * remaining;
+			return Math.max(1, Math.round(etaMs / 60000));
+		}
+	}
+	return Math.max(1, Math.round((fallbackDurationSec ?? 120) / 120));
 }
 
 export function getAiAnalysisNotice(
@@ -62,6 +99,12 @@ export function GenerateAiPanel({
 	aiQuotaWaiting = false,
 	duration,
 	aiIncomplete = false,
+	transcriptionChunksCompleted,
+	transcriptionChunksTotal,
+	aiStageChunksCompleted,
+	aiStageChunksTotal,
+	processingStartedAt,
+	aiProcessingStartedAt,
 	onStarted,
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
@@ -240,7 +283,22 @@ export function GenerateAiPanel({
 			return { key, label: tShare(stepLabelKey[key]), state };
 		});
 
-		const etaMin = Math.max(1, Math.round((duration ?? 120) / 120));
+		const etaMin =
+			currentStep === "transcribe"
+				? computeEtaMinutes({
+						now: Date.now(),
+						startedAt: processingStartedAt,
+						completed: transcriptionChunksCompleted,
+						total: transcriptionChunksTotal,
+						fallbackDurationSec: duration,
+					})
+				: computeEtaMinutes({
+						now: Date.now(),
+						startedAt: aiProcessingStartedAt,
+						completed: aiStageChunksCompleted,
+						total: aiStageChunksTotal,
+						fallbackDurationSec: duration,
+					});
 		const currentMode: AiSpeedMode = aiMode === "cheap" ? "cheap" : "fast";
 		const modeLabel =
 			currentMode === "cheap"
@@ -328,6 +386,27 @@ export function GenerateAiPanel({
 						</div>
 					))}
 				</div>
+
+				{/* Fine-grained counter for the active step — exactly what T3 asked for
+				    instead of a generic "yaratilmoqda…" the whole stage through. */}
+				{currentStep === "transcribe" &&
+					(transcriptionChunksTotal ?? 0) > 0 && (
+						<p className="text-[12px] font-medium text-gray-10">
+							{tShare("aiFineTranscribing", {
+								completed: transcriptionChunksCompleted ?? 0,
+								total: transcriptionChunksTotal ?? 0,
+							})}
+						</p>
+					)}
+				{(currentStep === "summary" || currentStep === "refined") &&
+					(aiStageChunksTotal ?? 0) > 0 && (
+						<p className="text-[12px] font-medium text-gray-10">
+							{tShare("aiFineStageProgress", {
+								completed: aiStageChunksCompleted ?? 0,
+								total: aiStageChunksTotal ?? 0,
+							})}
+						</p>
+					)}
 
 				{/* Status row — reflects the CURRENT stage, not a fixed message */}
 				<div className="flex items-center gap-2 text-[13.5px] font-medium text-gray-12">

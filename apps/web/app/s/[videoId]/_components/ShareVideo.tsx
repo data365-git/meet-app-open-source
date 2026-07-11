@@ -7,8 +7,8 @@ import { useAiStatus } from "hooks/use-ai-status";
 import { useAiTranslation } from "hooks/use-ai-translation";
 import { useTranscript } from "hooks/use-transcript";
 import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useRouter } from "next/navigation";
 import {
 	forwardRef,
 	startTransition,
@@ -26,6 +26,8 @@ import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
+import { AIChatPopup } from "./AIChatPopup";
+import { AIFab } from "./AIFab";
 import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { DockableVideo } from "./DockableVideo";
@@ -40,11 +42,11 @@ import { RefinedTranscriptPanel } from "./panels/RefinedTranscriptPanel";
 import { SummaryPanel } from "./panels/SummaryPanel";
 import { TasksPanel } from "./panels/TasksPanel";
 import { TranscriptPanel } from "./panels/TranscriptPanel";
-import { SharePanel } from "./SharePanel";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import { SharePanel } from "./SharePanel";
 import { toStandardWebVtt } from "./utils/caption-vtt";
 import { clampStartSec, formatChaptersAsVTT } from "./utils/transcript-utils";
 
@@ -112,6 +114,11 @@ export const ShareVideo = forwardRef<
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
+		const searchParams = useSearchParams();
+		// T9 prototype: ?variant=modal shows the old blue-FAB→dialog chat,
+		// otherwise (default) the current inline chat in SharePanel.
+		const chatVariant: "modal" | "inline" =
+			searchParams.get("variant") === "modal" ? "modal" : "inline";
 
 		const safeChapters = useMemo(
 			() =>
@@ -138,6 +145,7 @@ export const ShareVideo = forwardRef<
 			string | null
 		>(null);
 		const [currentTime, setCurrentTime] = useState(0);
+		const [aiChatOpen, setAiChatOpen] = useState(false);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
@@ -149,11 +157,14 @@ export const ShareVideo = forwardRef<
 			data.transcriptionStatus,
 		);
 
-		const [selectedLanguage, setSelectedLanguage] = useState<"base" | ShareLanguage>(
-			data.metadata?.preferredLanguage ?? "base",
-		);
-		const [generatingLanguage, setGeneratingLanguage] = useState<ShareLanguage | null>(null);
-		const [activeTranscriptVtt, setActiveTranscriptVtt] = useState<string | null>(null);
+		const [selectedLanguage, setSelectedLanguage] = useState<
+			"base" | ShareLanguage
+		>(data.metadata?.preferredLanguage ?? "base");
+		const [generatingLanguage, setGeneratingLanguage] =
+			useState<ShareLanguage | null>(null);
+		const [activeTranscriptVtt, setActiveTranscriptVtt] = useState<
+			string | null
+		>(null);
 		const translationGeneratedRef = useRef(false);
 
 		const [optimisticAiStatus, setOptimisticAiStatus] =
@@ -175,24 +186,27 @@ export const ShareVideo = forwardRef<
 			setAiPollEnabled(true);
 		}, []);
 
-		const handleGenerateTranslation = useCallback(async (lang: ShareLanguage) => {
-			translationGeneratedRef.current = false;
-			setGeneratingLanguage(lang);
-			try {
-				const res = await fetch("/api/video/ai/translate", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ videoId: data.id, language: lang }),
-				});
-				if (!res.ok) {
+		const handleGenerateTranslation = useCallback(
+			async (lang: ShareLanguage) => {
+				translationGeneratedRef.current = false;
+				setGeneratingLanguage(lang);
+				try {
+					const res = await fetch("/api/video/ai/translate", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ videoId: data.id, language: lang }),
+					});
+					if (!res.ok) {
+						setGeneratingLanguage(null);
+						toast.error(t("translationError"));
+					}
+				} catch {
 					setGeneratingLanguage(null);
 					toast.error(t("translationError"));
 				}
-			} catch {
-				setGeneratingLanguage(null);
-				toast.error(t("translationError"));
-			}
-		}, [data.id, t]);
+			},
+			[data.id, t],
+		);
 
 		// Stop polling + pull server-rendered content once generation reaches a terminal state.
 		useEffect(() => {
@@ -242,15 +256,19 @@ export const ShareVideo = forwardRef<
 		}, [aiGenerationStatus]);
 
 		const effectiveAiStatus =
-			aiStatusQuery.data?.aiGenerationStatus ?? optimisticAiStatus ?? aiGenerationStatus;
+			aiStatusQuery.data?.aiGenerationStatus ??
+			optimisticAiStatus ??
+			aiGenerationStatus;
 
 		const effectiveAiProcessingStep =
-			aiStatusQuery.data?.aiProcessingStep ?? data.metadata?.aiProcessingStep ?? null;
+			aiStatusQuery.data?.aiProcessingStep ??
+			data.metadata?.aiProcessingStep ??
+			null;
 		const effectiveAiMode =
 			aiStatusQuery.data?.aiMode ?? data.metadata?.aiMode ?? null;
 		const effectiveAiQuotaWaiting =
 			aiStatusQuery.data?.aiQuotaWaiting ??
-			(data.metadata?.aiQuotaWaiting === true);
+			data.metadata?.aiQuotaWaiting === true;
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
@@ -258,6 +276,26 @@ export const ShareVideo = forwardRef<
 			data.transcriptionStatus === "PROCESSING" ||
 			effectiveAiStatus === "QUEUED" ||
 			effectiveAiStatus === "PROCESSING";
+
+		// Whether the AI chat can actually answer questions: mirrors what
+		// `ensureTranscriptIndex` (chat/route.ts) requires — a non-empty
+		// transcript. When false, the ask box is disabled with a friendly note
+		// instead of sending and surfacing the raw "index is not ready" error.
+		const transcriptReady =
+			data.transcriptionStatus === "COMPLETE" &&
+			!!(transcript?.content && transcript.content.trim().length > 0);
+
+		// The `/api/video/ai` status poll only returns coarse fields; the fine
+		// per-chunk summary/refine counter (`aiStageChunksCompleted/Total`)
+		// lives in `data.metadata`, which only updates via a server round-trip.
+		// Refresh periodically while that stage is running so GenerateAiPanel's
+		// fine counter + ETA stay live (transcription already gets a live
+		// counter from the `useTranscript` poll above).
+		useEffect(() => {
+			if (!aiProcessing || data.transcriptionStatus !== "COMPLETE") return;
+			const interval = setInterval(() => router.refresh(), 6000);
+			return () => clearInterval(interval);
+		}, [aiProcessing, data.transcriptionStatus, router]);
 
 		// "chala" (incomplete-looking) analysis: empty-but-complete, or refined
 		// sections fewer than summary chapters (misaligned old-data case).
@@ -380,7 +418,9 @@ export const ShareVideo = forwardRef<
 			}
 
 			if (data.transcriptionStatus === "COMPLETE" && vttContent) {
-				const blob = new Blob([toStandardWebVtt(vttContent)], { type: "text/vtt" });
+				const blob = new Blob([toStandardWebVtt(vttContent)], {
+					type: "text/vtt",
+				});
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
 					if (prev) {
@@ -463,9 +503,7 @@ export const ShareVideo = forwardRef<
 				router.refresh();
 			} catch (error) {
 				setConfirmStoppedError(
-					error instanceof Error
-						? error.message
-						: t("recordingFinalizeFailed"),
+					error instanceof Error ? error.message : t("recordingFinalizeFailed"),
 				);
 			} finally {
 				setIsConfirmingStopped(false);
@@ -721,7 +759,8 @@ export const ShareVideo = forwardRef<
 
 		const activeAiSummary =
 			selectedLanguage !== "base"
-				? (data.metadata?.aiSummaryByLanguage?.[selectedLanguage] ?? data.metadata?.aiSummary)
+				? (data.metadata?.aiSummaryByLanguage?.[selectedLanguage] ??
+					data.metadata?.aiSummary)
 				: data.metadata?.aiSummary;
 
 		// Stable identity for the tasks array so TasksPanel's `initialTasks`
@@ -741,7 +780,8 @@ export const ShareVideo = forwardRef<
 		// the translated cue text + the rest of the analysis), else the base ones.
 		const transcriptChapters = useMemo(
 			() =>
-				selectedLanguage !== "base" && (activeAiSummary?.chapters?.length ?? 0) > 0
+				selectedLanguage !== "base" &&
+				(activeAiSummary?.chapters?.length ?? 0) > 0
 					? (activeAiSummary?.chapters ?? []).map((c) => ({
 							startSec: clampStartSec(c.startSec, data.duration ?? undefined),
 							title: c.title,
@@ -752,126 +792,165 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-			<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:gap-6">
-				{/* LEFT (wide): video (sticky-pinned, height-capped) followed by the
+				<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:gap-6">
+					{/* LEFT (wide): video (sticky-pinned, height-capped) followed by the
 				    unified AI panel (summary / tasks / transcript / refined tabs +
 				    pinned AI input), which scrolls in normal flow beneath the video.
 				    RIGHT (narrow): owner-only cost card + comments/activity, pinned
 				    and independently scrollable.
 				    On small screens both columns stack in DOM order: video, tabs,
 				    then cost + comments. */}
-				<div className="flex min-w-0 flex-col gap-3">
-					<DockableVideo>{playerBlock}</DockableVideo>
-					<SharePanel
-						videoId={data.id}
-						onVideoJump={handleSeekAndPlay}
-						processing={aiProcessing}
-						summary={
-							<>
-								<GenerateAiPanel
-									videoId={data.id}
-									canGenerate={canGenerate}
-									transcriptionStatus={
-										data.transcriptionStatus as
-											| "PROCESSING"
-											| "COMPLETE"
-											| "ERROR"
-											| "SKIPPED"
-											| "NO_AUDIO"
-											| null
-											| undefined
-									}
-									aiGenerationStatus={effectiveAiStatus}
-									aiProcessingStep={effectiveAiProcessingStep}
-									aiMode={effectiveAiMode}
-									aiQuotaWaiting={effectiveAiQuotaWaiting}
-									aiIncomplete={aiIncomplete}
-									duration={data.duration}
-									onStarted={handleAiStarted}
-								/>
-								<span className="mb-3 inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand)]">
-									{t("aiChatTitle")}
-								</span>
-								<SummaryPanel
-									data={{
-										duration: data.duration ?? undefined,
-										aiSummary: activeAiSummary ?? undefined,
-										speakerCount: undefined,
-									}}
-									onVideoJump={handleSeekAndPlay}
-								/>
-							</>
-						}
-						tasks={
-							<div>
-								<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
-									{t("tabTasks")} · {activeTasks.length}
-								</p>
-								<TasksPanel
-									videoId={data.id}
-									tasks={activeTasks}
-									canEdit={canGenerate}
-								/>
-							</div>
-						}
-						transcript={
-							<>
-								{transcript?.partial && (transcript.progress?.total ?? 0) > 0 && (
-									<div className="mb-2 inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11">
-										{t("transcribingProgress", {
-											completed: transcript.progress?.completed ?? 0,
-											total: transcript.progress?.total ?? 0,
-										})}
-									</div>
-								)}
-								{(selectedLanguage === "base" ? transcript?.content : activeTranscriptVtt) ? (
-								<TranscriptPanel
-									transcriptContent={
-										(selectedLanguage === "base" ? transcript?.content : activeTranscriptVtt) ?? undefined
-									}
-									currentTime={currentTime}
-									onVideoJump={handleSeekAndPlay}
-									duration={data.duration}
-									chapters={transcriptChapters}
-								/>
-							) : hasCleanTranscript ? (
-								<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
-									<p className="text-sm font-semibold text-gray-12">
-										{t("rawTranscriptUnavailable")}
+					<div className="flex min-w-0 flex-col gap-3">
+						<DockableVideo>{playerBlock}</DockableVideo>
+						<SharePanel
+							videoId={data.id}
+							onVideoJump={handleSeekAndPlay}
+							processing={aiProcessing}
+							transcriptReady={transcriptReady}
+							chatVariant={chatVariant}
+							summary={
+								<>
+									<GenerateAiPanel
+										videoId={data.id}
+										canGenerate={canGenerate}
+										transcriptionStatus={
+											data.transcriptionStatus as
+												| "PROCESSING"
+												| "COMPLETE"
+												| "ERROR"
+												| "SKIPPED"
+												| "NO_AUDIO"
+												| null
+												| undefined
+										}
+										aiGenerationStatus={effectiveAiStatus}
+										aiProcessingStep={effectiveAiProcessingStep}
+										aiMode={effectiveAiMode}
+										aiQuotaWaiting={effectiveAiQuotaWaiting}
+										aiIncomplete={aiIncomplete}
+										duration={data.duration}
+										transcriptionChunksCompleted={
+											transcript?.progress?.completed ??
+											data.metadata?.transcriptionChunksCompleted
+										}
+										transcriptionChunksTotal={
+											transcript?.progress?.total ??
+											data.metadata?.transcriptionChunksTotal
+										}
+										aiStageChunksCompleted={
+											data.metadata?.aiStageChunksCompleted
+										}
+										aiStageChunksTotal={data.metadata?.aiStageChunksTotal}
+										processingStartedAt={data.metadata?.processingStartedAt}
+										aiProcessingStartedAt={data.metadata?.aiProcessingStartedAt}
+										onStarted={handleAiStarted}
+									/>
+									<SummaryPanel
+										data={{
+											duration: data.duration ?? undefined,
+											aiSummary: activeAiSummary ?? undefined,
+											speakerCount: undefined,
+										}}
+										onVideoJump={handleSeekAndPlay}
+									/>
+								</>
+							}
+							tasks={
+								<div>
+									<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
+										{t("tabTasks")} · {activeTasks.length}
 									</p>
-									<p className="mt-1 text-sm leading-relaxed text-gray-11">
-										{t("cleanTranscriptReady")}
-									</p>
+									<TasksPanel
+										videoId={data.id}
+										tasks={activeTasks}
+										canEdit={canGenerate}
+									/>
 								</div>
-							) : (
-								<TranscriptPanel
-									transcriptContent={undefined}
-									currentTime={currentTime}
+							}
+							transcript={
+								<>
+									{transcript?.partial &&
+										(transcript.progress?.total ?? 0) > 0 && (
+											<div className="mb-2 inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11">
+												{t("transcribingProgress", {
+													completed: transcript.progress?.completed ?? 0,
+													total: transcript.progress?.total ?? 0,
+												})}
+											</div>
+										)}
+									{(
+										selectedLanguage === "base"
+											? transcript?.content
+											: activeTranscriptVtt
+									) ? (
+										<TranscriptPanel
+											transcriptContent={
+												(selectedLanguage === "base"
+													? transcript?.content
+													: activeTranscriptVtt) ?? undefined
+											}
+											currentTime={currentTime}
+											onVideoJump={handleSeekAndPlay}
+											duration={data.duration}
+											chapters={transcriptChapters}
+										/>
+									) : hasCleanTranscript ? (
+										<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
+											<p className="text-sm font-semibold text-gray-12">
+												{t("rawTranscriptUnavailable")}
+											</p>
+											<p className="mt-1 text-sm leading-relaxed text-gray-11">
+												{t("cleanTranscriptReady")}
+											</p>
+										</div>
+									) : (
+										<TranscriptPanel
+											transcriptContent={undefined}
+											currentTime={currentTime}
+											onVideoJump={handleSeekAndPlay}
+											duration={data.duration}
+											chapters={transcriptChapters}
+										/>
+									)}
+								</>
+							}
+							refined={
+								<RefinedTranscriptPanel
+									refinedTranscript={
+										activeAiSummary?.refinedTranscript ?? undefined
+									}
 									onVideoJump={handleSeekAndPlay}
 									duration={data.duration}
-									chapters={transcriptChapters}
+									currentTime={currentTime}
 								/>
-							)}
-							</>
-						}
-						refined={
-							<RefinedTranscriptPanel
-								refinedTranscript={
-									activeAiSummary?.refinedTranscript ?? undefined
-								}
-								onVideoJump={handleSeekAndPlay}
-								duration={data.duration}
-								currentTime={currentTime}
-							/>
-						}
-					/>
-				</div>
+							}
+						/>
+					</div>
 
-				<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
-					{costPanel}
-					{commentsPanel}
+					<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+						{costPanel}
+						{commentsPanel}
+					</div>
 				</div>
-			</div>
+				{/* T9 prototype: ?variant=modal — restored blue-FAB → dialog chat,
+			    hidden by default in favor of the current inline chat above. */}
+				{chatVariant === "modal" && (
+					<>
+						<div className={`ai-aura${aiChatOpen ? " show" : ""}`} />
+						<AIChatPopup
+							videoId={data.id}
+							onVideoJump={handleSeekAndPlay}
+							onClose={() => setAiChatOpen(false)}
+							isOpen={aiChatOpen}
+							processing={aiProcessing}
+							transcriptReady={transcriptReady}
+						/>
+						<AIFab
+							onClick={() => setAiChatOpen((v) => !v)}
+							isOpen={aiChatOpen}
+						/>
+					</>
+				)}
 			</>
 		);
 	},
