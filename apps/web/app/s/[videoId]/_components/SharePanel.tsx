@@ -129,6 +129,7 @@ export function SharePanel({
 	);
 
 	const [messages, setMessages] = useState<Message[]>([]);
+	const [chatOpen, setChatOpen] = useState(false);
 	const [input, setInput] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
 	const chatEndRef = useRef<HTMLDivElement>(null);
@@ -138,8 +139,10 @@ export function SharePanel({
 	const messageCount = messages.length;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional scroll trigger on message count and streaming state changes
 	useEffect(() => {
+		const prefersReducedMotion =
+			window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 		chatEndRef.current?.scrollIntoView({
-			behavior: "smooth",
+			behavior: prefersReducedMotion ? "auto" : "smooth",
 			block: "nearest",
 		});
 	}, [messageCount, isStreaming]);
@@ -162,6 +165,7 @@ export function SharePanel({
 				// duplicate ids (which is exactly what rendered messages on top of
 				// each other), guaranteeing unique React keys from now on.
 				setMessages(saved.map((m) => ({ ...m, id: nextMsgId() })));
+				setChatOpen(true);
 			}
 		} catch {
 			// ignore (storage disabled / bad JSON)
@@ -192,7 +196,8 @@ export function SharePanel({
 	const sendMessage = useCallback(
 		async (text: string) => {
 			const trimmed = text.trim();
-			if (!trimmed || isStreaming || !transcriptReady) return;
+			if (!trimmed || isStreaming || processing || !transcriptReady) return;
+			setChatOpen(true);
 
 			const userMsg: Message = {
 				id: nextMsgId(),
@@ -343,7 +348,7 @@ export function SharePanel({
 				abortRef.current = null;
 			}
 		},
-		[videoId, messages, isStreaming, t, transcriptReady],
+		[videoId, messages, isStreaming, processing, t, transcriptReady],
 	);
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -351,12 +356,6 @@ export function SharePanel({
 			e.preventDefault();
 			sendMessage(input);
 		}
-	};
-
-	const clearChat = () => {
-		abortRef.current?.abort();
-		setMessages([]);
-		setIsStreaming(false);
 	};
 
 	const TABS: { id: PanelTab; label: string }[] = [
@@ -377,7 +376,7 @@ export function SharePanel({
 	)?.content;
 
 	return (
-		<div className="flex w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)]">
+		<div className="flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)]">
 			<div
 				role="tablist"
 				aria-label={t("tabsAriaLabel")}
@@ -394,7 +393,10 @@ export function SharePanel({
 							aria-selected={isActive}
 							aria-controls={`panel-${tab.id}`}
 							id={`tab-${tab.id}`}
-							onClick={() => handleTabClick(tab.id)}
+							onClick={() => {
+								setChatOpen(false);
+								handleTabClick(tab.id);
+							}}
 							disabled={isDisabledByProcessing}
 							className={clsx(
 								"-mb-px min-h-11 flex-1 shrink-0 whitespace-nowrap border-b-2 px-3 text-[13.5px] font-semibold transition-colors",
@@ -416,68 +418,69 @@ export function SharePanel({
 				aria-labelledby={`tab-${effectiveActiveTab}`}
 				className="min-h-0 flex-1 overflow-y-auto p-4"
 			>
-				{activeContent}
-			</div>
-
-			{chatVariant === "inline" && messages.length > 0 && (
-				<div className="shrink-0 border-t border-gray-4">
-					<div className="flex items-center justify-between px-4 pt-2.5">
-						<span className="inline-flex items-center rounded-full bg-[var(--brand-wash)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--brand)]">
-							{t("aiChatTitle")}
-						</span>
-						<button
-							type="button"
-							onClick={clearChat}
-							aria-label={t("aiClearChat")}
-							className="flex size-6 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
-						>
-							<svg
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2.2"
-								aria-hidden="true"
+				{chatVariant === "inline" &&
+				chatOpen &&
+				messages.length > 0 &&
+				!processing ? (
+					<div className="flex min-h-full flex-col">
+						<div className="sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex items-center justify-between border-b border-gray-4 bg-gray-1 px-4 py-3">
+							<div className="flex items-center gap-2">
+								<span
+									className="size-3 rotate-45 rounded-[3px] bg-[var(--brand)]"
+									aria-hidden="true"
+								/>
+								<h3 className="text-[13.5px] font-semibold text-gray-12">
+									{t("aiConversationTitle")}
+								</h3>
+							</div>
+							<button
+								type="button"
+								onClick={() => setChatOpen(false)}
+								className="min-h-9 whitespace-nowrap rounded-lg border border-gray-5 px-3 text-[12.5px] font-medium text-gray-11 transition-colors hover:bg-gray-3 hover:text-gray-12"
 							>
-								<path d="M18 6 6 18M6 6l12 12" />
-							</svg>
-						</button>
-					</div>
-					<div className="flex max-h-64 flex-col gap-2.5 overflow-y-auto px-4 py-3">
-						{messages.map((msg) =>
-							msg.role === "user" ? (
-								<div
-									key={msg.id}
-									className="ml-6 min-w-0 max-w-[85%] shrink-0 self-end break-words whitespace-pre-wrap rounded-xl rounded-br-sm bg-gray-3 px-3 py-1.5 text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
-								>
-									{msg.content}
-								</div>
-							) : (
-								<div
-									key={msg.id}
-									className="min-w-0 max-w-full shrink-0 self-start break-words whitespace-pre-wrap text-[13px] leading-relaxed text-gray-12 [overflow-wrap:anywhere]"
-								>
-									{renderMessageContent(msg.content, onVideoJump)}
-								</div>
-							),
-						)}
-						{isStreaming &&
-							messages[messages.length - 1]?.role !== "assistant" && (
-								<div className="flex gap-1 self-start py-1" aria-hidden="true">
-									<span className="size-1.5 animate-pulse rounded-full bg-gray-8" />
-									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:150ms]" />
-									<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:300ms]" />
-								</div>
+								{t("aiCloseAriaLabel")}
+							</button>
+						</div>
+						<div className="flex flex-col gap-3">
+							{messages.map((msg) =>
+								msg.role === "user" ? (
+									<div
+										key={msg.id}
+										className="ml-6 min-w-0 max-w-[88%] self-end break-words whitespace-pre-wrap rounded-[14px] rounded-br bg-[var(--brand)] px-3 py-2 text-[13.5px] leading-relaxed text-[var(--brand-fg)] [overflow-wrap:anywhere]"
+									>
+										{msg.content}
+									</div>
+								) : (
+									<div
+										key={msg.id}
+										className="min-w-0 max-w-[92%] self-start break-words whitespace-pre-wrap rounded-[14px] rounded-bl bg-[var(--brand-wash)] px-3 py-2 text-[13.5px] leading-[1.55] text-gray-12 [overflow-wrap:anywhere]"
+									>
+										{renderMessageContent(msg.content, onVideoJump)}
+									</div>
+								),
 							)}
-						<div ref={chatEndRef} />
+							{isStreaming &&
+								messages[messages.length - 1]?.role !== "assistant" && (
+									<div
+										className="flex gap-1 self-start rounded-[14px] rounded-bl bg-[var(--brand-wash)] px-3 py-3"
+										aria-hidden="true"
+									>
+										<span className="size-1.5 animate-pulse rounded-full bg-gray-8 motion-reduce:animate-none" />
+										<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:150ms] motion-reduce:animate-none" />
+										<span className="size-1.5 animate-pulse rounded-full bg-gray-8 [animation-delay:300ms] motion-reduce:animate-none" />
+									</div>
+								)}
+							<div ref={chatEndRef} />
+						</div>
 					</div>
-				</div>
-			)}
+				) : (
+					activeContent
+				)}
+			</div>
 
 			{chatVariant === "inline" && (
 				<div className="shrink-0 border-t border-gray-4 p-3">
-					{messages.length === 0 && (
+					{messages.length === 0 && !processing && transcriptReady && (
 						<div className="mb-2.5 flex flex-col gap-1.5">
 							<span className="font-mono text-[11px] uppercase tracking-wide text-gray-9">
 								{t("suggestedQuestionsLabel")}
@@ -521,7 +524,9 @@ export function SharePanel({
 						<button
 							type="button"
 							onClick={() => sendMessage(input)}
-							disabled={!input.trim() || isStreaming || !transcriptReady}
+							disabled={
+								!input.trim() || isStreaming || processing || !transcriptReady
+							}
 							aria-label={t("aiSendAriaLabel")}
 							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
 						>

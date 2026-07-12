@@ -854,144 +854,148 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-				<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:gap-6">
-					{/* LEFT (wide): video (sticky-pinned, height-capped) followed by the
-				    unified AI panel (summary / tasks / transcript / refined tabs +
-				    pinned AI input), which scrolls in normal flow beneath the video.
-				    RIGHT (narrow): owner-only cost card + comments/activity, pinned
-				    and independently scrollable.
-				    On small screens both columns stack in DOM order: video, tabs,
-				    then cost + comments. */}
-					<div className="flex min-w-0 flex-col gap-3">
-						<DockableVideo isAudio={data.metadata?.isAudio} title={data.name}>
-							{playerBlock}
-						</DockableVideo>
-						<SharePanel
-							videoId={data.id}
-							onVideoJump={handleSeekAndPlay}
-							processing={aiProcessing}
-							transcriptReady={transcriptReady}
-							chatVariant={chatVariant}
-							summary={
-								<>
-									<GenerateAiPanel
-										videoId={data.id}
-										canGenerate={canGenerate}
-										transcriptionStatus={
-											data.transcriptionStatus as
-												| "PROCESSING"
-												| "COMPLETE"
-												| "ERROR"
-												| "SKIPPED"
-												| "NO_AUDIO"
-												| null
-												| undefined
-										}
-										aiGenerationStatus={effectiveAiStatus}
-										aiProcessingStep={effectiveAiProcessingStep}
-										aiMode={effectiveAiMode}
-										aiQuotaWaiting={effectiveAiQuotaWaiting}
-										aiIncomplete={aiIncomplete}
-										duration={data.duration}
-										transcriptionChunksCompleted={
-											transcript?.progress?.completed ??
-											data.metadata?.transcriptionChunksCompleted
-										}
-										transcriptionChunksTotal={
-											transcript?.progress?.total ??
-											data.metadata?.transcriptionChunksTotal
-										}
-										aiStageChunksCompleted={
-											data.metadata?.aiStageChunksCompleted
-										}
-										aiStageChunksTotal={data.metadata?.aiStageChunksTotal}
-										processingStartedAt={data.metadata?.processingStartedAt}
-										aiProcessingStartedAt={data.metadata?.aiProcessingStartedAt}
-										onStarted={handleAiStarted}
-									/>
-									<SummaryPanel
-										data={{
-											duration: data.duration ?? undefined,
-											aiSummary: activeAiSummary ?? undefined,
-											speakerCount: undefined,
-										}}
-										onVideoJump={handleSeekAndPlay}
-									/>
-								</>
-							}
-							tasks={
-								<div>
-									<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
-										{t("tabTasks")} · {activeTasks.length}
-									</p>
-									<TasksPanel
-										videoId={data.id}
-										tasks={activeTasks}
-										canEdit={canGenerate}
-									/>
-								</div>
-							}
-							transcript={
-								<>
-									{transcript?.partial &&
-										(transcript.progress?.total ?? 0) > 0 && (
-											<div className="mb-2 inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11">
-												{t("transcribingProgress", {
-													completed: transcript.progress?.completed ?? 0,
-													total: transcript.progress?.total ?? 0,
-												})}
-											</div>
-										)}
-									{(
-										selectedLanguage === "base"
-											? transcript?.content
-											: activeTranscriptVtt
-									) ? (
-										<TranscriptPanel
-											transcriptContent={
-												(selectedLanguage === "base"
-													? transcript?.content
-													: activeTranscriptVtt) ?? undefined
+				<div className="flex flex-col gap-4 xl:grid xl:grid-cols-[1.45fr_1fr] xl:items-start xl:gap-6">
+					{/* Mobile/tablet order: video -> AI panel -> activity.
+					    Desktop >=1280px: video/activity stay left while the AI panel
+					    becomes the sticky right-hand workspace. */}
+					<div className="flex min-w-0 flex-col gap-3 xl:contents">
+						<div className="min-w-0 xl:col-start-1 xl:row-start-1">
+							<DockableVideo isAudio={data.metadata?.isAudio} title={data.name}>
+								{playerBlock}
+							</DockableVideo>
+						</div>
+						<div className="min-w-0 xl:sticky xl:top-4 xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:max-h-[calc(100dvh-2rem)] xl:self-start">
+							<SharePanel
+								videoId={data.id}
+								onVideoJump={handleSeekAndPlay}
+								processing={aiProcessing}
+								transcriptReady={transcriptReady}
+								chatVariant={chatVariant}
+								summary={
+									<>
+										<GenerateAiPanel
+											videoId={data.id}
+											canGenerate={canGenerate}
+											transcriptionStatus={
+												data.transcriptionStatus as
+													| "PROCESSING"
+													| "COMPLETE"
+													| "ERROR"
+													| "SKIPPED"
+													| "NO_AUDIO"
+													| null
+													| undefined
 											}
-											currentTime={currentTime}
-											onVideoJump={handleSeekAndPlay}
+											aiGenerationStatus={effectiveAiStatus}
+											aiProcessingStep={effectiveAiProcessingStep}
+											aiMode={effectiveAiMode}
+											aiQuotaWaiting={effectiveAiQuotaWaiting}
+											aiIncomplete={aiIncomplete}
 											duration={data.duration}
-											chapters={transcriptChapters}
+											transcriptionChunksCompleted={
+												transcript?.progress?.completed ??
+												data.metadata?.transcriptionChunksCompleted
+											}
+											transcriptionChunksTotal={
+												transcript?.progress?.total ??
+												data.metadata?.transcriptionChunksTotal
+											}
+											aiStageChunksCompleted={
+												data.metadata?.aiStageChunksCompleted
+											}
+											aiStageChunksTotal={data.metadata?.aiStageChunksTotal}
+											processingStartedAt={data.metadata?.processingStartedAt}
+											aiProcessingStartedAt={
+												data.metadata?.aiProcessingStartedAt
+											}
+											onStarted={handleAiStarted}
 										/>
-									) : hasCleanTranscript ? (
-										<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
-											<p className="text-sm font-semibold text-gray-12">
-												{t("rawTranscriptUnavailable")}
-											</p>
-											<p className="mt-1 text-sm leading-relaxed text-gray-11">
-												{t("cleanTranscriptReady")}
-											</p>
-										</div>
-									) : (
-										<TranscriptPanel
-											transcriptContent={undefined}
-											currentTime={currentTime}
-											onVideoJump={handleSeekAndPlay}
-											duration={data.duration}
-											chapters={transcriptChapters}
+										{!aiProcessing && (
+											<SummaryPanel
+												data={{
+													duration: data.duration ?? undefined,
+													aiSummary: activeAiSummary ?? undefined,
+													speakerCount: undefined,
+												}}
+												onVideoJump={handleSeekAndPlay}
+											/>
+										)}
+									</>
+								}
+								tasks={
+									<div>
+										<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
+											{t("tabTasks")} · {activeTasks.length}
+										</p>
+										<TasksPanel
+											videoId={data.id}
+											tasks={activeTasks}
+											canEdit={canGenerate}
 										/>
-									)}
-								</>
-							}
-							refined={
-								<RefinedTranscriptPanel
-									refinedTranscript={
-										activeAiSummary?.refinedTranscript ?? undefined
-									}
-									onVideoJump={handleSeekAndPlay}
-									duration={data.duration}
-									currentTime={currentTime}
-								/>
-							}
-						/>
+									</div>
+								}
+								transcript={
+									<>
+										{transcript?.partial &&
+											(transcript.progress?.total ?? 0) > 0 && (
+												<div className="mb-2 inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11">
+													{t("transcribingProgress", {
+														completed: transcript.progress?.completed ?? 0,
+														total: transcript.progress?.total ?? 0,
+													})}
+												</div>
+											)}
+										{(
+											selectedLanguage === "base"
+												? transcript?.content
+												: activeTranscriptVtt
+										) ? (
+											<TranscriptPanel
+												transcriptContent={
+													(selectedLanguage === "base"
+														? transcript?.content
+														: activeTranscriptVtt) ?? undefined
+												}
+												currentTime={currentTime}
+												onVideoJump={handleSeekAndPlay}
+												duration={data.duration}
+												chapters={transcriptChapters}
+											/>
+										) : hasCleanTranscript ? (
+											<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
+												<p className="text-sm font-semibold text-gray-12">
+													{t("rawTranscriptUnavailable")}
+												</p>
+												<p className="mt-1 text-sm leading-relaxed text-gray-11">
+													{t("cleanTranscriptReady")}
+												</p>
+											</div>
+										) : (
+											<TranscriptPanel
+												transcriptContent={undefined}
+												currentTime={currentTime}
+												onVideoJump={handleSeekAndPlay}
+												duration={data.duration}
+												chapters={transcriptChapters}
+											/>
+										)}
+									</>
+								}
+								refined={
+									<RefinedTranscriptPanel
+										refinedTranscript={
+											activeAiSummary?.refinedTranscript ?? undefined
+										}
+										onVideoJump={handleSeekAndPlay}
+										duration={data.duration}
+										currentTime={currentTime}
+									/>
+								}
+							/>
+						</div>
 					</div>
 
-					<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+					<div className="flex min-w-0 flex-col gap-4 xl:col-start-1 xl:row-start-2">
 						{costPanel}
 						{commentsPanel}
 					</div>

@@ -29,15 +29,24 @@ const TASK_CATEGORIES = [
 	"Boshqa",
 ] as const;
 
+const TASK_CATEGORY_KEYS = {
+	Sotuv: "taskCategorySales",
+	Marketing: "taskCategoryMarketing",
+	Moliya: "taskCategoryFinance",
+	Texnik: "taskCategoryTechnical",
+	HR: "taskCategoryHr",
+	Operatsion: "taskCategoryOperations",
+	Strategiya: "taskCategoryStrategy",
+	Boshqa: "taskCategoryOther",
+} as const;
+
 function categoryOf(task: Task): (typeof TASK_CATEGORIES)[number] {
 	return (TASK_CATEGORIES as readonly string[]).includes(task.category ?? "")
 		? (task.category as (typeof TASK_CATEGORIES)[number])
 		: "Boshqa";
 }
 
-function groupTasksByCategory(
-	tasks: Task[],
-): {
+function groupTasksByCategory(tasks: Task[]): {
 	category: (typeof TASK_CATEGORIES)[number];
 	items: { task: Task; index: number }[];
 }[] {
@@ -59,20 +68,6 @@ interface TasksPanelProps {
 	canEdit?: boolean;
 }
 
-function priorityChipColors(priority?: "high" | "medium" | "low"): {
-	background: string;
-	color: string;
-} {
-	// amber/green Radix scales not imported in globals.css → fall back to neutral grays.
-	if (priority === "high")
-		return { background: "var(--red-3)", color: "var(--red-11)" };
-	if (priority === "medium")
-		return { background: "var(--gray-3)", color: "var(--gray-11)" };
-	if (priority === "low")
-		return { background: "var(--gray-3)", color: "var(--gray-11)" };
-	return { background: "var(--gray-3)", color: "var(--gray-11)" };
-}
-
 function Initials({ name }: { name: string }) {
 	const parts = name.trim().split(/\s+/);
 	const letters =
@@ -83,8 +78,7 @@ function Initials({ name }: { name: string }) {
 			: name.slice(0, 2).toUpperCase();
 	return (
 		<span
-			className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
-			style={{ background: "var(--gray-4)", color: "var(--gray-12)" }}
+			className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--brand-wash)] text-[9px] font-semibold text-[var(--brand)]"
 			title={name}
 		>
 			{letters}
@@ -94,49 +88,56 @@ function Initials({ name }: { name: string }) {
 
 function DeadlinePill({ deadline }: { deadline: string }) {
 	return (
-		<span
-			className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-			style={{ background: "var(--gray-2)", color: "var(--gray-11)" }}
-		>
+		<span className="whitespace-nowrap rounded-full bg-[var(--brand-wash)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand)]">
 			{deadline}
 		</span>
 	);
 }
 
-function PriorityBadge({ priority }: { priority?: "high" | "medium" | "low" }) {
+function PriorityDot({
+	priority,
+	label,
+}: {
+	priority?: "high" | "medium" | "low";
+	label?: string;
+}) {
 	if (!priority) return null;
-	const { background, color } = priorityChipColors(priority);
+	const color =
+		priority === "high"
+			? "bg-[var(--ds-error)]"
+			: priority === "medium"
+				? "bg-[var(--ds-warning)]"
+				: "bg-gray-7";
 	return (
 		<span
-			className="rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize"
-			style={{ background, color }}
-		>
-			{priority}
-		</span>
+			role="img"
+			aria-label={label}
+			title={label}
+			className={`mt-1.5 size-2 shrink-0 rounded-full ${color}`}
+		/>
 	);
 }
 
-function ProgressBar({ done, total }: { done: number; total: number }) {
+function ProgressBar({
+	done,
+	total,
+	label,
+}: {
+	done: number;
+	total: number;
+	label: string;
+}) {
 	const pct = total === 0 ? 0 : Math.round((done / total) * 100);
 	return (
 		<div className="flex items-center gap-3">
-			<div
-				className="relative flex-1 overflow-hidden rounded-full"
-				style={{ height: "6px", background: "var(--gray-3)" }}
-			>
+			<div className="relative h-1 flex-1 overflow-hidden rounded-full bg-gray-4">
 				<div
-					className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
-					style={{
-						width: `${pct}%`,
-						background: "var(--brand)",
-					}}
+					className="absolute inset-y-0 left-0 rounded-full bg-[var(--brand)] transition-[width] duration-300 motion-reduce:transition-none"
+					style={{ width: `${pct}%` }}
 				/>
 			</div>
-			<span
-				className="w-10 shrink-0 text-right text-xs font-semibold"
-				style={{ color: "var(--brand)", fontVariantNumeric: "tabular-nums" }}
-			>
-				{pct}%
+			<span className="shrink-0 whitespace-nowrap font-mono text-[11.5px] text-gray-10">
+				{label}
 			</span>
 		</div>
 	);
@@ -156,6 +157,11 @@ export function TasksPanel({
 
 	const done = tasks.filter((t) => t.done).length;
 	const total = tasks.length;
+	const priorityLabels = {
+		high: t("taskPriorityHigh"),
+		medium: t("taskPriorityMedium"),
+		low: t("taskPriorityLow"),
+	};
 
 	async function toggle(index: number) {
 		if (!canEdit) return;
@@ -175,14 +181,14 @@ export function TasksPanel({
 				setTasks((prev) =>
 					prev.map((t, i) => (i === index ? { ...t, done: task.done } : t)),
 				);
-				toast.error(t("videoTitleUpdateFailed"));
+				toast.error(t("taskUpdateFailed"));
 			}
 		} catch (error) {
 			console.error("Failed to update task status:", error);
 			setTasks((prev) =>
 				prev.map((t, i) => (i === index ? { ...t, done: task.done } : t)),
 			);
-			toast.error(t("videoTitleUpdateFailed"));
+			toast.error(t("taskUpdateFailed"));
 		}
 	}
 
@@ -191,50 +197,98 @@ export function TasksPanel({
 	}
 
 	return (
-		<div className="flex flex-col gap-3">
-			<ProgressBar done={done} total={total} />
-			<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4">
+			<ProgressBar
+				done={done}
+				total={total}
+				label={t("taskProgress", { done, total })}
+			/>
+			<div className="flex flex-col gap-5">
 				{groupTasksByCategory(tasks).map(({ category, items }) => (
-					<div key={category} className="flex flex-col">
-						<h4
-							className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide"
-							style={{ color: "var(--gray-10)" }}
-						>
-							{category}
+					<section key={category} className="flex min-w-0 flex-col">
+						<h4 className="px-1 pb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-10">
+							{t(TASK_CATEGORY_KEYS[category])}
 						</h4>
-						{items.map(({ task, index }, i) => (
+						{items.map(({ task, index }) => (
 							<div
-								key={`task-${index}`}
-								className="flex items-center gap-3"
-								style={{
-									minHeight: "38px",
-									padding: "8px 4px",
-									borderBottom:
-										i === items.length - 1 ? "none" : "1px solid var(--gray-3)",
-								}}
+								key={task.title + index}
+								className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-gray-4 px-1 py-3 last:border-b-0"
 							>
-								<input
-									type="checkbox"
-									checked={task.done}
-									onChange={() => toggle(index)}
-									disabled={!canEdit}
-									className={`size-4 shrink-0 ${canEdit ? "cursor-pointer" : "cursor-default"} accent-[var(--brand)]`}
-								/>
-								<span
-									className="flex-1 text-sm"
-									style={{
-										color: task.done ? "var(--gray-10)" : "var(--gray-12)",
-										textDecoration: task.done ? "line-through" : "none",
-									}}
+								<label
+									className={[
+										"-my-3 -ml-3 flex size-11 items-center justify-center",
+										canEdit ? "cursor-pointer" : "cursor-default",
+									].join(" ")}
 								>
-									{task.title}
-								</span>
-								<PriorityBadge priority={task.priority} />
-								{task.assignee && <Initials name={task.assignee} />}
-								{task.deadline && <DeadlinePill deadline={task.deadline} />}
+									<input
+										type="checkbox"
+										checked={task.done}
+										onChange={() => toggle(index)}
+										disabled={!canEdit}
+										aria-label={task.title}
+										className="peer sr-only"
+									/>
+									<span
+										className={[
+											"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+											task.done
+												? "border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-fg)]"
+												: "border-gray-7 bg-gray-1 text-transparent",
+											canEdit
+												? "cursor-pointer hover:border-[var(--brand)]"
+												: "cursor-default opacity-70",
+											"peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--brand)]",
+										].join(" ")}
+									>
+										<svg
+											width="11"
+											height="11"
+											viewBox="0 0 12 12"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											aria-hidden="true"
+										>
+											<path d="m2.5 6 2.1 2.1L9.5 3.5" />
+										</svg>
+									</span>
+								</label>
+								<div className="min-w-0">
+									<p
+										className={[
+											"break-words text-[13.5px] font-medium leading-snug",
+											task.done ? "text-gray-10 line-through" : "text-gray-12",
+										].join(" ")}
+									>
+										{task.title}
+									</p>
+									{(task.assignee || task.deadline) && (
+										<div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+											{task.assignee && (
+												<>
+													<Initials name={task.assignee} />
+													<span className="max-w-full truncate text-[11px] text-gray-10">
+														{task.assignee}
+													</span>
+												</>
+											)}
+											{task.deadline && (
+												<DeadlinePill deadline={task.deadline} />
+											)}
+										</div>
+									)}
+								</div>
+								<PriorityDot
+									priority={task.priority}
+									label={
+										task.priority ? priorityLabels[task.priority] : undefined
+									}
+								/>
 							</div>
 						))}
-					</div>
+					</section>
 				))}
 			</div>
 		</div>

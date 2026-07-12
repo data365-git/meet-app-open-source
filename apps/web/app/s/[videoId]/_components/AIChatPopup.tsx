@@ -217,22 +217,25 @@ export function AIChatPopup({
 	transcriptReady = true,
 }: AIChatPopupProps) {
 	const t = useTranslations("share");
+	// The chip LABEL is the short i18n string; the QUERY sent to the model must be
+	// a full instruction (a terse "Xulosa" degrades the answer). The transcript is
+	// Uzbek, so the instruction is Uzbek and consistent for all UI languages.
 	const QUICK_ACTIONS = [
 		{
 			label: t("aiQuickSummary"),
-			query: "Give me a concise summary of this video.",
+			query: "Bu video haqida qisqacha, aniq xulosa ber.",
 		},
 		{
 			label: t("aiQuickActionItems"),
-			query: "What are the main action items and who is responsible?",
+			query: "Asosiy vazifalar nima va har biriga kim mas'ul?",
 		},
 		{
 			label: t("aiQuickFollowUpEmail"),
-			query: "Draft a follow-up email about the next steps.",
+			query: "Keyingi qadamlar bo'yicha qisqa follow-up xat yozib ber.",
 		},
 		{
 			label: t("aiQuickKeyPoints"),
-			query: "What were the key decisions or points made?",
+			query: "Qanday asosiy qarorlar va muhim fikrlar bo'ldi?",
 		},
 	];
 	const [messages, setMessages] = useState<Message[]>([]);
@@ -240,6 +243,7 @@ export function AIChatPopup({
 	const [isStreaming, setIsStreaming] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const closeButtonRef = useRef<HTMLButtonElement>(null);
 	const popupRef = useRef<HTMLDivElement>(null);
 	const abortRef = useRef<AbortController | null>(null);
 
@@ -251,17 +255,45 @@ export function AIChatPopup({
 	} | null>(null);
 
 	useEffect(() => {
+		if (!isOpen) return;
 		const handleKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") onClose();
 		};
 		window.addEventListener("keydown", handleKey);
 		return () => window.removeEventListener("keydown", handleKey);
-	}, [onClose]);
+	}, [isOpen, onClose]);
+
+	useEffect(() => {
+		if (!isOpen) return;
+		const previouslyFocused =
+			document.activeElement instanceof HTMLElement
+				? document.activeElement
+				: null;
+		const frame = window.requestAnimationFrame(() => {
+			const input = textareaRef.current;
+			input?.focus();
+			if (document.activeElement !== input) {
+				closeButtonRef.current?.focus();
+			}
+		});
+		return () => {
+			window.cancelAnimationFrame(frame);
+			previouslyFocused?.focus();
+		};
+	}, [isOpen]);
+
+	useEffect(() => {
+		return () => abortRef.current?.abort();
+	}, []);
 
 	const messageCount = messages.length;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional scroll trigger on message count and streaming state changes
 	useEffect(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+		const prefersReducedMotion =
+			window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+		messagesEndRef.current?.scrollIntoView({
+			behavior: prefersReducedMotion ? "auto" : "smooth",
+		});
 	}, [messageCount, isStreaming]);
 
 	// Shares the same per-video localStorage history as the inline chat variant
@@ -303,7 +335,7 @@ export function AIChatPopup({
 	const sendMessage = useCallback(
 		async (text: string) => {
 			const trimmed = text.trim();
-			if (!trimmed || isStreaming || !transcriptReady) return;
+			if (!trimmed || isStreaming || processing || !transcriptReady) return;
 
 			const userMsg: Message = {
 				id: nextMsgId(),
@@ -454,7 +486,7 @@ export function AIChatPopup({
 				abortRef.current = null;
 			}
 		},
-		[videoId, messages, isStreaming, t, transcriptReady],
+		[videoId, messages, isStreaming, processing, t, transcriptReady],
 	);
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -511,6 +543,7 @@ export function AIChatPopup({
 			role="dialog"
 			aria-label={t("aiDialogAriaLabel")}
 			aria-hidden={!isOpen}
+			inert={!isOpen}
 		>
 			<div className="ai-tint-overlay" />
 			<div className="ai-noise" />
@@ -522,13 +555,18 @@ export function AIChatPopup({
 					<OrbIcon />
 				</div>
 				<div className="htxt">
-					<div className="t">{t("aiChatTitle")}</div>
+					<div className="t">{t("aiConversationTitle")}</div>
 					<div className="s">
-						<span className="live" />
-						{t("aiContextLoaded")}
+						{!processing && transcriptReady && <span className="live" />}
+						{processing
+							? t("aiInputDisabledPlaceholder")
+							: !transcriptReady
+								? t("aiTranscriptNotReady")
+								: t("aiContextLoaded")}
 					</div>
 				</div>
 				<button
+					ref={closeButtonRef}
 					type="button"
 					className="ai-x"
 					onClick={onClose}
@@ -549,7 +587,13 @@ export function AIChatPopup({
 			</div>
 
 			<div className="ai-body">
-				{!hasMessages && (
+				{!hasMessages && inputDisabled && (
+					<div className="ai-welcome">
+						<div className="ws">{inputPlaceholder}</div>
+					</div>
+				)}
+
+				{!hasMessages && !inputDisabled && (
 					<>
 						<div className="ai-welcome">
 							<div className="wt">
@@ -566,6 +610,7 @@ export function AIChatPopup({
 									type="button"
 									className="ai-chip"
 									onClick={() => sendMessage(action.query)}
+									disabled={inputDisabled}
 								>
 									{CHIP_ICONS[idx]}
 									{action.label}
@@ -627,7 +672,7 @@ export function AIChatPopup({
 						type="button"
 						className="ai-send"
 						onClick={() => sendMessage(input)}
-						disabled={!input.trim() || isStreaming || !transcriptReady}
+						disabled={!input.trim() || inputDisabled}
 						aria-label={t("aiSendAriaLabel")}
 					>
 						<svg

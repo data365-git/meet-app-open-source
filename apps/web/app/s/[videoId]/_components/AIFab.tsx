@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
 import "./ai-chat.css";
 
 interface AIFabProps {
@@ -11,43 +10,6 @@ interface AIFabProps {
 
 export function AIFab({ onClick, isOpen }: AIFabProps) {
 	const t = useTranslations("share");
-	const [hidden, setHidden] = useState(false);
-
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-		let rafId: number | null = null;
-
-		const update = () => {
-			rafId = null;
-			// Share page uses document-level scroll; also check scrollingElement
-			// for embedded/iframe contexts where window.scrollY may stay 0.
-			const scrollTop = Math.max(
-				window.scrollY,
-				document.scrollingElement?.scrollTop ?? 0,
-			);
-			const scrollEl = document.scrollingElement ?? document.documentElement;
-			const docHeight = scrollEl.scrollHeight - scrollEl.clientHeight;
-			const ratio = docHeight > 0 ? scrollTop / docHeight : 0;
-			setHidden(ratio > 0.4);
-		};
-
-		const onScroll = () => {
-			if (rafId != null) return;
-			rafId = window.requestAnimationFrame(update);
-		};
-
-		update();
-		window.addEventListener("scroll", onScroll, { passive: true });
-		window.addEventListener("resize", onScroll);
-
-		return () => {
-			window.removeEventListener("scroll", onScroll);
-			window.removeEventListener("resize", onScroll);
-			if (rafId != null) cancelAnimationFrame(rafId);
-		};
-	}, []);
-
-	const shouldHide = hidden && !isOpen;
 
 	return (
 		<button
@@ -55,11 +17,6 @@ export function AIFab({ onClick, isOpen }: AIFabProps) {
 			className={`ai-fab${isOpen ? " is-open" : ""}`}
 			onClick={onClick}
 			aria-label={isOpen ? t("aiFabCloseLabel") : t("aiFabOpenLabel")}
-			style={{
-				opacity: shouldHide ? 0 : 1,
-				pointerEvents: shouldHide ? "none" : "auto",
-				transition: "opacity 200ms ease",
-			}}
 		>
 			{isOpen ? (
 				<svg

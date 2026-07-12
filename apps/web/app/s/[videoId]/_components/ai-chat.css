@@ -4,14 +4,13 @@
 .ai-fab,
 .ai-aura,
 .ai-popup {
-	--accent: #2563eb;
-	--accent-ink: #1d4ed8;
-	--accent-soft: #eef4ff;
+	--accent: var(--brand);
+	--accent-ink: var(--brand);
+	--accent-soft: var(--brand-wash);
 	--accent-glow: 37, 99, 235;
 	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 	--dur: 320ms;
-	font-family:
-		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	font-family: inherit;
 }
 
 /* ========== AI ORB (FAB) ========== */
@@ -804,5 +803,30 @@
 		opacity: 0;
 		pointer-events: none;
 		transform: translateY(12px) scale(0.92);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ai-fab,
+	.ai-aura,
+	.ai-popup,
+	.ai-popup .ai-hd,
+	.ai-popup .ai-body,
+	.ai-popup .ai-foot,
+	.ai-popup .ai-resize::before,
+	.ai-popup .ai-x,
+	.ai-popup .ai-chip,
+	.ai-popup .ai-citation,
+	.ai-popup .ai-inputbar,
+	.ai-popup .ai-send {
+		transition: none;
+	}
+
+	.ai-fab::before,
+	.ai-fab::after,
+	.ai-popup .ai-hd .htxt .s .live,
+	.ai-popup .ai-msg,
+	.ai-popup .ai-typing span {
+		animation: none;
 	}
 }
