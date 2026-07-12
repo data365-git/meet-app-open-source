@@ -345,11 +345,66 @@ export const ShareVideo = forwardRef<
 			// The <video> mounts inside CapVideoPlayer AFTER this effect first
 			// runs, so retry until the ref is populated — otherwise currentTime
 			// never follows playback (karaoke/active-chapter follow stays frozen).
+			//
+			// T6 (resume position): also persist currentTime to localStorage
+			// (throttled ~5s + on pause/beforeunload) keyed by videoId, and
+			// restore it once on loadedmetadata — unless a `?t=` deep-link is
+			// present (Share.tsx owns that seek) or the saved time is within
+			// ~10s of the end.
 			let attached: HTMLVideoElement | null = null;
 			let raf = 0;
-			const onTimeUpdate = () => {
-				if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
+			const resumeKey = `data365:resume:${data.id}`;
+			const hasDeepLink = searchParams.has("t");
+			let restoredOnce = false;
+			let lastSavedAt = 0;
+
+			const saveResumeTime = (time: number) => {
+				try {
+					window.localStorage.setItem(resumeKey, String(Math.floor(time)));
+				} catch {
+					// ignore (storage disabled/full)
+				}
 			};
+
+			const onTimeUpdate = () => {
+				const video = videoRef.current;
+				if (!video) return;
+				setCurrentTime(video.currentTime);
+				const now = Date.now();
+				if (now - lastSavedAt >= 5000) {
+					lastSavedAt = now;
+					saveResumeTime(video.currentTime);
+				}
+			};
+
+			const onPause = () => {
+				if (videoRef.current) saveResumeTime(videoRef.current.currentTime);
+			};
+
+			const onBeforeUnload = () => {
+				if (videoRef.current) saveResumeTime(videoRef.current.currentTime);
+			};
+
+			const onLoadedMetadata = () => {
+				const video = videoRef.current;
+				if (!video || restoredOnce || hasDeepLink) return;
+				restoredOnce = true;
+				try {
+					const raw = window.localStorage.getItem(resumeKey);
+					if (!raw) return;
+					const saved = Number(raw);
+					if (!Number.isFinite(saved) || saved <= 0) return;
+					const duration =
+						Number.isFinite(video.duration) && video.duration > 0
+							? video.duration
+							: (data.duration ?? 0);
+					if (duration > 0 && saved >= duration - 10) return;
+					video.currentTime = saved;
+				} catch {
+					// ignore
+				}
+			};
+
 			const attach = () => {
 				const video = videoRef.current;
 				if (!video) {
@@ -358,13 +413,20 @@ export const ShareVideo = forwardRef<
 				}
 				attached = video;
 				video.addEventListener("timeupdate", onTimeUpdate);
+				video.addEventListener("pause", onPause);
+				video.addEventListener("loadedmetadata", onLoadedMetadata);
+				if (video.readyState >= 1) onLoadedMetadata();
+				window.addEventListener("beforeunload", onBeforeUnload);
 			};
 			attach();
 			return () => {
 				cancelAnimationFrame(raf);
 				attached?.removeEventListener("timeupdate", onTimeUpdate);
+				attached?.removeEventListener("pause", onPause);
+				attached?.removeEventListener("loadedmetadata", onLoadedMetadata);
+				window.removeEventListener("beforeunload", onBeforeUnload);
 			};
-		}, []);
+		}, [data.id, data.duration, searchParams]);
 
 		useEffect(() => {
 			if (selectedLanguage === "base") {
@@ -801,7 +863,9 @@ export const ShareVideo = forwardRef<
 				    On small screens both columns stack in DOM order: video, tabs,
 				    then cost + comments. */}
 					<div className="flex min-w-0 flex-col gap-3">
-						<DockableVideo>{playerBlock}</DockableVideo>
+						<DockableVideo isAudio={data.metadata?.isAudio} title={data.name}>
+							{playerBlock}
+						</DockableVideo>
 						<SharePanel
 							videoId={data.id}
 							onVideoJump={handleSeekAndPlay}

@@ -1,40 +1,140 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { formatMmSs } from "./video/SegmentedProgressBar";
 
 const POS_STORAGE_KEY = "data365:watchMiniPos";
 const MARGIN = 8;
+// Below this viewport width the corner video-frame dock has no room to be
+// useful — style falls back to the controls-only strip (see showBarStyle).
+const DESKTOP_BREAKPOINT = "(min-width: 1024px)";
 
 type Pos = { x: number; y: number };
+
+interface DockedMediaState {
+	videoEl: HTMLVideoElement | null;
+	isPlaying: boolean;
+	currentTime: number;
+	duration: number;
+}
+
+/**
+ * Tracks the native <video> mounted inside `children` (via querySelector,
+ * since it lives in a sibling React subtree we don't own — media-chrome's
+ * own dispatch/context isn't reachable from here) and mirrors play state +
+ * time/duration so the dock's own transport controls can drive it directly.
+ */
+function useDockedMediaState(
+	innerRef: React.RefObject<HTMLDivElement | null>,
+): DockedMediaState {
+	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+	const [isPlaying, setIsPlaying] = useState(false);
+	const [currentTime, setCurrentTime] = useState(0);
+	const [duration, setDuration] = useState(0);
+
+	useEffect(() => {
+		let video: HTMLVideoElement | null = null;
+		let raf = 0;
+		const syncPlaying = () => {
+			if (video) setIsPlaying(!video.paused && !video.ended);
+		};
+		const syncTime = () => {
+			if (video) setCurrentTime(video.currentTime);
+		};
+		const syncDuration = () => {
+			if (video && Number.isFinite(video.duration) && video.duration > 0) {
+				setDuration(video.duration);
+			}
+		};
+		const attach = () => {
+			const el = innerRef.current?.querySelector("video");
+			if (!el) {
+				raf = requestAnimationFrame(attach);
+				return;
+			}
+			video = el;
+			setVideoEl(el);
+			el.addEventListener("play", syncPlaying);
+			el.addEventListener("playing", syncPlaying);
+			el.addEventListener("pause", syncPlaying);
+			el.addEventListener("ended", syncPlaying);
+			el.addEventListener("timeupdate", syncTime);
+			el.addEventListener("loadedmetadata", syncDuration);
+			syncPlaying();
+			syncTime();
+			syncDuration();
+		};
+		attach();
+		return () => {
+			cancelAnimationFrame(raf);
+			if (video) {
+				video.removeEventListener("play", syncPlaying);
+				video.removeEventListener("playing", syncPlaying);
+				video.removeEventListener("pause", syncPlaying);
+				video.removeEventListener("ended", syncPlaying);
+				video.removeEventListener("timeupdate", syncTime);
+				video.removeEventListener("loadedmetadata", syncDuration);
+			}
+		};
+	}, [innerRef]);
+
+	return { videoEl, isPlaying, currentTime, duration };
+}
 
 /**
  * Wraps the video player so it can "dock" into a fixed mini-player once the
  * user scrolls it out of view. Only the WRAPPER's CSS position toggles —
  * `children` (the playerBlock) is rendered exactly once and never remounts,
- * so playback (and transcript seek sync via videoRef) keeps working.
+ * so playback keeps working across dock/undock.
  *
- * The mini-player only appears on desktop (≥1024px) AND while the video is
- * actually playing. It has no pin: instead a move handle lets the user drag
- * it anywhere, and an × dismisses it.
+ * Two docked styles (owner decision 2026-07-11):
+ * - Desktop (≥1024px) + video: a bigger floating corner box that still shows
+ *   the video frame, with its OWN always-on play/pause + seek bar overlay
+ *   (the full video chrome is too cramped to stay usable at this size).
+ * - Everything else (mobile, or any audio) — a slim sticky top strip with
+ *   NO video pixels, just play/pause + a seekable progress bar + time (+
+ *   title). `children` stays mounted (invisible) for playback continuity.
  */
-export function DockableVideo({ children }: { children: React.ReactNode }) {
+export function DockableVideo({
+	children,
+	isAudio = false,
+	title,
+}: {
+	children: React.ReactNode;
+	isAudio?: boolean;
+	title?: string;
+}) {
 	const t = useTranslations("share");
+	const tm = useTranslations("mediaPlayer");
 	const slotRef = useRef<HTMLDivElement | null>(null);
 	const innerRef = useRef<HTMLDivElement | null>(null);
 	const [docked, setDocked] = useState(false);
 	const [dismissed, setDismissed] = useState(false);
 	const [activated, setActivated] = useState(false);
 	const [isDesktop, setIsDesktop] = useState(false);
-	const [isPlaying, setIsPlaying] = useState(false);
 	const [pos, setPos] = useState<Pos | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const [slotHeight, setSlotHeight] = useState<number | null>(null);
 	const [reduceMotion, setReduceMotion] = useState(false);
 
-	// Mini-player is a desktop affordance only (owner: never show on phone).
+	const { videoEl, isPlaying, currentTime, duration } =
+		useDockedMediaState(innerRef);
+
+	const togglePlay = useCallback(() => {
+		if (!videoEl) return;
+		if (videoEl.paused || videoEl.ended) {
+			void videoEl.play().catch(() => {});
+		} else {
+			videoEl.pause();
+		}
+	}, [videoEl]);
+
+	// Style breakpoint: only a desktop-sized viewport has room for the
+	// video-frame corner box; below it (and always for audio) we use the
+	// controls-only strip.
 	useEffect(() => {
-		const mql = window.matchMedia("(min-width: 1024px)");
+		const mql = window.matchMedia(DESKTOP_BREAKPOINT);
 		setIsDesktop(mql.matches);
 		const onChange = () => setIsDesktop(mql.matches);
 		mql.addEventListener("change", onChange);
@@ -64,39 +164,6 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 		return () => mql.removeEventListener("change", onChange);
 	}, []);
 
-	// Track real playback state off the underlying <video>. It mounts inside
-	// CapVideoPlayer after this effect first runs, so retry until it exists.
-	useEffect(() => {
-		let video: HTMLVideoElement | null = null;
-		let raf = 0;
-		const sync = () => {
-			if (video) setIsPlaying(!video.paused && !video.ended);
-		};
-		const attach = () => {
-			const el = innerRef.current?.querySelector("video");
-			if (!el) {
-				raf = requestAnimationFrame(attach);
-				return;
-			}
-			video = el;
-			video.addEventListener("play", sync);
-			video.addEventListener("playing", sync);
-			video.addEventListener("pause", sync);
-			video.addEventListener("ended", sync);
-			sync();
-		};
-		attach();
-		return () => {
-			cancelAnimationFrame(raf);
-			if (video) {
-				video.removeEventListener("play", sync);
-				video.removeEventListener("playing", sync);
-				video.removeEventListener("pause", sync);
-				video.removeEventListener("ended", sync);
-			}
-		};
-	}, []);
-
 	useEffect(() => {
 		const slot = slotRef.current;
 		if (!slot) return;
@@ -118,7 +185,10 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 	}, []);
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
-	const dockable = docked && isDesktop;
+	const dockable = docked;
+	// Video gets the roomier corner box only on desktop; mobile video and
+	// ALL audio use the compact controls-only strip (no video pixels).
+	const showBarStyle = isAudio || !isDesktop;
 	// The mini auto-appears the moment playback starts while docked, then stays
 	// (owner choice B): pausing keeps it so the user can resume; only × or
 	// scrolling the main player back into view hides it.
@@ -221,10 +291,27 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 	const transitionClass =
 		reduceMotion || dragging ? "" : "transition-all duration-[180ms] ease-out";
 
-	// Default anchor (top-right) unless the user has dragged it somewhere.
+	// Default anchor (top-right) unless the user has dragged it somewhere —
+	// only meaningful for the draggable corner box style.
 	const positionStyle: React.CSSProperties | undefined = pos
 		? { top: pos.y, left: pos.x, right: "auto" }
 		: undefined;
+
+	const playPauseLabel = isPlaying ? tm("pause") : tm("play");
+
+	const outerClassName = !dockable
+		? `relative ${transitionClass}`
+		: showBarStyle
+			? `fixed inset-x-2 top-2 z-50 sm:inset-x-auto sm:right-4 sm:w-[380px] ${transitionClass} ${
+					showMini
+						? "translate-y-0 opacity-100"
+						: "pointer-events-none -translate-y-3 opacity-0"
+				}`
+			: `fixed z-50 w-[min(360px,55vw)] ${pos ? "" : "top-4 right-4"} ${transitionClass} ${
+					showMini
+						? "translate-y-0 opacity-100"
+						: "pointer-events-none -translate-y-2 opacity-0"
+				}`;
 
 	return (
 		<div
@@ -234,26 +321,67 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 		>
 			<div
 				ref={innerRef}
-				style={dockable ? positionStyle : undefined}
-				className={
-					dockable
-						? `fixed z-50 w-[min(300px,72vw)] ${pos ? "" : "top-4 right-4"} ${transitionClass} ${
-								showMini
-									? "translate-y-0 opacity-100"
-									: "pointer-events-none -translate-y-2 opacity-0"
-							}`
-						: `relative ${transitionClass}`
-				}
+				style={dockable && !showBarStyle ? positionStyle : undefined}
+				className={outerClassName}
 			>
-				<div
-					className={
-						dockable
-							? "relative aspect-video overflow-hidden rounded-xl shadow-lg ring-1 ring-black/10"
-							: "relative"
-					}
-				>
-					{children}
-					{dockable && (
+				{!dockable ? (
+					children
+				) : showBarStyle ? (
+					<div className="relative flex items-center gap-2.5 rounded-2xl border border-gray-5 bg-gray-1/95 px-3 py-2 shadow-lg backdrop-blur-md">
+						{/* Mounted for playback continuity only — no visible frame on
+						    the strip (owner: no video pixels on mobile/audio dock). */}
+						<div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0">
+							{children}
+						</div>
+						<button
+							type="button"
+							onClick={togglePlay}
+							aria-label={playPauseLabel}
+							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-500 text-white transition-colors hover:bg-blue-600"
+						>
+							{isPlaying ? <PauseIcon /> : <PlayIcon />}
+						</button>
+						<div className="min-w-0 flex-1">
+							{title && (
+								<p className="truncate text-xs font-medium text-gray-12">
+									{title}
+								</p>
+							)}
+							<div className="flex items-center gap-2">
+								<DockSeekBar
+									videoEl={videoEl}
+									currentTime={currentTime}
+									duration={duration}
+									variant="light"
+								/>
+								<span className="shrink-0 text-[11px] tabular-nums text-gray-10">
+									{formatMmSs(currentTime)} / {formatMmSs(duration)}
+								</span>
+							</div>
+						</div>
+						<button
+							type="button"
+							onClick={handleExpand}
+							aria-label={t("miniExpand")}
+							className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
+						>
+							<ExpandIcon />
+						</button>
+						<button
+							type="button"
+							onClick={() => setDismissed(true)}
+							aria-label={t("miniClose")}
+							className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
+						>
+							<CloseIcon />
+						</button>
+					</div>
+				) : (
+					<div className="relative aspect-video overflow-hidden rounded-xl shadow-lg ring-1 ring-black/10">
+						{/* Frame stays visible (desktop has room for it) but inert —
+						    the full video chrome is too cramped at this size to stay
+						    usable, so our own overlay below drives play/pause + seek. */}
+						<div className="pointer-events-none">{children}</div>
 						<div className="absolute right-2 top-2 z-40 flex items-center gap-1">
 							<button
 								type="button"
@@ -287,8 +415,98 @@ export function DockableVideo({ children }: { children: React.ReactNode }) {
 								<CloseIcon />
 							</button>
 						</div>
-					)}
-				</div>
+						<div className="absolute inset-x-0 bottom-0 z-40 flex items-center gap-2 bg-black/70 px-3 py-2 backdrop-blur-sm">
+							<button
+								type="button"
+								onClick={togglePlay}
+								aria-label={playPauseLabel}
+								className="flex size-7 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+							>
+								{isPlaying ? <PauseIcon /> : <PlayIcon />}
+							</button>
+							<DockSeekBar
+								videoEl={videoEl}
+								currentTime={currentTime}
+								duration={duration}
+								variant="dark"
+							/>
+						</div>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
+/** Simple draggable seek track driving the native <video> directly (no
+ * media-chrome dispatch — this component sits outside that context). Used
+ * by both docked styles. */
+function DockSeekBar({
+	videoEl,
+	currentTime,
+	duration,
+	variant,
+}: {
+	videoEl: HTMLVideoElement | null;
+	currentTime: number;
+	duration: number;
+	variant: "light" | "dark";
+}) {
+	const trackRef = useRef<HTMLDivElement>(null);
+	const draggingRef = useRef(false);
+
+	const seek = useCallback(
+		(clientX: number) => {
+			const el = trackRef.current;
+			if (!el || !videoEl || !(duration > 0)) return;
+			const rect = el.getBoundingClientRect();
+			const ratio = Math.max(
+				0,
+				Math.min((clientX - rect.left) / rect.width, 1),
+			);
+			videoEl.currentTime = ratio * duration;
+		},
+		[videoEl, duration],
+	);
+
+	const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
+		draggingRef.current = true;
+		e.currentTarget.setPointerCapture(e.pointerId);
+		seek(e.clientX);
+	};
+	const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (draggingRef.current) seek(e.clientX);
+	};
+	const onUp = (e: React.PointerEvent<HTMLDivElement>) => {
+		draggingRef.current = false;
+		try {
+			e.currentTarget.releasePointerCapture(e.pointerId);
+		} catch {
+			// ignore
+		}
+	};
+
+	const progress =
+		duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+	return (
+		<div
+			ref={trackRef}
+			className="relative flex h-4 w-full cursor-pointer touch-none select-none items-center"
+			onPointerDown={onDown}
+			onPointerMove={onMove}
+			onPointerUp={onUp}
+			onPointerCancel={onUp}
+		>
+			<div
+				className={`h-1 w-full overflow-hidden rounded-full ${
+					variant === "dark" ? "bg-white/25" : "bg-gray-6"
+				}`}
+			>
+				<div
+					className={`h-full rounded-full ${variant === "dark" ? "bg-white" : "bg-blue-500"}`}
+					style={{ width: `${progress}%` }}
+				/>
 			</div>
 		</div>
 	);
@@ -358,6 +576,32 @@ function CloseIcon() {
 				strokeLinejoin="round"
 				d="M6 6l12 12M18 6 6 18"
 			/>
+		</svg>
+	);
+}
+
+function PlayIcon() {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			className="size-4"
+			fill="currentColor"
+			aria-hidden="true"
+		>
+			<path d="M8 5v14l11-7z" />
+		</svg>
+	);
+}
+
+function PauseIcon() {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			className="size-4"
+			fill="currentColor"
+			aria-hidden="true"
+		>
+			<path d="M7 5h4v14H7zM13 5h4v14h-4z" />
 		</svg>
 	);
 }

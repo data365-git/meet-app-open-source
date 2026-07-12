@@ -8,12 +8,17 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon, AudioLines, InfoIcon } from "lucide-react";
+import { AlertTriangleIcon, InfoIcon, RotateCcw, RotateCw } from "lucide-react";
+import {
+	MediaActionTypes,
+	useMediaDispatch,
+} from "media-chrome/react/media-store";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import { useThumnailQuery } from "@/components/VideoThumbnail";
+import { AudioPlayerChrome } from "./AudioPlayer";
 import CommentStamp from "./CommentStamp";
 import { getActiveCaptionText } from "./caption-cues";
 import {
@@ -181,6 +186,14 @@ export function CapVideoPlayer({
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
+	// AudioPlayerChrome's transport is always visible (no hover-to-reveal like
+	// the video chrome), so mark controls "visible" for audio up front —
+	// otherwise comment stamps (gated on mainControlsVisible) never render
+	// since MediaPlayerControls (the thing that normally reports this) is not
+	// rendered for isAudio.
+	useEffect(() => {
+		if (isAudio) setMainControlsVisible(true);
+	}, [isAudio]);
 	const [toggleCaptions, setToggleCaptionsState] = useState<boolean>(() => {
 		if (typeof window === "undefined") return false;
 		const stored = localStorage.getItem("cap-captions-enabled");
@@ -712,6 +725,7 @@ export function CapVideoPlayer({
 			<VideoPreviewGif
 				videoId={videoId}
 				visible={
+					!isAudio &&
 					!disablePreviewGif &&
 					videoLoaded &&
 					!hasPlayedOnce &&
@@ -750,16 +764,30 @@ export function CapVideoPlayer({
 					)}
 				</MediaPlayerVideo>
 			)}
-			{isAudio && (
-				<div className="flex absolute inset-0 z-[5] flex-col justify-center items-center p-6 pointer-events-none bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] rounded-xl">
-					<AudioLines className="mb-3 text-white/80 size-12" />
-					{videoName && (
-						<p className="text-base sm:text-lg font-semibold text-center text-white line-clamp-2 max-w-[80%]">
-							{videoName}
-						</p>
-					)}
-				</div>
-			)}
+			{isAudio &&
+				resolvedSrc.data &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<AudioPlayerChrome
+						videoRef={videoRef}
+						videoName={videoName}
+						duration={playerDuration}
+						chapters={chapters}
+					/>
+				)}
+			{!isAudio &&
+				hasPlayedOnce &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<MobileSeekGestureLayer
+						videoRef={videoRef}
+						duration={playerDuration}
+					/>
+				)}
 			<AnimatePresence>
 				{(blockPlaybackDuringProcessing || !videoLoaded) &&
 					hasActiveProgress &&
@@ -823,7 +851,8 @@ export function CapVideoPlayer({
 							</motion.div>
 						</>
 					)}
-				{showPlayButton &&
+				{!isAudio &&
+					showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
 					!showUploadFailureOverlay &&
@@ -845,7 +874,8 @@ export function CapVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
-			{resolvedSrc.data &&
+			{!isAudio &&
+				resolvedSrc.data &&
 				videoLoaded &&
 				!hasActiveProgress &&
 				!showUploadFailureOverlay &&
@@ -915,55 +945,57 @@ export function CapVideoPlayer({
 					});
 				})()}
 
-			<MediaPlayerControls
-				className={clsx(
-					"flex-col items-start gap-2.5",
-					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
-				)}
-				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={blockPlaybackControls}
-			>
-				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<SegmentedProgressBar
-					chapters={chapters}
-					duration={playerDuration}
-					videoRef={videoRef}
-				/>
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
-						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
+			{!isAudio && (
+				<MediaPlayerControls
+					className={clsx(
+						"flex-col items-start gap-2.5",
+						showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+					)}
+					mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
+					isUploadingOrFailed={blockPlaybackControls}
+				>
+					<MediaPlayerControlsOverlay className="rounded-b-xl" />
+					<SegmentedProgressBar
+						chapters={chapters}
+						duration={playerDuration}
+						videoRef={videoRef}
+					/>
+					<div className="flex gap-2 items-center w-full">
+						<div className="flex flex-1 gap-2 items-center">
+							<MediaPlayerPlay />
+							<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+							<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+							<MediaPlayerVolume
+								expandable
+								// enhancedAudioEnabled={enhancedAudioEnabled}
+								// enhancedAudioMuted={enhancedAudioMuted}
+								// setEnhancedAudioMuted={setEnhancedAudioMuted}
 							/>
-						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
+							<MediaPlayerTime fallbackDuration={playerDuration} />
+						</div>
+						<div className="flex gap-2 items-center">
+							{!disableCaptions && (
+								<MediaPlayerCaptions
+									setToggleCaptions={setToggleCaptions}
+									toggleCaptions={toggleCaptions}
+								/>
+							)}
+							{/* <MediaPlayerEnhancedAudio
+								enhancedAudioStatus={enhancedAudioStatus}
+								enhancedAudioEnabled={enhancedAudioEnabled}
+								setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+							/> */}
+							<MediaPlayerSettings
 							// enhancedAudioStatus={enhancedAudioStatus}
 							// enhancedAudioEnabled={enhancedAudioEnabled}
 							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
+							/>
+							<MediaPlayerPiP />
+							<MediaPlayerFullscreen />
+						</div>
 					</div>
-				</div>
-			</MediaPlayerControls>
+				</MediaPlayerControls>
+			)}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio
@@ -984,4 +1016,180 @@ export function CapVideoPlayer({
 			)} */}
 		</MediaPlayer>
 	);
+}
+
+const GESTURE_SEEK_SECONDS = 10;
+const GESTURE_TAP_SLOP_PX = 12;
+
+/**
+ * T5: mobile-only (`sm:hidden`) gesture surface over the video so touch
+ * behaves like YouTube/MX Player — tap left/right thirds to seek ±10s,
+ * center third toggles play/pause, horizontal drag scrubs with a live time
+ * preview. Bottom strip is left uncovered so the real control bar (play,
+ * progress-bar drag, etc.) stays reachable and unaffected. Desktop mouse
+ * behavior is untouched — this layer simply doesn't render there.
+ */
+function MobileSeekGestureLayer({
+	videoRef,
+	duration,
+}: {
+	videoRef: React.RefObject<HTMLVideoElement | null>;
+	duration: number;
+}) {
+	const dispatch = useMediaDispatch();
+	const [flash, setFlash] = useState<{
+		side: "left" | "right";
+		key: number;
+	} | null>(null);
+	const [scrubTime, setScrubTime] = useState<number | null>(null);
+	const dragRef = useRef<{
+		startX: number;
+		startY: number;
+		startTime: number;
+		width: number;
+		dragging: boolean;
+	} | null>(null);
+
+	const seekTo = useCallback(
+		(time: number) => {
+			const clamped = Math.max(
+				0,
+				Math.min(duration > 0 ? duration : Number.POSITIVE_INFINITY, time),
+			);
+			if (videoRef.current) videoRef.current.currentTime = clamped;
+			dispatch({ type: MediaActionTypes.MEDIA_SEEK_REQUEST, detail: clamped });
+			return clamped;
+		},
+		[dispatch, duration, videoRef],
+	);
+
+	useEffect(() => {
+		if (!flash) return;
+		const timeout = setTimeout(() => setFlash(null), 550);
+		return () => clearTimeout(timeout);
+	}, [flash]);
+
+	const onPointerDown = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const rect = e.currentTarget.getBoundingClientRect();
+			dragRef.current = {
+				startX: e.clientX,
+				startY: e.clientY,
+				startTime: videoRef.current?.currentTime ?? 0,
+				width: rect.width,
+				dragging: false,
+			};
+		},
+		[videoRef],
+	);
+
+	const onPointerMove = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			if (!drag) return;
+			const dx = e.clientX - drag.startX;
+			const dy = e.clientY - drag.startY;
+			if (!drag.dragging) {
+				if (Math.abs(dx) < GESTURE_TAP_SLOP_PX || Math.abs(dx) < Math.abs(dy)) {
+					return;
+				}
+				drag.dragging = true;
+				e.currentTarget.setPointerCapture(e.pointerId);
+			}
+			const target = drag.startTime + (dx / drag.width) * duration;
+			setScrubTime(seekTo(target));
+		},
+		[duration, seekTo],
+	);
+
+	const endDrag = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			dragRef.current = null;
+			if (!drag) return;
+
+			if (drag.dragging) {
+				try {
+					e.currentTarget.releasePointerCapture(e.pointerId);
+				} catch {
+					// ignore
+				}
+				setScrubTime(null);
+				return;
+			}
+
+			// Plain tap: classify by horizontal third.
+			const rect = e.currentTarget.getBoundingClientRect();
+			const x = e.clientX - rect.left;
+			const third = rect.width / 3;
+			const video = videoRef.current;
+			if (x < third) {
+				seekTo((video?.currentTime ?? 0) - GESTURE_SEEK_SECONDS);
+				setFlash({ side: "left", key: Date.now() });
+			} else if (x > third * 2) {
+				seekTo((video?.currentTime ?? 0) + GESTURE_SEEK_SECONDS);
+				setFlash({ side: "right", key: Date.now() });
+			} else if (video) {
+				dispatch({
+					type: video.paused
+						? MediaActionTypes.MEDIA_PLAY_REQUEST
+						: MediaActionTypes.MEDIA_PAUSE_REQUEST,
+				});
+			}
+		},
+		[dispatch, seekTo, videoRef],
+	);
+
+	const onPointerCancel = useCallback(() => {
+		dragRef.current = null;
+		setScrubTime(null);
+	}, []);
+
+	return (
+		<div
+			aria-hidden="true"
+			className="absolute inset-x-0 top-0 bottom-24 z-[6] touch-pan-y select-none sm:hidden"
+			onPointerDown={onPointerDown}
+			onPointerMove={onPointerMove}
+			onPointerUp={endDrag}
+			onPointerCancel={onPointerCancel}
+		>
+			<AnimatePresence>
+				{flash && (
+					<motion.div
+						key={flash.key}
+						initial={{ opacity: 0, scale: 0.7 }}
+						animate={{ opacity: 1, scale: 1 }}
+						exit={{ opacity: 0, scale: 0.85 }}
+						transition={{ duration: 0.2 }}
+						className={clsx(
+							"pointer-events-none absolute top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 rounded-full bg-black/60 px-3 py-2 text-white",
+							flash.side === "left" ? "left-6" : "right-6",
+						)}
+					>
+						{flash.side === "left" ? (
+							<RotateCcw className="size-5" />
+						) : (
+							<RotateCw className="size-5" />
+						)}
+						<span className="text-[11px] font-medium tabular-nums">
+							{GESTURE_SEEK_SECONDS}s
+						</span>
+					</motion.div>
+				)}
+			</AnimatePresence>
+			{scrubTime !== null && (
+				<div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium tabular-nums text-white">
+					{formatGestureTime(scrubTime)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function formatGestureTime(sec: number): string {
+	const s = Math.max(0, Math.floor(sec));
+	const m = Math.floor(s / 60);
+	const r = s % 60;
+	return `${m}:${r.toString().padStart(2, "0")}`;
 }
