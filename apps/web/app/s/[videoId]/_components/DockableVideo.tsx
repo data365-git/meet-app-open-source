@@ -4,14 +4,6 @@ import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatMmSs } from "./video/SegmentedProgressBar";
 
-const POS_STORAGE_KEY = "data365:watchMiniPos";
-const MARGIN = 8;
-// Below this viewport width the corner video-frame dock has no room to be
-// useful — style falls back to the controls-only strip (see showBarStyle).
-const DESKTOP_BREAKPOINT = "(min-width: 1024px)";
-
-type Pos = { x: number; y: number };
-
 interface DockedMediaState {
 	videoEl: HTMLVideoElement | null;
 	isPlaying: boolean;
@@ -88,13 +80,11 @@ function useDockedMediaState(
  * `children` (the playerBlock) is rendered exactly once and never remounts,
  * so playback keeps working across dock/undock.
  *
- * Two docked styles (owner decision 2026-07-11):
- * - Desktop (≥1024px) + video: a bigger floating corner box that still shows
- *   the video frame, with its OWN always-on play/pause + seek bar overlay
- *   (the full video chrome is too cramped to stay usable at this size).
- * - Everything else (mobile, or any audio) — a slim sticky top strip with
- *   NO video pixels, just play/pause + a seekable progress bar + time (+
- *   title). `children` stays mounted (invisible) for playback continuity.
+ * Docked style (owner decision 2026-07-13): on EVERY viewport the dock is a
+ * slim bottom bar with NO video pixels — just play/pause + a seekable
+ * progress bar + time (+ title). A floating video box would cover the AI
+ * analysis the user is reading, so docking never shows the video frame.
+ * `children` stays mounted (invisible) for playback continuity.
  */
 export function DockableVideo({
 	children,
@@ -112,9 +102,6 @@ export function DockableVideo({
 	const [docked, setDocked] = useState(false);
 	const [dismissed, setDismissed] = useState(false);
 	const [activated, setActivated] = useState(false);
-	const [isDesktop, setIsDesktop] = useState(false);
-	const [pos, setPos] = useState<Pos | null>(null);
-	const [dragging, setDragging] = useState(false);
 	const [slotHeight, setSlotHeight] = useState<number | null>(null);
 	const [reduceMotion, setReduceMotion] = useState(false);
 
@@ -129,32 +116,6 @@ export function DockableVideo({
 			videoEl.pause();
 		}
 	}, [videoEl]);
-
-	// Style breakpoint: only a desktop-sized viewport has room for the
-	// video-frame corner box; below it (and always for audio) we use the
-	// controls-only strip.
-	useEffect(() => {
-		const mql = window.matchMedia(DESKTOP_BREAKPOINT);
-		setIsDesktop(mql.matches);
-		const onChange = () => setIsDesktop(mql.matches);
-		mql.addEventListener("change", onChange);
-		return () => mql.removeEventListener("change", onChange);
-	}, []);
-
-	// Read persisted drag position on mount only (SSR-safe).
-	useEffect(() => {
-		try {
-			const raw = window.localStorage.getItem(POS_STORAGE_KEY);
-			if (raw) {
-				const parsed = JSON.parse(raw) as Pos;
-				if (typeof parsed?.x === "number" && typeof parsed?.y === "number") {
-					setPos(parsed);
-				}
-			}
-		} catch {
-			// ignore (e.g. storage disabled / bad JSON)
-		}
-	}, []);
 
 	useEffect(() => {
 		const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -186,9 +147,6 @@ export function DockableVideo({
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
 	const dockable = docked;
-	// Video gets the roomier corner box only on desktop; mobile video and
-	// ALL audio use the compact controls-only strip (no video pixels).
-	const showBarStyle = isAudio || !isDesktop;
 	// The mini auto-appears the moment playback starts while docked, then stays
 	// (owner choice B): pausing keeps it so the user can resume; only × or
 	// scrolling the main player back into view hides it.
@@ -213,74 +171,6 @@ export function DockableVideo({
 		return () => ro.disconnect();
 	}, [dockable]);
 
-	// Keep a dragged position inside the viewport if the window is resized.
-	useEffect(() => {
-		if (!pos) return;
-		const clampToViewport = () => {
-			const el = innerRef.current;
-			if (!el) return;
-			setPos((prev) => (prev ? clampPos(prev, el) : prev));
-		};
-		window.addEventListener("resize", clampToViewport);
-		return () => window.removeEventListener("resize", clampToViewport);
-	}, [pos]);
-
-	const dragOrigin = useRef<{
-		px: number;
-		py: number;
-		ox: number;
-		oy: number;
-	} | null>(null);
-
-	const handleMovePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-		const el = innerRef.current;
-		if (!el) return;
-		const rect = el.getBoundingClientRect();
-		dragOrigin.current = {
-			px: e.clientX,
-			py: e.clientY,
-			ox: rect.left,
-			oy: rect.top,
-		};
-		setDragging(true);
-		e.currentTarget.setPointerCapture(e.pointerId);
-	};
-
-	const handleMovePointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
-		const origin = dragOrigin.current;
-		const el = innerRef.current;
-		if (!origin || !el) return;
-		const next = clampPos(
-			{
-				x: origin.ox + (e.clientX - origin.px),
-				y: origin.oy + (e.clientY - origin.py),
-			},
-			el,
-		);
-		setPos(next);
-	};
-
-	const handleMovePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
-		if (!dragOrigin.current) return;
-		dragOrigin.current = null;
-		setDragging(false);
-		try {
-			e.currentTarget.releasePointerCapture(e.pointerId);
-		} catch {
-			// ignore
-		}
-		setPos((prev) => {
-			if (prev) {
-				try {
-					window.localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(prev));
-				} catch {
-					// ignore
-				}
-			}
-			return prev;
-		});
-	};
-
 	const handleExpand = () => {
 		slotRef.current?.scrollIntoView({
 			behavior: reduceMotion ? "auto" : "smooth",
@@ -288,30 +178,31 @@ export function DockableVideo({
 		});
 	};
 
-	const transitionClass =
-		reduceMotion || dragging ? "" : "transition-all duration-[180ms] ease-out";
-
-	// Default anchor (top-right) unless the user has dragged it somewhere —
-	// only meaningful for the draggable corner box style.
-	const positionStyle: React.CSSProperties | undefined = pos
-		? { top: pos.y, left: pos.x, right: "auto" }
-		: undefined;
+	const transitionClass = reduceMotion
+		? ""
+		: "transition-all duration-[180ms] ease-out";
 
 	const playPauseLabel = isPlaying ? tm("pause") : tm("play");
 
+	// The dock's box styling lives on the inner wrapper (innerRef) itself, NOT
+	// on a per-state child element, so `children` can hang off ONE stable host
+	// div that never changes type/position → the native <video> is never
+	// remounted across dock transitions (a remount would restart playback and
+	// orphan the dock/transcript/resume listeners). Only CSS toggles.
 	const outerClassName = !dockable
 		? `relative ${transitionClass}`
-		: showBarStyle
-			? `fixed inset-x-2 top-2 z-50 sm:inset-x-auto sm:right-4 sm:w-[380px] ${transitionClass} ${
-					showMini
-						? "translate-y-0 opacity-100"
-						: "pointer-events-none -translate-y-3 opacity-0"
-				}`
-			: `fixed z-50 w-[min(360px,55vw)] ${pos ? "" : "top-4 right-4"} ${transitionClass} ${
-					showMini
-						? "translate-y-0 opacity-100"
-						: "pointer-events-none -translate-y-2 opacity-0"
-				}`;
+		: `fixed inset-x-2 bottom-2 z-50 flex items-center gap-2.5 rounded-2xl border border-gray-5 bg-gray-1/95 px-3 py-2 shadow-lg backdrop-blur-md sm:inset-x-auto sm:right-4 sm:w-[380px] ${transitionClass} ${
+				showMini
+					? "translate-y-0 opacity-100"
+					: "pointer-events-none translate-y-3 opacity-0"
+			}`;
+
+	// One stable host for `children` across every state (see above). Docked, it
+	// is absolutely positioned behind the bar chrome and hidden (opacity-0) —
+	// the bar never shows video pixels; undocked, plain flow.
+	const playerHostClassName = !dockable
+		? undefined
+		: "pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0";
 
 	return (
 		<div
@@ -319,20 +210,13 @@ export function DockableVideo({
 			className="min-w-0"
 			style={dockable && slotHeight ? { minHeight: slotHeight } : undefined}
 		>
-			<div
-				ref={innerRef}
-				style={dockable && !showBarStyle ? positionStyle : undefined}
-				className={outerClassName}
-			>
-				{!dockable ? (
-					children
-				) : showBarStyle ? (
-					<div className="relative flex items-center gap-2.5 rounded-2xl border border-gray-5 bg-gray-1/95 px-3 py-2 shadow-lg backdrop-blur-md">
-						{/* Mounted for playback continuity only — no visible frame on
-						    the strip (owner: no video pixels on mobile/audio dock). */}
-						<div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0">
-							{children}
-						</div>
+			<div ref={innerRef} className={outerClassName}>
+				{/* One stable host for `children` — never changes type/position, so
+				    the native <video> is never remounted across dock transitions. */}
+				<div className={playerHostClassName}>{children}</div>
+
+				{dockable && (
+					<>
 						<button
 							type="button"
 							onClick={togglePlay}
@@ -375,63 +259,7 @@ export function DockableVideo({
 						>
 							<CloseIcon />
 						</button>
-					</div>
-				) : (
-					<div className="relative aspect-video overflow-hidden rounded-xl shadow-lg ring-1 ring-black/10">
-						{/* Frame stays visible (desktop has room for it) but inert —
-						    the full video chrome is too cramped at this size to stay
-						    usable, so our own overlay below drives play/pause + seek. */}
-						<div className="pointer-events-none">{children}</div>
-						<div className="absolute right-2 top-2 z-40 flex items-center gap-1">
-							<button
-								type="button"
-								aria-label={t("miniMove")}
-								onPointerDown={handleMovePointerDown}
-								onPointerMove={handleMovePointerMove}
-								onPointerUp={handleMovePointerUp}
-								onPointerCancel={handleMovePointerUp}
-								className={`inline-flex size-6 touch-none items-center justify-center rounded-md border border-white/15 text-white/80 shadow-sm backdrop-blur-sm transition-colors ${
-									dragging
-										? "cursor-grabbing bg-black/80 text-white"
-										: "cursor-grab bg-black/65 hover:bg-black/80 hover:text-white"
-								}`}
-							>
-								<MoveIcon />
-							</button>
-							<button
-								type="button"
-								aria-label={t("miniExpand")}
-								onClick={handleExpand}
-								className="inline-flex size-6 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
-							>
-								<ExpandIcon />
-							</button>
-							<button
-								type="button"
-								aria-label={t("miniClose")}
-								onClick={() => setDismissed(true)}
-								className="inline-flex size-6 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
-							>
-								<CloseIcon />
-							</button>
-						</div>
-						<div className="absolute inset-x-0 bottom-0 z-40 flex items-center gap-2 bg-black/70 px-3 py-2 backdrop-blur-sm">
-							<button
-								type="button"
-								onClick={togglePlay}
-								aria-label={playPauseLabel}
-								className="flex size-7 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-							>
-								{isPlaying ? <PauseIcon /> : <PlayIcon />}
-							</button>
-							<DockSeekBar
-								videoEl={videoEl}
-								currentTime={currentTime}
-								duration={duration}
-								variant="dark"
-							/>
-						</div>
-					</div>
+					</>
 				)}
 			</div>
 		</div>
@@ -439,8 +267,7 @@ export function DockableVideo({
 }
 
 /** Simple draggable seek track driving the native <video> directly (no
- * media-chrome dispatch — this component sits outside that context). Used
- * by both docked styles. */
+ * media-chrome dispatch — this component sits outside that context). */
 function DockSeekBar({
 	videoEl,
 	currentTime,
@@ -509,36 +336,6 @@ function DockSeekBar({
 				/>
 			</div>
 		</div>
-	);
-}
-
-function clampPos(p: Pos, el: HTMLElement): Pos {
-	const w = el.offsetWidth;
-	const h = el.offsetHeight;
-	const maxX = Math.max(MARGIN, window.innerWidth - w - MARGIN);
-	const maxY = Math.max(MARGIN, window.innerHeight - h - MARGIN);
-	return {
-		x: Math.min(Math.max(p.x, MARGIN), maxX),
-		y: Math.min(Math.max(p.y, MARGIN), maxY),
-	};
-}
-
-function MoveIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			className="size-3.5"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth={2}
-			aria-hidden="true"
-		>
-			<path
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				d="M12 2v20M2 12h20M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"
-			/>
-		</svg>
 	);
 }
 

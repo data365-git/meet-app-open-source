@@ -504,6 +504,9 @@ export const Share = ({
 					chapters={aiData?.chapters || []}
 					aiGenerationStatus={aiData?.aiGenerationStatus}
 					canRetryProcessing={viewerId === data.owner.id}
+					canReplaceWithAudio={
+						viewerId === data.owner.id && !data.metadata?.isAudio
+					}
 					canFinalizeDesktopSegments={viewerId === data.owner.id}
 					showPlaybackStatusBadge={viewerId === data.owner.id}
 					isEditProcessing={isEditProcessing}

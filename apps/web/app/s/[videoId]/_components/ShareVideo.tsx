@@ -76,6 +76,7 @@ export const ShareVideo = forwardRef<
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
+		canReplaceWithAudio?: boolean;
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
@@ -99,6 +100,7 @@ export const ShareVideo = forwardRef<
 			areReactionStampsDisabled,
 			aiGenerationStatus,
 			canRetryProcessing,
+			canReplaceWithAudio,
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
@@ -733,6 +735,7 @@ export const ShareVideo = forwardRef<
 							}))}
 							onSeek={handleSeek}
 							canRetryProcessing={canRetryProcessing}
+							canReplaceWithAudio={canReplaceWithAudio}
 							chapters={
 								areChaptersDisabled
 									? []

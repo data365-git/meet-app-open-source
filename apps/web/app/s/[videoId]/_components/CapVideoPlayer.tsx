@@ -8,15 +8,24 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon, InfoIcon, RotateCcw, RotateCw } from "lucide-react";
+import {
+	AlertTriangleIcon,
+	AudioLines,
+	InfoIcon,
+	RotateCcw,
+	RotateCw,
+} from "lucide-react";
 import {
 	MediaActionTypes,
 	useMediaDispatch,
 } from "media-chrome/react/media-store";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { AudioPlayerChrome } from "./AudioPlayer";
 import CommentStamp from "./CommentStamp";
@@ -101,6 +110,37 @@ function RawPlaybackStatusBadge({
 	);
 }
 
+function ReplaceWithAudioButton({
+	visible,
+	loading,
+	label,
+	onClick,
+}: {
+	visible: boolean;
+	loading: boolean;
+	label: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={loading}
+			className={clsx(
+				// top-14 (not top-3) so it stacks BELOW the top-right LanguagePicker
+				// overlay (ShareVideo) instead of colliding with it.
+				"absolute top-14 right-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 disabled:cursor-not-allowed disabled:opacity-60",
+				visible ? "opacity-100" : "pointer-events-none opacity-0",
+			)}
+			aria-hidden={!visible}
+			tabIndex={visible ? undefined : -1}
+		>
+			<AudioLines className="size-3" />
+			<span>{label}</span>
+		</button>
+	);
+}
+
 type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 
 interface Props {
@@ -130,6 +170,7 @@ interface Props {
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	canRetryProcessing?: boolean;
+	canReplaceWithAudio?: boolean;
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
 	showPlaybackStatusBadge?: boolean;
@@ -161,6 +202,7 @@ export function CapVideoPlayer({
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	canRetryProcessing = false,
+	canReplaceWithAudio = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
 	showPlaybackStatusBadge = false,
@@ -171,6 +213,7 @@ export function CapVideoPlayer({
 	videoName,
 }: Props) {
 	const t = useTranslations("share");
+	const router = useRouter();
 	const getProgressStatusText = (
 		status: "uploading" | "processing" | "generating_thumbnail",
 	) => {
@@ -211,6 +254,9 @@ export function CapVideoPlayer({
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [hasError, setHasError] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+	const [showReplaceWithAudioConfirm, setShowReplaceWithAudioConfirm] =
+		useState(false);
+	const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
 	const [hasTriedRawFallback, setHasTriedRawFallback] = useState(false);
@@ -595,6 +641,35 @@ export function CapVideoPlayer({
 		}
 	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId, t]);
 
+	const handleReplaceWithAudio = useCallback(async () => {
+		if (isReplacingWithAudio) return;
+
+		setIsReplacingWithAudio(true);
+		try {
+			const result = await replaceVideoWithAudio(videoId);
+			if (result.ok) {
+				toast.success(t("replaceWithAudioSuccess"));
+				router.refresh();
+				return;
+			}
+			if (result.reason === "already_audio") {
+				router.refresh();
+				return;
+			}
+			toast.error(
+				result.reason === "unsupported_source"
+					? t("replaceWithAudioErrorUnsupported")
+					: t("replaceWithAudioError"),
+			);
+		} catch (error) {
+			console.error("Failed to replace video with audio", error);
+			toast.error(t("replaceWithAudioError"));
+		} finally {
+			setIsReplacingWithAudio(false);
+			setShowReplaceWithAudioConfirm(false);
+		}
+	}, [isReplacingWithAudio, videoId, t, router]);
+
 	const prevUploadProgress =
 		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
 	useEffect(() => {
@@ -721,6 +796,34 @@ export function CapVideoPlayer({
 				visible={showRawPlaybackBadge}
 				label={rawPlaybackBadgeLabel}
 				description={rawPlaybackBadgeDescription}
+			/>
+			<ReplaceWithAudioButton
+				visible={
+					canReplaceWithAudio &&
+					!isAudio &&
+					videoLoaded &&
+					!hasActiveProgress &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError
+				}
+				loading={isReplacingWithAudio}
+				label={t("replaceWithAudioButton")}
+				onClick={() => setShowReplaceWithAudioConfirm(true)}
+			/>
+			<ConfirmationDialog
+				open={showReplaceWithAudioConfirm}
+				title={t("replaceWithAudioTitle")}
+				description={t("replaceWithAudioBody")}
+				confirmLabel={
+					isReplacingWithAudio
+						? t("replacingWithAudio")
+						: t("replaceWithAudioConfirm")
+				}
+				cancelLabel={t("replaceWithAudioCancel")}
+				confirmVariant="destructive"
+				loading={isReplacingWithAudio}
+				onConfirm={handleReplaceWithAudio}
+				onCancel={() => setShowReplaceWithAudioConfirm(false)}
 			/>
 			<VideoPreviewGif
 				videoId={videoId}
