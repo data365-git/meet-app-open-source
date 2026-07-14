@@ -136,6 +136,9 @@ export function DockableVideo({
 	const [activated, setActivated] = useState(false);
 	const [slotHeight, setSlotHeight] = useState<number | null>(null);
 	const [reduceMotion, setReduceMotion] = useState(false);
+	// Desktop-only: the mini interferes with reading on a phone (owner
+	// 2026-07-14), so on mobile the video just scrolls away in normal flow.
+	const [isDesktop, setIsDesktop] = useState(false);
 	const dockedTopOffset = useDockedTopOffset();
 
 	const { videoEl, isPlaying, currentTime, duration } =
@@ -154,6 +157,15 @@ export function DockableVideo({
 		const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
 		setReduceMotion(mql.matches);
 		const onChange = () => setReduceMotion(mql.matches);
+		mql.addEventListener("change", onChange);
+		return () => mql.removeEventListener("change", onChange);
+	}, []);
+
+	// Track desktop (>=1280px, the `xl` breakpoint) — the mini docks ONLY here.
+	useEffect(() => {
+		const mql = window.matchMedia("(min-width: 1280px)");
+		setIsDesktop(mql.matches);
+		const onChange = () => setIsDesktop(mql.matches);
 		mql.addEventListener("change", onChange);
 		return () => mql.removeEventListener("change", onChange);
 	}, []);
@@ -182,7 +194,8 @@ export function DockableVideo({
 	}, []);
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
-	const dockable = docked;
+	// Desktop only — on mobile the video stays in flow and scrolls away.
+	const dockable = docked && isDesktop;
 	// The mini auto-appears the moment playback starts, then stays activated —
 	// "scroll down while paused" (after having played) still shows the mini —
 	// until the user explicitly dismisses it with ×.
@@ -225,13 +238,12 @@ export function DockableVideo({
 
 	const playPauseLabel = isPlaying ? tm("pause") : tm("play");
 
-	// Enter/exit transform: mobile slides down from above (the player exited
-	// upward), desktop slides up from below — both settle to identity. Kept as
-	// a directional slide (not a plain fade) so the mini reads as "floating in"
-	// rather than "installed/stuck".
+	// Enter/exit transform: slides down from above (the mini lives top-right on
+	// every viewport now) + a slight scale — a directional slide, not a plain
+	// fade, so it reads as "floating in" rather than "installed/stuck".
 	const motionClass = showMini
 		? "translate-y-0 scale-100 opacity-100"
-		: "pointer-events-none -translate-y-2 scale-[0.96] opacity-0 xl:translate-y-2 xl:scale-100";
+		: "pointer-events-none -translate-y-2 scale-[0.96] opacity-0";
 
 	// The dock's box styling lives on the inner wrapper (innerRef) itself, NOT
 	// on a per-state child element, so `children` can hang off ONE stable host
@@ -253,13 +265,13 @@ export function DockableVideo({
 			motionClass,
 		].join(" ");
 	} else {
-		// Floating real player: mobile top-right below the sticky header
-		// (bottom-right/top-right are both taken on desktop by the AI panel /
-		// chat FAB), desktop bottom-left.
+		// Floating real player (YouTube/Telegram-style, owner spec 2026-07-14):
+		// TOP-RIGHT on EVERY viewport — small below the sticky header, just wider
+		// on desktop. Scrolling the main player back into view restores it.
 		outerClassName = [
 			"fixed right-3 z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
 			"top-[var(--docked-top)]",
-			"xl:left-4 xl:right-auto xl:top-auto xl:bottom-4 xl:w-[380px]",
+			"xl:w-[380px]",
 			transitionClass,
 			motionClass,
 		].join(" ");
