@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, Rewind, FastForward } from "lucide-react";
+import { AudioLines } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/app/lib/utils";
@@ -46,9 +46,8 @@ export function AudioPlayerChrome({
 	chapters = [],
 }: AudioPlayerChromeProps) {
 	const tm = useTranslations("mediaPlayer");
-	// Invisible double-tap-to-skip (owner 2026-07-14: YouTube-style, no visible
-	// buttons). Tracks the last tap's side+time to detect a double-tap within
-	// DOUBLE_TAP_MS; a single tap does nothing so it doesn't fight play/pause.
+	// Invisible double-tap-to-skip supplements the visible controls on touch.
+	// These gesture zones stay out of keyboard and screen-reader navigation.
 	const lastTapRef = useRef<{ side: TapSide; time: number } | null>(null);
 	const [flashSide, setFlashSide] = useState<TapSide | null>(null);
 	const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,26 +97,30 @@ export function AudioPlayerChrome({
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
 			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
-				<div className="pointer-events-none flex size-14 items-center justify-center rounded-full bg-white/10 sm:size-20">
-					<AudioLines className="size-7 text-white/85 sm:size-10" />
+				<div className="pointer-events-none flex w-full max-w-[85%] items-center justify-center gap-3">
+					<div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-white/10">
+						<AudioLines className="size-7 text-white/85" />
+					</div>
+					{videoName && (
+						<p className="min-w-0 line-clamp-2 text-left text-sm font-semibold text-white sm:text-lg">
+							{videoName}
+						</p>
+					)}
 				</div>
-				{videoName && (
-					<p className="pointer-events-none line-clamp-2 max-w-[85%] text-center text-sm font-semibold text-white sm:text-lg">
-						{videoName}
-					</p>
-				)}
 
 				{/* Invisible double-tap zones — left = −10s, right = +10s. */}
 				<div className="absolute inset-0 flex">
 					<button
 						type="button"
-						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
+						aria-hidden="true"
+						tabIndex={-1}
 						className="h-full flex-1"
 						onClick={() => handleTap("left")}
 					/>
 					<button
 						type="button"
-						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
+						aria-hidden="true"
+						tabIndex={-1}
 						className="h-full flex-1"
 						onClick={() => handleTap("right")}
 					/>
@@ -151,7 +154,7 @@ export function AudioPlayerChrome({
 						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
 						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
 					>
-						<Rewind className="size-5" />
+						<span className="text-xs font-semibold">−10</span>
 					</button>
 					<MediaPlayerPlay className="size-11 text-white hover:bg-white/15" />
 					<button
@@ -160,7 +163,7 @@ export function AudioPlayerChrome({
 						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
 						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
 					>
-						<FastForward className="size-5" />
+						<span className="text-xs font-semibold">+10</span>
 					</button>
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
