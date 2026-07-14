@@ -3,15 +3,37 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## CODEX VIDEO SEEK CONTROL POLISH (2026-07-14) — VERIFIED, UNCOMMITTED
+## CODEX PLAYER + AI PROGRESS POLISH (2026-07-14) — VERIFIED, UNCOMMITTED
 
-- Scoped only the main share-page video transport. Audio controls, touch double-tap, fullscreen, captions, timeline, and mini-player behavior were not changed.
+- Final owner decision for video: no visible skip buttons. Desktop uses plain Left/Right Arrow keys for ±5 seconds; mobile touch uses a real double-tap on the left/right third for ±10 seconds. A single side tap no longer seeks accidentally.
+- Live proof on the real video: visible skip controls = 0; ArrowRight changed 20s -> 25s and ArrowLeft restored 25s -> 20s. The touch layer remains pointer-type gated for phones, including landscape fullscreen.
+- Audio keeps the visible shared skip controls and the hold/right-click/ArrowDown `5 / 10 / 15 / 20 / 30` picker. The selected audio duration persists locally.
+- Rebuilt the running AI-analysis status around real persisted pipeline data only: transcription, summary, and refinement stages; completed/active/waiting states; actual chunk progress; overall percentage; and rate-based ETA. Cheap-mode quota wait honestly shows `2–4 hours` instead of a fake minute estimate.
+- The AI status is responsive: three cards on desktop and stacked cards on mobile. Live preview proof showed stage 2/3, 4/12 chunks, 44%, and ~12 minutes remaining; 390 px mobile had no horizontal overflow and neither viewport logged console errors.
+- Exact Claude handoff: `CODEX_TO_CLAUDE_AI_PROGRESS_2026-07-14.md`, plus the superseding player note in `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`. No commit, push, or deploy was performed.
+
+---
+## SUPERSEDED CODEX AUDIO/VIDEO SEEK CONTROL POLISH (2026-07-14) — HISTORY ONLY
+
+- Scoped only the main share-page audio/video seek controls. Fullscreen, captions, timeline, and mini-player behavior were not changed.
 - Found a behavior/UI mismatch: desktop showed generic 32x32 rewind/forward icons; backward sought 5 seconds while forward sought 10 seconds.
-- Updated desktop transport to the familiar `10-back / Play / 10-forward` group. All three desktop controls are 44x44, both seek actions are exactly 10 seconds, and the circular arrows visibly contain `10`.
-- Localized the backward tooltip and accessible label through the existing `backSeconds` / `backSecondsLabel` messages; the Uzbek live page now reports `10 soniya orqaga` and `10 soniya oldinga`.
-- Fresh production proof at 1280x720: measured each transport control at 44x44; live clicks changed 1s -> 11s -> 1s; no browser console errors. At 390x844, desktop seek controls remain hidden and the existing touch gesture path is unchanged.
+- Updated desktop transport to the familiar `N-back / Play / N-forward` group. All three desktop controls are 44x44 and the circular arrows visibly contain the selected duration.
+- Follow-up owner request: holding either seek button for 450 ms opens a `5 / 10 / 15 / 20 / 30` second picker. Right-click and keyboard ArrowDown open the same picker; a normal click still seeks. The selected duration applies to both directions and persists in local storage.
+- The audio player now uses the same shared seek control. Its visible buttons and touch double-tap both follow the selected duration.
+- Localized the backward tooltip and accessible label through the existing `backSeconds` / `backSecondsLabel` messages; Uzbek labels now follow the selected duration, for example `20 soniya orqaga` and `20 soniya oldinga`.
+- Fresh audio proof: a real pointer hold opened the picker; selecting 15 updated both controls; live clicks changed 1:15 -> 1:30 -> 1:15; reload preserved 15. At 390x844, all five choices fit without horizontal overflow. ArrowDown no longer triggers the parent volume indicator. The neighboring video picker also remained correct at 1280x720. No browser console errors.
 - `pnpm typecheck`, `pnpm --filter @cap/web test`, and `NEXT_PUBLIC_DOCKER_BUILD=false pnpm --filter @cap/web build` all exited 0.
-- Files: `CapVideoPlayer.tsx` and `video/media-player.tsx`. Exact Claude handoff appended to `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`. No commit, push, or deploy was performed.
+- Files: `AudioPlayer.tsx`, `CapVideoPlayer.tsx`, `video/SkipControls.tsx`, and `video/media-player.tsx`. Exact Claude handoff appended to `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`. No commit, push, or deploy was performed.
+
+---
+## CODEX TIMESTAMP PIPELINE AUDIT (2026-07-14) — LIVE ELEVENLABS OFF
+
+- Live production has Gemini keys but no `ELEVENLABS_API_KEY`, so `applyScribeTimingTransfer()` returns Gemini VTT unchanged. Current timestamps are Gemini estimates; ElevenLabs timing is not active.
+- The dormant hybrid architecture is sound: keep Gemini text and transfer a timing oracle's word timestamps onto it. Historical project evidence reduced mean drift from 18.3s to 3.7s on a two-hour Uzbek recording.
+- Do not enable the current integration as-is: `eleven-scribe.ts` requests deprecated `scribe_v1`, whose documented removal date was 2026-07-09.
+- Recommended next: upgrade the timing-only call to Scribe v2, retain alignment-quality fallback, mark low-confidence timing as estimated, and A/B real mixed Uzbek/Russian meetings before enabling the production key.
+- ElevenLabs Forced Alignment is not the current answer because its official language list excludes Uzbek and it does not support diarization.
+- Exact Claude handoff: `CODEX_TO_CLAUDE_TIMESTAMP_AUDIT_2026-07-14.md`. No transcription code, secret, environment, commit, push, or deploy change was made.
 
 ---
 ## CODEX GUARANTEED CLIENT-AUDIO AUDIT (2026-07-14) — ARCHITECTURE CORRECT, REAL MEET TEST REQUIRED
@@ -130,6 +152,7 @@ Gate I ran myself: **tsc 0 · vitest 886 · 3 i18n JSON valid.** Working-tree on
 5. **Recorder T11/T12** device prototype test (`_proto-offscreen-gdm/`) — device-only.
 
 **DEFERRED (owner-decided / needs a visual channel):** dark-mode on share (owner "skip" — 0 dark: variants, risky; do as a dedicated visual pass) · supermodel visual sweep (screenshots broke ALL session — video renderer hang; use owner's phone / a recovered pane) · "optimizing" badge (owner-only Low; webMP4 serves raw). Polish wayfind map: `docs/plans/2026-07-13-polish-map.md`.
+- **⏳ TRANSCRIPT TIMESTAMP ACCURACY — DEFERRED (owner 2026-07-15: "hozircha muhimmas, keyinroq ElevenLabs yoki shunga o'xshash API qo'shamiz").** Codex audit (`CODEX_TO_CLAUDE_TIMESTAMP_AUDIT_2026-07-14.md`, code-verified): live transcript times = Gemini ESTIMATES (no `ELEVENLABS_API_KEY` set) → drift on long recordings (~18s on a 2h Uzbek rec). A dormant hybrid (`lib/eleven-scribe.ts` + `transcribe.ts` `applyScribeTimingTransfer`, gated on the key + >1 chunk) transfers ElevenLabs word timings onto Gemini text (drift 18.3s→3.7s). **WHEN we build it:** (1) `eleven-scribe.ts:76` uses deprecated `model_id=scribe_v1` (removed 2026-07-09) → upgrade to `scribe_v2` FIRST; (2) needs the PAID `ELEVENLABS_API_KEY` (owner); (3) A/B on a real mixed Uzbek/Rus meeting (median+p95 cue error, number retention, runtime, cost) before enabling; (4) low alignment quality → mark timing "estimated", don't fake precision; (5) run Scribe only for long/drifting recs. ElevenLabs Forced Alignment = cleaner but NO Uzbek + no diarization → not the choice.
 
 **▶▶ QA RUN 6 + FIX BATCH (2026-07-13, this session) — BUILT + LOCAL-GATE GREEN, NOT COMMITTED/DEPLOYED, NOT LIVE-VERIFIED.** Ran qa-6-step (Step 0→3 + Step5 Layer9) on the live Contabo deploy → `QA_REPORT.md`/`QA_POLISH.md` (RUN 6). Then grilled owner + built fixes (working tree, uncommitted). **GATE I ran myself (didn't trust the Sonnet report — it falsely claimed tsc0 while stale diagnostics showed a CheckIcon error; re-ran clean): `tsc --noEmit` EXIT 0 · vitest 885 pass · `next build` EXIT 0 · 3 i18n files valid.**
 - ✅ **#1 tab-lock (High):** `SharePanel.tsx` + `ShareVideo.tsx` — non-summary tabs no longer force-locked while `processing`. New per-tab readiness: Transcript unlocks on `transcriptReady` (independent of AI-gen), Tasks/Refined on `aiContentReady` (=aiGenStatus COMPLETE/SKIPPED), Summary always. Locked tabs get `title` tooltip (`tabLockedHint`) + dim, no dead-click. Fixes the "summary shows but all tabs locked" inconsistency. New prop `aiContentReady`.
