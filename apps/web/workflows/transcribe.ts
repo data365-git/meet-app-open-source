@@ -50,7 +50,10 @@ import { restoreRussianScript } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
-import { transferVttTimingWithStats } from "@/lib/vtt-timing-transfer";
+import {
+	copyCueTimingsByIndex,
+	transferVttTimingWithStats,
+} from "@/lib/vtt-timing-transfer";
 
 interface TranscribeWorkflowPayload {
 	videoId: string;
@@ -166,18 +169,11 @@ export async function transcribeVideoWorkflow(
 			totalDurationSec: audio.totalDurationSec,
 		});
 
-		const finalTranscription = await applyScribeTimingTransfer(
-			audio,
-			gapFill.transcription,
-			videoId,
-			{ userId, orgId: videoData.orgId },
-		);
-
 		await saveTranscription(
 			videoId,
 			userId,
 			videoData.video,
-			finalTranscription,
+			gapFill.transcription,
 			gapFill.remainingGaps,
 			audio.totalDurationSec == null,
 		);
@@ -200,16 +196,29 @@ export async function transcribeVideoWorkflow(
 	return { success: true, message: "Transcription completed successfully" };
 }
 
+export type ScribeTimingTransferResult =
+	| {
+			applied: true;
+			vtt: string;
+			stats: ReturnType<typeof transferVttTimingWithStats>["stats"];
+	  }
+	| {
+			applied: false;
+			vtt: string;
+			reason: "missing_key" | "low_confidence" | "failed";
+	  };
+
 export async function applyScribeTimingTransfer(
 	audio: ExtractedAudio,
 	transcription: string,
 	videoId: string,
 	context?: { userId: string; orgId: string },
-): Promise<string> {
+	refreshTranscription?: () => Promise<string>,
+): Promise<ScribeTimingTransferResult> {
 	"use step";
 
-	if (audio.chunks.length <= 1 || !serverEnv().ELEVENLABS_API_KEY) {
-		return transcription;
+	if (audio.chunks.length === 0 || !serverEnv().ELEVENLABS_API_KEY) {
+		return { applied: false, vtt: transcription, reason: "missing_key" };
 	}
 
 	try {
@@ -217,18 +226,155 @@ export async function applyScribeTimingTransfer(
 		await recordScribeTimingUsage(audio, videoId, context).catch((error) => {
 			console.log("[transcribe] scribe-transfer usage record failed", error);
 		});
-		const result = transferVttTimingWithStats(transcription, words);
+		const latestTranscription = refreshTranscription
+			? await refreshTranscription()
+			: transcription;
+		const result = transferVttTimingWithStats(latestTranscription, words);
+		if (result.stats.identity) {
+			console.log(
+				`[transcribe] scribe-transfer low confidence for ${videoId}; keeping Gemini-timed VTT`,
+			);
+			return {
+				applied: false,
+				vtt: latestTranscription,
+				reason: "low_confidence",
+			};
+		}
 		console.log(
 			`[transcribe] scribe-transfer: ${result.stats.shiftedCueCount} cues shifted, mean ${result.stats.meanShiftSec.toFixed(1)}s, ${result.stats.denseMatches} dense matches`,
 		);
-		return result.vtt;
+		return { applied: true, vtt: result.vtt, stats: result.stats };
 	} catch (error) {
 		console.log(
 			`[transcribe] scribe-transfer failed for ${videoId}; keeping Gemini-timed VTT`,
 			error,
 		);
-		return transcription;
+		return { applied: false, vtt: transcription, reason: "failed" };
 	}
+}
+
+export async function refineVideoTimestampsWorkflow(payload: {
+	videoId: string;
+	userId: string;
+}): Promise<{ success: boolean; reason?: string }> {
+	const { videoId, userId } = payload;
+	let video: typeof videos.$inferSelect | undefined;
+	let audio: ExtractedAudio | null = null;
+
+	try {
+		[video] = await db()
+			.select()
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+		if (!video || video.ownerId !== userId) throw new Error("missing_transcript");
+		if (!serverEnv().ELEVENLABS_API_KEY) throw new Error("missing_key");
+
+		const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+		const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
+		const initialTranscript = await bucket.getObject(transcriptKey).pipe(runPromise);
+		if (Option.isNone(initialTranscript)) throw new Error("missing_transcript");
+
+		audio = await extractAudio(videoId, userId, video);
+		if (!audio) throw new Error("no_audio");
+
+		const transfer = await applyScribeTimingTransfer(
+			audio,
+			initialTranscript.value,
+			videoId,
+			{ userId, orgId: video.orgId },
+			async () => {
+				// Re-read after the external call so edits made while Scribe was running
+				// are preserved. Only timing lines from this latest VTT are rewritten.
+				const latest = await bucket.getObject(transcriptKey).pipe(runPromise);
+				if (Option.isNone(latest)) throw new Error("missing_transcript");
+				return latest.value;
+			},
+		);
+		if (!transfer.applied) throw new Error(transfer.reason);
+
+		await bucket
+			.putObject(transcriptKey, transfer.vtt, { contentType: "text/vtt" })
+			.pipe(runPromise);
+
+		await syncTranslatedTranscriptTimings(video, transfer.vtt).catch((error) => {
+			console.log(
+				`[transcribe] translated timing sync failed for ${videoId}`,
+				error,
+			);
+		});
+
+		await patchVideoMetadata(videoId, (current) => ({
+			...current,
+			timestampRefinement: {
+				status: "COMPLETE",
+				requestedAt:
+					current.timestampRefinement?.requestedAt ?? new Date().toISOString(),
+				completedAt: new Date().toISOString(),
+				model: "elevenlabs-scribe-v2",
+				shiftedCueCount: transfer.stats.shiftedCueCount,
+				meanShiftSec: transfer.stats.meanShiftSec,
+			},
+		}));
+
+		return { success: true };
+	} catch (error) {
+		const rawReason = error instanceof Error ? error.message : "failed";
+		const reason = isTimestampRefinementError(rawReason) ? rawReason : "failed";
+		await patchVideoMetadata(videoId, (current) => ({
+			...current,
+			timestampRefinement: {
+				status: "ERROR",
+				requestedAt:
+					current.timestampRefinement?.requestedAt ?? new Date().toISOString(),
+				completedAt: new Date().toISOString(),
+				error: reason,
+			},
+		})).catch(() => {});
+		return { success: false, reason };
+	} finally {
+		if (audio && video) {
+			await cleanupTempAudioKeys(
+				audio.chunks.map((chunk) => chunk.key),
+				video,
+			);
+		}
+	}
+}
+
+async function syncTranslatedTranscriptTimings(
+	video: typeof videos.$inferSelect,
+	correctedBaseVtt: string,
+): Promise<void> {
+	const metadata = (video.metadata as VideoMetadata) ?? {};
+	const languages = Object.keys(metadata.aiSummaryByLanguage ?? {});
+	if (languages.length === 0) return;
+
+	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+	for (const language of languages) {
+		const key = `${video.ownerId}/${video.id}/transcription.${language}.vtt`;
+		const translated = await bucket.getObject(key).pipe(runPromise);
+		if (Option.isNone(translated)) continue;
+		const synced = copyCueTimingsByIndex(correctedBaseVtt, translated.value);
+		if (!synced) continue;
+		await bucket
+			.putObject(key, synced, { contentType: "text/vtt" })
+			.pipe(runPromise);
+	}
+}
+
+function isTimestampRefinementError(
+	value: string,
+): value is Exclude<
+	NonNullable<VideoMetadata["timestampRefinement"]>["error"],
+	undefined
+> {
+	return [
+		"missing_key",
+		"missing_transcript",
+		"no_audio",
+		"low_confidence",
+		"failed",
+	].includes(value);
 }
 
 async function recordScribeTimingUsage(
@@ -248,7 +394,7 @@ async function recordScribeTimingUsage(
 			userId: context.userId as User.UserId,
 			videoId: videoId as Video.VideoId,
 			operation: "transcription",
-			model: "elevenlabs-scribe-v1",
+			model: "elevenlabs-scribe-v2",
 			inputTokens: 0,
 			outputTokens: 0,
 			costUsdMicros: Math.round(

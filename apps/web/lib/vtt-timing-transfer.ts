@@ -50,6 +50,40 @@ export function transferVttTiming(vttText: string, words: ScribeWord[]): string 
 	return transferVttTimingWithStats(vttText, words).vtt;
 }
 
+/**
+ * Copy corrected cue ranges to a translated VTT without changing its text.
+ * Returns null instead of risking a mismatched rewrite when cue counts differ.
+ */
+export function copyCueTimingsByIndex(
+	sourceVtt: string,
+	targetVtt: string,
+): string | null {
+	const rangePattern =
+		/^(\s*)(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})(.*)$/;
+	const sourceRanges = sourceVtt
+		.split(/\r?\n/)
+		.map((line) => line.match(rangePattern))
+		.filter((match): match is RegExpMatchArray => match !== null);
+	const targetLines = targetVtt.split(/\r?\n/);
+	const targetIndexes = targetLines
+		.map((line, index) => (rangePattern.test(line) ? index : -1))
+		.filter((index) => index >= 0);
+
+	if (sourceRanges.length === 0 || sourceRanges.length !== targetIndexes.length) {
+		return null;
+	}
+
+	for (let i = 0; i < targetIndexes.length; i++) {
+		const lineIndex = targetIndexes[i];
+		const source = sourceRanges[i];
+		const target = lineIndex == null ? null : targetLines[lineIndex]?.match(rangePattern);
+		if (lineIndex == null || !source || !target) return null;
+		targetLines[lineIndex] = `${target[1]}${source[2]} --> ${source[3]}${target[4]}`;
+	}
+
+	return targetLines.join("\n");
+}
+
 export function transferVttTimingWithStats(
 	vttText: string,
 	words: ScribeWord[],

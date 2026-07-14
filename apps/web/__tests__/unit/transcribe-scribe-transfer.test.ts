@@ -106,7 +106,7 @@ describe("applyScribeTimingTransfer", () => {
 
 		const out = await applyScribeTimingTransfer(audio(2), ORIGINAL, "v1");
 
-		expect(out).toBe(CORRECTED);
+		expect(out).toMatchObject({ applied: true, vtt: CORRECTED });
 		expect(H.fetchScribeWordTimes).toHaveBeenCalledTimes(1);
 		expect(H.fetchScribeWordTimes).toHaveBeenCalledWith(audio(2).chunks);
 		expect(H.transferVttTimingWithStats).toHaveBeenCalledWith(ORIGINAL, words);
@@ -121,18 +121,35 @@ describe("applyScribeTimingTransfer", () => {
 
 		const out = await applyScribeTimingTransfer(audio(2), ORIGINAL, "v1");
 
-		expect(out).toBe(ORIGINAL);
+		expect(out).toEqual({
+			applied: false,
+			vtt: ORIGINAL,
+			reason: "failed",
+		});
 		expect(H.transferVttTimingWithStats).not.toHaveBeenCalled();
 		expect(logSpy.mock.calls[0]?.[0]).toContain("scribe-transfer failed");
 	});
 
-	it("single chunk: does not call Scribe", async () => {
+	it("single chunk: refines on explicit request", async () => {
 		H.serverEnv.mockReturnValue({ ELEVENLABS_API_KEY: "scribe-key" });
+		H.fetchScribeWordTimes.mockResolvedValue([
+			{ word: "hello", start: 5, end: 5.2 },
+		]);
+		H.transferVttTimingWithStats.mockReturnValue({
+			vtt: CORRECTED,
+			stats: {
+				shiftedCueCount: 1,
+				meanShiftSec: 5,
+				denseMatches: 42,
+				skeletonAnchors: 10,
+				identity: false,
+			},
+		});
 
 		const out = await applyScribeTimingTransfer(audio(1), ORIGINAL, "v1");
 
-		expect(out).toBe(ORIGINAL);
-		expect(H.fetchScribeWordTimes).not.toHaveBeenCalled();
+		expect(out).toMatchObject({ applied: true, vtt: CORRECTED });
+		expect(H.fetchScribeWordTimes).toHaveBeenCalledOnce();
 	});
 
 	it("no key: does not call Scribe", async () => {
@@ -140,7 +157,36 @@ describe("applyScribeTimingTransfer", () => {
 
 		const out = await applyScribeTimingTransfer(audio(2), ORIGINAL, "v1");
 
-		expect(out).toBe(ORIGINAL);
+		expect(out).toEqual({
+			applied: false,
+			vtt: ORIGINAL,
+			reason: "missing_key",
+		});
 		expect(H.fetchScribeWordTimes).not.toHaveBeenCalled();
+	});
+
+	it("low-confidence alignment keeps the latest transcript unchanged", async () => {
+		H.serverEnv.mockReturnValue({ ELEVENLABS_API_KEY: "scribe-key" });
+		H.fetchScribeWordTimes.mockResolvedValue([
+			{ word: "hello", start: 5, end: 5.2 },
+		]);
+		H.transferVttTimingWithStats.mockReturnValue({
+			vtt: ORIGINAL,
+			stats: {
+				shiftedCueCount: 0,
+				meanShiftSec: 0,
+				denseMatches: 0,
+				skeletonAnchors: 2,
+				identity: true,
+			},
+		});
+
+		const out = await applyScribeTimingTransfer(audio(1), ORIGINAL, "v1");
+
+		expect(out).toEqual({
+			applied: false,
+			vtt: ORIGINAL,
+			reason: "low_confidence",
+		});
 	});
 });

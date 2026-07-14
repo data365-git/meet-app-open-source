@@ -32,12 +32,13 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
-import { AudioLines } from "lucide-react";
+import { AudioLines, TimerReset } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { refineVideoTimestamps } from "@/actions/video/refine-timestamps";
 import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -56,6 +57,10 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardContent } from "./CapCardContent";
 
 const { circumference } = getProgressCircleConfig();
+
+// A background timestamp-refinement stuck in PROCESSING past this age is treated
+// as crashed → the card unsticks and the owner can retry (no polling/job system).
+const REFINE_STALE_MS = 30 * 60 * 1000;
 
 function getProgressStatusText(
   status: "uploading" | "processing" | "generating_thumbnail",
@@ -167,6 +172,26 @@ export const CapCard = ({
   const [confirmReplaceWithAudioOpen, setConfirmReplaceWithAudioOpen] =
     useState(false);
   const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
+  const [confirmTimestampRefinementOpen, setConfirmTimestampRefinementOpen] =
+    useState(false);
+  // A PROCESSING refinement older than this is treated as stale (a crashed
+  // background run) so the owner can retry instead of being stuck forever
+  // (Codex 2026-07-15 correctness boundary — smallest recovery, no job system).
+  const refinement = cap.metadata?.timestampRefinement;
+  const refinementActive =
+    refinement?.status === "PROCESSING" &&
+    (!refinement.requestedAt ||
+      Date.now() - new Date(refinement.requestedAt).getTime() <
+        REFINE_STALE_MS);
+  const [isRefiningTimestamps, setIsRefiningTimestamps] =
+    useState(refinementActive);
+  // Sync the local pending flag with the server-refreshed status so a card that
+  // finishes (COMPLETE) or fails (ERROR) in the background unsticks on the next
+  // refresh instead of staying visually stuck until a full reload. COMPLETE/ERROR
+  // and stale-PROCESSING all clear it → the menu item re-enables (ERROR retryable).
+  useEffect(() => {
+    setIsRefiningTimestamps(refinementActive);
+  }, [refinementActive]);
 
   const [isFreshlyUploaded, setIsFreshlyUploaded] = useState(() => {
     if (!cap.createdAt) return false;
@@ -418,6 +443,38 @@ export const CapCard = ({
     }
   };
 
+  const handleTimestampRefinement = async () => {
+    if (isRefiningTimestamps) return;
+
+    setIsRefiningTimestamps(true);
+    try {
+      const result = await refineVideoTimestamps(cap.id);
+      if (result.ok) {
+        toast.success(t("timestampRefineStarted"));
+        setConfirmTimestampRefinementOpen(false);
+        router.refresh();
+        return;
+      }
+
+      setIsRefiningTimestamps(false);
+      if (result.reason === "missing_key") {
+        toast.error(t("timestampRefineUnavailable"));
+      } else if (result.reason === "missing_transcript") {
+        toast.error(t("timestampRefineNeedsTranscript"));
+      } else if (result.reason === "already_processing") {
+        toast.info(t("timestampRefineAlreadyProcessing"));
+      } else if (result.reason === "budget_exceeded") {
+        toast.error(t("timestampRefineBudgetExceeded"));
+      } else {
+        toast.error(t("timestampRefineError"));
+      }
+    } catch (error) {
+      console.error("Failed to start timestamp refinement", error);
+      setIsRefiningTimestamps(false);
+      toast.error(t("timestampRefineError"));
+    }
+  };
+
   return (
     <>
       <SharingDialog
@@ -482,10 +539,14 @@ export const CapCard = ({
               <button
                 type="button"
                 aria-label={t("moreOptions")}
-                className="flex size-[26px] items-center justify-center rounded-md border border-gray-5 bg-gray-1/90 text-gray-12 shadow-sm transition-colors hover:border-gray-7 hover:bg-gray-2"
+                // Icon-only: invisible 44x44 hit target, no border/bg/shadow so
+                // the open/focus state never reads as a selected checkbox surface
+                // (Codex refinement 2026-07-15). Subtle drop-shadow keeps the
+                // ellipsis legible over any thumbnail; focus-visible ring for a11y.
+                className="flex size-11 items-center justify-center rounded-full text-gray-12 drop-shadow-sm transition-colors hover:text-gray-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
                 onClick={(e) => e.stopPropagation()}
               >
-                <FontAwesomeIcon icon={faEllipsis} className="size-3" />
+                <FontAwesomeIcon icon={faEllipsis} className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -610,6 +671,23 @@ export const CapCard = ({
                       </p>
                     </DropdownMenuItem>
                   )}
+                  {cap.isScreenshot !== true && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmTimestampRefinementOpen(true);
+                      }}
+                      disabled={isRefiningTimestamps || cap.hasActiveUpload}
+                      className="flex gap-2 items-center rounded-lg"
+                    >
+                      <TimerReset className="size-3" />
+                      <p className="text-sm text-gray-12">
+                        {isRefiningTimestamps
+                          ? t("timestampRefineProcessing")
+                          : t("timestampRefineButton")}
+                      </p>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     onClick={(e) => {
                       e.stopPropagation();
@@ -654,6 +732,22 @@ export const CapCard = ({
             loading={isReplacingWithAudio}
             onConfirm={handleReplaceWithAudio}
             onCancel={() => setConfirmReplaceWithAudioOpen(false)}
+          />
+
+          <ConfirmationDialog
+            open={confirmTimestampRefinementOpen}
+            icon={<TimerReset className="size-4" />}
+            title={t("timestampRefineTitle")}
+            description={t("timestampRefineBody")}
+            confirmLabel={
+              isRefiningTimestamps
+                ? t("timestampRefineProcessing")
+                : t("timestampRefineConfirm")
+            }
+            cancelLabel={tShare("replaceWithAudioCancel")}
+            loading={isRefiningTimestamps}
+            onConfirm={handleTimestampRefinement}
+            onCancel={() => setConfirmTimestampRefinementOpen(false)}
           />
         </div>
 

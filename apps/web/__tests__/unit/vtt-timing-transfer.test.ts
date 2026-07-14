@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	copyCueTimingsByIndex,
 	type ScribeWord,
 	transferVttTiming,
 } from "@/lib/vtt-timing-transfer";
@@ -142,5 +143,28 @@ describe("transferVttTiming", () => {
 		const scribe = scribeWordsForCues(cues, (i) => 30 + i * 5);
 
 		expect(transferVttTiming(original, scribe)).toBe(original);
+	});
+});
+
+describe("copyCueTimingsByIndex", () => {
+	it("copies only cue times and preserves translated text", () => {
+		const corrected =
+			"WEBVTT\n\n00:00:05.000 --> 00:00:07.000\nSalom\n\n00:00:09.000 --> 00:00:10.000\nDunyo\n";
+		const translated =
+			"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n\n00:00:02.000 --> 00:00:04.000\nWorld\n";
+
+		const result = copyCueTimingsByIndex(corrected, translated);
+
+		expect(result).toContain("00:00:05.000 --> 00:00:07.000\nHello");
+		expect(result).toContain("00:00:09.000 --> 00:00:10.000\nWorld");
+	});
+
+	it("refuses to rewrite when cue counts differ", () => {
+		const corrected =
+			"WEBVTT\n\n00:00:05.000 --> 00:00:07.000\nSalom\n";
+		const translated =
+			"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n\n00:00:02.000 --> 00:00:04.000\nWorld\n";
+
+		expect(copyCueTimingsByIndex(corrected, translated)).toBeNull();
 	});
 });

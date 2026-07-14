@@ -110,6 +110,21 @@ export interface VideoMetadata {
 	 * can show COMPLETE with no recorded gaps despite stopping early.
 	 */
 	transcriptionCoverageUnknown?: boolean;
+	/** On-demand per-file Scribe timing refinement. Gemini remains the default. */
+	timestampRefinement?: {
+		status: "PROCESSING" | "COMPLETE" | "ERROR";
+		requestedAt: string;
+		completedAt?: string;
+		model?: "elevenlabs-scribe-v2";
+		error?:
+			| "missing_key"
+			| "missing_transcript"
+			| "no_audio"
+			| "low_confidence"
+			| "failed";
+		shiftedCueCount?: number;
+		meanShiftSec?: number;
+	};
 	/**
 	 * Multi-language analysis (ИSH 3). The base `aiSummary` above is the original
 	 * generation; `aiSummaryByLanguage` holds on-demand-translated cached versions.

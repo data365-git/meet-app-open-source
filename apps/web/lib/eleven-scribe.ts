@@ -73,7 +73,7 @@ async function transcribeChunk(
 		new Blob([toArrayBuffer(bytes)], { type: "audio/mpeg" }),
 		chunkFilename(chunk),
 	);
-	fd.append("model_id", "scribe_v1");
+	fd.append("model_id", "scribe_v2");
 	fd.append("language_code", "uzb");
 	fd.append("timestamps_granularity", "word");
 	fd.append("diarize", "false");
