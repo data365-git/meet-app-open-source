@@ -32,11 +32,13 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
+import { AudioLines } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
@@ -140,6 +142,9 @@ export const CapCard = ({
   isDeleting = false,
 }: CapCardProps) => {
   const t = useTranslations("library");
+  // replaceWithAudio* keys live in the "share" namespace (CapVideoPlayer),
+  // reused here rather than duplicated.
+  const tShare = useTranslations("share");
   const { activeOrganization } = useDashboardContext();
   const customDomain = activeOrganization?.organization.customDomain;
   const domainVerified = activeOrganization?.organization.domainVerified;
@@ -159,6 +164,9 @@ export const CapCard = ({
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const { user, setUpgradeModalOpen } = useDashboardContext();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmReplaceWithAudioOpen, setConfirmReplaceWithAudioOpen] =
+    useState(false);
+  const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
 
   const [isFreshlyUploaded, setIsFreshlyUploaded] = useState(() => {
     if (!cap.createdAt) return false;
@@ -379,6 +387,37 @@ export const CapCard = ({
     router.push(`/s/${cap.id}/edit`);
   };
 
+  // Mirrors CapVideoPlayer's former handleReplaceWithAudio (T4b), moved here
+  // into the dashboard card's ⋮ menu.
+  const handleReplaceWithAudio = async () => {
+    if (isReplacingWithAudio) return;
+
+    setIsReplacingWithAudio(true);
+    try {
+      const result = await replaceVideoWithAudio(cap.id);
+      if (result.ok) {
+        toast.success(tShare("replaceWithAudioSuccess"));
+        router.refresh();
+        return;
+      }
+      if (result.reason === "already_audio") {
+        router.refresh();
+        return;
+      }
+      toast.error(
+        result.reason === "unsupported_source"
+          ? tShare("replaceWithAudioErrorUnsupported")
+          : tShare("replaceWithAudioError"),
+      );
+    } catch (error) {
+      console.error("Failed to replace video with audio", error);
+      toast.error(tShare("replaceWithAudioError"));
+    } finally {
+      setIsReplacingWithAudio(false);
+      setConfirmReplaceWithAudioOpen(false);
+    }
+  };
+
   return (
     <>
       <SharingDialog
@@ -557,6 +596,20 @@ export const CapCard = ({
                       {passwordProtected ? t("editPassword") : t("addPassword")}
                     </p>
                   </DropdownMenuItem>
+                  {!cap.metadata?.isAudio && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmReplaceWithAudioOpen(true);
+                      }}
+                      className="flex gap-2 items-center rounded-lg"
+                    >
+                      <AudioLines className="size-3" />
+                      <p className="text-sm text-gray-12">
+                        {tShare("replaceWithAudioButton")}
+                      </p>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     onClick={(e) => {
                       e.stopPropagation();
@@ -584,6 +637,23 @@ export const CapCard = ({
             loading={deleteMutation.isPending}
             onConfirm={() => deleteMutation.mutate()}
             onCancel={() => setConfirmOpen(false)}
+          />
+
+          <ConfirmationDialog
+            open={confirmReplaceWithAudioOpen}
+            icon={<AudioLines className="size-4" />}
+            title={tShare("replaceWithAudioTitle")}
+            description={tShare("replaceWithAudioBody")}
+            confirmLabel={
+              isReplacingWithAudio
+                ? tShare("replacingWithAudio")
+                : tShare("replaceWithAudioConfirm")
+            }
+            cancelLabel={tShare("replaceWithAudioCancel")}
+            confirmVariant="destructive"
+            loading={isReplacingWithAudio}
+            onConfirm={handleReplaceWithAudio}
+            onCancel={() => setConfirmReplaceWithAudioOpen(false)}
           />
         </div>
 
