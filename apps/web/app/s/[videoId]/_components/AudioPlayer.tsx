@@ -10,6 +10,7 @@ import {
 	MediaPlayerVolume,
 } from "./video/media-player";
 import { SegmentedProgressBar } from "./video/SegmentedProgressBar";
+import { SkipButton } from "./video/SkipControls";
 
 interface Chapter {
 	startSec: number;
@@ -76,7 +77,19 @@ export function AudioPlayerChrome({
 					videoRef={videoRef}
 				/>
 				<div className="flex items-center gap-2">
+					<SkipButton
+						video={videoRef.current}
+						direction="back"
+						iconClassName="size-7 text-white/85"
+						className="flex size-9 items-center justify-center rounded-full text-white hover:bg-white/15"
+					/>
 					<MediaPlayerPlay className="size-8 text-white hover:bg-white/15" />
+					<SkipButton
+						video={videoRef.current}
+						direction="forward"
+						iconClassName="size-7 text-white/85"
+						className="flex size-9 items-center justify-center rounded-full text-white hover:bg-white/15"
+					/>
 					<MediaPlayerTime fallbackDuration={duration} />
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
