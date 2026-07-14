@@ -131,7 +131,18 @@
     "linkCopied": "Ссылка скопирована",
     "dateInFuture": "Нельзя указать дату в будущем",
     "dateUpdated": "Дата видео обновлена",
-    "dateUpdateFailed": "Не удалось обновить дату — попробуйте ещё раз."
+    "dateUpdateFailed": "Не удалось обновить дату — попробуйте ещё раз.",
+    "timestampRefineButton": "Уточнить таймкоды",
+    "timestampRefineProcessing": "Таймкоды уточняются…",
+    "timestampRefineTitle": "Уточнить таймкоды с помощью Scribe?",
+    "timestampRefineBody": "Текст Gemini не изменится. Scribe v2 уточнит только время по аудио. Стоимость — примерно $0.22 за час аудио.",
+    "timestampRefineConfirm": "Да, уточнить",
+    "timestampRefineStarted": "Уточнение таймкодов запущено в фоновом режиме.",
+    "timestampRefineUnavailable": "Scribe ещё не подключён к серверу.",
+    "timestampRefineNeedsTranscript": "Сначала создайте AI-транскрипт для этого файла.",
+    "timestampRefineAlreadyProcessing": "Таймкоды этого файла уже уточняются.",
+    "timestampRefineBudgetExceeded": "Лимит расходов на AI исчерпан.",
+    "timestampRefineError": "Не удалось запустить уточнение таймкодов."
   },
   "auth": {
     "signingIn": "Выполняется вход…",
@@ -515,7 +526,14 @@
     "aiFocalSummary": "Составление сводки",
     "aiFocalRefined": "Уточнение текста",
     "aiEtaSoon": "Почти готово",
-    "aiStageOfTotal": "Шаг {current} / {total}"
+    "aiStageOfTotal": "Шаг {current} / {total}",
+    "aiAnalysisRunning": "AI-анализ выполняется",
+    "aiEtaQueue": "Ожидание 2–4 ч",
+    "aiOverallProgress": "Общий прогресс",
+    "aiEstimatedTime": "Примерно осталось",
+    "aiStageComplete": "Готово",
+    "aiStageWaiting": "В очереди",
+    "aiStageActive": "В процессе"
   },
   "nav": {
     "searchPlaceholder": "Поиск записей…",

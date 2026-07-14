@@ -7,7 +7,7 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { MoreVertical } from "lucide-react";
+import { Clock3, MoreVertical, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRef, useState } from "react";
 
@@ -297,10 +297,7 @@ export function GenerateAiPanel({
 						fallbackDurationSec: duration,
 					});
 		if (etaMinRef.current && etaMinRef.current.step === currentStep) {
-			etaMinRef.current.value = Math.min(
-				etaMinRef.current.value,
-				rawEtaMin,
-			);
+			etaMinRef.current.value = Math.min(etaMinRef.current.value, rawEtaMin);
 		} else {
 			etaMinRef.current = { step: currentStep, value: rawEtaMin };
 		}
@@ -313,6 +310,10 @@ export function GenerateAiPanel({
 			currentMode === "cheap"
 				? tShare("aiModeCheapShort")
 				: tShare("aiModeFastShort");
+		const displayedEtaLabel =
+			currentMode === "cheap" && aiQuotaWaiting
+				? tShare("aiEtaQueue")
+				: etaLabel;
 
 		// The 3 REAL tracked stages (tasks/chapters are not separately tracked,
 		// so they never get their own row).
@@ -371,7 +372,7 @@ export function GenerateAiPanel({
 		const stageNumber = Math.min(currentIdx + 1, runningStages.length);
 
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 p-4">
+			<div className="flex flex-col gap-4 rounded-2xl border border-gray-5 bg-gray-1 p-4 shadow-[0_18px_50px_-36px_rgba(0,92,177,0.7)] sm:p-5">
 				{/* Indeterminate-slide keyframes, scoped to this card. Defined here
 				    (not tailwind.config) to keep the change local to this component. */}
 				<style>{`
@@ -381,93 +382,144 @@ export function GenerateAiPanel({
 					}
 				`}</style>
 
-				{/* Header row — quiet, no pill/wash/spinner */}
-				<div className="flex items-center justify-between gap-2">
-					<span className="text-xs font-medium text-gray-11">
-						{tShare("aiStepAiAnalysis")}
-					</span>
-					<span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-gray-10">
+				<div className="flex items-start justify-between gap-3">
+					<div className="flex min-w-0 items-start gap-3">
+						<div className="relative flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-wash)] text-[var(--brand)]">
+							<Sparkles aria-hidden className="size-5" />
+							<span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-gray-1 bg-[var(--brand)] motion-safe:animate-pulse" />
+						</div>
+						<div className="min-w-0" aria-live="polite">
+							<p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-9">
+								{tShare("aiAnalysisRunning")}
+							</p>
+							<h3 className="mt-0.5 text-base font-semibold leading-tight text-gray-12 sm:text-lg">
+								{currentFocalLabel}
+							</h3>
+						</div>
+					</div>
+					<span className="shrink-0 rounded-full border border-gray-5 bg-gray-2 px-2.5 py-1 text-[11px] font-medium text-gray-10">
 						{modeLabel}
 					</span>
 				</div>
 
 				{/* Overall glance readout: what's happening now + stage N/3 + ETA,
 				    over one continuous bar so the whole-pipeline position is felt. */}
-				<div className="flex flex-col gap-1.5">
+				<div className="rounded-xl border border-gray-4 bg-gray-2 p-3.5">
 					<div className="flex items-center justify-between gap-2">
-						<span className="text-[15px] font-semibold text-gray-12">
-							{currentFocalLabel}
-						</span>
-						<span className="shrink-0 text-[12px] tabular-nums text-gray-10">
-							{tShare("aiStageOfTotal", {
-								current: stageNumber,
-								total: runningStages.length,
-							})}{" "}
-							· {etaLabel}
-						</span>
+						<div>
+							<p className="text-xs font-medium text-gray-9">
+								{tShare("aiOverallProgress")}
+							</p>
+							<p className="mt-0.5 text-sm font-semibold text-gray-12">
+								{tShare("aiStageOfTotal", {
+									current: stageNumber,
+									total: runningStages.length,
+								})}
+							</p>
+						</div>
+						<div className="text-right">
+							<p className="text-[11px] font-medium text-gray-9">
+								{tShare("aiEstimatedTime")}
+							</p>
+							<p className="mt-0.5 inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums text-gray-12">
+								<Clock3 aria-hidden className="size-3.5 text-[var(--brand)]" />
+								{displayedEtaLabel}
+							</p>
+						</div>
 					</div>
-					<div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-5">
+					<div
+						role="progressbar"
+						aria-label={tShare("aiOverallProgress")}
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={overallPct}
+						aria-valuetext={`${stageNumber}/${runningStages.length}, ${displayedEtaLabel}`}
+						className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-5"
+					>
 						<div
 							className="h-full rounded-full bg-[var(--brand)] motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
 							style={{ width: `${overallPct}%` }}
 						/>
 					</div>
+					<p className="mt-1.5 text-right text-[11px] font-medium tabular-nums text-gray-9">
+						{overallPct}%
+					</p>
 				</div>
 
-				{/* Vertical stage list — no connector lines, whitespace + dot state
-				    carry the sequence. */}
-				<div className="flex flex-col gap-3" aria-label={tShare("aiAnalysisStage")}>
+				<ol
+					className="grid gap-2 sm:grid-cols-3"
+					aria-label={tShare("aiAnalysisStage")}
+				>
 					{runningStages.map((stage, i) => {
 						const state =
-							i < currentIdx
-								? "done"
-								: i === currentIdx
-									? "active"
-									: "pending";
+							i < currentIdx ? "done" : i === currentIdx ? "active" : "pending";
 
 						if (state === "done") {
 							return (
-								<div key={stage.key} className="flex items-center gap-2">
-									<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--brand)]">
-										<CheckIcon className="size-2.5 text-[var(--brand-fg)]" />
+								<li
+									key={stage.key}
+									className="flex min-h-24 gap-3 rounded-xl border border-gray-4 bg-gray-2 p-3.5"
+								>
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--brand)]">
+										<CheckIcon className="size-3.5 text-[var(--brand-fg)]" />
 									</span>
-									<span className="text-[13px] font-medium text-gray-11">
-										{stage.nounLabel}
-									</span>
-								</div>
+									<div className="min-w-0">
+										<p className="text-sm font-semibold text-gray-12">
+											{stage.nounLabel}
+										</p>
+										<p className="mt-1 text-xs leading-relaxed text-gray-9">
+											{tShare("aiStageComplete")}
+										</p>
+									</div>
+								</li>
 							);
 						}
 
 						if (state === "pending") {
 							return (
-								<div key={stage.key} className="flex items-center gap-2">
-									<span className="size-4 shrink-0 rounded-full border-2 border-border" />
-									<span className="text-[13px] text-gray-9">
-										{stage.nounLabel}
+								<li
+									key={stage.key}
+									className="flex min-h-24 gap-3 rounded-xl border border-gray-4 bg-gray-1 p-3.5"
+								>
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-gray-5 bg-gray-2 text-xs font-semibold text-gray-8">
+										{i + 1}
 									</span>
-								</div>
+									<div className="min-w-0">
+										<p className="text-sm font-semibold text-gray-9">
+											{stage.nounLabel}
+										</p>
+										<p className="mt-1 text-xs leading-relaxed text-gray-8">
+											{tShare("aiStageWaiting")}
+										</p>
+									</div>
+								</li>
 							);
 						}
 
 						// active — the focal row: verb label + determinate/indeterminate bar
 						const hasTotal = stage.total > 0;
 						const pct = hasTotal
-							? Math.min(
-									100,
-									Math.round((stage.completed / stage.total) * 100),
-								)
+							? Math.min(100, Math.round((stage.completed / stage.total) * 100))
 							: 0;
 						return (
-							<div key={stage.key} className="flex flex-col gap-1.5">
+							<li
+								key={stage.key}
+								className="flex min-h-24 flex-col gap-2 rounded-xl border border-[var(--brand)] bg-[var(--brand-wash)] p-3.5"
+							>
 								<div className="flex items-center gap-2">
-									<span className="flex size-4 shrink-0 items-center justify-center rounded-full border-2 border-[var(--brand)]">
-										<span className="size-1.5 rounded-full bg-[var(--brand)]" />
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-[var(--brand)] bg-gray-1 text-xs font-semibold text-[var(--brand)]">
+										{i + 1}
 									</span>
-									<span className="text-[15px] font-semibold text-gray-12">
-										{stage.focalLabel}
-									</span>
+									<div className="min-w-0">
+										<p className="text-sm font-semibold text-gray-12">
+											{stage.nounLabel}
+										</p>
+										<p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--brand)]">
+											{tShare("aiStageActive")}
+										</p>
+									</div>
 								</div>
-								<div className="flex flex-col gap-1 pl-[26px]">
+								<div className="flex flex-col gap-1">
 									{hasTotal ? (
 										<>
 											<div className="h-1 w-full overflow-hidden rounded-full bg-gray-5">
@@ -476,12 +528,17 @@ export function GenerateAiPanel({
 													style={{ width: `${pct}%` }}
 												/>
 											</div>
-											<div className="flex items-center justify-between text-[12px] tabular-nums text-gray-10">
-												<span>
-													{stage.completed}/{stage.total}
-												</span>
-												<span>{etaLabel}</span>
-											</div>
+											<p className="text-[11px] font-medium tabular-nums text-gray-10">
+												{stage.key === "transcribe"
+													? tShare("aiFineTranscribing", {
+															completed: stage.completed,
+															total: stage.total,
+														})
+													: tShare("aiFineStageProgress", {
+															completed: stage.completed,
+															total: stage.total,
+														})}
+											</p>
 										</>
 									) : (
 										<>
@@ -494,10 +551,10 @@ export function GenerateAiPanel({
 										</>
 									)}
 								</div>
-							</div>
+							</li>
 						);
 					})}
-				</div>
+				</ol>
 
 				{currentMode === "cheap" && aiQuotaWaiting && (
 					<p className="text-[12px] text-amber-11">
@@ -662,6 +719,7 @@ export function GenerateAiPanel({
 function CheckIcon({ className }: { className?: string }) {
 	return (
 		<svg
+			aria-hidden="true"
 			className={className}
 			xmlns="http://www.w3.org/2000/svg"
 			viewBox="0 0 24 24"

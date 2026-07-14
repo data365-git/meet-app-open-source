@@ -8,12 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-	AlertTriangleIcon,
-	InfoIcon,
-	RotateCcw,
-	RotateCw,
-} from "lucide-react";
+import { AlertTriangleIcon, InfoIcon, RotateCcw, RotateCw } from "lucide-react";
 import {
 	MediaActionTypes,
 	useMediaDispatch,
@@ -56,8 +51,6 @@ import {
 	MediaPlayerPiP,
 	MediaPlayerPlay,
 	MediaPlayerPlaybackSpeedDial,
-	MediaPlayerSeekBackward,
-	MediaPlayerSeekForward,
 	MediaPlayerSettings,
 	MediaPlayerTime,
 	MediaPlayerVideo,
@@ -976,9 +969,7 @@ export function CapVideoPlayer({
 					/>
 					<div className="flex gap-2 items-center w-full">
 						<div className="flex flex-1 gap-2 items-center">
-							<MediaPlayerPlay />
-							<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
-							<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+							<MediaPlayerPlay className="sm:size-11" />
 							<MediaPlayerVolume
 								expandable
 								// enhancedAudioEnabled={enhancedAudioEnabled}
@@ -1034,10 +1025,11 @@ export function CapVideoPlayer({
 
 const GESTURE_SEEK_SECONDS = 10;
 const GESTURE_TAP_SLOP_PX = 12;
+const GESTURE_DOUBLE_TAP_WINDOW_MS = 320;
 
 /**
  * T5: mobile-only (`sm:hidden`) gesture surface over the video so touch
- * behaves like YouTube/MX Player — tap left/right thirds to seek ±10s,
+ * behaves like YouTube/MX Player — double-tap left/right thirds to seek ±10s,
  * center third toggles play/pause, horizontal drag scrubs with a live time
  * preview. Bottom strip is left uncovered so the real control bar (play,
  * progress-bar drag, etc.) stays reachable and unaffected. Desktop mouse
@@ -1062,6 +1054,10 @@ function MobileSeekGestureLayer({
 		startTime: number;
 		width: number;
 		dragging: boolean;
+	} | null>(null);
+	const lastSideTapRef = useRef<{
+		side: "left" | "right";
+		at: number;
 	} | null>(null);
 
 	const seekTo = useCallback(
@@ -1132,18 +1128,30 @@ function MobileSeekGestureLayer({
 				return;
 			}
 
-			// Plain tap: classify by horizontal third.
+			// Double-tap the left/right third to seek. A single side tap waits for
+			// its pair so it never skips by accident.
 			const rect = e.currentTarget.getBoundingClientRect();
 			const x = e.clientX - rect.left;
 			const third = rect.width / 3;
 			const video = videoRef.current;
-			if (x < third) {
-				seekTo((video?.currentTime ?? 0) - GESTURE_SEEK_SECONDS);
-				setFlash({ side: "left", key: Date.now() });
-			} else if (x > third * 2) {
-				seekTo((video?.currentTime ?? 0) + GESTURE_SEEK_SECONDS);
-				setFlash({ side: "right", key: Date.now() });
+			const side = x < third ? "left" : x > third * 2 ? "right" : null;
+
+			if (side) {
+				const now = performance.now();
+				const lastTap = lastSideTapRef.current;
+				if (
+					lastTap?.side === side &&
+					now - lastTap.at <= GESTURE_DOUBLE_TAP_WINDOW_MS
+				) {
+					const direction = side === "left" ? -1 : 1;
+					seekTo((video?.currentTime ?? 0) + direction * GESTURE_SEEK_SECONDS);
+					setFlash({ side, key: Date.now() });
+					lastSideTapRef.current = null;
+				} else {
+					lastSideTapRef.current = { side, at: now };
+				}
 			} else if (video) {
+				lastSideTapRef.current = null;
 				dispatch({
 					type: video.paused
 						? MediaActionTypes.MEDIA_PLAY_REQUEST

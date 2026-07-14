@@ -1477,13 +1477,13 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
 
 	return (
 		<MediaPlayerTooltip
-			tooltip={`Back ${seconds}s`}
+			tooltip={t("backSeconds", { seconds })}
 			shortcut={context.isVideo ? ["←"] : ["Shift ←"]}
 		>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={`Back ${seconds} seconds`}
+				aria-label={t("backSecondsLabel", { seconds })}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-seek-backward"
 				disabled={isDisabled}

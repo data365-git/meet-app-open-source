@@ -131,7 +131,18 @@
     "linkCopied": "Havola nusxalandi",
     "dateInFuture": "Kelajakdagi sanani qo'yib bo'lmaydi",
     "dateUpdated": "Video sanasi yangilandi",
-    "dateUpdateFailed": "Sanani yangilab bo'lmadi — qayta urinib ko'ring."
+    "dateUpdateFailed": "Sanani yangilab bo'lmadi — qayta urinib ko'ring.",
+    "timestampRefineButton": "Timestampni aniqlashtirish",
+    "timestampRefineProcessing": "Timestamp aniqlashtirilmoqda…",
+    "timestampRefineTitle": "Timestampni Scribe bilan aniqlashtirasizmi?",
+    "timestampRefineBody": "Gemini yozgan matn o'zgarmaydi. Scribe v2 faqat audio vaqtlarini aniqlashtiradi. Narxi audio soatiga taxminan $0.22.",
+    "timestampRefineConfirm": "Ha, aniqlashtir",
+    "timestampRefineStarted": "Timestampni aniqlashtirish boshlandi. Fayl fonda qayta ishlanadi.",
+    "timestampRefineUnavailable": "Scribe hali serverga ulanmagan.",
+    "timestampRefineNeedsTranscript": "Avval bu fayl uchun AI transkript yarating.",
+    "timestampRefineAlreadyProcessing": "Bu faylning timestamplari allaqachon aniqlashtirilmoqda.",
+    "timestampRefineBudgetExceeded": "AI xarajat limiti tugagan.",
+    "timestampRefineError": "Timestampni aniqlashtirishni boshlab bo'lmadi."
   },
   "auth": {
     "signingIn": "Tizimga kiritilmoqda…",
@@ -515,7 +526,14 @@
     "aiFocalSummary": "Xulosa yozilmoqda",
     "aiFocalRefined": "Matn aniqlashtirilmoqda",
     "aiEtaSoon": "Oz qoldi",
-    "aiStageOfTotal": "{current}-bosqich / {total}"
+    "aiStageOfTotal": "{current}-bosqich / {total}",
+    "aiAnalysisRunning": "AI tahlil davom etmoqda",
+    "aiEtaQueue": "2–4 soat kutish",
+    "aiOverallProgress": "Umumiy jarayon",
+    "aiEstimatedTime": "Taxminiy qolgan vaqt",
+    "aiStageComplete": "Tugadi",
+    "aiStageWaiting": "Navbatda",
+    "aiStageActive": "Bajarilmoqda"
   },
   "nav": {
     "searchPlaceholder": "Yozuv yoki Space qidirish…",

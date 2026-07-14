@@ -1,7 +1,6 @@
 "use client";
 
 import { AudioLines } from "lucide-react";
-import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/app/lib/utils";
 import {
@@ -11,8 +10,8 @@ import {
 	MediaPlayerVolume,
 } from "./video/media-player";
 import { SegmentedProgressBar } from "./video/SegmentedProgressBar";
+import { SkipButton, useSkipStep } from "./video/SkipControls";
 
-const SKIP_SECONDS = 10;
 const DOUBLE_TAP_MS = 300;
 const FLASH_MS = 600;
 
@@ -45,7 +44,7 @@ export function AudioPlayerChrome({
 	duration,
 	chapters = [],
 }: AudioPlayerChromeProps) {
-	const tm = useTranslations("mediaPlayer");
+	const [skipSeconds, setSkipSeconds] = useSkipStep();
 	// Invisible double-tap-to-skip supplements the visible controls on touch.
 	// These gesture zones stay out of keyboard and screen-reader navigation.
 	const lastTapRef = useRef<{ side: TapSide; time: number } | null>(null);
@@ -66,7 +65,7 @@ export function AudioPlayerChrome({
 				lastTapRef.current = null;
 				const v = videoRef.current;
 				if (v && Number.isFinite(v.duration)) {
-					const delta = side === "left" ? -SKIP_SECONDS : SKIP_SECONDS;
+					const delta = side === "left" ? -skipSeconds : skipSeconds;
 					v.currentTime = Math.min(
 						Math.max(0, v.currentTime + delta),
 						v.duration,
@@ -79,21 +78,11 @@ export function AudioPlayerChrome({
 				lastTapRef.current = { side, time: now };
 			}
 		},
-		[videoRef],
+		[videoRef, skipSeconds],
 	);
 
-	// Visible ±10s skip flanking Play (owner 2026-07-14: buttons left/right of
-	// centre; ≥44px + keyboard/screen-reader reachable — Codex accessibility).
-	const skipBy = useCallback(
-		(delta: number) => {
-			const v = videoRef.current;
-			if (v && Number.isFinite(v.duration)) {
-				v.currentTime = Math.min(Math.max(0, v.currentTime + delta), v.duration);
-			}
-		},
-		[videoRef],
-	);
-
+	// Visible selectable skip controls flank Play; touch double-tap uses the
+	// same persisted step.
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
 			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
@@ -108,7 +97,7 @@ export function AudioPlayerChrome({
 					)}
 				</div>
 
-				{/* Invisible double-tap zones — left = −10s, right = +10s. */}
+				{/* Invisible double-tap zones use the selected step. */}
 				<div className="absolute inset-0 flex">
 					<button
 						type="button"
@@ -134,7 +123,7 @@ export function AudioPlayerChrome({
 							flashSide === "left" ? "left-[15%]" : "right-[15%]",
 						)}
 					>
-						{flashSide === "left" ? `-${SKIP_SECONDS}s` : `+${SKIP_SECONDS}s`}
+						{flashSide === "left" ? `-${skipSeconds}s` : `+${skipSeconds}s`}
 					</span>
 				)}
 			</div>
@@ -148,23 +137,21 @@ export function AudioPlayerChrome({
 				<div className="flex items-center gap-2">
 					<MediaPlayerTime fallbackDuration={duration} />
 					<div className="flex-1" />
-					<button
-						type="button"
-						onClick={() => skipBy(-SKIP_SECONDS)}
-						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
-						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-					>
-						<span className="text-xs font-semibold">−10</span>
-					</button>
+					<SkipButton
+						videoRef={videoRef}
+						direction="back"
+						step={skipSeconds}
+						onStepChange={setSkipSeconds}
+						className="text-white hover:bg-white/15"
+					/>
 					<MediaPlayerPlay className="size-11 text-white hover:bg-white/15" />
-					<button
-						type="button"
-						onClick={() => skipBy(SKIP_SECONDS)}
-						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
-						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-					>
-						<span className="text-xs font-semibold">+10</span>
-					</button>
+					<SkipButton
+						videoRef={videoRef}
+						direction="forward"
+						step={skipSeconds}
+						onStepChange={setSkipSeconds}
+						className="text-white hover:bg-white/15"
+					/>
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
 					<MediaPlayerVolume expandable />

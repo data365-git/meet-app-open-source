@@ -131,7 +131,18 @@
     "linkCopied": "Link copied",
     "dateInFuture": "Cannot set a date in the future",
     "dateUpdated": "Video date updated",
-    "dateUpdateFailed": "Failed to update date — please try again."
+    "dateUpdateFailed": "Failed to update date — please try again.",
+    "timestampRefineButton": "Refine timestamps",
+    "timestampRefineProcessing": "Refining timestamps…",
+    "timestampRefineTitle": "Refine timestamps with Scribe?",
+    "timestampRefineBody": "Gemini's transcript text will not change. Scribe v2 will refine only the audio timing. The estimated cost is $0.22 per audio hour.",
+    "timestampRefineConfirm": "Yes, refine",
+    "timestampRefineStarted": "Timestamp refinement started in the background.",
+    "timestampRefineUnavailable": "Scribe is not connected to the server yet.",
+    "timestampRefineNeedsTranscript": "Create an AI transcript for this file first.",
+    "timestampRefineAlreadyProcessing": "This file's timestamps are already being refined.",
+    "timestampRefineBudgetExceeded": "The AI spending limit has been reached.",
+    "timestampRefineError": "Could not start timestamp refinement."
   },
   "auth": {
     "signingIn": "Signing you in…",
@@ -515,7 +526,14 @@
     "aiFocalSummary": "Writing the summary",
     "aiFocalRefined": "Refining the text",
     "aiEtaSoon": "Almost done",
-    "aiStageOfTotal": "Step {current} / {total}"
+    "aiStageOfTotal": "Step {current} / {total}",
+    "aiAnalysisRunning": "AI analysis in progress",
+    "aiEtaQueue": "2–4 hr wait",
+    "aiOverallProgress": "Overall progress",
+    "aiEstimatedTime": "Estimated time left",
+    "aiStageComplete": "Completed",
+    "aiStageWaiting": "Waiting",
+    "aiStageActive": "In progress"
   },
   "nav": {
     "searchPlaceholder": "Search recordings, spaces, settings…",
