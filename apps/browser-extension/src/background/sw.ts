@@ -19,11 +19,16 @@ import {
 // path was architecturally broken from a SW: it required a targetTab, and its
 // stream id could not be consumed inside an offscreen document.)
 
-function getTabMediaStreamId(targetTabId: number): Promise<string> {
+function getTabMediaStreamId(
+	targetTabId: number,
+	consumerTabId?: number,
+): Promise<string> {
 	return new Promise((resolve, reject) => {
 		try {
 			chrome.tabCapture.getMediaStreamId(
-				{ targetTabId },
+				consumerTabId !== undefined
+					? { targetTabId, consumerTabId }
+					: { targetTabId },
 				(streamId: string) => {
 					if (chrome.runtime.lastError) {
 						reject(new Error(chrome.runtime.lastError.message));
@@ -373,7 +378,10 @@ async function handleMessage(
 			if (!settings.apiKey) {
 				return { ok: false, error: "not signed in" };
 			}
-			await setState({ kind: "arming", mode: "instruction" });
+			// The tab the user launched from (a Meet, or any audible tab). The
+			// recorder page will pull its audio via tabCapture and mix it in.
+			const sourceTabId = getNumber(msg, "sourceTabId");
+			await setState({ kind: "arming", mode: "instruction", sourceTabId });
 			let recorderTabId: number;
 			try {
 				recorderTabId = await openInstructionRecorder();
@@ -385,7 +393,12 @@ async function handleMessage(
 					error: `Couldn't open the recorder: ${err instanceof Error ? err.message : String(err)}`,
 				};
 			}
-			await setState({ kind: "arming", mode: "instruction", recorderTabId });
+			await setState({
+				kind: "arming",
+				mode: "instruction",
+				recorderTabId,
+				sourceTabId,
+			});
 			return { ok: true };
 		}
 
@@ -770,6 +783,28 @@ async function handleMessage(
 				autoRecordCountdownSec: settings.autoRecordCountdownSec,
 				soundEnabled: settings.soundEnabled,
 			};
+		}
+
+		// ── Recorder tab: request the source tab's audio (remote participants) ──
+		// Minted here (SW) with consumerTabId = the recorder tab, so THAT tab can
+		// consume it via getUserMedia(chromeMediaSource:"tab"). No "share system
+		// audio" tick needed. Returns { streamId: null } when there is no usable
+		// source tab (e.g. launched from a non-capturable page) — the recorder then
+		// falls back to screen + mic.
+		case "REQUEST_TAB_AUDIO": {
+			const st = await getState();
+			const sourceTabId = st.kind === "arming" ? st.sourceTabId : undefined;
+			const consumerTabId = _sender.tab?.id;
+			if (sourceTabId === undefined || consumerTabId === undefined) {
+				return { streamId: null };
+			}
+			try {
+				const streamId = await getTabMediaStreamId(sourceTabId, consumerTabId);
+				return { streamId };
+			} catch (err) {
+				console.warn("[sw] tab-audio streamId failed:", err);
+				return { streamId: null };
+			}
 		}
 
 		// ── Offscreen: recorder started ───────────────────────────────────

@@ -26,6 +26,7 @@ interface RecordingState {
 	audioCtx: AudioContext;
 	displayStream: MediaStream;
 	micStream: MediaStream | null;
+	tabAudioStream: MediaStream | null;
 }
 
 let state: RecordingState | null = null;
@@ -128,6 +129,7 @@ function pickMimeType(): string {
 function cleanup(s: RecordingState): void {
 	for (const t of s.displayStream.getTracks()) t.stop();
 	if (s.micStream) for (const t of s.micStream.getTracks()) t.stop();
+	if (s.tabAudioStream) for (const t of s.tabAudioStream.getTracks()) t.stop();
 	s.audioCtx.close().catch(() => {});
 }
 
@@ -199,6 +201,33 @@ async function startRecording(): Promise<void> {
 			}
 		}
 
+		// Pull the SOURCE TAB's audio (the other meeting participants) via a
+		// tabCapture streamId minted by the SW — this captures the remote party
+		// WITHOUT any "share system audio" tick. The SW mints the id with
+		// consumerTabId = this tab, so it is consumable here; we mint→consume
+		// back-to-back so the short-lived id never expires. Non-fatal: on any
+		// failure we simply record screen + mic (+ system audio if shared).
+		let tabAudioStream: MediaStream | null = null;
+		try {
+			const resp = (await sendMsgAwait({ type: "REQUEST_TAB_AUDIO" })) as
+				| { streamId?: string | null }
+				| undefined;
+			const streamId = resp?.streamId;
+			if (streamId) {
+				tabAudioStream = await navigator.mediaDevices.getUserMedia({
+					audio: {
+						mandatory: {
+							chromeMediaSource: "tab",
+							chromeMediaSourceId: streamId,
+						},
+					} as unknown as MediaTrackConstraints,
+					video: false,
+				});
+			}
+		} catch {
+			tabAudioStream = null;
+		}
+
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
 		const dest = audioCtx.createMediaStreamDestination();
 
@@ -207,6 +236,13 @@ async function startRecording(): Promise<void> {
 		}
 		if (micStream && micStream.getAudioTracks().length > 0) {
 			audioCtx.createMediaStreamSource(micStream).connect(dest);
+		}
+		if (tabAudioStream && tabAudioStream.getAudioTracks().length > 0) {
+			const tabSrc = audioCtx.createMediaStreamSource(tabAudioStream);
+			tabSrc.connect(dest);
+			// Also route the tab audio back to the speakers — tabCapture otherwise
+			// mutes the source tab, so the meeting would go silent for the user.
+			tabSrc.connect(audioCtx.destination);
 		}
 
 		const recordStream = new MediaStream([
@@ -279,7 +315,7 @@ async function startRecording(): Promise<void> {
 			};
 		}
 
-		state = { recorder, audioCtx, displayStream, micStream };
+		state = { recorder, audioCtx, displayStream, micStream, tabAudioStream };
 
 		// Initialize the upload BEFORE producing any media data. The SW creates
 		// the video + multipart session in its RECORDER_STARTED handler and only
@@ -310,6 +346,19 @@ async function startRecording(): Promise<void> {
 		recorder.start(200);
 
 		showView("view-recording");
+		// If the user didn't tick "share system audio" in the picker, the other
+		// participants' voices are NOT captured (only mic) — surface it loudly so a
+		// meeting is never silently recorded mic-only.
+		const audioWarn = $("rec-audio-warn");
+		if (audioWarn) {
+			// Remote audio is captured if EITHER the source tab's audio came through
+			// (tabCapture) OR the user shared system audio. Warn only when neither
+			// did, so a meeting is never silently recorded mic-only.
+			const hasRemoteAudio =
+				displayStream.getAudioTracks().length > 0 ||
+				(tabAudioStream?.getAudioTracks().length ?? 0) > 0;
+			audioWarn.classList.toggle("hidden", hasRemoteAudio);
+		}
 		startTimer();
 	} catch (err) {
 		if (state) {

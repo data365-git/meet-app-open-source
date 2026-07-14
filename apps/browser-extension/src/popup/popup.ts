@@ -273,7 +273,11 @@ function renderIdlePanel(
 		"Record Instruction",
 	);
 	instrBtn.addEventListener("click", () => {
-		sendMsg({ type: "START_INSTRUCTION" });
+		const msg: Record<string, unknown> = { type: "START_INSTRUCTION" };
+		// Pass the current tab so the recorder can capture its audio (the other
+		// party) via tabCapture and mix it into the screen recording.
+		if (activeTabId !== undefined) msg.sourceTabId = activeTabId;
+		sendMsg(msg);
 		window.close();
 	});
 

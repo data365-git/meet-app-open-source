@@ -514,7 +514,8 @@
     "aiFocalTranscribe": "Audio matnga o'girilmoqda",
     "aiFocalSummary": "Xulosa yozilmoqda",
     "aiFocalRefined": "Matn aniqlashtirilmoqda",
-    "aiEtaSoon": "Oz qoldi"
+    "aiEtaSoon": "Oz qoldi",
+    "aiStageOfTotal": "{current}-bosqich / {total}"
   },
   "nav": {
     "searchPlaceholder": "Yozuv yoki Space qidirish…",

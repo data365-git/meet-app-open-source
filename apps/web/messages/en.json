@@ -514,7 +514,8 @@
     "aiFocalTranscribe": "Transcribing audio",
     "aiFocalSummary": "Writing the summary",
     "aiFocalRefined": "Refining the text",
-    "aiEtaSoon": "Almost done"
+    "aiEtaSoon": "Almost done",
+    "aiStageOfTotal": "Step {current} / {total}"
   },
   "nav": {
     "searchPlaceholder": "Search recordings, spaces, settings…",

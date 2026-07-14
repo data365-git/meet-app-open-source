@@ -33,6 +33,10 @@ interface ArmingState {
 	// For an instruction recording, the id of the visible recorder.html tab that
 	// owns the capture. Stop/pause/resume/cancel must be routed to THIS tab.
 	recorderTabId?: number;
+	// For an instruction recording started from a Meet/audible tab: the id of THAT
+	// tab, so the recorder page can pull its audio (remote participants) via
+	// tabCapture and mix it in — no "share system audio" tick needed.
+	sourceTabId?: number;
 }
 
 interface RecordingState {

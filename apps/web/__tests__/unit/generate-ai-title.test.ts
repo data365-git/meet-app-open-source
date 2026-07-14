@@ -61,6 +61,24 @@ describe("shouldReplaceVideoTitle", () => {
 		).toBe(true);
 	});
 
+	it("replaces the extension's real em-dash recording/meeting names", () => {
+		// The extension names recordings "data365 Recording — <date>" and
+		// meetings "data365 Meeting — <id>" with an EM-DASH, not a hyphen.
+		// These are the owner's actual default titles — they MUST be replaced.
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "data365 Recording — 15 May 2026",
+				nextAiTitle: "Quarterly Roadmap Review",
+			}),
+		).toBe(true);
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "data365 Meeting — abc123xyz",
+				nextAiTitle: "Quarterly Roadmap Review",
+			}),
+		).toBe(true);
+	});
+
 	it("replaces a title that was previously set by AI", () => {
 		expect(
 			shouldReplaceVideoTitle({

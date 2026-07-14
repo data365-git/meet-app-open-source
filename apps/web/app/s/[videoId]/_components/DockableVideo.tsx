@@ -174,6 +174,32 @@ export function DockableVideo({
 		}
 	}, [videoEl]);
 
+	// Invisible double-tap-to-skip over the mini video (owner 2026-07-14: tapping
+	// the mini should skip too, no visible buttons). Double-tap left = −10s,
+	// right = +10s; a single tap does nothing so it never fights play/pause.
+	const miniLastTapRef = useRef<{ side: "left" | "right"; time: number } | null>(
+		null,
+	);
+	const handleMiniTap = useCallback(
+		(side: "left" | "right") => {
+			const now = Date.now();
+			const last = miniLastTapRef.current;
+			if (last && last.side === side && now - last.time < 300) {
+				miniLastTapRef.current = null;
+				if (videoEl && Number.isFinite(videoEl.duration)) {
+					const delta = side === "left" ? -10 : 10;
+					videoEl.currentTime = Math.min(
+						Math.max(0, videoEl.currentTime + delta),
+						videoEl.duration,
+					);
+				}
+			} else {
+				miniLastTapRef.current = { side, time: now };
+			}
+		},
+		[videoEl],
+	);
+
 	// Read the persisted drag position on mount only (SSR-safe). Raw value —
 	// it gets clamped to the CURRENT viewport when the mini actually docks
 	// (below), so a stale position from a bigger monitor can't strand the
@@ -263,6 +289,19 @@ export function DockableVideo({
 	useEffect(() => {
 		if (isPlaying) setActivated(true);
 	}, [isPlaying]);
+
+	// When the VIDEO mini floats in the bottom-right corner, flag the body so the
+	// chat FAB (styled in ai-chat.css) lifts above it instead of being covered.
+	// Audio docks as a top pin bar, so it never sets this.
+	useEffect(() => {
+		if (showMini && !isAudio) {
+			document.body.dataset.miniDocked = "true";
+			return () => {
+				delete document.body.dataset.miniDocked;
+			};
+		}
+		return undefined;
+	}, [showMini, isAudio]);
 
 	const handleDismiss = useCallback(() => {
 		setDismissed(true);
@@ -418,7 +457,10 @@ export function DockableVideo({
 		// over-constrained — must-fix #2).
 		outerClassName = [
 			"fixed z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
-			"bottom-[104px]",
+			// Owner 2026-07-14: pin the mini to the very bottom-right corner. The
+			// chat FAB lifts above it (see `data-mini-docked` effect + ai-chat.css)
+			// so the two no longer stack the other way around.
+			"bottom-[24px]",
 			chatOpen ? "right-[434px]" : "right-4",
 			"lg:w-[480px]",
 			transitionClass,
@@ -500,6 +542,26 @@ export function DockableVideo({
 						>
 							<CloseIcon className="size-4" />
 						</button>
+					</div>
+				)}
+
+				{dockable && !isAudio && (
+					// Invisible double-tap-to-skip zones over the mini's video area.
+					// Sits between the top drag strip (h-10) and the bottom transport
+					// so it never blocks those; single tap is a no-op.
+					<div className="absolute inset-x-0 bottom-12 top-10 z-[5] flex">
+						<button
+							type="button"
+							aria-label={tm("skipBack", { seconds: 10 })}
+							className="h-full flex-1 cursor-default"
+							onClick={() => handleMiniTap("left")}
+						/>
+						<button
+							type="button"
+							aria-label={tm("skipForward", { seconds: 10 })}
+							className="h-full flex-1 cursor-default"
+							onClick={() => handleMiniTap("right")}
+						/>
 					</div>
 				)}
 
@@ -644,6 +706,16 @@ function DockSeekBar({
 					style={{ width: `${progress}%` }}
 				/>
 			</div>
+			{/* Visible draggable handle (owner 2026-07-14): without a dot the mini
+			    timeline reads as a static bar — the knob shows it can be grabbed and
+			    dragged like the main player's scrubber. */}
+			<span
+				aria-hidden="true"
+				className={`pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full shadow ${
+					variant === "dark" ? "bg-white" : "bg-[var(--brand)]"
+				}`}
+				style={{ left: `${progress}%` }}
+			/>
 		</div>
 	);
 }

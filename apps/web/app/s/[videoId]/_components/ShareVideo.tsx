@@ -665,7 +665,11 @@ export const ShareVideo = forwardRef<
 		const playerBlock = (
 			<>
 				<div
-					className="relative aspect-video overflow-hidden rounded-2xl border border-gray-5 bg-gray-1"
+					className={`relative overflow-hidden rounded-2xl border border-gray-5 bg-gray-1 ${
+						data.metadata?.isAudio
+							? "h-[190px] sm:h-[210px]"
+							: "aspect-video"
+					}`}
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
 					<div className="absolute right-3 top-3 z-10">

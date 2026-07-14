@@ -346,6 +346,30 @@ export function GenerateAiPanel({
 			},
 		];
 
+		// Single glance-level readout the owner asked for: WHAT is happening now
+		// (the active stage's verb) + WHERE in the whole pipeline we are (stage
+		// N/3 + one overall bar) + roughly how long left (ETA). The per-stage list
+		// below stays for detail; this header is the "his qilinadigan" summary.
+		const focalByStep: Record<AiProcessingStep, string> = {
+			transcribe: tShare("aiFocalTranscribe"),
+			summary: tShare("aiFocalSummary"),
+			refined: tShare("aiFocalRefined"),
+			done: tShare("stepDone"),
+		};
+		const currentFocalLabel = focalByStep[currentStep];
+		const activeStage = runningStages[currentIdx];
+		const withinFraction =
+			activeStage && activeStage.total > 0
+				? Math.min(1, activeStage.completed / activeStage.total)
+				: 0;
+		// (completedStages + fraction-through-active-stage) / 3. Advances by whole
+		// thirds even when a stage reports no chunk total, so the bar still moves.
+		const overallPct = Math.min(
+			100,
+			Math.round(((Math.min(currentIdx, 3) + withinFraction) / 3) * 100),
+		);
+		const stageNumber = Math.min(currentIdx + 1, runningStages.length);
+
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 p-4">
 				{/* Indeterminate-slide keyframes, scoped to this card. Defined here
@@ -365,6 +389,29 @@ export function GenerateAiPanel({
 					<span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-gray-10">
 						{modeLabel}
 					</span>
+				</div>
+
+				{/* Overall glance readout: what's happening now + stage N/3 + ETA,
+				    over one continuous bar so the whole-pipeline position is felt. */}
+				<div className="flex flex-col gap-1.5">
+					<div className="flex items-center justify-between gap-2">
+						<span className="text-[15px] font-semibold text-gray-12">
+							{currentFocalLabel}
+						</span>
+						<span className="shrink-0 text-[12px] tabular-nums text-gray-10">
+							{tShare("aiStageOfTotal", {
+								current: stageNumber,
+								total: runningStages.length,
+							})}{" "}
+							· {etaLabel}
+						</span>
+					</div>
+					<div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-5">
+						<div
+							className="h-full rounded-full bg-[var(--brand)] motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
+							style={{ width: `${overallPct}%` }}
+						/>
+					</div>
 				</div>
 
 				{/* Vertical stage list — no connector lines, whitespace + dot state

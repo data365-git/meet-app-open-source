@@ -514,7 +514,8 @@
     "aiFocalTranscribe": "Расшифровка аудио",
     "aiFocalSummary": "Составление сводки",
     "aiFocalRefined": "Уточнение текста",
-    "aiEtaSoon": "Почти готово"
+    "aiEtaSoon": "Почти готово",
+    "aiStageOfTotal": "Шаг {current} / {total}"
   },
   "nav": {
     "searchPlaceholder": "Поиск записей…",

@@ -174,8 +174,13 @@ export const MAX_REFINED_TRANSCRIPT_AUTO_CHARS = 12000;
 export const MAX_REFINED_TRANSCRIPT_AUTO_SECONDS = 12 * 60;
 const AI_SUMMARY_FAILURE_PLACEHOLDER =
 	"The AI was unable to generate a proper summary for this content.";
+// The " [-–—] " class accepts hyphen, en-dash AND em-dash: the extension names
+// recordings "data365 Recording — <date>" and meetings "data365 Meeting — <id>"
+// with an EM-DASH (rebrand commit 4dcf339), while older/desktop rows use a plain
+// hyphen. Matching all three (and "Meeting") is what lets the AI auto-title kick
+// in — without it the meeting recorder's default names never got replaced.
 const GENERATED_TITLE_PATTERN =
-	/^(data365 (Recording|Upload) - .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
+	/^(data365 (Recording|Upload|Meeting) [-–—] .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
 
 export function shouldReplaceVideoTitle({
 	currentTitle,
