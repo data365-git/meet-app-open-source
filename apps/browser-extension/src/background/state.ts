@@ -37,6 +37,10 @@ interface ArmingState {
 	// tab, so the recorder page can pull its audio (remote participants) via
 	// tabCapture and mix it in — no "share system audio" tick needed.
 	sourceTabId?: number;
+	// Guaranteed-client-audio mode: the "Record full-screen meeting" popup button
+	// sets this true. It fails-closed (never starts / hard-stops) if the source
+	// tab's audio can't be captured, instead of silently recording client-less.
+	meetingRequired?: boolean;
 }
 
 interface RecordingState {
@@ -58,6 +62,11 @@ interface RecordingState {
 	// owns the capture. Stop/pause/resume/cancel must be routed to THIS tab, and
 	// if the tab closes unexpectedly the arming/recording lock must be released.
 	recorderTabId?: number;
+	// Carried over from ArmingState so mid-recording watchdogs (tab closed/
+	// navigated away, tab-audio track lost) know which tab to watch and whether
+	// a loss must fail loudly (see meetingRequired).
+	sourceTabId?: number;
+	meetingRequired?: boolean;
 	mime: string;
 	paused: boolean;
 	// Timestamp when the current pause began; undefined while running. With

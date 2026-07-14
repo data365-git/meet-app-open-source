@@ -156,6 +156,91 @@ function updateBadge(state: ExtensionState): void {
 	}
 }
 
+// ── Tab-audio-lost watchdog (guaranteed client audio) ──────────────────────
+//
+// `intentionalStop` is set true the instant ANY deliberate stop/disarm begins
+// (STOP, CANCEL, a matching MEET_CALL_ENDED) and reset false when a new
+// recording starts. Every loss signal below is gated on it being false, so a
+// normal user "Stop & upload" never raises a false "audio lost" alert (Codex
+// FIX B — chrome.tabCapture.onStatusChanged fires "stopped" on ordinary stops
+// too). `tabAudioLostNotified` makes the notify/badge idempotent per recording.
+let intentionalStop = false;
+let tabAudioLostNotified = false;
+
+function notifyTabAudioLost(): void {
+	if (tabAudioLostNotified) return;
+	tabAudioLostNotified = true;
+	chrome.notifications.create("tab-audio-lost", {
+		type: "basic",
+		iconUrl: "icons/icon-128.png",
+		title: "Client audio lost",
+		message:
+			"The client's audio was lost mid-recording. Saving the partial recording.",
+	});
+	chrome.action.setBadgeText({ text: "!" });
+	chrome.action.setBadgeBackgroundColor({ color: "#dd6b20" });
+}
+
+/** SW-side detection (source tab closed/navigated away): tell the recorder tab
+ * to stop via the loss path (NOT the ordinary STOP_CAPTURE, which would mark
+ * this as an intentional stop) and notify. */
+async function handleSourceTabLost(tabId: number): Promise<void> {
+	const state = await getState();
+	if (
+		state.kind !== "recording" ||
+		!state.meetingRequired ||
+		state.sourceTabId !== tabId
+	) {
+		return;
+	}
+	if (intentionalStop) return;
+	if (state.recorderTabId !== undefined) {
+		await sendControlWithRetry(
+			() =>
+				chrome.tabs.sendMessage(state.recorderTabId!, {
+					type: "TAB_AUDIO_LOST_REMOTE",
+				}),
+			"TAB_AUDIO_LOST_REMOTE→tab",
+		);
+	}
+	notifyTabAudioLost();
+}
+
+// ── Meeting ended → ask, don't auto-stop (owner's choice) ──────────────────
+//
+// When the Google Meet call ends during a GUARANTEED full-screen meeting
+// recording (mode "instruction" + meetingRequired), the owner wants neither a
+// silent auto-stop (false-detection could cut a real recording short) nor a
+// silent continue — instead prompt the admin whether to stop or keep going.
+const MEET_ENDED_PROMPT_ID = "meet-ended-stop-prompt";
+
+function promptStopOnMeetEnded(): void {
+	chrome.notifications.create(MEET_ENDED_PROMPT_ID, {
+		type: "basic",
+		iconUrl: "icons/icon-128.png",
+		title: "Yig'ilish tugadi",
+		message:
+			"Google Meet qo'ng'irog'i tugadi. Yozuvni to'xtatasizmi, yoki ekran yozuvini davom ettirasizmi?",
+		buttons: [{ title: "To'xtatish va saqlash" }, { title: "Davom ettirish" }],
+		requireInteraction: true,
+	});
+}
+
+/** Deliberate stop of the running instruction recording — mirrors the popup
+ * STOP path (set intentionalStop so the watchdog doesn't misread the teardown,
+ * then tell the recorder tab to finalize). Used by the meeting-ended prompt. */
+async function stopInstructionDeliberate(): Promise<void> {
+	const st = await getState();
+	if (st.kind !== "recording" || st.mode !== "instruction") return;
+	intentionalStop = true;
+	if (st.recorderTabId !== undefined) {
+		await sendControlWithRetry(
+			() => chrome.tabs.sendMessage(st.recorderTabId!, { type: "STOP_CAPTURE" }),
+			"STOP_CAPTURE→tab",
+		);
+	}
+}
+
 // ── Recording lock ──────────────────────────────────────────────────────────
 //
 // A new recording may start from any TERMINAL state (idle / error / complete) —
@@ -250,7 +335,6 @@ function _getBoolean(
 	return typeof v === "boolean" ? v : undefined;
 }
 
-const PENDING_MEET_START_KEY = "capPendingMeetStart";
 const MIN_MEET_RECORDING_MS_BEFORE_AUTO_STOP = 10000;
 
 function isMeetUrl(url: string | undefined): boolean {
@@ -280,34 +364,6 @@ async function resolveMeetSenderTabId(
 	});
 	const tab = tabs.find((t) => t.id !== undefined && isMeetUrl(t.url));
 	return tab?.id;
-}
-
-function isTabCaptureInvocationError(error: string): boolean {
-	const lower = error.toLowerCase();
-	return (
-		lower.includes("not been invoked") ||
-		lower.includes("activetab") ||
-		lower.includes("active tab")
-	);
-}
-
-async function openPopupForPendingMeet(
-	tabId: number,
-	meetingId: string | undefined,
-): Promise<boolean> {
-	await chrome.storage.local.set({
-		[PENDING_MEET_START_KEY]: { tabId, meetingId, createdAt: Date.now() },
-	});
-	try {
-		if (typeof chrome.action?.openPopup === "function") {
-			await chrome.action.openPopup();
-			return true;
-		}
-	} catch {
-		// Fall through to a friendly inline error in the Meet nudge.
-	}
-	await chrome.storage.local.remove(PENDING_MEET_START_KEY);
-	return false;
 }
 
 // Serializes recorder upload work (chunk processing + finalization) so they
@@ -381,7 +437,15 @@ async function handleMessage(
 			// The tab the user launched from (a Meet, or any audible tab). The
 			// recorder page will pull its audio via tabCapture and mix it in.
 			const sourceTabId = getNumber(msg, "sourceTabId");
-			await setState({ kind: "arming", mode: "instruction", sourceTabId });
+			// Guaranteed-client-audio mode ("Record full-screen meeting"): set only
+			// when the popup explicitly requested it while on a Meet tab.
+			const meetingRequired = _getBoolean(msg, "meeting") === true;
+			await setState({
+				kind: "arming",
+				mode: "instruction",
+				sourceTabId,
+				meetingRequired,
+			});
 			let recorderTabId: number;
 			try {
 				recorderTabId = await openInstructionRecorder();
@@ -398,6 +462,7 @@ async function handleMessage(
 				mode: "instruction",
 				recorderTabId,
 				sourceTabId,
+				meetingRequired,
 			});
 			return { ok: true };
 		}
@@ -445,6 +510,9 @@ async function handleMessage(
 
 		// ── Popup: stop ───────────────────────────────────────────────────
 		case "STOP": {
+			// Deliberate stop — the watchdog must not treat the resulting
+			// tabCapture teardown as a tab-audio loss (Codex FIX B).
+			intentionalStop = true;
 			const stopState = await getState();
 			const stopTabId =
 				stopState.kind === "recording" && stopState.mode === "instruction"
@@ -577,6 +645,9 @@ async function handleMessage(
 
 		// ── Popup: cancel ─────────────────────────────────────────────────
 		case "CANCEL": {
+			// Deliberate disarm — see the STOP case for why this guards the
+			// tab-audio-loss watchdog.
+			intentionalStop = true;
 			const cancelState = await getState();
 			const cancelTabId =
 				cancelState.kind === "recording" && cancelState.mode === "instruction"
@@ -651,6 +722,9 @@ async function handleMessage(
 				(senderTabId === undefined || state.tabId === senderTabId) &&
 				Date.now() - state.startedAt >= MIN_MEET_RECORDING_MS_BEFORE_AUTO_STOP
 			) {
+				// Deliberate stop — see the STOP case for why this guards the
+				// tab-audio-loss watchdog.
+				intentionalStop = true;
 				if (state.contentRecorderTabId !== undefined) {
 					await sendControlWithRetry(
 						() =>
@@ -665,14 +739,30 @@ async function handleMessage(
 						"STOP_CAPTURE→offscreen",
 					);
 				}
+			} else if (
+				state.kind === "recording" &&
+				state.mode === "instruction" &&
+				state.meetingRequired === true &&
+				state.sourceTabId !== undefined &&
+				senderTabId === state.sourceTabId &&
+				Date.now() - state.startedAt >= MIN_MEET_RECORDING_MS_BEFORE_AUTO_STOP
+			) {
+				// Guaranteed full-screen meeting: don't auto-stop (false-detection
+				// risk) or silently continue — ask the admin (owner's choice).
+				promptStopOnMeetEnded();
 			}
 			return { ok: true };
 		}
 
 		// ── Content: user clicked "Record now" nudge ──────────────────────
+		// FIX A (Codex v4): chrome.action.openPopup() gives NO guarantee of
+		// granting activeTab/tabCapture — only a direct click on the extension
+		// icon does. This handler therefore NEVER attempts tabCapture itself
+		// (that used to fail silently into a client-less recording in the rare
+		// case activeTab happened to still be granted from an unrelated earlier
+		// icon click). It only opens the popup as a convenience; the guarantee
+		// rests entirely on the user clicking "Record full-screen meeting" there.
 		case "MEET_NUDGE_RECORD_NOW": {
-			const meetingId = getString(msg, "meetingId");
-			const tabId = await resolveMeetSenderTabId(_sender);
 			const state = await getState();
 			if (isInProgress(state)) {
 				return { ok: false, error: "A recording is already in progress" };
@@ -696,36 +786,14 @@ async function handleMessage(
 				}
 				return { ok: false, error: "not signed in" };
 			}
-			if (tabId === undefined) {
-				return { ok: false, error: "No Meet tab to record" };
-			}
-			await setState({ kind: "arming", mode: "meeting", meetingId, tabId });
-			let nudgeStreamId: string;
 			try {
-				// Tab capture of the Meet tab the nudge button was clicked in.
-				nudgeStreamId = await getTabMediaStreamId(tabId);
-			} catch (err) {
-				await setState({ kind: "idle" });
-				updateBadge({ kind: "idle" });
-				const error = err instanceof Error ? err.message : String(err);
-				if (isTabCaptureInvocationError(error)) {
-					const opened = await openPopupForPendingMeet(tabId, meetingId);
-					if (opened) return { ok: true, openedPopup: true };
+				if (typeof chrome.action?.openPopup === "function") {
+					await chrome.action.openPopup();
 				}
-				return {
-					ok: false,
-					error: `Couldn't capture the meeting tab: ${error}`,
-				};
+			} catch {
+				// Convenience only — ignore failures; the nudge text already told
+				// the user to click the icon manually.
 			}
-			await ensureOffscreenDocument();
-			await sendToOffscreen({
-				type: "START_CAPTURE",
-				streamId: nudgeStreamId,
-				meetingId,
-				tabId,
-				micEnabled: settings.micEnabled,
-				...(settings.micEnabled ? { micDeviceId: settings.micDeviceId } : {}),
-			});
 			return { ok: true };
 		}
 
@@ -790,10 +858,14 @@ async function handleMessage(
 		// consume it via getUserMedia(chromeMediaSource:"tab"). No "share system
 		// audio" tick needed. Returns { streamId: null } when there is no usable
 		// source tab (e.g. launched from a non-capturable page) — the recorder then
-		// falls back to screen + mic.
+		// falls back to screen + mic. `required` mirrors meetingRequired and MUST
+		// be preserved on every failure branch — the recorder page fails closed
+		// (never starts / hard-stops) instead of silently dropping client audio
+		// when required is true.
 		case "REQUEST_TAB_AUDIO": {
 			const st = await getState();
 			const sourceTabId = st.kind === "arming" ? st.sourceTabId : undefined;
+			const required = st.kind === "arming" && st.meetingRequired === true;
 			const consumerTabId = _sender.tab?.id;
 			// The requester MUST be the recorder tab this arming session opened —
 			// guards against a stale/racing recorder tab grabbing audio for a
@@ -807,15 +879,36 @@ async function handleMessage(
 				consumerTabId === undefined ||
 				!isCurrentRecorderTab
 			) {
-				return { streamId: null };
+				return { streamId: null, required };
+			}
+			// Re-verify the source tab still exists AND is still a Meet tab before
+			// minting — a stale/closed/navigated-away tab must never silently mint
+			// a stream id for the wrong (or gone) content.
+			try {
+				const sourceTab = await chrome.tabs.get(sourceTabId);
+				if (!isMeetUrl(sourceTab.url)) {
+					return { streamId: null, required };
+				}
+			} catch {
+				return { streamId: null, required };
 			}
 			try {
 				const streamId = await getTabMediaStreamId(sourceTabId, consumerTabId);
-				return { streamId };
+				return { streamId, required };
 			} catch (err) {
 				console.warn("[sw] tab-audio streamId failed:", err);
-				return { streamId: null };
+				return { streamId: null, required };
 			}
+		}
+
+		// ── Recorder tab: mid-recording tab-audio loss detected locally ──────
+		// The recorder page detected the tab-audio track/context died and already
+		// stopped its own recorder (see recorder-page.ts handleTabAudioLoss). We
+		// only notify + badge — NEVER set state to "error", which would make
+		// finalizeRecording() bail (state.kind !== "recording").
+		case "TAB_AUDIO_LOST": {
+			if (!intentionalStop) notifyTabAudioLost();
+			return { ok: true };
 		}
 
 		// ── Offscreen: recorder started ───────────────────────────────────
@@ -829,6 +922,10 @@ async function handleMessage(
 				state.kind === "arming" ? state.recorderTabId : undefined;
 			const contentRecorderTabId =
 				state.kind === "arming" ? state.contentRecorderTabId : undefined;
+			const sourceTabId =
+				state.kind === "arming" ? state.sourceTabId : undefined;
+			const meetingRequired =
+				state.kind === "arming" ? state.meetingRequired : undefined;
 
 			let videoId: string;
 			let uploadId: string;
@@ -866,8 +963,14 @@ async function handleMessage(
 				pausedAccumMs: 0,
 				recorderTabId,
 				contentRecorderTabId,
+				sourceTabId,
+				meetingRequired,
 			};
 			await setState(nextState);
+			// A new recording starts clean: no stop is "in flight" yet, and any
+			// prior tab-audio-lost notification no longer applies.
+			intentionalStop = false;
+			tabAudioLostNotified = false;
 			startKeepAlive();
 			updateBadge(nextState);
 			return { ok: true };
@@ -1175,3 +1278,35 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 		await enqueueRecorder(() => finalizeRecording()).catch(() => {});
 	}
 });
+
+// ── Guaranteed client audio: source (Meet) tab closed or navigated away ────
+// Independent of the recorder-page's own tab-track watchdog — belt-and-
+// suspenders in case that page-side detection is slow or missed.
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+	handleSourceTabLost(tabId).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.url === undefined || isMeetUrl(changeInfo.url)) return;
+	handleSourceTabLost(tabId).catch(() => {});
+});
+
+// Meeting-ended prompt: button 0 = stop & save, button 1 = keep recording.
+chrome.notifications.onButtonClicked.addListener((notifId, btnIdx) => {
+	if (notifId !== MEET_ENDED_PROMPT_ID) return;
+	chrome.notifications.clear(MEET_ENDED_PROMPT_ID);
+	if (btnIdx === 0) stopInstructionDeliberate().catch(() => {});
+});
+
+// Advisory only (Codex FIX B): this fires "stopped" on normal stops too, so it
+// must never independently trigger the loss alert — the trustworthy signals
+// are the recorder-page track events and the tabs.onRemoved/onUpdated
+// listeners above. Kept only for diagnostics.
+if (chrome.tabCapture?.onStatusChanged) {
+	chrome.tabCapture.onStatusChanged.addListener((info) => {
+		if (intentionalStop) return;
+		if (info.status !== "stopped" && info.status !== "error") return;
+		console.warn("[sw] tabCapture.onStatusChanged (advisory only):", info);
+	});
+}

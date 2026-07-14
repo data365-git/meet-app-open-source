@@ -63,13 +63,6 @@ let recordingStartTime = 0;
 let pillPausedAccumMs = 0;
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let meetEndTimer: ReturnType<typeof setTimeout> | null = null;
-let nudgeRecorder: {
-	recorder: MediaRecorder;
-	audioCtx: AudioContext;
-	displayStream: MediaStream;
-	micStream: MediaStream | null;
-	chunkIndex: number;
-} | null = null;
 
 let shadowHost: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
@@ -123,47 +116,6 @@ function scheduleMeetEnded(): void {
 			nudgeState = "hidden";
 		}
 	}, MEET_END_DEBOUNCE_MS);
-}
-
-function friendlyStartError(error: unknown): string {
-	const raw = typeof error === "string" ? error.toLowerCase() : "";
-	if (raw.includes("already")) return "A recording is already running.";
-	if (raw.includes("not signed")) return "Connect the 365 extension first — click the extension icon, then Connect account.";
-	if (
-		raw.includes("not been invoked") ||
-		raw.includes("activetab") ||
-		raw.includes("active tab")
-	) {
-		return "Click the data365 extension icon, then Record Meeting.";
-	}
-	if (raw.includes("meet tab") || raw.includes("tab")) {
-		return "Open this Meet tab, then try Record now again.";
-	}
-	return "Couldn't start recording. Try the extension popup.";
-}
-
-function pickMimeType(): string {
-	const candidates = [
-		"video/mp4;codecs=h264",
-		"video/mp4",
-		"video/webm;codecs=vp9,opus",
-		"video/webm;codecs=vp8,opus",
-		"video/webm",
-	];
-	for (const mime of candidates) {
-		if (MediaRecorder.isTypeSupported(mime)) return mime;
-	}
-	return "video/webm";
-}
-
-function cleanupNudgeRecorder(): void {
-	if (!nudgeRecorder) return;
-	for (const track of nudgeRecorder.displayStream.getTracks()) track.stop();
-	if (nudgeRecorder.micStream) {
-		for (const track of nudgeRecorder.micStream.getTracks()) track.stop();
-	}
-	nudgeRecorder.audioCtx.close().catch(() => {});
-	nudgeRecorder = null;
 }
 
 // ── Sound helpers ─────────────────────────────────────────────────────────────
@@ -643,19 +595,19 @@ function renderDefaultNudge(): void {
 	container.appendChild(card);
 	nudgeState = "default";
 
+	// FIX A (Codex v4): this button no longer captures directly — an in-page
+	// gesture can't grant activeTab/tabCapture, so a direct getDisplayMedia()
+	// here had NO client-audio guarantee. Only a real click on the extension
+	// icon does, so this just points the user there (openPopup is attempted as
+	// a convenience only, never as the guarantee).
 	btnRecord.addEventListener("click", (event) => {
 		event.stopImmediatePropagation();
-		btnRecord.disabled = true;
-		btnRecord.textContent = "Starting...";
-		startNudgeRecording(card, btnRecord).catch((err) => {
-			showStartNote(
-				card,
-				`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
-				true,
-			);
-			btnRecord.disabled = false;
-			btnRecord.textContent = "Record now";
-		});
+		sendToBackground({ type: "MEET_NUDGE_RECORD_NOW", meetingId: meetingId ?? "" });
+		showStartNote(
+			card,
+			"Yozish uchun data365 belgisini bosing (mijoz ovozi kafolatli).",
+			false,
+		);
 	});
 
 
@@ -724,7 +676,7 @@ function renderCountdownNudge(): void {
 			if (activeCard) {
 				showStartNote(
 					activeCard,
-					"Click Record now to choose what to share.",
+					"Yozish uchun data365 belgisini bosing (mijoz ovozi kafolatli).",
 					false,
 				);
 			}
@@ -897,22 +849,6 @@ function sendToBackground(msg: OutboundMessage): void {
 	chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
-function sendMsg(msg: Record<string, unknown>): void {
-	chrome.runtime.sendMessage(msg).catch(() => {});
-}
-
-function sendMsgAwait(msg: Record<string, unknown>): Promise<unknown> {
-	return new Promise((resolve) => {
-		chrome.runtime.sendMessage(msg, (response: unknown) => {
-			if (chrome.runtime.lastError) {
-				resolve({ ok: false, error: chrome.runtime.lastError.message });
-			} else {
-				resolve(response);
-			}
-		});
-	});
-}
-
 function showStartNote(card: HTMLElement, text: string, isError: boolean): void {
 	const existing = card.querySelector(
 		".cap-nudge-send-err",
@@ -924,223 +860,6 @@ function showStartNote(card: HTMLElement, text: string, isError: boolean): void 
 		: "font-size:12px;color:#6b7280;margin:6px 0 0;";
 	note.textContent = text;
 	if (!existing) card.appendChild(note);
-}
-
-async function getOptionalMicStream(
-	micEnabled: boolean,
-	micDeviceId: string,
-): Promise<MediaStream | null> {
-	if (!micEnabled) return null;
-	if (micDeviceId) {
-		try {
-			return await navigator.mediaDevices.getUserMedia({
-				audio: { deviceId: { exact: micDeviceId } },
-			});
-		} catch {}
-	}
-	try {
-		return await navigator.mediaDevices.getUserMedia({ audio: true });
-	} catch {
-		return null;
-	}
-}
-
-function stopNudgeRecorder(): void {
-	if (nudgeRecorder && nudgeRecorder.recorder.state !== "inactive") {
-		nudgeRecorder.recorder.stop();
-	} else if (nudgeRecorder) {
-		cleanupNudgeRecorder();
-		sendMsg({ type: "RECORDER_STOPPED" });
-	}
-}
-
-async function startNudgeRecording(
-	card: HTMLElement,
-	button: HTMLButtonElement,
-): Promise<void> {
-	if (nudgeRecorder) {
-		showStartNote(card, "A recording is already running.", true);
-		button.disabled = false;
-		button.textContent = "Record now";
-		return;
-	}
-
-	let displayStream: MediaStream;
-	try {
-		displayStream = await navigator.mediaDevices.getDisplayMedia({
-			video: {
-				width: { max: 1280 },
-				height: { max: 720 },
-				frameRate: { max: 24 },
-			},
-			audio: true,
-		});
-	} catch (err) {
-		const name = err instanceof Error ? err.name : "";
-		const message =
-			name === "NotAllowedError" || name === "AbortError"
-				? "Screen sharing was cancelled. Click Record now to try again."
-				: `Couldn't open Chrome's share picker: ${err instanceof Error ? err.message : String(err)}`;
-		showStartNote(card, message, true);
-		button.disabled = false;
-		button.textContent = "Record now";
-		return;
-	}
-
-	if (displayStream.getVideoTracks().length === 0) {
-		for (const track of displayStream.getTracks()) track.stop();
-		showStartNote(card, "No video track was shared. Try sharing this Meet tab.", true);
-		button.disabled = false;
-		button.textContent = "Record now";
-		return;
-	}
-
-	let pendingMicStream: MediaStream | null = null;
-	let pendingAudioCtx: AudioContext | null = null;
-	try {
-		const readyResp = (await sendMsgAwait({
-			type: "MEET_NUDGE_CAPTURE_READY",
-			meetingId: meetingId ?? "",
-		})) as
-			| {
-					ok?: boolean;
-					error?: string;
-					micEnabled?: boolean;
-					micDeviceId?: string;
-			  }
-			| undefined;
-
-		if (!readyResp?.ok) {
-			for (const track of displayStream.getTracks()) track.stop();
-			showStartNote(card, friendlyStartError(readyResp?.error), true);
-			button.disabled = false;
-			button.textContent = "Record now";
-			return;
-		}
-
-		const micStream = await getOptionalMicStream(
-			readyResp.micEnabled !== false,
-			readyResp.micDeviceId ?? "",
-		);
-		pendingMicStream = micStream;
-		const audioCtx = new AudioContext({ sampleRate: 48000 });
-		pendingAudioCtx = audioCtx;
-		const dest = audioCtx.createMediaStreamDestination();
-
-		if (displayStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(displayStream).connect(dest);
-		}
-		if (micStream && micStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(micStream).connect(dest);
-		}
-
-		const recordStream = new MediaStream([
-			...displayStream.getVideoTracks(),
-			...dest.stream.getAudioTracks(),
-		]);
-		const mime = pickMimeType();
-		const recorder = new MediaRecorder(recordStream, {
-			mimeType: mime,
-			videoBitsPerSecond: 600_000,
-			audioBitsPerSecond: 96_000,
-		});
-
-		let chunkIndex = 0;
-		let pendingChunks = 0;
-		let stopRequested = false;
-
-		const finishStop = () => {
-			cleanupNudgeRecorder();
-			sendMsg({ type: "RECORDER_STOPPED" });
-		};
-
-		recorder.ondataavailable = async (event) => {
-			if (event.data.size <= 0) {
-				if (stopRequested && pendingChunks === 0) finishStop();
-				return;
-			}
-			pendingChunks++;
-			try {
-				const buffer = await event.data.arrayBuffer();
-				sendMsg({
-					type: "RECORDER_CHUNK",
-					chunk: Array.from(new Uint8Array(buffer)),
-					index: chunkIndex++,
-					mime: recorder.mimeType,
-					ts: Date.now(),
-				});
-			} finally {
-				pendingChunks--;
-				if (stopRequested && pendingChunks === 0) finishStop();
-			}
-		};
-
-		recorder.onerror = () => {
-			sendMsg({ type: "RECORDER_ERROR", error: "MediaRecorder error" });
-			cleanupNudgeRecorder();
-		};
-
-		recorder.onstop = () => {
-			stopRequested = true;
-			if (pendingChunks === 0) finishStop();
-		};
-
-		displayStream.getVideoTracks()[0].onended = () => {
-			stopNudgeRecorder();
-		};
-
-		nudgeRecorder = {
-			recorder,
-			audioCtx,
-			displayStream,
-			micStream,
-			chunkIndex: 0,
-		};
-		pendingMicStream = null;
-		pendingAudioCtx = null;
-
-		const startResp = (await sendMsgAwait({
-			type: "RECORDER_STARTED",
-			mime,
-			hasVideo: displayStream.getVideoTracks().length > 0,
-			hasAudio: dest.stream.getAudioTracks().length > 0,
-		})) as { ok?: boolean; error?: string } | undefined;
-
-		if (!startResp?.ok) {
-			cleanupNudgeRecorder();
-			showStartNote(
-				card,
-				`Couldn't start recording: ${
-					startResp?.error ?? "Couldn't start the upload session."
-				}`,
-				true,
-			);
-			button.disabled = false;
-			button.textContent = "Record now";
-			return;
-		}
-
-		recorder.start(200);
-		clearNudge(() => renderRecordingPill(false));
-	} catch (err) {
-		for (const track of displayStream.getTracks()) track.stop();
-		if (pendingMicStream) {
-			for (const track of pendingMicStream.getTracks()) track.stop();
-		}
-		pendingAudioCtx?.close().catch(() => {});
-		cleanupNudgeRecorder();
-		sendMsg({
-			type: "RECORDER_ERROR",
-			error: err instanceof Error ? err.message : String(err),
-		});
-		showStartNote(
-			card,
-			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
-			true,
-		);
-		button.disabled = false;
-		button.textContent = "Record now";
-	}
 }
 
 // ── Main gate ─────────────────────────────────────────────────────────────────
@@ -1241,24 +960,11 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 	}
 }
 
-chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: unknown) => {
 	if (!msg || typeof msg !== "object") return;
 	const message = msg as Record<string, unknown>;
 	if (message.type === "STATE_CHANGED" && message.state) {
 		handleStateChange(message.state as StateChangedMessage["state"]);
-	} else if (message.type === "STOP_CAPTURE") {
-		stopNudgeRecorder();
-		sendResponse({ ok: true });
-	} else if (message.type === "PAUSE_CAPTURE") {
-		if (nudgeRecorder && nudgeRecorder.recorder.state === "recording") {
-			nudgeRecorder.recorder.pause();
-		}
-		sendResponse({ ok: true });
-	} else if (message.type === "RESUME_CAPTURE") {
-		if (nudgeRecorder && nudgeRecorder.recorder.state === "paused") {
-			nudgeRecorder.recorder.resume();
-		}
-		sendResponse({ ok: true });
 	}
 });
 
@@ -1301,9 +1007,6 @@ setInterval(() => {
 
 window.addEventListener("popstate", maybeShow);
 window.addEventListener("hashchange", maybeShow);
-window.addEventListener("beforeunload", () => {
-	stopNudgeRecorder();
-});
 
 let mutationDebounce: ReturnType<typeof setTimeout> | null = null;
 const observer = new MutationObserver(() => {

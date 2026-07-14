@@ -250,11 +250,16 @@ function renderIdlePanel(
 
 	const actionsSection = el("div", { className: "panel-section" });
 
+	// On a Meet tab, "Record full-screen meeting" is the GUARANTEED path
+	// (sourceTabId + meeting:true → fail-closed if the client's audio can't be
+	// captured, per the owner's requirement). "Record Meet tab only" (START_MEET)
+	// stays available but demoted — it records only the Meet tab, not the whole
+	// screen. Off a Meet tab there is no client-audio requirement at all.
 	const meetBtn = document.createElement("button");
-	meetBtn.className = "btn btn-primary";
+	meetBtn.className = "btn btn-secondary";
 
 	if (isMeetTab && meetingId) {
-		meetBtn.textContent = `Record Meeting · ${meetingId}`;
+		meetBtn.textContent = `Record Meet tab only · ${meetingId}`;
 		meetBtn.addEventListener("click", () => {
 			const msg: Record<string, unknown> = { type: "START_MEET", meetingId };
 			if (activeTabId !== undefined) msg.tabId = activeTabId;
@@ -262,28 +267,33 @@ function renderIdlePanel(
 			window.close();
 		});
 	} else {
-		meetBtn.textContent = "Record Meeting";
+		meetBtn.textContent = "Record Meet tab only";
 		meetBtn.disabled = true;
 		meetBtn.classList.add("btn--disabled");
 	}
 
 	const instrBtn = el(
 		"button",
-		{ className: "btn btn-secondary" },
-		"Record Instruction",
+		{ className: isMeetTab ? "btn btn-primary" : "btn btn-secondary" },
+		isMeetTab ? "Record full-screen meeting" : "Record screen",
 	);
 	instrBtn.addEventListener("click", () => {
 		const msg: Record<string, unknown> = { type: "START_INSTRUCTION" };
 		// Only on a Meet tab: pass it so the recorder mixes in the OTHER party's
-		// audio via tabCapture. NOT for plain instruction recordings from a random
-		// tab — that would silently capture whatever audio that tab plays (privacy).
-		if (isMeetTab && activeTabId !== undefined) msg.sourceTabId = activeTabId;
+		// audio via tabCapture, and require the guarantee to fail closed rather
+		// than silently record client-less. NOT for plain instruction recordings
+		// from a random tab — that would silently capture whatever audio that
+		// tab plays (privacy), and there is no client-audio guarantee to make.
+		if (isMeetTab && activeTabId !== undefined) {
+			msg.sourceTabId = activeTabId;
+			msg.meeting = true;
+		}
 		sendMsg(msg);
 		window.close();
 	});
 
-	actionsSection.appendChild(meetBtn);
 	actionsSection.appendChild(instrBtn);
+	actionsSection.appendChild(meetBtn);
 
 	if (!isMeetTab || !meetingId) {
 		const hint = el(
