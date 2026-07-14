@@ -138,7 +138,6 @@ export function LoginForm() {
             <MotionInput
               id={emailInputId}
               name="email"
-              autoFocus
               type="email"
               placeholder={t("emailPlaceholder")}
               autoComplete="email"
@@ -159,7 +158,7 @@ export function LoginForm() {
                 value={password}
                 disabled={loading}
                 onChange={(e) => setPassword(e.target.value)}
-                className="rounded-[10px] pr-10"
+                className="rounded-[10px] pr-12"
               />
               <button
                 type="button"
@@ -167,8 +166,7 @@ export function LoginForm() {
                 aria-label={
                   showPassword ? t("hidePassword") : t("showPassword")
                 }
-                tabIndex={-1}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-10 hover:text-gray-12 transition-colors"
+                className="absolute right-0 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-[10px] text-gray-10 transition-colors hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
               >
                 {showPassword ? (
                   <EyeOff className="size-4" />

@@ -81,7 +81,7 @@ export function LocaleSwitcher({ className }: { className?: string }) {
 					disabled={pending}
 					aria-label={t("languageTitle")}
 					className={[
-						"inline-flex h-9 items-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 px-3 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60",
+						"inline-flex h-11 items-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 px-3 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60 sm:h-9",
 						className ?? "",
 					].join(" ")}
 				>

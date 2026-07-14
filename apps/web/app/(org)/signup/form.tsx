@@ -131,7 +131,6 @@ export function SignupForm() {
 					<MotionInput
 						id={nameInputId}
 						name="name"
-						autoFocus
 						type="text"
 						placeholder={t("namePlaceholder")}
 						autoComplete="name"
@@ -163,14 +162,13 @@ export function SignupForm() {
 							value={password}
 							disabled={submitting}
 							onChange={(e) => setPassword(e.target.value)}
-							className="pr-10"
+							className="pr-12"
 						/>
 						<button
 							type="button"
 							onClick={() => setShowPassword((v) => !v)}
 							aria-label={showPassword ? t("hidePassword") : t("showPassword")}
-							tabIndex={-1}
-							className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-10 hover:text-gray-12 transition-colors"
+							className="absolute right-0 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-[10px] text-gray-10 transition-colors hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
 						>
 							{showPassword ? (
 								<EyeOff className="size-4" />
@@ -191,14 +189,15 @@ export function SignupForm() {
 							value={confirmPassword}
 							disabled={submitting}
 							onChange={(e) => setConfirmPassword(e.target.value)}
-							className="pr-10"
+							className="pr-12"
 						/>
 						<button
 							type="button"
 							onClick={() => setShowConfirmPassword((v) => !v)}
-							aria-label={showConfirmPassword ? t("hidePassword") : t("showPassword")}
-							tabIndex={-1}
-							className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-10 hover:text-gray-12 transition-colors"
+							aria-label={
+								showConfirmPassword ? t("hidePassword") : t("showPassword")
+							}
+							className="absolute right-0 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-[10px] text-gray-10 transition-colors hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
 						>
 							{showConfirmPassword ? (
 								<EyeOff className="size-4" />

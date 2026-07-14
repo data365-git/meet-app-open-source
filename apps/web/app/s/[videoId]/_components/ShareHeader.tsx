@@ -526,17 +526,17 @@ export const ShareHeader = ({
 			/>
 			<div className="mt-5 sm:mt-8">
 				<div className="flex flex-col gap-5">
-					<div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-						<div className="flex min-w-0 items-center gap-2 sm:gap-3">
+					<div className="flex items-start justify-between gap-3 sm:flex-col lg:flex-row">
+						<div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
 							{user && (
 								<button
 									type="button"
 									onClick={handleBackClick}
-									className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 px-3 py-1 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:min-h-0 sm:px-2.5 sm:py-0.5 sm:text-xs"
+									className="inline-flex size-11 items-center justify-center rounded-full border border-gray-6 bg-gray-3 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:min-h-0 sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-0.5 sm:text-xs"
 									aria-label={t("goBackAriaLabel")}
 								>
 									<ArrowLeft className="size-3" />
-									{t("back")}
+									<span className="hidden sm:inline">{t("back")}</span>
 								</button>
 							)}
 							{renderBranding()}
@@ -582,7 +582,7 @@ export const ShareHeader = ({
 							</div>
 						</div>
 
-						<div className="flex w-full shrink-0 items-center justify-end gap-2 lg:w-auto">
+						<div className="flex w-auto shrink-0 items-center justify-end gap-2 sm:w-full lg:w-auto">
 							{(data.hasPassword || data.hasInheritedPassword) && (
 								<FontAwesomeIcon
 									className="text-amber-600 size-4"
@@ -599,19 +599,6 @@ export const ShareHeader = ({
 									<span className="max-w-[50vw] truncate sm:max-w-72">
 										{getDisplayLink()}
 									</span>
-									{linkCopied ? (
-										<Check className="w-3.5 h-3.5 shrink-0 text-green-600 svgpathanimation" />
-									) : (
-										<Copy className="w-3.5 h-3.5 shrink-0" />
-									)}
-								</button>
-								{/* Icon-only copy button: visible on mobile only */}
-								<button
-									type="button"
-									onClick={handleCopyClick}
-									aria-label={t("copyLink")}
-									className="inline-flex size-11 items-center justify-center rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:hidden"
-								>
 									{linkCopied ? (
 										<Check className="w-3.5 h-3.5 shrink-0 text-green-600 svgpathanimation" />
 									) : (
@@ -664,7 +651,18 @@ export const ShareHeader = ({
 									<div className="absolute right-0 top-full z-50 mt-1 w-max max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-gray-6 bg-gray-1 shadow-lg">
 										<button
 											type="button"
-											className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3 sm:hidden"
+											onClick={() => {
+												handleCopyLink(false);
+												setShowShareOptions(false);
+											}}
+										>
+											<Copy className="w-3.5 h-3.5 shrink-0" />
+											{t("copyLink")}
+										</button>
+										<button
+											type="button"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
 											onClick={() => {
 												const link = getVideoLink();
 												const title = displayTitle || data.name;
@@ -681,7 +679,7 @@ export const ShareHeader = ({
 										</button>
 										<button
 											type="button"
-											className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
 											onClick={() => {
 												const link = getVideoLink();
 												const title = displayTitle || data.name;
@@ -698,7 +696,7 @@ export const ShareHeader = ({
 										</button>
 										<button
 											type="button"
-											className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
 											onClick={() => {
 												const link = getVideoLink();
 												const title = displayTitle || data.name;
@@ -713,6 +711,20 @@ export const ShareHeader = ({
 											<Share2 className="w-3.5 h-3.5 shrink-0" />
 											{t("email")}
 										</button>
+										<button
+											type="button"
+											disabled={isDownloading}
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3 disabled:opacity-60 sm:hidden"
+											onClick={() => {
+												setShowShareOptions(false);
+												void handleDownload();
+											}}
+										>
+											<Download className="w-3.5 h-3.5 shrink-0" />
+											{isDownloading
+												? t("downloadPreparing")
+												: t("download")}
+										</button>
 									</div>
 								)}
 							</div>
@@ -723,7 +735,7 @@ export const ShareHeader = ({
 								disabled={isDownloading}
 								aria-label={t("downloadAriaLabel")}
 								title={t("downloadAriaLabel")}
-								className="inline-flex size-11 items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
+								className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
 							>
 								{isDownloading ? (
 									<Loader2 className="size-3.5 shrink-0 animate-spin" />
