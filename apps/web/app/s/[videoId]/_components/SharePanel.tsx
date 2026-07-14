@@ -90,6 +90,10 @@ interface SharePanelProps {
 	/** False once transcription is done but the transcript is empty/missing —
 	 * matches what `ensureTranscriptIndex` (chat/route.ts) requires. */
 	transcriptReady?: boolean;
+	/** True once AI GENERATION (summary/tasks/refined) is COMPLETE/SKIPPED. Used
+	 * so the Transcript tab stays reachable while only AI-generation is still
+	 * running — the transcript doesn't have to wait for the summary to finish. */
+	aiContentReady?: boolean;
 	/** T9 prototype: "modal" hides this inline chat (the AIFab/AIChatPopup pair
 	 * renders instead, one level up in ShareVideo). Default "inline". */
 	chatVariant?: "modal" | "inline";
@@ -104,6 +108,7 @@ export function SharePanel({
 	refined,
 	processing,
 	transcriptReady = true,
+	aiContentReady = true,
 	chatVariant = "inline",
 }: SharePanelProps) {
 	const t = useTranslations("share");
@@ -116,7 +121,19 @@ export function SharePanel({
 			? rawParam
 			: "summary";
 	const [activeTab, setActiveTab] = useState<PanelTab>(initialTab);
-	const effectiveActiveTab: PanelTab = processing ? "summary" : activeTab;
+
+	// Per-tab readiness: Summary is always reachable (it hosts the live AI-status
+	// view while processing). Transcript unlocks the moment the transcript is
+	// ready — it must NOT wait for the summary/refine generation. Tasks + Refined
+	// come out of AI generation, so they unlock only when that is complete.
+	const tabReady: Record<PanelTab, boolean> = {
+		summary: true,
+		tasks: aiContentReady,
+		transcript: transcriptReady,
+		refined: aiContentReady,
+	};
+	// Fall back to Summary only when the selected tab isn't ready yet.
+	const effectiveActiveTab: PanelTab = tabReady[activeTab] ? activeTab : "summary";
 
 	const handleTabClick = useCallback(
 		(id: PanelTab) => {
@@ -384,7 +401,7 @@ export function SharePanel({
 			>
 				{TABS.map((tab) => {
 					const isActive = effectiveActiveTab === tab.id;
-					const isDisabledByProcessing = processing && tab.id !== "summary";
+					const isLocked = !tabReady[tab.id];
 					return (
 						<button
 							key={tab.id}
@@ -397,13 +414,14 @@ export function SharePanel({
 								setChatOpen(false);
 								handleTabClick(tab.id);
 							}}
-							disabled={isDisabledByProcessing}
+							disabled={isLocked}
+							title={isLocked ? t("tabLockedHint") : undefined}
 							className={clsx(
 								"-mb-px min-h-11 flex-1 shrink-0 whitespace-nowrap border-b-2 px-3 text-[13.5px] font-semibold transition-colors",
 								isActive
 									? "border-[var(--brand)] text-[var(--brand)]"
 									: "border-transparent text-gray-11 hover:text-gray-12",
-								isDisabledByProcessing && "opacity-45 pointer-events-none",
+								isLocked && "cursor-not-allowed opacity-45 pointer-events-none",
 							)}
 						>
 							{tab.label}

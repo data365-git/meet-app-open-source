@@ -115,6 +115,11 @@ export function GenerateAiPanel({
 	// accidental tap must not fire it. null = no pending request.
 	const [confirm, setConfirm] = useState<{ reprocess: boolean } | null>(null);
 	const inFlightRef = useRef(false);
+	// Keeps the min ETA seen for the CURRENT stage so the caption never flaps
+	// upward between polls; reset whenever the active stage changes.
+	const etaMinRef = useRef<{ step: AiProcessingStep; value: number } | null>(
+		null,
+	);
 	const isRunning =
 		transcriptionStatus === "PROCESSING" ||
 		aiGenerationStatus === "QUEUED" ||
@@ -260,9 +265,11 @@ export function GenerateAiPanel({
 						? "refined"
 						: "summary"
 					: "done";
+		// Index of the CURRENT step within stepOrder. When the pipeline reaches
+		// "done" this is 3, which is > every visible-stage index below — so all
+		// three rows resolve to "done" for one terminal frame instead of ever
+		// leaving a bar stuck at 99%.
 		const currentIdx = stepOrder.indexOf(currentStep);
-		const labelKey =
-			currentStep === "transcribe" ? "aiTranscribing" : "aiGenerating";
 
 		const stepLabelKey = {
 			transcribe: "stepTranscribe",
@@ -270,20 +277,10 @@ export function GenerateAiPanel({
 			refined: "stepRefined",
 			done: "stepDone",
 		} as const;
-		const steps = stepOrder.map((key) => {
-			const idx = stepOrder.indexOf(key);
-			const state =
-				idx < currentIdx
-					? "done"
-					: idx === currentIdx
-						? currentStep === "done"
-							? "done"
-							: "current"
-						: "pending";
-			return { key, label: tShare(stepLabelKey[key]), state };
-		});
 
-		const etaMin =
+		// Rate-based ETA for the active stage, clamped to the min seen so far
+		// for THAT stage so the caption never counts back up between polls.
+		const rawEtaMin =
 			currentStep === "transcribe"
 				? computeEtaMinutes({
 						now: Date.now(),
@@ -299,151 +296,182 @@ export function GenerateAiPanel({
 						total: aiStageChunksTotal,
 						fallbackDurationSec: duration,
 					});
+		if (etaMinRef.current && etaMinRef.current.step === currentStep) {
+			etaMinRef.current.value = Math.min(
+				etaMinRef.current.value,
+				rawEtaMin,
+			);
+		} else {
+			etaMinRef.current = { step: currentStep, value: rawEtaMin };
+		}
+		const etaMin = etaMinRef.current.value;
+		const etaLabel =
+			etaMin < 1 ? tShare("aiEtaSoon") : tShare("aiEta", { minutes: etaMin });
+
 		const currentMode: AiSpeedMode = aiMode === "cheap" ? "cheap" : "fast";
 		const modeLabel =
 			currentMode === "cheap"
 				? tShare("aiModeCheapShort")
 				: tShare("aiModeFastShort");
 
+		// The 3 REAL tracked stages (tasks/chapters are not separately tracked,
+		// so they never get their own row).
+		const runningStages: {
+			key: "transcribe" | "summary" | "refined";
+			nounLabel: string;
+			focalLabel: string;
+			completed: number;
+			total: number;
+		}[] = [
+			{
+				key: "transcribe",
+				nounLabel: tShare(stepLabelKey.transcribe),
+				focalLabel: tShare("aiFocalTranscribe"),
+				completed: transcriptionChunksCompleted ?? 0,
+				total: transcriptionChunksTotal ?? 0,
+			},
+			{
+				key: "summary",
+				nounLabel: tShare(stepLabelKey.summary),
+				focalLabel: tShare("aiFocalSummary"),
+				completed: aiStageChunksCompleted ?? 0,
+				total: aiStageChunksTotal ?? 0,
+			},
+			{
+				key: "refined",
+				nounLabel: tShare(stepLabelKey.refined),
+				focalLabel: tShare("aiFocalRefined"),
+				completed: aiStageChunksCompleted ?? 0,
+				total: aiStageChunksTotal ?? 0,
+			},
+		];
+
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 px-4 py-4">
-				{/* Header row */}
-				<div className="flex justify-between items-center gap-2">
-					<span className="inline-flex items-center gap-2 rounded-full bg-[var(--brand-wash)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand)]">
-						<SpinnerIcon />
-						{tShare("aiBadge")}
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-gray-2 p-4">
+				{/* Indeterminate-slide keyframes, scoped to this card. Defined here
+				    (not tailwind.config) to keep the change local to this component. */}
+				<style>{`
+					@keyframes ustozAiEtaSlide {
+						0% { transform: translateX(-100%); }
+						100% { transform: translateX(430%); }
+					}
+				`}</style>
+
+				{/* Header row — quiet, no pill/wash/spinner */}
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-xs font-medium text-gray-11">
+						{tShare("aiStepAiAnalysis")}
 					</span>
-					{duration != null && (
-						<span className="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-gray-10">
-							{tShare("aiEta", { minutes: etaMin })}
-						</span>
-					)}
+					<span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-gray-10">
+						{modeLabel}
+					</span>
 				</div>
 
-				<div className="flex flex-col gap-1 rounded-lg border border-gray-4 bg-gray-1 px-3 py-2">
-					<p className="text-xs font-semibold text-gray-12">
-						{tShare("aiModeLabel", { mode: modeLabel })}
-					</p>
-					{currentMode === "cheap" && (
-						<p className="text-xs text-gray-10">
-							{tShare(
-								aiQuotaWaiting
-									? "aiModeCheapQuotaWaiting"
-									: "aiModeCheapRunningHint",
-							)}
-						</p>
-					)}
-					{canGenerate && currentMode === "cheap" && (
-						<button
-							type="button"
-							disabled={continuingPaid}
-							onClick={requestContinuePaid}
-							className="mt-1 self-start rounded-lg border border-gray-5 bg-gray-3 px-3 py-1.5 text-xs font-semibold text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
-						>
-							{continuingPaid
-								? tShare("aiContinuingPaid")
-								: tShare("aiContinuePaid")}
-						</button>
-					)}
-					{error && <p className="text-xs text-red-10">{error}</p>}
-				</div>
+				{/* Vertical stage list — no connector lines, whitespace + dot state
+				    carry the sequence. */}
+				<div className="flex flex-col gap-3" aria-label={tShare("aiAnalysisStage")}>
+					{runningStages.map((stage, i) => {
+						const state =
+							i < currentIdx
+								? "done"
+								: i === currentIdx
+									? "active"
+									: "pending";
 
-				{/* Stepper */}
-				<div className="flex" aria-label={tShare("aiAnalysisStage")}>
-					{steps.map((step, i) => (
-						<div
-							key={step.key}
-							className="flex flex-1 flex-col items-center gap-1.5 last:flex-none"
-						>
-							<div className="relative flex w-full items-center justify-center">
-								<div
-									className={`flex size-[22px] items-center justify-center rounded-full border-2 text-[11px] font-semibold relative z-10 ${
-										step.state === "done"
-											? "bg-[var(--brand)] border-[var(--brand)] text-[var(--brand-fg)]"
-											: step.state === "current"
-												? "border-[var(--brand)] text-[var(--brand)] shadow-[0_0_0_4px_var(--brand-wash)] animate-pulse"
-												: "border-border text-gray-9"
-									}`}
-								>
-									{step.state === "done" ? "✓" : i + 1}
+						if (state === "done") {
+							return (
+								<div key={stage.key} className="flex items-center gap-2">
+									<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--brand)]">
+										<CheckIcon className="size-2.5 text-[var(--brand-fg)]" />
+									</span>
+									<span className="text-[13px] font-medium text-gray-11">
+										{stage.nounLabel}
+									</span>
 								</div>
-								{i < steps.length - 1 && (
-									<span
-										aria-hidden="true"
-										className={`absolute top-[10px] left-1/2 h-0.5 w-full ${
-											step.state === "done" ? "bg-[var(--brand)]" : "bg-border"
-										}`}
-									/>
-								)}
+							);
+						}
+
+						if (state === "pending") {
+							return (
+								<div key={stage.key} className="flex items-center gap-2">
+									<span className="size-4 shrink-0 rounded-full border-2 border-border" />
+									<span className="text-[13px] text-gray-9">
+										{stage.nounLabel}
+									</span>
+								</div>
+							);
+						}
+
+						// active — the focal row: verb label + determinate/indeterminate bar
+						const hasTotal = stage.total > 0;
+						const pct = hasTotal
+							? Math.min(
+									100,
+									Math.round((stage.completed / stage.total) * 100),
+								)
+							: 0;
+						return (
+							<div key={stage.key} className="flex flex-col gap-1.5">
+								<div className="flex items-center gap-2">
+									<span className="flex size-4 shrink-0 items-center justify-center rounded-full border-2 border-[var(--brand)]">
+										<span className="size-1.5 rounded-full bg-[var(--brand)]" />
+									</span>
+									<span className="text-[15px] font-semibold text-gray-12">
+										{stage.focalLabel}
+									</span>
+								</div>
+								<div className="flex flex-col gap-1 pl-[26px]">
+									{hasTotal ? (
+										<>
+											<div className="h-1 w-full overflow-hidden rounded-full bg-gray-5">
+												<div
+													className="h-full rounded-full bg-[var(--brand)] motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
+													style={{ width: `${pct}%` }}
+												/>
+											</div>
+											<div className="flex items-center justify-between text-[12px] tabular-nums text-gray-10">
+												<span>
+													{stage.completed}/{stage.total}
+												</span>
+												<span>{etaLabel}</span>
+											</div>
+										</>
+									) : (
+										<>
+											<div className="relative h-1 w-full overflow-hidden rounded-full bg-gray-5">
+												<div className="absolute inset-y-0 left-0 w-[30%] rounded-full bg-[var(--brand)] motion-reduce:w-[25%] motion-safe:animate-[ustozAiEtaSlide_1.6s_ease-in-out_infinite]" />
+											</div>
+											<span className="text-[12px] text-gray-10">
+												{tShare("aiStarting")}
+											</span>
+										</>
+									)}
+								</div>
 							</div>
-							<span
-								className={`text-[11.5px] font-semibold ${
-									step.state === "pending" ? "text-gray-9" : "text-gray-12"
-								}`}
-							>
-								{step.label}
-							</span>
-						</div>
-					))}
+						);
+					})}
 				</div>
 
-				{/* Fine-grained counter for the active step — exactly what T3 asked for
-				    instead of a generic "yaratilmoqda…" the whole stage through. */}
-				{currentStep === "transcribe" &&
-					(transcriptionChunksTotal ?? 0) > 0 && (
-						<p className="text-[12px] font-medium text-gray-10">
-							{tShare("aiFineTranscribing", {
-								completed: transcriptionChunksCompleted ?? 0,
-								total: transcriptionChunksTotal ?? 0,
-							})}
-						</p>
-					)}
-				{(currentStep === "summary" || currentStep === "refined") &&
-					(aiStageChunksTotal ?? 0) > 0 && (
-						<p className="text-[12px] font-medium text-gray-10">
-							{tShare("aiFineStageProgress", {
-								completed: aiStageChunksCompleted ?? 0,
-								total: aiStageChunksTotal ?? 0,
-							})}
-						</p>
-					)}
+				{currentMode === "cheap" && aiQuotaWaiting && (
+					<p className="text-[12px] text-amber-11">
+						{tShare("aiModeCheapQuotaWaiting")}
+					</p>
+				)}
 
-				{/* Status row — reflects the CURRENT stage, not a fixed message */}
-				<div className="flex items-center gap-2 text-[13.5px] font-medium text-gray-12">
-					<SpinnerIcon />
-					{tShare(labelKey)}
-				</div>
+				{error && <p className="text-xs text-red-10">{error}</p>}
 
-				{/* Skeleton */}
-				<div className="flex flex-col gap-2">
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "95%" }}
-					/>
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "88%" }}
-					/>
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "92%" }}
-					/>
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "58%" }}
-					/>
-					<span className="text-[11px] font-semibold uppercase tracking-wide text-gray-10">
-						{tShare("skeletonNextSteps")}
-					</span>
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "78%" }}
-					/>
-					<div
-						className="h-3 rounded-md bg-[var(--brand-wash)] animate-pulse"
-						style={{ width: "66%" }}
-					/>
-				</div>
+				{canGenerate && currentMode === "cheap" && (
+					<button
+						type="button"
+						disabled={continuingPaid}
+						onClick={requestContinuePaid}
+						className="self-start rounded-lg border border-gray-5 px-3 py-1.5 text-xs font-semibold text-gray-12 hover:bg-gray-3 disabled:opacity-60"
+					>
+						{continuingPaid
+							? tShare("aiContinuingPaid")
+							: tShare("aiContinuePaid")}
+					</button>
+				)}
 			</div>
 		);
 	}
@@ -584,27 +612,19 @@ export function GenerateAiPanel({
 	return null;
 }
 
-function SpinnerIcon() {
+function CheckIcon({ className }: { className?: string }) {
 	return (
 		<svg
-			className="size-4 animate-spin text-[var(--brand)]"
+			className={className}
 			xmlns="http://www.w3.org/2000/svg"
-			fill="none"
 			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth={3}
+			strokeLinecap="round"
+			strokeLinejoin="round"
 		>
-			<circle
-				className="opacity-25"
-				cx="12"
-				cy="12"
-				r="10"
-				stroke="currentColor"
-				strokeWidth="4"
-			/>
-			<path
-				className="opacity-75"
-				fill="currentColor"
-				d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-			/>
+			<path d="M5 13l4 4L19 7" />
 		</svg>
 	);
 }

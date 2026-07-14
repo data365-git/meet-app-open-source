@@ -5,7 +5,8 @@
     "copy": "Nusxalash",
     "reset": "Qayta boshlash",
     "back": "Orqaga",
-    "backHome": "Bosh sahifa"
+    "backHome": "Bosh sahifa",
+    "forgotPasswordHint": "Parolni tiklash uchun ish joyingiz administratoriga murojaat qiling."
   },
   "aiChat": {
     "title": "Meeting AI",
@@ -508,7 +509,12 @@
     "progressFinishingStalled": "Video yakunlanishi to'xtab qoldi. Qayta ishlovni urinib ko'ring.",
     "recordingFinalizeFailed": "Yozuvni yakunlab bo'lmadi",
     "expandActivity": "Faoliyatni kengaytirish",
-    "aiAnalysisStage": "AI tahlil bosqichi"
+    "aiAnalysisStage": "AI tahlil bosqichi",
+    "tabLockedHint": "Tahlil tugagach ochiladi",
+    "aiFocalTranscribe": "Audio matnga o'girilmoqda",
+    "aiFocalSummary": "Xulosa yozilmoqda",
+    "aiFocalRefined": "Matn aniqlashtirilmoqda",
+    "aiEtaSoon": "Oz qoldi"
   },
   "nav": {
     "searchPlaceholder": "Yozuv yoki Space qidirish…",

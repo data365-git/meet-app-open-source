@@ -24,6 +24,7 @@ function isSafeRelativePath(path: string) {
 
 export function LoginForm() {
   const t = useTranslations("auth");
+  const tCommon = useTranslations("common");
   const searchParams = useSearchParams();
   const router = useRouter();
   const next = searchParams?.get("next");
@@ -196,13 +197,8 @@ export function LoginForm() {
             >
               {loading ? t("signinLoading") : t("signin")}
             </MotionButton>
-            <p className="text-center text-[12.5px] text-gray-11">
-              <a
-                href="mailto:mirkomilovabrorwork@gmail.com"
-                className="font-semibold text-[var(--brand)] hover:brightness-95"
-              >
-                {t("forgotPassword")}
-              </a>
+            <p className="text-center text-[12.5px] text-gray-10">
+              {tCommon("forgotPasswordHint")}
             </p>
           </form>
           <motion.p

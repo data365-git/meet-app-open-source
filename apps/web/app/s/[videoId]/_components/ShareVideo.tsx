@@ -117,10 +117,10 @@ export const ShareVideo = forwardRef<
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
 		const searchParams = useSearchParams();
-		// T9 prototype: ?variant=modal shows the old blue-FAB→dialog chat,
-		// otherwise (default) the current inline chat in SharePanel.
+		// Chat UI: the blue-FAB → dialog chat is the DEFAULT (owner choice
+		// 2026-07-13). `?variant=inline` still opts into the in-panel inline chat.
 		const chatVariant: "modal" | "inline" =
-			searchParams.get("variant") === "modal" ? "modal" : "inline";
+			searchParams.get("variant") === "inline" ? "inline" : "modal";
 
 		const safeChapters = useMemo(
 			() =>
@@ -278,6 +278,11 @@ export const ShareVideo = forwardRef<
 			data.transcriptionStatus === "PROCESSING" ||
 			effectiveAiStatus === "QUEUED" ||
 			effectiveAiStatus === "PROCESSING";
+
+		// AI GENERATION (summary/tasks/refined) is finished — lets SharePanel keep
+		// the Tasks/Refined tabs reachable independently of the transcript.
+		const aiContentReady =
+			effectiveAiStatus === "COMPLETE" || effectiveAiStatus === "SKIPPED";
 
 		// Whether the AI chat can actually answer questions: mirrors what
 		// `ensureTranscriptIndex` (chat/route.ts) requires — a non-empty
@@ -873,6 +878,7 @@ export const ShareVideo = forwardRef<
 								onVideoJump={handleSeekAndPlay}
 								processing={aiProcessing}
 								transcriptReady={transcriptReady}
+								aiContentReady={aiContentReady}
 								chatVariant={chatVariant}
 								summary={
 									<>

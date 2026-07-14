@@ -2907,7 +2907,7 @@ function MediaPlayerPlaybackSpeedDial(
 												whileTap={{ scale: 0.96 }}
 												onClick={() => setPinned(true)}
 												aria-label={t("changePlaybackSpeed")}
-												className="flex gap-1 sm:gap-2 items-center px-1 sm:px-2"
+												className="flex min-h-11 gap-1 sm:gap-2 items-center justify-center px-1 sm:px-2"
 											>
 												<GaugeIcon className="size-3 sm:size-4 text-white/80" />
 												<span className="text-xs sm:text-base font-semibold tabular-nums">

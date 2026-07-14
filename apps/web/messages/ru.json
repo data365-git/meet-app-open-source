@@ -5,7 +5,8 @@
     "copy": "Копировать",
     "reset": "Сбросить",
     "back": "Назад",
-    "backHome": "На главную"
+    "backHome": "На главную",
+    "forgotPasswordHint": "Чтобы сбросить пароль, обратитесь к администратору рабочего пространства."
   },
   "aiChat": {
     "title": "Meeting AI",
@@ -508,7 +509,12 @@
     "progressFinishingStalled": "Завершение видео остановилось. Повторите обработку.",
     "recordingFinalizeFailed": "Не удалось завершить запись",
     "expandActivity": "Развернуть активность",
-    "aiAnalysisStage": "Этап AI-анализа"
+    "aiAnalysisStage": "Этап AI-анализа",
+    "tabLockedHint": "Откроется после анализа",
+    "aiFocalTranscribe": "Расшифровка аудио",
+    "aiFocalSummary": "Составление сводки",
+    "aiFocalRefined": "Уточнение текста",
+    "aiEtaSoon": "Почти готово"
   },
   "nav": {
     "searchPlaceholder": "Поиск записей…",

@@ -66,7 +66,7 @@ export function LanguagePicker({
 				<button
 					type="button"
 					aria-label={t("languageMenu")}
-					className="inline-flex size-8 items-center justify-center rounded-full transition-colors"
+					className="inline-flex size-11 items-center justify-center rounded-full transition-colors"
 					style={{
 						background: "rgba(0,0,0,0.45)",
 						color: "white",

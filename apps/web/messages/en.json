@@ -5,7 +5,8 @@
     "copy": "Copy",
     "reset": "Reset",
     "back": "Back",
-    "backHome": "Home"
+    "backHome": "Home",
+    "forgotPasswordHint": "To reset your password, contact your workspace administrator."
   },
   "aiChat": {
     "title": "Meeting AI",
@@ -508,7 +509,12 @@
     "progressFinishingStalled": "Video finishing stalled. Retry processing.",
     "recordingFinalizeFailed": "Recording could not be finalized",
     "expandActivity": "Expand activity",
-    "aiAnalysisStage": "AI analysis stage"
+    "aiAnalysisStage": "AI analysis stage",
+    "tabLockedHint": "Opens when analysis finishes",
+    "aiFocalTranscribe": "Transcribing audio",
+    "aiFocalSummary": "Writing the summary",
+    "aiFocalRefined": "Refining the text",
+    "aiEtaSoon": "Almost done"
   },
   "nav": {
     "searchPlaceholder": "Search recordings, spaces, settings…",
