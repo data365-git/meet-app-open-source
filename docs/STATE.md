@@ -3,6 +3,17 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## CODEX UI POLISH (2026-07-14) — VERIFIED, UNCOMMITTED, NOT DEPLOYED
+
+- Scope was limited to public auth and share-page mobile/desktop UX. Auth logic, recorder/extension, AI, database, and deployment were not changed.
+- Login/signup: removed mobile-hostile autofocus; password visibility controls are now keyboard reachable, have a visible focus ring, and measure 44x44 px. Password inputs reserve enough right padding.
+- Share header: mobile now keeps the title and one primary Share action in one row. Copy and Download remain available inside the Share menu; every menu row is 44 px. The owner-only Back control is icon-only on mobile and keeps its label on desktop.
+- Locale switcher: 44 px on mobile, unchanged 36 px on `sm+` desktop.
+- Fresh production-build visual proof: 390x844 login/signup/share and 1280x720 share; no horizontal overflow and no browser console errors. `pnpm typecheck`, `pnpm --filter @cap/web test`, and `NEXT_PUBLIC_DOCKER_BUILD=false pnpm --filter @cap/web build` all exited 0.
+- Files owned by this batch: `apps/web/app/(org)/login/form.tsx`, `apps/web/app/(org)/signup/form.tsx`, `apps/web/app/s/[videoId]/_components/ShareHeader.tsx`, `apps/web/components/LocaleSwitcher.tsx`.
+- Exact Claude handoff: `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`.
+
+---
 ## ▶▶ /CLEAR HANDOFF (2026-07-14 night — SESSION c) — READ THIS FIRST, true last point.
 
 🔴 **OWNER TODO (SECURITY, not done — re-surface until done): rotate the admin password.** `admin@ustoz.uz`'s live password was stored cleartext in docs + git history (Codex QA RUN 7, Critical). I REDACTED all current-doc cleartext (STATE.md 6 spots + 3 other docs; `git grep UstozAdmin2026` = 0 in tracked files) and Codex fixed `.gitignore` for `.env.bak*`. **The secret is STILL in git HISTORY** — the real fix = owner changes the admin password in the live app (owner answered "hali yo'q" 2026-07-14). Git-history scrub = only via an approved plan, NO force-push. `.env` still holds the live `INITIAL_ADMIN_PASSWORD` (gitignored, local-only).
@@ -12,9 +23,9 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 - **Item 4 IMPLEMENTED (owner chose "ogohlantirish", not auto-stop / not silent-continue):** when the Meet call ends during a guaranteed full-screen meeting recording, the SW shows a `chrome.notifications` prompt with **[To'xtatish va saqlash] / [Davom ettirish]** buttons. 3 surgical edits in `sw.ts`: `promptStopOnMeetEnded()` + `stopInstructionDeliberate()` helpers, an `else if` in the MEET_CALL_ENDED handler (mode instruction + meetingRequired + sender===sourceTabId + >10s guard), and an `onButtonClicked` listener (btn0=stop, btn1=keep). `notifications` perm already in manifest.
 - **Build EXIT 0** (`node scripts/build.mjs`) with the new code confirmed in `dist/background.js`. **Manifest bumped 0.2.0 → 0.3.0.** **Zip refreshed** via `Compress-Archive dist/* → apps/web/public/365-extension.zip`; verified version INSIDE the zip = **0.3.0** + background.js present.
 
-**▶ NEXT (this session, in order):** (a) commit extension (5 src + manifest + zip) as ONE commit; (b) commit security scrub (STATE.md + .gitignore) separately; (c) push qa-fixes; (d) trigger Contabo deploy (`pokroz1qrj8wfc82bl63ns2c`); (e) confirm `/api/health` {db,storage} ok after build.
+**▶ NEXT (this session):** ✅ committed (`9f8d198` extension + `d706bec` security), ✅ pushed qa-fixes (`d706bec`), ✅ Contabo deploy QUEUED = **`mj8i3pejsz2o0if3knik4cpl`** (Docker build ~30min). **REMAINING on resume:** confirm `docker ps` image tag = `d706bec` + `/api/health` {db,storage} ok on data365.duckdns.org after build; then the extension v0.3.0 zip is live for the team to download.
 
-⚠️ **DO NOT COMMIT (unrelated, unknown provenance — another writer's uncommitted work):** 5 modified web files (`(org)/login/form.tsx`, `(org)/signup/form.tsx`, `s/[videoId]/_components/ShareHeader.tsx`, `ai-chat.css`, `LocaleSwitcher.tsx`) + the RUN 7 QA docs (QA_PLAN/FLOWS/SMOKE/REPORT/HARDENING) + all untracked cruft. Codex said keep QA docs separate; owner hasn't asked to commit any of these. Surface to owner before touching.
+📌 **SEPARATE, NOT in this deploy — CODEX UI POLISH batch (VERIFIED, awaiting owner go):** the 5 modified web files (`(org)/login/form.tsx`, `(org)/signup/form.tsx`, `s/[videoId]/_components/ShareHeader.tsx`, `ai-chat.css`, `LocaleSwitcher.tsx`) are Codex's auth+share mobile-UX polish (44px tap targets, share-header one-row mobile, locale switcher) — Codex-verified tsc0/test0/build0 + 390x844 & 1280x720 visual proof (see the "CODEX UI POLISH" block at the top of this file + `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`). **OWNER DECISION pending: deploy this UI polish too?** If yes → commit those 5 files + re-deploy. **DO NOT COMMIT:** RUN 7 QA docs (QA_PLAN/FLOWS/SMOKE/REPORT/HARDENING — Codex said keep separate) + all untracked cruft.
 
 **⏳ OWNER TODOs (device-only, re-surface):** (1) rotate admin password (SECURITY, above). (2) after the new zip deploys: reinstall `dist/` / download the v0.3.0 zip → device-test on a REAL Meet: client talking + admin presenting full-screen → client voice in file; **end the Meet call → the "Yig'ilish tugadi" prompt appears → Stop saves, Keep continues**; kill Meet tab mid-record → stops+notifies; audio blocked → won't start. (3) web batch phone-walk. (4) "Dangerous site" duckdns Safe-Browsing → Search Console review OR buy a real domain. (5) Telegram down-alert: add `TELEGRAM_ALERT_CHAT_ID` GitHub secret.
 
