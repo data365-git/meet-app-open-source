@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, Rewind, FastForward } from "lucide-react";
+import { AudioLines } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/app/lib/utils";
@@ -46,28 +46,12 @@ export function AudioPlayerChrome({
 	chapters = [],
 }: AudioPlayerChromeProps) {
 	const tm = useTranslations("mediaPlayer");
-	const [isPlaying, setIsPlaying] = useState(false);
 	// Invisible double-tap-to-skip (owner 2026-07-14: YouTube-style, no visible
 	// buttons). Tracks the last tap's side+time to detect a double-tap within
 	// DOUBLE_TAP_MS; a single tap does nothing so it doesn't fight play/pause.
 	const lastTapRef = useRef<{ side: TapSide; time: number } | null>(null);
 	const [flashSide, setFlashSide] = useState<TapSide | null>(null);
 	const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	useEffect(() => {
-		const video = videoRef.current;
-		if (!video) return;
-		const sync = () => setIsPlaying(!video.paused && !video.ended);
-		video.addEventListener("play", sync);
-		video.addEventListener("pause", sync);
-		video.addEventListener("ended", sync);
-		sync();
-		return () => {
-			video.removeEventListener("play", sync);
-			video.removeEventListener("pause", sync);
-			video.removeEventListener("ended", sync);
-		};
-	}, [videoRef.current]);
 
 	useEffect(() => {
 		return () => {
@@ -99,19 +83,6 @@ export function AudioPlayerChrome({
 		[videoRef],
 	);
 
-	// Visible ±10s skip for the audio transport row (owner 2026-07-14: prefers a
-	// visible button in a convenient place, alongside play — the invisible
-	// double-tap zones stay as a bonus gesture).
-	const skipBy = useCallback(
-		(delta: number) => {
-			const v = videoRef.current;
-			if (v && Number.isFinite(v.duration)) {
-				v.currentTime = Math.min(Math.max(0, v.currentTime + delta), v.duration);
-			}
-		},
-		[videoRef],
-	);
-
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
 			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
@@ -123,7 +94,6 @@ export function AudioPlayerChrome({
 						{videoName}
 					</p>
 				)}
-				<AudioLevelBars playing={isPlaying} />
 
 				{/* Invisible double-tap zones — left = −10s, right = +10s. */}
 				<div className="absolute inset-0 flex">
@@ -161,50 +131,13 @@ export function AudioPlayerChrome({
 					videoRef={videoRef}
 				/>
 				<div className="flex items-center gap-2">
-					<button
-						type="button"
-						onClick={() => skipBy(-SKIP_SECONDS)}
-						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-					>
-						<Rewind className="size-4" />
-					</button>
 					<MediaPlayerPlay className="size-8 text-white hover:bg-white/15" />
-					<button
-						type="button"
-						onClick={() => skipBy(SKIP_SECONDS)}
-						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-					>
-						<FastForward className="size-4" />
-					</button>
 					<MediaPlayerTime fallbackDuration={duration} />
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
 					<MediaPlayerVolume expandable />
 				</div>
 			</div>
-		</div>
-	);
-}
-
-/** Purely decorative "level bar" — no real audio analysis, just a calm
- * breathing animation while playing (kept simple on purpose). */
-function AudioLevelBars({ playing }: { playing: boolean }) {
-	const heights = ["h-2", "h-4", "h-5", "h-3", "h-2"];
-	return (
-		<div className="flex items-end gap-1" aria-hidden="true">
-			{heights.map((h, i) => (
-				<span
-					key={h}
-					className={cn(
-						"w-1 rounded-full bg-white/70",
-						h,
-						playing && "animate-pulse",
-					)}
-					style={playing ? { animationDelay: `${i * 120}ms` } : undefined}
-				/>
-			))}
 		</div>
 	);
 }
