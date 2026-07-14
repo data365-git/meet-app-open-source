@@ -3,6 +3,17 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## CODEX VIDEO SEEK CONTROL POLISH (2026-07-14) — VERIFIED, UNCOMMITTED
+
+- Scoped only the main share-page video transport. Audio controls, touch double-tap, fullscreen, captions, timeline, and mini-player behavior were not changed.
+- Found a behavior/UI mismatch: desktop showed generic 32x32 rewind/forward icons; backward sought 5 seconds while forward sought 10 seconds.
+- Updated desktop transport to the familiar `10-back / Play / 10-forward` group. All three desktop controls are 44x44, both seek actions are exactly 10 seconds, and the circular arrows visibly contain `10`.
+- Localized the backward tooltip and accessible label through the existing `backSeconds` / `backSecondsLabel` messages; the Uzbek live page now reports `10 soniya orqaga` and `10 soniya oldinga`.
+- Fresh production proof at 1280x720: measured each transport control at 44x44; live clicks changed 1s -> 11s -> 1s; no browser console errors. At 390x844, desktop seek controls remain hidden and the existing touch gesture path is unchanged.
+- `pnpm typecheck`, `pnpm --filter @cap/web test`, and `NEXT_PUBLIC_DOCKER_BUILD=false pnpm --filter @cap/web build` all exited 0.
+- Files: `CapVideoPlayer.tsx` and `video/media-player.tsx`. Exact Claude handoff appended to `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`. No commit, push, or deploy was performed.
+
+---
 ## CODEX GUARANTEED CLIENT-AUDIO AUDIT (2026-07-14) — ARCHITECTURE CORRECT, REAL MEET TEST REQUIRED
 
 - Reviewed extension v0.3.0 end-to-end: active Meet popup -> `START_INSTRUCTION` with `sourceTabId + meeting:true` -> screen `getDisplayMedia` -> Meet `tabCapture.getMediaStreamId({targetTabId, consumerTabId})` -> recorder-tab `getUserMedia(chromeMediaSource:"tab")` -> Web Audio mix of Meet audio + admin mic -> MediaRecorder.
@@ -33,7 +44,7 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 - **Item 4 IMPLEMENTED (owner chose "ogohlantirish", not auto-stop / not silent-continue):** when the Meet call ends during a guaranteed full-screen meeting recording, the SW shows a `chrome.notifications` prompt with **[To'xtatish va saqlash] / [Davom ettirish]** buttons. 3 surgical edits in `sw.ts`: `promptStopOnMeetEnded()` + `stopInstructionDeliberate()` helpers, an `else if` in the MEET_CALL_ENDED handler (mode instruction + meetingRequired + sender===sourceTabId + >10s guard), and an `onButtonClicked` listener (btn0=stop, btn1=keep). `notifications` perm already in manifest.
 - **Build EXIT 0** (`node scripts/build.mjs`) with the new code confirmed in `dist/background.js`. **Manifest bumped 0.2.0 → 0.3.0.** **Zip refreshed** via `Compress-Archive dist/* → apps/web/public/365-extension.zip`; verified version INSIDE the zip = **0.3.0** + background.js present.
 
-**▶ NEXT (this session):** ✅ committed `9f8d198` (extension v0.3.0) + `d706bec` (security) + `662d3d3` (4-file UI polish) + `1673ccf` (ai-chat.css mini-FAB) + `96c5e80` (audio declutter) + `37cd39f` (audio skip buttons RESTORED). + `6ba8ffa` (Codex player-layout refine: icon beside title so it shows fully + text −10/+10 + a11y-hide gesture zones). All gate re-run: tsc0/vitest886. ✅ pushed qa-fixes (`6ba8ffa`). ✅ Contabo deploy QUEUED = **`eykv2xx0oqk5690gxa9otlac`** (supersedes po9ooh/cxdntgc/dslurkgb/mj8i3; ~30min; target commit `6ba8ffa`). **REMAINING on resume:** confirm `docker ps` image tag = `6ba8ffa` + `/api/health` {db,storage} ok on data365.duckdns.org after build; then everything is live.
+**▶ NEXT (this session):** ✅ committed `9f8d198` (extension v0.3.0) + `d706bec` (security) + `662d3d3` (4-file UI polish) + `1673ccf` (ai-chat.css mini-FAB) + `96c5e80` (audio declutter) + `37cd39f` (audio skip buttons RESTORED). + `6ba8ffa` (Codex player-layout refine: icon beside title so it shows fully + text −10/+10 + a11y-hide gesture zones). + `fd1cd75` (🐛 AUDIO-import auto-title fix: "data365 Audio Upload - <date>" — the "Audio " word broke GENERATED_TITLE_PATTERN so audio imports never got AI-renamed; video imports were fine; added optional `(?:Audio )?` + test). All gate re-run: tsc0/vitest886. ✅ pushed qa-fixes (`fd1cd75`). ✅ Contabo deploy QUEUED = **`abba794kub5cg7pslvwxx4zk`** (supersedes eykv2xx/po9ooh/…; ~30min; target commit `fd1cd75`). **REMAINING on resume:** confirm `docker ps` image tag = `fd1cd75` + `/api/health` {db,storage} ok on data365.duckdns.org after build; then everything is live.
 
 **🎬 PLAYER DIRECTION (Codex spec, owner-endorsed 2026-07-14):** audio ≠ "pictureless video" — audio = compact listening tool (no black video window, ~190px, big Play, VISIBLE ±10/+10 flanking Play, timeline/time/volume/speed, sticky top pin on scroll, read transcript+AI while playing); video = full watch tool (16:9, +fullscreen/subtitles, mobile-fullscreen double-tap skip, desktop bottom-right mini, NO mobile mini). Both: ≥44px, persist speed/volume, transcript-time seek, keyboard+SR. **BUILT + Codex-reviewed (2026-07-14): audio card icon-beside-title (full title) + text −10/+10 44px + a11y-clean gesture zones (`6ba8ffa`); video captions CONFIRMED to exist. Direction largely satisfied.** Owner phone-walks the final look after the `6ba8ffa` deploy.
 
