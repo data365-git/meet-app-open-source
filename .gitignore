@@ -16,6 +16,8 @@ dist-ssr
 .env.production
 .env.development
 .env.test
+.env.bak*
+.env.backup*
 target
 target-agent
 target-phase8
