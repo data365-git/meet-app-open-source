@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines } from "lucide-react";
+import { AudioLines, Rewind, FastForward } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/app/lib/utils";
@@ -83,6 +83,18 @@ export function AudioPlayerChrome({
 		[videoRef],
 	);
 
+	// Visible ±10s skip flanking Play (owner 2026-07-14: buttons left/right of
+	// centre; ≥44px + keyboard/screen-reader reachable — Codex accessibility).
+	const skipBy = useCallback(
+		(delta: number) => {
+			const v = videoRef.current;
+			if (v && Number.isFinite(v.duration)) {
+				v.currentTime = Math.min(Math.max(0, v.currentTime + delta), v.duration);
+			}
+		},
+		[videoRef],
+	);
+
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
 			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
@@ -131,8 +143,25 @@ export function AudioPlayerChrome({
 					videoRef={videoRef}
 				/>
 				<div className="flex items-center gap-2">
-					<MediaPlayerPlay className="size-8 text-white hover:bg-white/15" />
 					<MediaPlayerTime fallbackDuration={duration} />
+					<div className="flex-1" />
+					<button
+						type="button"
+						onClick={() => skipBy(-SKIP_SECONDS)}
+						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
+						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+					>
+						<Rewind className="size-5" />
+					</button>
+					<MediaPlayerPlay className="size-11 text-white hover:bg-white/15" />
+					<button
+						type="button"
+						onClick={() => skipBy(SKIP_SECONDS)}
+						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
+						className="flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+					>
+						<FastForward className="size-5" />
+					</button>
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
 					<MediaPlayerVolume expandable />
