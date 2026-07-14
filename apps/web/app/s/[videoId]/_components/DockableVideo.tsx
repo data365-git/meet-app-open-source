@@ -11,6 +11,22 @@ interface DockedMediaState {
 	duration: number;
 }
 
+const POS_STORAGE_KEY = "data365:watchMiniPos";
+const POS_MARGIN = 8;
+
+type MiniPos = { x: number; y: number };
+
+function clampPos(p: MiniPos, el: HTMLElement): MiniPos {
+	const w = el.offsetWidth;
+	const h = el.offsetHeight;
+	const maxX = Math.max(POS_MARGIN, window.innerWidth - w - POS_MARGIN);
+	const maxY = Math.max(POS_MARGIN, window.innerHeight - h - POS_MARGIN);
+	return {
+		x: Math.min(Math.max(p.x, POS_MARGIN), maxX),
+		y: Math.min(Math.max(p.y, POS_MARGIN), maxY),
+	};
+}
+
 /**
  * Tracks the native <video> mounted inside `children` (via querySelector,
  * since it lives in a sibling React subtree we don't own — media-chrome's
@@ -139,6 +155,11 @@ export function DockableVideo({
 	// Desktop-only: the mini interferes with reading on a phone (owner
 	// 2026-07-14), so on mobile the video just scrolls away in normal flow.
 	const [isDesktop, setIsDesktop] = useState(false);
+	// User-dragged mini position (YouTube-style, owner 2026-07-14). null =
+	// default anchor (bottom-right above the chat FAB). Persisted so the mini
+	// reopens where the user left it.
+	const [pos, setPos] = useState<MiniPos | null>(null);
+	const [dragging, setDragging] = useState(false);
 	const dockedTopOffset = useDockedTopOffset();
 
 	const { videoEl, isPlaying, currentTime, duration } =
@@ -153,6 +174,40 @@ export function DockableVideo({
 		}
 	}, [videoEl]);
 
+	// Read the persisted drag position on mount only (SSR-safe). Raw value —
+	// it gets clamped to the CURRENT viewport when the mini actually docks
+	// (below), so a stale position from a bigger monitor can't strand the
+	// mini off-screen (Fable review must-fix #4).
+	useEffect(() => {
+		try {
+			const raw = window.localStorage.getItem(POS_STORAGE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw) as MiniPos;
+				if (typeof parsed?.x === "number" && typeof parsed?.y === "number") {
+					setPos(parsed);
+				}
+			}
+		} catch {
+			// ignore (storage disabled / bad JSON)
+		}
+	}, []);
+
+	// The AI chat popup (`.ai-popup`, always mounted, `open` class when shown)
+	// is fixed at the same bottom-right quadrant (right:26 bottom:104 w:392
+	// z:2147483001) and would bury the mini. Track its open state so the
+	// mini's DEFAULT anchor slides left of it (Fable review must-fix #1);
+	// a user-dragged position is left alone.
+	const [chatOpen, setChatOpen] = useState(false);
+	useEffect(() => {
+		const el = document.querySelector(".ai-popup");
+		if (!el) return;
+		const sync = () => setChatOpen(el.classList.contains("open"));
+		sync();
+		const mo = new MutationObserver(sync);
+		mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+		return () => mo.disconnect();
+	}, []);
+
 	useEffect(() => {
 		const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
 		setReduceMotion(mql.matches);
@@ -161,9 +216,10 @@ export function DockableVideo({
 		return () => mql.removeEventListener("change", onChange);
 	}, []);
 
-	// Track desktop (>=1280px, the `xl` breakpoint) — the mini docks ONLY here.
+	// Track desktop (>=1024px, the `lg` breakpoint — matches the share page's
+	// two-column layout) — the VIDEO mini docks only here.
 	useEffect(() => {
-		const mql = window.matchMedia("(min-width: 1280px)");
+		const mql = window.matchMedia("(min-width: 1024px)");
 		setIsDesktop(mql.matches);
 		const onChange = () => setIsDesktop(mql.matches);
 		mql.addEventListener("change", onChange);
@@ -213,6 +269,89 @@ export function DockableVideo({
 		setActivated(false);
 	}, []);
 
+	// Clamp the (possibly stale) persisted position into the CURRENT viewport
+	// the moment the mini docks — not only on window resize (must-fix #4).
+	useEffect(() => {
+		if (!dockable || isAudio || !pos) return;
+		const el = innerRef.current;
+		if (!el) return;
+		const clamped = clampPos(pos, el);
+		if (clamped.x !== pos.x || clamped.y !== pos.y) setPos(clamped);
+	}, [dockable, isAudio, pos]);
+
+	// Keep a dragged position inside the viewport if the window is resized.
+	useEffect(() => {
+		if (!pos) return;
+		const onResize = () => {
+			const el = innerRef.current;
+			if (!el) return;
+			setPos((prev) => (prev ? clampPos(prev, el) : prev));
+		};
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, [pos]);
+
+	// Drag (YouTube-style, owner 2026-07-14): the whole top gradient strip is
+	// the grab surface. Pointer capture keeps the drag alive outside the strip.
+	const dragOrigin = useRef<{
+		px: number;
+		py: number;
+		ox: number;
+		oy: number;
+	} | null>(null);
+
+	const handleStripPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+		// Presses on the expand/× buttons are clicks, not drags.
+		if ((e.target as HTMLElement).closest("button")) return;
+		const el = innerRef.current;
+		if (!el) return;
+		const rect = el.getBoundingClientRect();
+		dragOrigin.current = {
+			px: e.clientX,
+			py: e.clientY,
+			ox: rect.left,
+			oy: rect.top,
+		};
+		setDragging(true);
+		e.currentTarget.setPointerCapture(e.pointerId);
+	};
+
+	const handleStripPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+		const origin = dragOrigin.current;
+		const el = innerRef.current;
+		if (!origin || !el) return;
+		setPos(
+			clampPos(
+				{
+					x: origin.ox + (e.clientX - origin.px),
+					y: origin.oy + (e.clientY - origin.py),
+				},
+				el,
+			),
+		);
+	};
+
+	const handleStripPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (!dragOrigin.current) return;
+		dragOrigin.current = null;
+		setDragging(false);
+		try {
+			e.currentTarget.releasePointerCapture(e.pointerId);
+		} catch {
+			// ignore
+		}
+		setPos((prev) => {
+			if (prev) {
+				try {
+					window.localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(prev));
+				} catch {
+					// ignore
+				}
+			}
+			return prev;
+		});
+	};
+
 	// Measure the player's inline (non-docked) height so the slot can reserve
 	// that space via min-height once the inner wrapper becomes `fixed` and
 	// leaves normal flow — otherwise the content below jumps up.
@@ -235,18 +374,22 @@ export function DockableVideo({
 		});
 	};
 
-	const transitionClass = reduceMotion
-		? ""
-		: `transition-all ease-out ${showMini ? "duration-200" : "duration-150"}`;
+	// Dragging suppresses the transition, else the mini rubber-bands 200ms
+	// behind the cursor (must-fix #3).
+	const transitionClass =
+		reduceMotion || dragging
+			? ""
+			: `transition-all ease-out ${showMini ? "duration-200" : "duration-150"}`;
 
 	const playPauseLabel = isPlaying ? tm("pause") : tm("play");
 
-	// Enter/exit transform: slides down from above (the mini lives top-right on
-	// every viewport now) + a slight scale — a directional slide, not a plain
-	// fade, so it reads as "floating in" rather than "installed/stuck".
+	// Enter/exit transform: a directional slide + slight scale. The VIDEO mini
+	// lives at the bottom → slides up from below; the AUDIO pin lives at the
+	// top → slides down from above.
+	const hiddenSlide = isAudio ? "-translate-y-2" : "translate-y-2";
 	const motionClass = showMini
 		? "translate-y-0 scale-100 opacity-100"
-		: "pointer-events-none -translate-y-2 scale-[0.96] opacity-0";
+		: `pointer-events-none ${hiddenSlide} scale-[0.96] opacity-0`;
 
 	// The dock's box styling lives on the inner wrapper (innerRef) itself, NOT
 	// on a per-state child element, so `children` can hang off ONE stable host
@@ -258,24 +401,26 @@ export function DockableVideo({
 	if (!dockable) {
 		outerClassName = "relative";
 	} else if (isAudio) {
-		// Telegram-style pin bar: mobile under the sticky header, desktop
-		// bottom-left (same quadrant as the video mini, for consistency).
+		// Telegram-style pin bar: full-width at the very top on EVERY viewport
+		// (owner screenshot 2026-07-14), sitting just below the sticky notice.
 		outerClassName = [
 			"fixed inset-x-2 z-50 flex h-12 items-center gap-2.5 rounded-xl border border-gray-5 bg-gray-1/95 px-3 shadow-md backdrop-blur-md",
 			"top-[var(--docked-top)]",
-			"xl:inset-x-auto xl:left-4 xl:right-auto xl:top-auto xl:bottom-4 xl:max-w-[420px] xl:w-[420px]",
 			transitionClass,
 			motionClass,
 		].join(" ");
 	} else {
-		// Floating real player (YouTube/Telegram-style, owner spec 2026-07-14):
-		// TOP-RIGHT on EVERY viewport — small below the sticky header, wider on
-		// desktop (owner 2026-07-14: the 380px mini felt too small). Scrolling the
-		// main player back into view restores it.
+		// Floating real player (YouTube-style, owner spec 2026-07-14): default
+		// anchor bottom-right ABOVE the chat FAB (right:26 bottom:26 h:62). When
+		// the chat POPUP is open (same quadrant, 392px wide, z above the mini)
+		// the default slides left of it. A user-dragged `pos` wins over both via
+		// inline top/left (+ right/bottom:auto so the fixed box isn't
+		// over-constrained — must-fix #2).
 		outerClassName = [
-			"fixed right-3 z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
-			"top-[var(--docked-top)]",
-			"xl:w-[480px]",
+			"fixed z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
+			"bottom-[104px]",
+			chatOpen ? "right-[434px]" : "right-4",
+			"lg:w-[480px]",
 			transitionClass,
 			motionClass,
 		].join(" ");
@@ -304,7 +449,18 @@ export function DockableVideo({
 				className={outerClassName}
 				style={
 					dockable
-						? ({ "--docked-top": `${dockedTopOffset}px` } as React.CSSProperties)
+						? isAudio
+							? ({
+									"--docked-top": `${dockedTopOffset}px`,
+								} as React.CSSProperties)
+							: pos
+								? {
+										top: pos.y,
+										left: pos.x,
+										right: "auto",
+										bottom: "auto",
+									}
+								: undefined
 						: undefined
 				}
 			>
@@ -315,13 +471,24 @@ export function DockableVideo({
 
 				{dockable && !isAudio && (
 					// Overlay strip: a SIBLING of the host inside the fixed wrapper
-					// (not re-parenting children) — expand top-left, × top-right.
-					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-10 bg-gradient-to-b from-black/50 to-transparent">
+					// (not re-parenting children). The WHOLE strip is the drag
+					// surface (pointer-events-auto + touch-none, must-fix #3);
+					// expand top-left, × top-right (their presses don't start a
+					// drag — filtered in handleStripPointerDown).
+					<div
+						onPointerDown={handleStripPointerDown}
+						onPointerMove={handleStripPointerMove}
+						onPointerUp={handleStripPointerUp}
+						onPointerCancel={handleStripPointerUp}
+						className={`absolute inset-x-0 top-0 z-10 h-10 touch-none bg-gradient-to-b from-black/50 to-transparent ${
+							dragging ? "cursor-grabbing" : "cursor-grab"
+						}`}
+					>
 						<button
 							type="button"
 							onClick={handleExpand}
 							aria-label={t("miniExpand")}
-							className="pointer-events-auto absolute left-0 top-0 flex size-10 items-center justify-center text-white/90"
+							className="absolute left-0 top-0 flex size-10 items-center justify-center text-white/90"
 						>
 							<ExpandIcon className="size-4" />
 						</button>
@@ -329,7 +496,7 @@ export function DockableVideo({
 							type="button"
 							onClick={handleDismiss}
 							aria-label={t("miniClose")}
-							className="pointer-events-auto absolute right-0 top-0 flex size-10 items-center justify-center text-white/90"
+							className="absolute right-0 top-0 flex size-10 items-center justify-center text-white/90"
 						>
 							<CloseIcon className="size-4" />
 						</button>

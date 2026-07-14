@@ -393,7 +393,7 @@ export function SharePanel({
 	)?.content;
 
 	return (
-		<div className="flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)]">
+		<div className="flex w-full flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 shadow-[0_2px_6px_rgba(15,23,42,.06),0_8px_20px_rgba(15,23,42,.08)]">
 			<div
 				role="tablist"
 				aria-label={t("tabsAriaLabel")}

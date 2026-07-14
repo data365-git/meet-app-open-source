@@ -862,17 +862,18 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-				<div className="flex flex-col gap-4 xl:grid xl:grid-cols-[1.45fr_1fr] xl:items-start xl:gap-6">
-					{/* Mobile/tablet order: video -> AI panel -> activity.
-					    Desktop >=1280px: video/activity stay left while the AI panel
-					    becomes the sticky right-hand workspace. */}
-					<div className="flex min-w-0 flex-col gap-3 xl:contents">
-						<div className="min-w-0 xl:col-start-1 xl:row-start-1">
+				<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:items-start lg:gap-6">
+					{/* All widths: video on top, AI panel right below it — one normal
+					    full-page scroll (owner spec 2026-07-14, restores the
+					    pre-3c3d78a arrangement). Desktop's right sidebar holds only
+					    the light cost + comments cards. */}
+					<div className="flex min-w-0 flex-col gap-3">
+						<div className="min-w-0">
 							<DockableVideo isAudio={data.metadata?.isAudio} title={data.name}>
 								{playerBlock}
 							</DockableVideo>
 						</div>
-						<div className="min-w-0 xl:sticky xl:top-4 xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:max-h-[calc(100dvh-2rem)] xl:self-start">
+						<div className="min-w-0">
 							<SharePanel
 								videoId={data.id}
 								onVideoJump={handleSeekAndPlay}
@@ -1004,7 +1005,7 @@ export const ShareVideo = forwardRef<
 						</div>
 					</div>
 
-					<div className="flex min-w-0 flex-col gap-4 xl:col-start-1 xl:row-start-2">
+					<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
 						{costPanel}
 						{commentsPanel}
 					</div>
