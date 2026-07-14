@@ -179,8 +179,11 @@ const AI_SUMMARY_FAILURE_PLACEHOLDER =
 // with an EM-DASH (rebrand commit 4dcf339), while older/desktop rows use a plain
 // hyphen. Matching all three (and "Meeting") is what lets the AI auto-title kick
 // in — without it the meeting recorder's default names never got replaced.
+// The optional "(?:Audio )?" also covers audio uploads/imports named
+// "data365 Audio Upload - <date>" (create-for-processing.ts) — without it the
+// "Audio " word broke the match and audio imports never got auto-titled.
 const GENERATED_TITLE_PATTERN =
-	/^(data365 (Recording|Upload|Meeting) [-–—] .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
+	/^(data365 (?:Audio )?(Recording|Upload|Meeting) [-–—] .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
 
 export function shouldReplaceVideoTitle({
 	currentTitle,

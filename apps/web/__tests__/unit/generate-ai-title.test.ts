@@ -53,6 +53,14 @@ describe("shouldReplaceVideoTitle", () => {
 				nextAiTitle: "Quarterly Roadmap Review",
 			}),
 		).toBe(true);
+		// Audio imports get "data365 Audio Upload - <date>" (create-for-processing);
+		// the "Audio " word must not break the auto-title match.
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "data365 Audio Upload - 15 May 2026",
+				nextAiTitle: "Quarterly Roadmap Review",
+			}),
+		).toBe(true);
 		expect(
 			shouldReplaceVideoTitle({
 				currentTitle: "Untitled",
