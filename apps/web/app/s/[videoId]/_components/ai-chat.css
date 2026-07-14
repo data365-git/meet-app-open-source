@@ -53,7 +53,15 @@
 	transition:
 		transform var(--dur) var(--ease),
 		box-shadow var(--dur) var(--ease),
+		bottom 280ms var(--ease),
 		opacity 240ms var(--ease);
+}
+/* When the desktop video mini-player is docked in the bottom-right corner
+   (DockableVideo sets data-mini-docked on <body>), lift the FAB above it so
+   the two never overlap. The mini is ~270px tall (480px wide, 16:9) anchored
+   at bottom:24px, so clearing to ~300px sits the button just above it. */
+body[data-mini-docked="true"] .ai-fab {
+	bottom: calc(304px + env(safe-area-inset-bottom, 0px));
 }
 .ai-fab:not(.is-open):hover {
 	transform: translateY(-2px) scale(1.05);
