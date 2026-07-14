@@ -795,7 +795,18 @@ async function handleMessage(
 			const st = await getState();
 			const sourceTabId = st.kind === "arming" ? st.sourceTabId : undefined;
 			const consumerTabId = _sender.tab?.id;
-			if (sourceTabId === undefined || consumerTabId === undefined) {
+			// The requester MUST be the recorder tab this arming session opened —
+			// guards against a stale/racing recorder tab grabbing audio for a
+			// different (or overwritten) source tab.
+			const isCurrentRecorderTab =
+				st.kind === "arming" &&
+				st.recorderTabId !== undefined &&
+				consumerTabId === st.recorderTabId;
+			if (
+				sourceTabId === undefined ||
+				consumerTabId === undefined ||
+				!isCurrentRecorderTab
+			) {
 				return { streamId: null };
 			}
 			try {

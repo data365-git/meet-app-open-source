@@ -231,13 +231,20 @@ async function startRecording(): Promise<void> {
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
 		const dest = audioCtx.createMediaStreamDestination();
 
-		if (displayStream.getAudioTracks().length > 0) {
+		const haveTabAudio =
+			!!tabAudioStream && tabAudioStream.getAudioTracks().length > 0;
+
+		// System/display audio and tab audio are the SAME meeting sound when both
+		// exist (the user also ticked "share system audio") — mixing both doubles
+		// it into echo/clipping. Tab audio is the reliable source, so prefer it and
+		// skip system audio whenever we have it.
+		if (!haveTabAudio && displayStream.getAudioTracks().length > 0) {
 			audioCtx.createMediaStreamSource(displayStream).connect(dest);
 		}
 		if (micStream && micStream.getAudioTracks().length > 0) {
 			audioCtx.createMediaStreamSource(micStream).connect(dest);
 		}
-		if (tabAudioStream && tabAudioStream.getAudioTracks().length > 0) {
+		if (haveTabAudio && tabAudioStream) {
 			const tabSrc = audioCtx.createMediaStreamSource(tabAudioStream);
 			tabSrc.connect(dest);
 			// Also route the tab audio back to the speakers — tabCapture otherwise

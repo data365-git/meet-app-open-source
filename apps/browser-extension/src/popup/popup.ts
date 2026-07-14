@@ -274,9 +274,10 @@ function renderIdlePanel(
 	);
 	instrBtn.addEventListener("click", () => {
 		const msg: Record<string, unknown> = { type: "START_INSTRUCTION" };
-		// Pass the current tab so the recorder can capture its audio (the other
-		// party) via tabCapture and mix it into the screen recording.
-		if (activeTabId !== undefined) msg.sourceTabId = activeTabId;
+		// Only on a Meet tab: pass it so the recorder mixes in the OTHER party's
+		// audio via tabCapture. NOT for plain instruction recordings from a random
+		// tab — that would silently capture whatever audio that tab plays (privacy).
+		if (isMeetTab && activeTabId !== undefined) msg.sourceTabId = activeTabId;
 		sendMsg(msg);
 		window.close();
 	});
