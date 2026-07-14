@@ -40,8 +40,12 @@ Walk `/s`, `/login`, `/embed` at 375/768/1280 in light+dark: alignment, spacing 
 - **D3** dark-mode → RESOLVED: owner "hozircha skip" — deferred to a dedicated visual pass (0 dark: variants in share components + unverifiable headlessly = too risky to ship blind).
 - **D5** dock → SUPERSEDED by a new build: owner rejected the pinned bar on his phone → **floating mini-player** built (Fable-reviewed, `2026-07-14-floating-miniplayer-design.md`, commit 3e409da) — awaits his on-phone confirm at deploy.
 - **D6** "optimizing" badge → RESOLVED-as-Low: badge is **owner-only** (`Share.tsx:511` `viewerId === data.owner.id`); the team never sees it. Video is source=webMP4 serving raw (optimized-mp4 probe fails); plays fine. Transcode-pipeline fix is disproportionate for an owner-only Low — surfaced, no change.
-- **D7** T4b relocation → still OPEN (dashboard/auth-gated code move; next round).
-- **D8** supermodel sweep → still BLOCKED on a visual channel (deploy + phone).
+- **D7** T4b relocation → RESOLVED (commit 72d046c): replace-with-audio moved to the dashboard ⋮ menu above Delete, guard `!isAudio`, confirm-only, verified action unchanged. Auth-gated → owner confirms on use.
+- **D8** supermodel sweep → still BLOCKED on a visual channel (screenshots broke all session). Deferred to when the pane recovers / owner walks it on phone.
+- **Extension** origin → duckdns + rebuilt (commit c14d919) — owner reinstalls the unpacked `dist/`.
+
+## STATUS (2026-07-14, owner away, auto-deploy authorized)
+BATCH 2 pushed (`10e0149..50d38cc`) → Contabo deploy `u60bwtol9fcflvltk0obfyyp` building (~30 min). Contains: cron-repoint · mini-player · T4b · extension-origin. Gate all-green (tsc0/vitest885/build0). **Everything doable without the owner is DONE.** Remaining = owner-only: visual confirm of mini-player/status-UI/T4b on his phone; dark-mode (he chose skip → later visual pass); D8 supermodel sweep (needs a visual channel); recorder T11/T12 (his device).
 
 ## ORDER (the unblock chain)
 **D1 (verify channel)** → **D2 (live-verify what shipped)** → then parallel: **D3→D4 (dark-mode)**, **D5 (dock, owner)**, **D6 (badge, AFK)**, **D7 (T4b)** → finally **D8 (supermodel sweep)**. D1 is the keystone: without a way to SEE, no visual unit can honestly close.
