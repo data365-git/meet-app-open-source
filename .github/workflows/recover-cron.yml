@@ -18,7 +18,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
-          APP_URL: https://capweb-production-dd85.up.railway.app
+          APP_URL: https://data365.duckdns.org
         run: |
           code=$(curl -sS -o /tmp/health.txt -w "%{http_code}" "$APP_URL/api/health" || echo "000")
           echo "Health check HTTP $code"
@@ -36,7 +36,7 @@ jobs:
       - name: Ping recover-stale-ai-jobs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://capweb-production-dd85.up.railway.app
+          APP_URL: https://data365.duckdns.org
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "CRON_SECRET secret not set yet — skipping."
@@ -55,7 +55,7 @@ jobs:
       - name: Ping poll-batch-jobs
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://capweb-production-dd85.up.railway.app
+          APP_URL: https://data365.duckdns.org
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "CRON_SECRET secret not set yet — skipping."
