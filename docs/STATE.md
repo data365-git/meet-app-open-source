@@ -3,13 +3,25 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶ RESUME HERE (2026-07-13) — read this block first; everything below is history/detail.
+## ▶ RESUME HERE (2026-07-14) — read this block first; everything below is history/detail.
 
-🎯 **GOAL:** get Ustoz production-ready for the owner's **IT team** to **record meetings → AI-analyze** them, on a **Contabo VPS built to Railway-grade reliability** (owner locked this 2026-07-13: "contaboni railwaydek ishonchlik qilib qura olsang ... unga o'tamiz").
+🎯 **GOAL:** get Ustoz production-ready for the owner's **IT team** to **record meetings → AI-analyze** them, on a **Contabo VPS built to Railway-grade reliability**.
 
-**WHERE WE ARE (2026-07-13): ✅✅✅ CONTABO DEPLOY IS LIVE.** The web app runs on the Contabo VPS at **`https://data365.duckdns.org`** (Coolify v4.1.2, migrated MySQL with 84 videos, R2 storage, valid Let's-Encrypt SSL — ALL CLI-verified: health 200 {db,storage ok}, share page renders real content). Old laptop deploy `https://data365.taildef23b.ts.net` stays up as a **fallback** (don't kill until Contabo proven in real team use). Full migration detail in the ✅ blocks below.
+**WHERE WE ARE (2026-07-14): ✅ LIVE on `https://data365.duckdns.org`, live commit `07022df`.** Several UX batches shipped + verified (health {db,storage ok}, 0 console errors). Reliability mandate largely met. **Deploy mechanism:** commit → `git push origin qa-fixes` → `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'CT=$(cat /root/.ct); curl -s -X POST -H "Authorization: Bearer $CT" -H "Content-Type: application/json" http://localhost:8000/api/v1/deploy -d "{\"uuid\":\"pokroz1qrj8wfc82bl63ns2c\"}"'` → poll (API status stays "running:unknown" — trust the logs' "Rolling update completed" + `docker ps` image tag). **Docker build ~30 min → owner rule: batch ALL work, deploy ONCE.**
 
-**IMMEDIATE NEXT = UX-polish pass, then ONE redeploy.** Owner is live-verifying and listing UX tweaks. **Batch ALL tweaks → rebuild → deploy ONCE** (Docker build ~15-20 min, so never deploy per-change). **Redeploy mechanism:** commit + `git push origin qa-fixes`, then trigger `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'CT=$(cat /root/.ct); curl -s -X POST -H "Authorization: Bearer $CT" -H "Content-Type: application/json" http://localhost:8000/api/v1/deploy -d "{\"uuid\":\"pokroz1qrj8wfc82bl63ns2c\"}"'` → poll deployment status same as before.
+**SHIPPED THIS SESSION (all live, gate-verified tsc0/vitest885/build0 each — I re-ran myself, never trusted Sonnet's report):**
+- Tab-lock fix · **AI-status UI redesign** (Fable, 3-stage bar) · **blue-FAB chat** (default) · mailto removed · tap-targets ≥44px · **T4b** (replace-with-audio → dashboard ⋮ menu) · **dock = desktop-only floating mini, top-right** (mobile scrolls away; owner's final spec) · cron-repoint (recover/reconcile → data365, verified 200 end-to-end) · extension origin → duckdns (rebuilt).
+- 🛡️ **Reliability:** nightly DB backup `/root/backup-db.sh` cron 22:00 UTC → R2 (tested, 5MB dump) · unattended-upgrades (no auto-reboot) · Coolify auto-restart. Live Contabo DB now backed up (was ZERO).
+- 🧹 **R2 cleaned:** 63 soft-deleted videos purged, ~11GB freed; 3 active videos protected. ("84 videos" = 84 DB rows; only **3 active**, 81 soft-deleted.)
+
+**⏳ OWNER TODOs (only he can — re-surface these next session until done):**
+1. **Confirm the dock on his devices:** mobile → video scrolls away (NO mini); desktop → small floating video top-right + controls work. (Headless can't trigger the dock; owner is the oracle.) If wrong, adjust `DockableVideo.tsx`.
+2. **"Dangerous site" fix (duckdns Safe Browsing false-positive; site is CLEAN — verified no injected content):** (a) request review in Google Search Console (add+verify `data365.duckdns.org` → Security Issues → Request Review); (b) REAL fix = buy a cheap real domain → A-record → `169.58.12.255` → give it to me → I migrate SSL+env+rebuild+deploy+extension+crons.
+3. **Telegram down-alert:** add `TELEGRAM_ALERT_CHAT_ID` (his chat id) as a GitHub Actions secret → the recover-cron health-alert starts pinging on downtime.
+4. **Extension reinstall:** load the rebuilt unpacked `apps/browser-extension/dist/` (now data365.duckdns.org origin).
+5. **Recorder T11/T12** device prototype test (`_proto-offscreen-gdm/`) — device-only.
+
+**DEFERRED (owner-decided / needs a visual channel):** dark-mode on share (owner "skip" — 0 dark: variants, risky; do as a dedicated visual pass) · supermodel visual sweep (screenshots broke ALL session — video renderer hang; use owner's phone / a recovered pane) · "optimizing" badge (owner-only Low; webMP4 serves raw). Polish wayfind map: `docs/plans/2026-07-13-polish-map.md`.
 
 **▶▶ QA RUN 6 + FIX BATCH (2026-07-13, this session) — BUILT + LOCAL-GATE GREEN, NOT COMMITTED/DEPLOYED, NOT LIVE-VERIFIED.** Ran qa-6-step (Step 0→3 + Step5 Layer9) on the live Contabo deploy → `QA_REPORT.md`/`QA_POLISH.md` (RUN 6). Then grilled owner + built fixes (working tree, uncommitted). **GATE I ran myself (didn't trust the Sonnet report — it falsely claimed tsc0 while stale diagnostics showed a CheckIcon error; re-ran clean): `tsc --noEmit` EXIT 0 · vitest 885 pass · `next build` EXIT 0 · 3 i18n files valid.**
 - ✅ **#1 tab-lock (High):** `SharePanel.tsx` + `ShareVideo.tsx` — non-summary tabs no longer force-locked while `processing`. New per-tab readiness: Transcript unlocks on `transcriptReady` (independent of AI-gen), Tasks/Refined on `aiContentReady` (=aiGenStatus COMPLETE/SKIPPED), Summary always. Locked tabs get `title` tooltip (`tabLockedHint`) + dim, no dead-click. Fixes the "summary shows but all tabs locked" inconsistency. New prop `aiContentReady`.
