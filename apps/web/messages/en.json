@@ -590,7 +590,6 @@
     "forwardSecondsLabel": "Forward {seconds} seconds",
     "skipBack": "Back {seconds} seconds",
     "skipForward": "Forward {seconds} seconds",
-    "skipStepLabel": "Skip amount",
     "previewAt": "Preview at {time}",
     "playbackSpeed": "Playback speed",
     "changePlaybackSpeed": "Change playback speed",

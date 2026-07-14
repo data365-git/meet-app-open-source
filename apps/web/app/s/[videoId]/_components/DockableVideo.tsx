@@ -3,7 +3,6 @@
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatMmSs } from "./video/SegmentedProgressBar";
-import { SkipButton } from "./video/SkipControls";
 
 interface DockedMediaState {
 	videoEl: HTMLVideoElement | null;
@@ -535,13 +534,6 @@ export function DockableVideo({
 
 				{dockable && isAudio && (
 					<>
-						<SkipButton
-							video={videoEl}
-							direction="back"
-							iconClassName="size-5 text-gray-11"
-							className="flex size-8 shrink-0 items-center justify-center rounded-md text-gray-11 hover:bg-gray-3"
-							menuPlacement="bottom"
-						/>
 						<button
 							type="button"
 							onClick={togglePlay}
@@ -550,13 +542,6 @@ export function DockableVideo({
 						>
 							{isPlaying ? <PauseIcon /> : <PlayIcon />}
 						</button>
-						<SkipButton
-							video={videoEl}
-							direction="forward"
-							iconClassName="size-5 text-gray-11"
-							className="flex size-8 shrink-0 items-center justify-center rounded-md text-gray-11 hover:bg-gray-3"
-							menuPlacement="bottom"
-						/>
 						<div className="min-w-0 flex-1">
 							{title && (
 								<p className="truncate text-xs font-medium text-gray-12">

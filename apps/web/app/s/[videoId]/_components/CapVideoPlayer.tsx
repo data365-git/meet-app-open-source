@@ -1159,7 +1159,13 @@ function MobileSeekGestureLayer({
 		<div
 			aria-hidden="true"
 			data-slot="mobile-seek-gesture-layer"
-			className="absolute inset-x-0 top-0 bottom-24 z-[6] touch-pan-y select-none sm:hidden"
+			// Gate on POINTER TYPE, not viewport width: mobile fullscreen rotates
+			// to landscape (width >= sm), so the old `sm:hidden` wrongly hid the
+			// gesture layer in fullscreen and tap-to-seek stopped working (owner
+			// 2026-07-14). Coarse pointer = touch → keep the gesture at any width
+			// (portrait, landscape, fullscreen); fine pointer (mouse) = desktop →
+			// hide it so mouse behavior is untouched.
+			className="absolute inset-x-0 top-0 bottom-24 z-[6] touch-pan-y select-none [@media(pointer:fine)]:hidden"
 			onPointerDown={onPointerDown}
 			onPointerMove={onPointerMove}
 			onPointerUp={endDrag}

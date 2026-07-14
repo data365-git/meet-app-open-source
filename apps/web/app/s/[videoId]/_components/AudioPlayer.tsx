@@ -1,7 +1,8 @@
 "use client";
 
 import { AudioLines } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/app/lib/utils";
 import {
 	MediaPlayerPlay,
@@ -10,7 +11,12 @@ import {
 	MediaPlayerVolume,
 } from "./video/media-player";
 import { SegmentedProgressBar } from "./video/SegmentedProgressBar";
-import { SkipButton } from "./video/SkipControls";
+
+const SKIP_SECONDS = 10;
+const DOUBLE_TAP_MS = 300;
+const FLASH_MS = 600;
+
+type TapSide = "left" | "right";
 
 interface Chapter {
 	startSec: number;
@@ -39,7 +45,14 @@ export function AudioPlayerChrome({
 	duration,
 	chapters = [],
 }: AudioPlayerChromeProps) {
+	const tm = useTranslations("mediaPlayer");
 	const [isPlaying, setIsPlaying] = useState(false);
+	// Invisible double-tap-to-skip (owner 2026-07-14: YouTube-style, no visible
+	// buttons). Tracks the last tap's side+time to detect a double-tap within
+	// DOUBLE_TAP_MS; a single tap does nothing so it doesn't fight play/pause.
+	const lastTapRef = useRef<{ side: TapSide; time: number } | null>(null);
+	const [flashSide, setFlashSide] = useState<TapSide | null>(null);
+	const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -56,18 +69,76 @@ export function AudioPlayerChrome({
 		};
 	}, [videoRef.current]);
 
+	useEffect(() => {
+		return () => {
+			if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+		};
+	}, []);
+
+	const handleTap = useCallback(
+		(side: TapSide) => {
+			const now = Date.now();
+			const last = lastTapRef.current;
+			if (last && last.side === side && now - last.time < DOUBLE_TAP_MS) {
+				lastTapRef.current = null;
+				const v = videoRef.current;
+				if (v && Number.isFinite(v.duration)) {
+					const delta = side === "left" ? -SKIP_SECONDS : SKIP_SECONDS;
+					v.currentTime = Math.min(
+						Math.max(0, v.currentTime + delta),
+						v.duration,
+					);
+				}
+				setFlashSide(side);
+				if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+				flashTimerRef.current = setTimeout(() => setFlashSide(null), FLASH_MS);
+			} else {
+				lastTapRef.current = { side, time: now };
+			}
+		},
+		[videoRef],
+	);
+
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
-			<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
-				<div className="flex size-14 items-center justify-center rounded-full bg-white/10 sm:size-20">
+			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
+				<div className="pointer-events-none flex size-14 items-center justify-center rounded-full bg-white/10 sm:size-20">
 					<AudioLines className="size-7 text-white/85 sm:size-10" />
 				</div>
 				{videoName && (
-					<p className="line-clamp-2 max-w-[85%] text-center text-sm font-semibold text-white sm:text-lg">
+					<p className="pointer-events-none line-clamp-2 max-w-[85%] text-center text-sm font-semibold text-white sm:text-lg">
 						{videoName}
 					</p>
 				)}
 				<AudioLevelBars playing={isPlaying} />
+
+				{/* Invisible double-tap zones — left = −10s, right = +10s. */}
+				<div className="absolute inset-0 flex">
+					<button
+						type="button"
+						aria-label={tm("skipBack", { seconds: SKIP_SECONDS })}
+						className="h-full flex-1"
+						onClick={() => handleTap("left")}
+					/>
+					<button
+						type="button"
+						aria-label={tm("skipForward", { seconds: SKIP_SECONDS })}
+						className="h-full flex-1"
+						onClick={() => handleTap("right")}
+					/>
+				</div>
+
+				{flashSide && (
+					<span
+						aria-hidden="true"
+						className={cn(
+							"pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-3 py-1 text-sm text-white",
+							flashSide === "left" ? "left-[15%]" : "right-[15%]",
+						)}
+					>
+						{flashSide === "left" ? `-${SKIP_SECONDS}s` : `+${SKIP_SECONDS}s`}
+					</span>
+				)}
 			</div>
 
 			<div className="flex flex-col gap-1.5">
@@ -77,19 +148,7 @@ export function AudioPlayerChrome({
 					videoRef={videoRef}
 				/>
 				<div className="flex items-center gap-2">
-					<SkipButton
-						video={videoRef.current}
-						direction="back"
-						iconClassName="size-7 text-white/85"
-						className="flex size-9 items-center justify-center rounded-full text-white hover:bg-white/15"
-					/>
 					<MediaPlayerPlay className="size-8 text-white hover:bg-white/15" />
-					<SkipButton
-						video={videoRef.current}
-						direction="forward"
-						iconClassName="size-7 text-white/85"
-						className="flex size-9 items-center justify-center rounded-full text-white hover:bg-white/15"
-					/>
 					<MediaPlayerTime fallbackDuration={duration} />
 					<div className="flex-1" />
 					<MediaPlayerPlaybackSpeed className="text-white hover:bg-white/15" />
