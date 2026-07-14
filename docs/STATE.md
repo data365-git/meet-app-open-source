@@ -3,6 +3,16 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## CODEX ON-DEMAND TIMESTAMP REFINEMENT (2026-07-15) — PARTIAL, CLAUDE HANDOFF
+
+- Owner superseded the global-setting idea: Gemini is always the default; Scribe v2 timing is an explicit per-file action in the dashboard card `...` menu.
+- Codex wrote the owner-only action, background timing workflow, Scribe v2 switch, latest-text preservation, low-confidence fallback, translated-VTT timing sync, metadata status, localized confirmation UI, and focused tests.
+- Fresh evidence: `pnpm typecheck` exit 0; 5 focused test files / 27 tests passed; production web build exit 0.
+- Not finished visually: the first browser check hit the stale port-3001 build. Owner's final `...` note is only a tiny CSS-state fix: make it icon-only with no visible circle/rectangle/selected background, while preserving a transparent 44×44 hit target and keyboard focus accessibility.
+- Exact remaining spec and risks: `CODEX_TO_CLAUDE_TIMESTAMP_REFINEMENT_2026-07-15.md`.
+- Live has no `ELEVENLABS_API_KEY`; no commit, push, deploy, or secret change was performed.
+
+---
 ## CODEX PLAYER + AI PROGRESS POLISH (2026-07-14) — VERIFIED, UNCOMMITTED
 
 - Final owner decision for video: no visible skip buttons. Desktop uses plain Left/Right Arrow keys for ±5 seconds; mobile touch uses a real double-tap on the left/right third for ±10 seconds. A single side tap no longer seeks accidentally.
@@ -10,6 +20,7 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 - Audio keeps the visible shared skip controls and the hold/right-click/ArrowDown `5 / 10 / 15 / 20 / 30` picker. The selected audio duration persists locally.
 - Rebuilt the running AI-analysis status around real persisted pipeline data only: transcription, summary, and refinement stages; completed/active/waiting states; actual chunk progress; overall percentage; and rate-based ETA. Cheap-mode quota wait honestly shows `2–4 hours` instead of a fake minute estimate.
 - The AI status is responsive: three cards on desktop and stacked cards on mobile. Live preview proof showed stage 2/3, 4/12 chunks, 44%, and ~12 minutes remaining; 390 px mobile had no horizontal overflow and neither viewport logged console errors.
+- Final verification after the double-tap correction: `pnpm typecheck`, `pnpm --filter @cap/web test`, and `NEXT_PUBLIC_DOCKER_BUILD=false pnpm --filter @cap/web build` exited 0. The temporary preview route is absent from the final production build.
 - Exact Claude handoff: `CODEX_TO_CLAUDE_AI_PROGRESS_2026-07-14.md`, plus the superseding player note in `CODEX_TO_CLAUDE_UI_POLISH_2026-07-14.md`. No commit, push, or deploy was performed.
 
 ---
@@ -66,7 +77,8 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 - **Item 4 IMPLEMENTED (owner chose "ogohlantirish", not auto-stop / not silent-continue):** when the Meet call ends during a guaranteed full-screen meeting recording, the SW shows a `chrome.notifications` prompt with **[To'xtatish va saqlash] / [Davom ettirish]** buttons. 3 surgical edits in `sw.ts`: `promptStopOnMeetEnded()` + `stopInstructionDeliberate()` helpers, an `else if` in the MEET_CALL_ENDED handler (mode instruction + meetingRequired + sender===sourceTabId + >10s guard), and an `onButtonClicked` listener (btn0=stop, btn1=keep). `notifications` perm already in manifest.
 - **Build EXIT 0** (`node scripts/build.mjs`) with the new code confirmed in `dist/background.js`. **Manifest bumped 0.2.0 → 0.3.0.** **Zip refreshed** via `Compress-Archive dist/* → apps/web/public/365-extension.zip`; verified version INSIDE the zip = **0.3.0** + background.js present.
 
-**▶ NEXT (this session):** ✅ committed `9f8d198` (extension v0.3.0) + `d706bec` (security) + `662d3d3` (4-file UI polish) + `1673ccf` (ai-chat.css mini-FAB) + `96c5e80` (audio declutter) + `37cd39f` (audio skip buttons RESTORED). + `6ba8ffa` (Codex player-layout refine: icon beside title so it shows fully + text −10/+10 + a11y-hide gesture zones). + `fd1cd75` (🐛 AUDIO-import auto-title fix: "data365 Audio Upload - <date>" — the "Audio " word broke GENERATED_TITLE_PATTERN so audio imports never got AI-renamed; video imports were fine; added optional `(?:Audio )?` + test). All gate re-run: tsc0/vitest886. ✅ pushed qa-fixes (`fd1cd75`). ✅ Contabo deploy QUEUED = **`abba794kub5cg7pslvwxx4zk`** (supersedes eykv2xx/po9ooh/…; ~30min; target commit `fd1cd75`). **REMAINING on resume:** confirm `docker ps` image tag = `fd1cd75` + `/api/health` {db,storage} ok on data365.duckdns.org after build; then everything is live.
+**▶ NEXT (2026-07-15):** everything through `fd1cd75` (extension v0.3.0, security scrub, UI polish, players, audio-import auto-title) is LIVE + verified (was image `00ee2bf`, /api/health ok). THEN shipped the big Codex batch — `f484c56` (AI-progress card redesign + player polish: selectable audio skip, video double-tap gesture, i18n seek) + `e1fe9a1` (🆕 owner on-demand TIMESTAMP REFINEMENT via ElevenLabs Scribe v2). I finished Codex's 5 remaining items myself (CapCard ⋯ icon-only trigger, PROCESSING lifecycle sync + stale-recovery, no-auto-Scribe regression test, correctness review) — gate: **tsc0 · vitest895 · next build 0**. ✅ pushed qa-fixes (`e1fe9a1`). ✅ Contabo deploy QUEUED = **`phmdqcp73lwlt24ndqo287gz`** (~30min; target `e1fe9a1`). **REMAINING on resume:** confirm `docker ps` tag = `e1fe9a1` + `/api/health` ok after build.
+- **🆕 TIMESTAMP REFINEMENT is DORMANT on prod** (no `ELEVENLABS_API_KEY` → the ⋯→"Refine timestamps" action returns `missing_key`, spends nothing). Ordinary transcription = Gemini text+timing only (regression-tested). **OWNER TODO to ACTIVATE it:** (1) add the paid `ELEVENLABS_API_KEY` to the Contabo/Coolify env (~$0.22/audio-hour, ~$6.60 for 30h/mo); (2) then per-file ⋯→Refine on a long Uzbek/Rus meeting → A/B the accuracy before relying on it. Owner phone-walks the new ⋯ trigger + AI-progress card (headless dashboard = auth-gated, can't verify).
 
 **🎬 PLAYER DIRECTION (Codex spec, owner-endorsed 2026-07-14):** audio ≠ "pictureless video" — audio = compact listening tool (no black video window, ~190px, big Play, VISIBLE ±10/+10 flanking Play, timeline/time/volume/speed, sticky top pin on scroll, read transcript+AI while playing); video = full watch tool (16:9, +fullscreen/subtitles, mobile-fullscreen double-tap skip, desktop bottom-right mini, NO mobile mini). Both: ≥44px, persist speed/volume, transcript-time seek, keyboard+SR. **BUILT + Codex-reviewed (2026-07-14): audio card icon-beside-title (full title) + text −10/+10 44px + a11y-clean gesture zones (`6ba8ffa`); video captions CONFIRMED to exist. Direction largely satisfied.** Owner phone-walks the final look after the `6ba8ffa` deploy.
 
