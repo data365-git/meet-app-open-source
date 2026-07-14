@@ -1,0 +1,37 @@
+/* ======== Docked mini-player chrome diet ========
+   DockableVideo.tsx sets `data-docked="true"` on its fixed wrapper once the
+   real player has floated into the mini. These rules trim the in-player
+   chrome that only makes sense at full size (language picker, status pill,
+   volume/speed controls, the big center play button, the mobile swipe-seek
+   gesture layer) WITHOUT remounting the video — CapVideoPlayer.tsx keeps
+   rendering exactly the same tree, only these descendants are hidden/resized
+   by CSS while an ancestor carries `data-docked="true"`. Kept as a plain CSS
+   import (same pattern as ai-chat.css) since DockableVideo wraps ShareVideo's
+   already-built player tree and can't pass a `docked` prop into it. */
+
+/* In-player LanguagePicker overlay (ShareVideo.tsx, "absolute right-3 top-3
+   z-10" — not editable from here, targeted by its exact Tailwind class
+   combo) and the playback-status pill (CapVideoPlayer.tsx) — both collide
+   with the mini's own expand/× chips in the cramped mobile width. */
+[data-docked="true"] .right-3.top-3.z-10,
+[data-docked="true"] [data-slot="playback-status-badge"] {
+	display: none !important;
+}
+
+/* Center play button: cap to size-12 (3rem) instead of xs:size-20 md:size-32. */
+[data-docked="true"] [data-slot="center-play-button"] {
+	width: 3rem !important;
+	height: 3rem !important;
+}
+
+/* Volume slider + playback-speed/settings control in the bottom bar — keep
+   play, seek, time, fullscreen. */
+[data-docked="true"] [data-slot="media-player-volume-container"],
+[data-docked="true"] [data-slot="media-player-settings"] {
+	display: none !important;
+}
+
+/* Mobile swipe-seek gesture layer eats scroll/drag in a ~127px-tall mini. */
+[data-docked="true"] [data-slot="mobile-seek-gesture-layer"] {
+	pointer-events: none !important;
+}

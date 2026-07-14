@@ -70,6 +70,7 @@ import {
 } from "./video/media-player";
 import { SegmentedProgressBar } from "./video/SegmentedProgressBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
+import "./docked-chrome.css";
 
 const { circumference } = getProgressCircleConfig();
 
@@ -87,6 +88,7 @@ function RawPlaybackStatusBadge({
 			<TooltipTrigger asChild>
 				<button
 					type="button"
+					data-slot="playback-status-badge"
 					className={clsx(
 						"absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70",
 						visible ? "opacity-100" : "pointer-events-none opacity-0",
@@ -968,6 +970,7 @@ export function CapVideoPlayer({
 							exit={{ opacity: 0, y: 10 }}
 							transition={{ duration: 0.2 }}
 							onClick={() => videoRef.current?.play()}
+							data-slot="center-play-button"
 							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
 						>
 							<FontAwesomeIcon
@@ -1251,6 +1254,7 @@ function MobileSeekGestureLayer({
 	return (
 		<div
 			aria-hidden="true"
+			data-slot="mobile-seek-gesture-layer"
 			className="absolute inset-x-0 top-0 bottom-24 z-[6] touch-pan-y select-none sm:hidden"
 			onPointerDown={onPointerDown}
 			onPointerMove={onPointerMove}

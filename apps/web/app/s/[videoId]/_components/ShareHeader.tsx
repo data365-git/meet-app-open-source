@@ -492,7 +492,10 @@ export const ShareHeader = ({
 	return (
 		<>
 			{userIsOwnerAndNotPro && (
-				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
+				<div
+					id="share-sticky-notice"
+					className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6"
+				>
 					<p className="text-center text-gray-12">
 						{t("freePlanLimitNotice")}
 					</p>

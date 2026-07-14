@@ -74,17 +74,49 @@ function useDockedMediaState(
 	return { videoEl, isPlaying, currentTime, duration };
 }
 
+// Height (px) reserved for the sticky share-page notice banner
+// (`ShareHeader.tsx` `#share-sticky-notice`, only rendered for an
+// owner-not-pro viewer) plus a small breathing gap, so the mobile mini never
+// sits flush under — or behind — it. Falls back to a small top gap when the
+// banner isn't rendered at all (the common case).
+const DOCKED_TOP_FALLBACK_PX = 12;
+const DOCKED_TOP_GAP_PX = 8;
+
 /**
- * Wraps the video player so it can "dock" into a fixed mini-player once the
- * user scrolls it out of view. Only the WRAPPER's CSS position toggles —
+ * Measures whatever is currently pinned to the top of the share page (the
+ * conditional `#share-sticky-notice` banner in `ShareHeader.tsx`) so the
+ * mobile mini-player can sit just below it instead of a hardcoded `top-*`
+ * that would either float too high (colliding with the banner) or guess
+ * wrong when the banner isn't rendered.
+ */
+function useDockedTopOffset(): number {
+	const [offset, setOffset] = useState(DOCKED_TOP_FALLBACK_PX);
+
+	useEffect(() => {
+		const el = document.getElementById("share-sticky-notice");
+		if (!el) return;
+		const measure = () =>
+			setOffset(el.getBoundingClientRect().height + DOCKED_TOP_GAP_PX);
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
+	return offset;
+}
+
+/**
+ * Wraps the video player so it can "dock" into a floating mini-player once
+ * the user scrolls it out of view. Only the WRAPPER's CSS position toggles —
  * `children` (the playerBlock) is rendered exactly once and never remounts,
  * so playback keeps working across dock/undock.
  *
- * Docked style (owner decision 2026-07-13): on EVERY viewport the dock is a
- * slim bottom bar with NO video pixels — just play/pause + a seekable
- * progress bar + time (+ title). A floating video box would cover the AI
- * analysis the user is reading, so docking never shows the video frame.
- * `children` stays mounted (invisible) for playback continuity.
+ * Docked style (Fable-reviewed 2026-07-14, `docs/plans/2026-07-14-floating-
+ * miniplayer-design.md`): VIDEO docks as a floating mini showing the REAL
+ * player (full controls, no re-parenting) — mobile top-right below the
+ * sticky header, desktop bottom-left. AUDIO docks as a Telegram-style
+ * under-header/bottom-left pin bar (no video frame to float).
  */
 export function DockableVideo({
 	children,
@@ -104,6 +136,7 @@ export function DockableVideo({
 	const [activated, setActivated] = useState(false);
 	const [slotHeight, setSlotHeight] = useState<number | null>(null);
 	const [reduceMotion, setReduceMotion] = useState(false);
+	const dockedTopOffset = useDockedTopOffset();
 
 	const { videoEl, isPlaying, currentTime, duration } =
 		useDockedMediaState(innerRef);
@@ -131,12 +164,15 @@ export function DockableVideo({
 		const observer = new IntersectionObserver(
 			([entry]) => {
 				if (!entry) return;
+				// Entering/exiting fullscreen from the mini briefly changes layout
+				// and can spuriously toggle intersection — ignore while it's active
+				// to avoid a dock/undock flap.
+				if (document.fullscreenElement) return;
 				if (!entry.isIntersecting && entry.boundingClientRect.top < 0) {
 					setDocked(true);
 				} else if (entry.isIntersecting) {
 					setDocked(false);
 					setDismissed(false);
-					setActivated(false);
 				}
 			},
 			{ threshold: 0 },
@@ -147,14 +183,19 @@ export function DockableVideo({
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
 	const dockable = docked;
-	// The mini auto-appears the moment playback starts while docked, then stays
-	// (owner choice B): pausing keeps it so the user can resume; only × or
-	// scrolling the main player back into view hides it.
+	// The mini auto-appears the moment playback starts, then stays activated —
+	// "scroll down while paused" (after having played) still shows the mini —
+	// until the user explicitly dismisses it with ×.
 	const showMini = dockable && activated && !dismissed;
 
 	useEffect(() => {
-		if (dockable && isPlaying) setActivated(true);
-	}, [dockable, isPlaying]);
+		if (isPlaying) setActivated(true);
+	}, [isPlaying]);
+
+	const handleDismiss = useCallback(() => {
+		setDismissed(true);
+		setActivated(false);
+	}, []);
 
 	// Measure the player's inline (non-docked) height so the slot can reserve
 	// that space via min-height once the inner wrapper becomes `fixed` and
@@ -180,29 +221,60 @@ export function DockableVideo({
 
 	const transitionClass = reduceMotion
 		? ""
-		: "transition-all duration-[180ms] ease-out";
+		: `transition-all ease-out ${showMini ? "duration-200" : "duration-150"}`;
 
 	const playPauseLabel = isPlaying ? tm("pause") : tm("play");
 
+	// Enter/exit transform: mobile slides down from above (the player exited
+	// upward), desktop slides up from below — both settle to identity. Kept as
+	// a directional slide (not a plain fade) so the mini reads as "floating in"
+	// rather than "installed/stuck".
+	const motionClass = showMini
+		? "translate-y-0 scale-100 opacity-100"
+		: "pointer-events-none -translate-y-2 scale-[0.96] opacity-0 xl:translate-y-2 xl:scale-100";
+
 	// The dock's box styling lives on the inner wrapper (innerRef) itself, NOT
 	// on a per-state child element, so `children` can hang off ONE stable host
-	// div that never changes type/position → the native <video> is never
-	// remounted across dock transitions (a remount would restart playback and
-	// orphan the dock/transcript/resume listeners). Only CSS toggles.
-	const outerClassName = !dockable
-		? `relative ${transitionClass}`
-		: `fixed inset-x-2 bottom-2 z-50 flex items-center gap-2.5 rounded-2xl border border-gray-5 bg-gray-1/95 px-3 py-2 shadow-lg backdrop-blur-md sm:inset-x-auto sm:right-4 sm:w-[380px] ${transitionClass} ${
-				showMini
-					? "translate-y-0 opacity-100"
-					: "pointer-events-none translate-y-3 opacity-0"
-			}`;
+	// div that never changes type/position → the native <video>/<audio> is
+	// never remounted across dock transitions (a remount would restart
+	// playback and orphan the dock/transcript/resume listeners). Only CSS
+	// toggles on the wrapper (and, for audio only, the host — see below).
+	let outerClassName: string;
+	if (!dockable) {
+		outerClassName = "relative";
+	} else if (isAudio) {
+		// Telegram-style pin bar: mobile under the sticky header, desktop
+		// bottom-left (same quadrant as the video mini, for consistency).
+		outerClassName = [
+			"fixed inset-x-2 z-50 flex h-12 items-center gap-2.5 rounded-xl border border-gray-5 bg-gray-1/95 px-3 shadow-md backdrop-blur-md",
+			"top-[var(--docked-top)]",
+			"xl:inset-x-auto xl:left-4 xl:right-auto xl:top-auto xl:bottom-4 xl:max-w-[420px] xl:w-[420px]",
+			transitionClass,
+			motionClass,
+		].join(" ");
+	} else {
+		// Floating real player: mobile top-right below the sticky header
+		// (bottom-right/top-right are both taken on desktop by the AI panel /
+		// chat FAB), desktop bottom-left.
+		outerClassName = [
+			"fixed right-3 z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
+			"top-[var(--docked-top)]",
+			"xl:left-4 xl:right-auto xl:top-auto xl:bottom-4 xl:w-[380px]",
+			transitionClass,
+			motionClass,
+		].join(" ");
+	}
 
-	// One stable host for `children` across every state (see above). Docked, it
-	// is absolutely positioned behind the bar chrome and hidden (opacity-0) —
-	// the bar never shows video pixels; undocked, plain flow.
-	const playerHostClassName = !dockable
-		? undefined
-		: "pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0";
+	// One stable host for `children` across every state. AUDIO has no video
+	// frame to float, so it stays hidden (invisible, behind the pin bar's own
+	// chrome) same as before. VIDEO's host gets no special class at all —
+	// docked, it simply becomes a normal-flow child of the `fixed` wrapper
+	// above, so its own aspect-ratio sizing drives the mini's height and the
+	// real player (with all its controls) is what's visible. No re-parenting.
+	const playerHostClassName =
+		dockable && isAudio
+			? "pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0"
+			: undefined;
 
 	return (
 		<div
@@ -210,18 +282,51 @@ export function DockableVideo({
 			className="min-w-0"
 			style={dockable && slotHeight ? { minHeight: slotHeight } : undefined}
 		>
-			<div ref={innerRef} className={outerClassName}>
+			<div
+				ref={innerRef}
+				data-docked={dockable ? "true" : undefined}
+				className={outerClassName}
+				style={
+					dockable
+						? ({ "--docked-top": `${dockedTopOffset}px` } as React.CSSProperties)
+						: undefined
+				}
+			>
 				{/* One stable host for `children` — never changes type/position, so
-				    the native <video> is never remounted across dock transitions. */}
+				    the native <video>/<audio> is never remounted across dock
+				    transitions. */}
 				<div className={playerHostClassName}>{children}</div>
 
-				{dockable && (
+				{dockable && !isAudio && (
+					// Overlay strip: a SIBLING of the host inside the fixed wrapper
+					// (not re-parenting children) — expand top-left, × top-right.
+					<div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-10 bg-gradient-to-b from-black/50 to-transparent">
+						<button
+							type="button"
+							onClick={handleExpand}
+							aria-label={t("miniExpand")}
+							className="pointer-events-auto absolute left-0 top-0 flex size-10 items-center justify-center text-white/90"
+						>
+							<ExpandIcon className="size-4" />
+						</button>
+						<button
+							type="button"
+							onClick={handleDismiss}
+							aria-label={t("miniClose")}
+							className="pointer-events-auto absolute right-0 top-0 flex size-10 items-center justify-center text-white/90"
+						>
+							<CloseIcon className="size-4" />
+						</button>
+					</div>
+				)}
+
+				{dockable && isAudio && (
 					<>
 						<button
 							type="button"
 							onClick={togglePlay}
 							aria-label={playPauseLabel}
-							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-500 text-white transition-colors hover:bg-blue-600"
+							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity hover:opacity-90"
 						>
 							{isPlaying ? <PauseIcon /> : <PlayIcon />}
 						</button>
@@ -245,15 +350,7 @@ export function DockableVideo({
 						</div>
 						<button
 							type="button"
-							onClick={handleExpand}
-							aria-label={t("miniExpand")}
-							className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
-						>
-							<ExpandIcon />
-						</button>
-						<button
-							type="button"
-							onClick={() => setDismissed(true)}
+							onClick={handleDismiss}
 							aria-label={t("miniClose")}
 							className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
 						>
@@ -331,7 +428,7 @@ function DockSeekBar({
 				}`}
 			>
 				<div
-					className={`h-full rounded-full ${variant === "dark" ? "bg-white" : "bg-blue-500"}`}
+					className={`h-full rounded-full ${variant === "dark" ? "bg-white" : "bg-[var(--brand)]"}`}
 					style={{ width: `${progress}%` }}
 				/>
 			</div>
@@ -339,11 +436,11 @@ function DockSeekBar({
 	);
 }
 
-function ExpandIcon() {
+function ExpandIcon({ className = "size-3.5" }: { className?: string }) {
 	return (
 		<svg
 			viewBox="0 0 24 24"
-			className="size-3.5"
+			className={className}
 			fill="none"
 			stroke="currentColor"
 			strokeWidth={2}
@@ -358,11 +455,11 @@ function ExpandIcon() {
 	);
 }
 
-function CloseIcon() {
+function CloseIcon({ className = "size-3.5" }: { className?: string }) {
 	return (
 		<svg
 			viewBox="0 0 24 24"
-			className="size-3.5"
+			className={className}
 			fill="none"
 			stroke="currentColor"
 			strokeWidth={2}
