@@ -20,7 +20,7 @@ const extensionEnv = (
 	}
 ).process?.env;
 
-const fallbackApiBaseUrl = "https://capweb-production-dd85.up.railway.app";
+const fallbackApiBaseUrl = "https://data365.duckdns.org";
 
 export const DEFAULT_API_BASE_URL =
 	[

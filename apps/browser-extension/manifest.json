@@ -47,7 +47,7 @@
 	],
 	"externally_connectable": {
 		"matches": [
-			"https://capweb-production-dd85.up.railway.app/*",
+			"https://data365.duckdns.org/*",
 			"http://localhost:3000/*",
 			"http://localhost:3001/*"
 		]
