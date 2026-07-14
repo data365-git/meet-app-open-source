@@ -24,10 +24,12 @@
 	height: 3rem !important;
 }
 
-/* Volume slider + playback-speed/settings control in the bottom bar — keep
-   play, seek, time, fullscreen. */
-[data-docked="true"] [data-slot="media-player-volume-container"],
-[data-docked="true"] [data-slot="media-player-settings"] {
+/* The whole media-chrome bottom control bar is suppressed while docked: it
+   auto-hides after inactivity (so the timeline vanishes) and its 86px cluster
+   eats ~40% of the small mini. DockableVideo renders its own persistent slim
+   transport strip (play + seek + time) instead — always visible, owner ask
+   2026-07-14. */
+[data-docked="true"] [data-slot="media-player-controls"] {
 	display: none !important;
 }
 

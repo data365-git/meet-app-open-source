@@ -194,8 +194,11 @@ export function DockableVideo({
 	}, []);
 
 	// Whether the wrapper is currently a fixed mini-player (leaves normal flow).
-	// Desktop only — on mobile the video stays in flow and scrolls away.
-	const dockable = docked && isDesktop;
+	// VIDEO is desktop-only — on a phone the floating frame covers the reading
+	// area. AUDIO has no video frame, just a slim Telegram-style pin bar that
+	// doesn't block reading, so it docks on every viewport (owner 2026-07-14:
+	// "why is there no audio pin [on mobile]").
+	const dockable = docked && (isDesktop || isAudio);
 	// The mini auto-appears the moment playback starts, then stays activated —
 	// "scroll down while paused" (after having played) still shows the mini —
 	// until the user explicitly dismisses it with ×.
@@ -266,12 +269,13 @@ export function DockableVideo({
 		].join(" ");
 	} else {
 		// Floating real player (YouTube/Telegram-style, owner spec 2026-07-14):
-		// TOP-RIGHT on EVERY viewport — small below the sticky header, just wider
-		// on desktop. Scrolling the main player back into view restores it.
+		// TOP-RIGHT on EVERY viewport — small below the sticky header, wider on
+		// desktop (owner 2026-07-14: the 380px mini felt too small). Scrolling the
+		// main player back into view restores it.
 		outerClassName = [
 			"fixed right-3 z-50 w-[min(230px,60vw)] overflow-hidden rounded-xl ring-1 ring-black/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] dark:ring-white/15 dark:shadow-[0_8px_30px_rgba(0,0,0,0.55)]",
 			"top-[var(--docked-top)]",
-			"xl:w-[380px]",
+			"xl:w-[480px]",
 			transitionClass,
 			motionClass,
 		].join(" ");
@@ -329,6 +333,35 @@ export function DockableVideo({
 						>
 							<CloseIcon className="size-4" />
 						</button>
+					</div>
+				)}
+
+				{dockable && !isAudio && (
+					// Persistent bottom transport strip: owner (2026-07-14) wants the
+					// timeline ALWAYS visible in the mini (scrub + see position) —
+					// media-chrome's own control bar auto-hides after inactivity and is
+					// suppressed while docked (docked-chrome.css). Play/pause + slim
+					// seek + time, driven straight off the native <video>.
+					<div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-2 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-2.5 pb-1.5 pt-6">
+						<button
+							type="button"
+							onClick={togglePlay}
+							aria-label={playPauseLabel}
+							className="pointer-events-auto flex size-7 shrink-0 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-sm transition-colors hover:bg-white/25"
+						>
+							{isPlaying ? <PauseIcon /> : <PlayIcon />}
+						</button>
+						<div className="pointer-events-auto min-w-0 flex-1">
+							<DockSeekBar
+								videoEl={videoEl}
+								currentTime={currentTime}
+								duration={duration}
+								variant="dark"
+							/>
+						</div>
+						<span className="shrink-0 text-[11px] tabular-nums text-white/90">
+							{formatMmSs(currentTime)} / {formatMmSs(duration)}
+						</span>
 					</div>
 				)}
 
