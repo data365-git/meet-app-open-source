@@ -662,8 +662,12 @@ export function CapVideoPlayer({
 		(!resolvedSrc.isSuccess || Boolean(resolvedSrc.data));
 	const showPlaybackResolutionError =
 		hasError && !uploadProgress && !resolvedSrc.data && !resolvedSrc.isPending;
-	const showRawPlaybackBadge =
-		showPlaybackStatusBadge && resolvedSrc.data?.type === "raw";
+	// Owner-only "optimizing" badge removed (owner 2026-07-14): it only ever
+	// showed to the video owner (viewers/team never saw it) and read as noise;
+	// raw-source playback works fine. `showPlaybackStatusBadge` is referenced
+	// below only to keep the prop wired; flip this back on if the optimize
+	// pipeline is fixed and the signal is wanted again.
+	const showRawPlaybackBadge = false && showPlaybackStatusBadge;
 	const rawPlaybackBadgeLabel =
 		uploadProgressRaw?.status === "error"
 			? t("originalUploadBadge")
