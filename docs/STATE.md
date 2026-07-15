@@ -31,6 +31,8 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 4. (optional) activate timestamp refinement = add `ELEVENLABS_API_KEY` to Contabo env.
 5. duckdns "Dangerous site" Safe-Browsing review; Telegram down-alert `TELEGRAM_ALERT_CHAT_ID` secret.
 
+**🔜 NEXT UP — PLANNED, NOT BUILT (owner-decided 2026-07-15):** recorder resilience + one-click screen (extension v0.3.2). Plan: `docs/plans/2026-07-15-recorder-resilience-and-one-click.md` (under Fable plan-review). Owner decisions: (1) start with no client audio → **confirm once then start** (not silent abort); (2) mid-recording client-audio loss → **do NOT stop; warn + auto-recover** (mute→unmute, suspend→resume, tab-closed→one re-capture attempt then keep recording); (3) **one-click whole-screen picker** via `chrome.desktopCapture.chooseDesktopMedia(['screen'])`. REVERSES part of the earlier fail-closed guarantee — deliberately. Device-test-gated (real Meet). Build after plan-review folds in fixes.
+
 **✅ /CLEAR-SAFE:** all code committed+pushed. Deploy in flight — on resume just confirm the image tag + health.
 
 ---
