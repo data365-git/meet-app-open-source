@@ -1,0 +1,48 @@
+name: uptime-alert
+
+# External down-alert: GitHub (outside Contabo) pings /api/health on a schedule
+# and Telegrams the owner when the site is unreachable or unhealthy. This is the
+# real "server is down" detector — the in-app sendOpsAlert (lib/ops-alert.ts)
+# can only fire while the app is ALIVE, so it cannot report a full outage.
+#
+# Secrets to set in the GitHub repo (Settings → Secrets and variables → Actions):
+#   TELEGRAM_BOT_TOKEN      — the bot token (from @BotFather)
+#   TELEGRAM_ALERT_CHAT_ID  — the owner's chat id (from @userinfobot)
+# Do NOT paste these anywhere in the repo — only as GitHub Actions secrets.
+#
+# Note: GitHub-hosted cron is best-effort (can lag a few min) and each run bills
+# ~1 Actions-minute. */15 keeps it well within limits; a dedicated uptime service
+# (e.g. UptimeRobot free, 5-min, native Telegram) is an alternative that burns none.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/health and alert on failure
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: |
+          set +e
+          code=$(curl -s -o /tmp/h.json -w "%{http_code}" --max-time 25 https://data365.duckdns.org/api/health)
+          healthy=$(grep -c '"status":"ok"' /tmp/h.json 2>/dev/null)
+          echo "http=$code healthy=$healthy body=$(head -c 300 /tmp/h.json 2>/dev/null)"
+          if [ "$code" = "200" ] && [ "$healthy" != "0" ]; then
+            echo "site healthy"
+            exit 0
+          fi
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "::warning::site unhealthy (http=$code) but Telegram secrets are not set"
+            exit 1
+          fi
+          msg="🔴 data365 DOWN — /api/health returned HTTP $code ($(date -u '+%Y-%m-%d %H:%M UTC'))"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode chat_id="${TG_CHAT}" \
+            --data-urlencode text="$msg" >/dev/null
+          echo "alert sent"
+          exit 1
