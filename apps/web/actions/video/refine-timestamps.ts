@@ -15,6 +15,11 @@ import {
 import { patchVideoMetadata } from "@/lib/video-metadata";
 import { refineVideoTimestampsWorkflow } from "@/workflows/transcribe";
 
+// Mirrors CapCard's REFINE_STALE_MS (apps/web/app/(org)/dashboard/caps/components/CapCard/CapCard.tsx,
+// ~line 63) — a PROCESSING refinement older than this is a crashed run, not truly in-flight, so a new
+// request is allowed to proceed instead of being rejected with already_processing forever.
+const REFINE_STALE_MS = 30 * 60 * 1000;
+
 export type RefineTimestampsResult =
 	| { ok: true }
 	| {
@@ -56,7 +61,13 @@ export async function refineVideoTimestamps(
 		});
 
 		await patchVideoMetadata(videoId, (current) => {
-			if (current.timestampRefinement?.status === "PROCESSING") {
+			const existing = current.timestampRefinement;
+			if (
+				existing?.status === "PROCESSING" &&
+				(!existing.requestedAt ||
+					Date.now() - new Date(existing.requestedAt).getTime() <
+						REFINE_STALE_MS)
+			) {
 				throw new Error("already_processing");
 			}
 			return {

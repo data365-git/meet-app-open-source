@@ -10,6 +10,7 @@ import { signIn } from "next-auth/react";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { syncLocaleFromPreferences } from "@/actions/set-language";
 
 const MotionLogoBadge = motion(LogoBadge);
 const MotionLink = motion(Link);
@@ -59,6 +60,14 @@ export function LoginForm() {
 
       if (res?.ok && !res?.error) {
         const dest = next && next.length > 0 ? next : "/dashboard/caps";
+        // Best-effort: pull the account's saved language (DB) into the
+        // NEXT_LOCALE cookie so it follows the user to a fresh/cookieless
+        // browser. Never block login on this.
+        try {
+          await syncLocaleFromPreferences();
+        } catch {
+          // ignore — locale sync is not critical to signing in
+        }
         // Keep the hard navigation so server components pick up the fresh
         // session reliably; show a full-screen overlay so the reload reads
         // as an intentional transition instead of a jarring page reload.

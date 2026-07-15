@@ -80,12 +80,14 @@ interface CameraPreviewWindowProps {
 	cameraId: string;
 	onClose: () => void;
 	onStreamChange?: (stream: MediaStream | null) => void;
+	hidden?: boolean;
 }
 
 export const CameraPreviewWindow = ({
 	cameraId,
 	onClose,
 	onStreamChange,
+	hidden = false,
 }: CameraPreviewWindowProps) => {
 	const t = useTranslations("recorder");
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
@@ -560,6 +562,10 @@ export const CameraPreviewWindow = ({
 				width: `${metrics.width}px`,
 				height: `${totalHeight}px`,
 				borderRadius,
+				// Camera off during recording: hide the bubble entirely instead of
+				// showing a black (muted-track) circle. Stay mounted so the stream
+				// stays alive and toggling the camera back on restores the preview.
+				display: hidden ? "none" : undefined,
 			}}
 			onMouseDown={(e) => {
 				e.stopPropagation();

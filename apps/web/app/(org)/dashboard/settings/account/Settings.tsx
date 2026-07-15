@@ -20,7 +20,7 @@ import { Effect, Option } from "effect";
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteAccount } from "@/actions/account/delete-account";
@@ -221,10 +221,10 @@ export const Settings = () => {
 	const t = useTranslations("settings");
 	const router = useRouter();
 	const { organizationData, user, userPreferences } = useDashboardContext();
-	const currentLocale: Locale =
-		((userPreferences as Record<string, unknown> | null)?.locale as
-			| Locale
-			| undefined) ?? "uz";
+	// Reflect the ACTUALLY-rendered locale (next-intl), not the raw DB
+	// preference — the two can disagree (e.g. cookie-only locale changes),
+	// which previously trapped the switcher's early-return on a no-op click.
+	const currentLocale = useLocale() as Locale;
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
 	const [defaultOrgId, setDefaultOrgId] = useState<

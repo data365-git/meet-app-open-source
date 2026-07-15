@@ -595,11 +595,15 @@ export const WebRecorderDialog = ({
 					isRestarting={isRestarting}
 				/>
 			)}
-			{selectedCameraId && (
+			{selectedCameraId && phase !== "completed" && (
 				<CameraPreviewWindow
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
 					onStreamChange={registerPreviewCameraStream}
+					// Only screen+camera mode mutes the bubble's own stream (→ black
+					// circle) on camera-off; hide it there. Camera-only mode keeps its
+					// live preview (its stream isn't the muted one), so leave it alone.
+					hidden={isCameraOff && recordingMode !== "camera"}
 				/>
 			)}
 		</>

@@ -98,6 +98,7 @@ const FolderCard = ({
 		},
 		onError: () => {
 			setPublicEnabled(isPublic);
+			setUpdateName(name);
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
@@ -113,6 +114,10 @@ const FolderCard = ({
 	useEffect(() => {
 		setPublicEnabled(isPublic);
 	}, [isPublic]);
+
+	useEffect(() => {
+		setUpdateName(name);
+	}, [name]);
 
 	useEffect(() => {
 		if (!folderRef.current) return;

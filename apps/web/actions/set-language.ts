@@ -41,3 +41,30 @@ export async function setLanguage(locale: string): Promise<{ success: true }> {
 
 	return { success: true };
 }
+
+// Called once, right after a successful login, to make the account-level
+// language preference (DB) follow the user to a fresh/cookieless browser.
+// Cheap: one indexed lookup on the user that just authenticated, not a
+// per-request read (i18n/request.ts still resolves purely from the cookie).
+export async function syncLocaleFromPreferences(): Promise<void> {
+	const user = await getCurrentUser();
+	if (!user) return;
+
+	const [row] = await db()
+		.select({ preferences: users.preferences })
+		.from(users)
+		.where(eq(users.id, user.id))
+		.limit(1);
+
+	const locale = (row?.preferences as Record<string, unknown> | null)
+		?.locale;
+	if (typeof locale !== "string" || !(locales as readonly string[]).includes(locale)) {
+		return;
+	}
+
+	(await cookies()).set("NEXT_LOCALE", locale, {
+		maxAge: 365 * 24 * 60 * 60,
+		path: "/",
+		sameSite: "lax",
+	});
+}

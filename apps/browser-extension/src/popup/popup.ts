@@ -386,63 +386,69 @@ function renderIdlePanel(
 			meterEl.classList.add("mic-meter--off");
 		});
 
-	let cameraEnabled = settings.cameraOverlay;
-	let cameraDeviceId = settings.cameraDeviceId ?? "";
-
-	const cameraSelect = document.createElement("select");
-	cameraSelect.className = "device-select";
-	cameraSelect.disabled = !cameraEnabled;
-
-	const cameraToggleWrap = createToggleEl("camera-toggle", cameraEnabled);
-	const cameraToggleInput = cameraToggleWrap.querySelector(
-		"input",
-	) as HTMLInputElement;
-
-	const cameraEnableBtn = el(
-		"button",
-		{ className: "btn btn-secondary perm-btn" },
-		"Enable camera",
-	);
-	cameraEnableBtn.style.display = "none";
-	cameraEnableBtn.addEventListener("click", () => {
-		chrome.runtime.openOptionsPage();
-	});
-
-	const cameraRow = el(
-		"div",
-		{ className: "device-row" },
-		el("span", { className: "device-row-label" }, "Camera"),
-		cameraToggleWrap,
-		cameraSelect,
-		cameraEnableBtn,
-	);
-	devicesSection.appendChild(cameraRow);
-
-	cameraToggleInput.addEventListener("change", () => {
-		cameraEnabled = cameraToggleInput.checked;
-		cameraSelect.disabled = !cameraEnabled;
-		sendMsg({
-			type: "SAVE_SETTINGS",
-			settings: { cameraOverlay: cameraEnabled },
-		});
-	});
-
-	cameraSelect.addEventListener("change", () => {
-		cameraDeviceId = cameraSelect.value;
-		sendMsg({ type: "SAVE_SETTINGS", settings: { cameraDeviceId } });
-	});
-
-	populateDeviceSelect(cameraSelect, "videoinput", cameraDeviceId, {
-		video: true,
-	})
-		.then((result) => {
-			if (result === "blocked") {
-				cameraSelect.style.display = "none";
-				cameraToggleWrap.style.display = "none";
-				cameraEnableBtn.style.display = "";
-			}
-		})
-		.catch(() => {});
+	// Camera overlay toggle + device dropdown: HIDDEN (R4) — nothing in the
+	// recording pipeline (recorder/offscreen recorder/service worker) ever
+	// reads cameraOverlay/cameraDeviceId, so this control did nothing. Keeping
+	// the settings fields themselves untouched; just not rendering the dead
+	// UI. See CLAUDE.md R4.
+	//
+	// let cameraEnabled = settings.cameraOverlay;
+	// let cameraDeviceId = settings.cameraDeviceId ?? "";
+	//
+	// const cameraSelect = document.createElement("select");
+	// cameraSelect.className = "device-select";
+	// cameraSelect.disabled = !cameraEnabled;
+	//
+	// const cameraToggleWrap = createToggleEl("camera-toggle", cameraEnabled);
+	// const cameraToggleInput = cameraToggleWrap.querySelector(
+	// 	"input",
+	// ) as HTMLInputElement;
+	//
+	// const cameraEnableBtn = el(
+	// 	"button",
+	// 	{ className: "btn btn-secondary perm-btn" },
+	// 	"Enable camera",
+	// );
+	// cameraEnableBtn.style.display = "none";
+	// cameraEnableBtn.addEventListener("click", () => {
+	// 	chrome.runtime.openOptionsPage();
+	// });
+	//
+	// const cameraRow = el(
+	// 	"div",
+	// 	{ className: "device-row" },
+	// 	el("span", { className: "device-row-label" }, "Camera"),
+	// 	cameraToggleWrap,
+	// 	cameraSelect,
+	// 	cameraEnableBtn,
+	// );
+	// devicesSection.appendChild(cameraRow);
+	//
+	// cameraToggleInput.addEventListener("change", () => {
+	// 	cameraEnabled = cameraToggleInput.checked;
+	// 	cameraSelect.disabled = !cameraEnabled;
+	// 	sendMsg({
+	// 		type: "SAVE_SETTINGS",
+	// 		settings: { cameraOverlay: cameraEnabled },
+	// 	});
+	// });
+	//
+	// cameraSelect.addEventListener("change", () => {
+	// 	cameraDeviceId = cameraSelect.value;
+	// 	sendMsg({ type: "SAVE_SETTINGS", settings: { cameraDeviceId } });
+	// });
+	//
+	// populateDeviceSelect(cameraSelect, "videoinput", cameraDeviceId, {
+	// 	video: true,
+	// })
+	// 	.then((result) => {
+	// 		if (result === "blocked") {
+	// 			cameraSelect.style.display = "none";
+	// 			cameraToggleWrap.style.display = "none";
+	// 			cameraEnableBtn.style.display = "";
+	// 		}
+	// 	})
+	// 	.catch(() => {});
 
 	root.appendChild(devicesSection);
 	root.appendChild(el("div", { className: "panel-divider" }));

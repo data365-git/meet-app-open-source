@@ -16,6 +16,10 @@ const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
 const CHEAP_STALE_JOB_THRESHOLD_MS = 20 * 60 * 1000;
 const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
 const MAX_AUTO_RETRY_ATTEMPTS = 2;
+// Mirrors CapCard's REFINE_STALE_MS (apps/web/app/(org)/dashboard/caps/components/CapCard/CapCard.tsx)
+// and the local REFINE_STALE_MS in actions/video/refine-timestamps.ts — a PROCESSING timestamp
+// refinement older than this is a crashed run, not truly in-flight.
+const REFINE_STALE_JOB_THRESHOLD_MS = 30 * 60 * 1000;
 
 export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {
 	return metadata.aiMode === "cheap"
@@ -84,6 +88,13 @@ type StaleAiCandidate = {
 	metadata: VideoMetadata | null;
 };
 
+type StaleRefinementCandidate = {
+	id: Video.VideoId;
+	ownerId: string;
+	name: string;
+	metadata: VideoMetadata | null;
+};
+
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
 	if (!cronSecret) {
@@ -108,6 +119,8 @@ export async function GET(request: Request) {
 	const cheapStaleBefore = new Date(now - CHEAP_STALE_JOB_THRESHOLD_MS);
 	const fastStaleBeforeIso = fastStaleBefore.toISOString();
 	const cheapStaleBeforeIso = cheapStaleBefore.toISOString();
+	const refineStaleBefore = new Date(now - REFINE_STALE_JOB_THRESHOLD_MS);
+	const refineStaleBeforeIso = refineStaleBefore.toISOString();
 
 	const transcriptionCandidates: StaleTranscriptionCandidate[] = await db()
 		.select({
@@ -153,10 +166,27 @@ export async function GET(request: Request) {
 			),
 		);
 
+	const refinementCandidates: StaleRefinementCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
+		.from(videos)
+		.where(
+			and(
+				isNull(videos.deletedAt),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.timestampRefinement.status')) = 'PROCESSING'`,
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.timestampRefinement.requestedAt')) <= ${refineStaleBeforeIso}`,
+			),
+		);
+
 	let retried = 0;
 	let gaveUp = 0;
 	let flippedToPaid = 0;
 	let skippedForBatch = 0;
+	let refinementReset = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -255,13 +285,42 @@ export async function GET(request: Request) {
 		}
 	}
 
+	for (const candidate of refinementCandidates) {
+		const metadata = candidate.metadata ?? {};
+		const current = metadata.timestampRefinement;
+		if (!current) continue;
+		try {
+			const nextMetadata: VideoMetadata = {
+				...metadata,
+				timestampRefinement: {
+					...current,
+					status: "ERROR",
+					completedAt: new Date().toISOString(),
+					error: "failed",
+				},
+			};
+			await db()
+				.update(videos)
+				.set({ metadata: nextMetadata })
+				.where(eq(videos.id, candidate.id));
+			refinementReset++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to recover timestamp refinement for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
+
 	return NextResponse.json({
 		success: true,
 		staleBefore: fastStaleBefore.toISOString(),
 		cheapStaleBefore: cheapStaleBefore.toISOString(),
+		refineStaleBefore: refineStaleBefore.toISOString(),
 		retried,
 		gaveUp,
 		flippedToPaid,
 		skippedForBatch,
+		refinementReset,
 	});
 }

@@ -12,6 +12,7 @@ import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
@@ -76,6 +77,7 @@ export const SettingsDialog = ({
 	inheritedSpaceSettings,
 }: SettingsDialogProps) => {
 	const { user, organizationSettings } = useDashboardContext();
+	const router = useRouter();
 	const [saveLoading, setSaveLoading] = useState(false);
 	const buildSettings = useCallback(
 		(data?: OrganizationSettings): OrganizationSettings => ({
@@ -109,6 +111,7 @@ export const SettingsDialog = ({
 			) as Partial<OrganizationSettings>;
 			await updateVideoSettings(capId, payload);
 			toast.success("Settings updated successfully");
+			router.refresh();
 			onClose();
 		} catch (error) {
 			console.error("Error updating video settings:", error);

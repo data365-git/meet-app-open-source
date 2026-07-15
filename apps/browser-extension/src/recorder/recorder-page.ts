@@ -33,6 +33,11 @@ let state: RecordingState | null = null;
 let startedAt = 0;
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let lastShareUrl = "";
+// Paused-time accounting (R3) — mirrors the popup's recordingElapsedMs
+// approach (see popup.ts) so the on-screen timer excludes paused spans and
+// matches the actual recorded media duration.
+let pausedAt: number | null = null;
+let pausedAccumMs = 0;
 
 // ── Guaranteed client audio (meeting mode) ──────────────────────────────────
 //
@@ -126,14 +131,20 @@ function formatElapsed(ms: number): string {
 	return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+function elapsedMs(): number {
+	return Math.max(0, Date.now() - startedAt - pausedAccumMs);
+}
+
 function startTimer(): void {
 	stopTimer();
 	startedAt = Date.now();
+	pausedAt = null;
+	pausedAccumMs = 0;
 	const el = $("timer");
 	if (el) el.textContent = "00:00";
 	timerInterval = setInterval(() => {
 		const t = $("timer");
-		if (t) t.textContent = formatElapsed(Date.now() - startedAt);
+		if (t) t.textContent = formatElapsed(elapsedMs());
 	}, 1000);
 }
 
@@ -142,6 +153,29 @@ function stopTimer(): void {
 		clearInterval(timerInterval);
 		timerInterval = null;
 	}
+}
+
+// Freeze the displayed timer at the moment pause begins (does not touch
+// startedAt/pausedAccumMs — resumeTimer() below settles the accounting).
+function pauseTimer(): void {
+	if (pausedAt !== null) return;
+	pausedAt = Date.now();
+	stopTimer();
+	const t = $("timer");
+	if (t) t.textContent = formatElapsed(elapsedMs());
+}
+
+// Fold the just-finished paused span into pausedAccumMs so elapsedMs() (and
+// therefore the displayed time) excludes it going forward, then restart the
+// tick — same accounting concept as the popup's pausedAccumMs.
+function resumeTimer(): void {
+	if (pausedAt === null) return;
+	pausedAccumMs += Date.now() - pausedAt;
+	pausedAt = null;
+	timerInterval = setInterval(() => {
+		const t = $("timer");
+		if (t) t.textContent = formatElapsed(elapsedMs());
+	}, 1000);
 }
 
 // ── Recorder helpers ────────────────────────────────────────────────────────
@@ -678,11 +712,13 @@ function wire(): void {
 		} else if (msg.type === "PAUSE_CAPTURE") {
 			if (state && state.recorder.state === "recording") {
 				state.recorder.pause();
+				pauseTimer();
 			}
 			sendResponse({ ok: true });
 		} else if (msg.type === "RESUME_CAPTURE") {
 			if (state && state.recorder.state === "paused") {
 				state.recorder.resume();
+				resumeTimer();
 			}
 			sendResponse({ ok: true });
 		} else if (msg.type === "TAB_AUDIO_LOST_REMOTE") {

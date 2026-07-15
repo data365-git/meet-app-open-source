@@ -6,6 +6,7 @@ import { cn } from "@/app/lib/utils";
 import {
 	MediaPlayerPlay,
 	MediaPlayerPlaybackSpeed,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerTime,
 	MediaPlayerVolume,
 } from "./video/media-player";
@@ -27,6 +28,7 @@ interface AudioPlayerChromeProps {
 	videoName?: string;
 	duration: number;
 	chapters?: Chapter[];
+	defaultPlaybackSpeed?: number;
 }
 
 /**
@@ -43,6 +45,7 @@ export function AudioPlayerChrome({
 	videoName,
 	duration,
 	chapters = [],
+	defaultPlaybackSpeed,
 }: AudioPlayerChromeProps) {
 	const [skipSeconds, setSkipSeconds] = useSkipStep();
 	// Invisible double-tap-to-skip supplements the visible controls on touch.
@@ -85,6 +88,12 @@ export function AudioPlayerChrome({
 	// same persisted step.
 	return (
 		<div className="absolute inset-0 z-[5] flex flex-col justify-between gap-3 rounded-xl bg-[linear-gradient(135deg,var(--brand)_0%,#003c74_100%)] p-4 sm:gap-4 sm:p-6">
+			{/* Hidden: only mounted to apply the default playback speed via the
+			 * same mount effect the video player's speed dial uses (never shown). */}
+			<MediaPlayerPlaybackSpeedDial
+				defaultSpeed={defaultPlaybackSpeed}
+				show={false}
+			/>
 			<div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
 				<div className="pointer-events-none flex w-full max-w-[85%] items-center justify-center gap-3">
 					<div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-white/10">

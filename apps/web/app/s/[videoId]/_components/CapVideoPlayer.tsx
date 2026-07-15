@@ -408,9 +408,7 @@ export function CapVideoPlayer({
 	]);
 
 	useEffect(() => {
-		if (!captionsSrc) {
-			setCurrentCue("");
-		}
+		setCurrentCue("");
 	}, [captionsSrc]);
 
 	useEffect(() => {
@@ -781,6 +779,7 @@ export function CapVideoPlayer({
 						videoName={videoName}
 						duration={playerDuration}
 						chapters={chapters}
+						defaultPlaybackSpeed={defaultPlaybackSpeed}
 					/>
 				)}
 			{!isAudio &&

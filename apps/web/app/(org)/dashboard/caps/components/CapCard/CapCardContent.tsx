@@ -68,6 +68,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
       } else {
         toast.error(t("titleUpdateFailed"));
       }
+      setTitle(cap.name);
+      setIsEditing(false);
     }
   };
 

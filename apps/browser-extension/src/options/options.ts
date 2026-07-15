@@ -425,34 +425,39 @@ async function buildRecordingSection(
 		showToast("Saved");
 	});
 
-	const cameraToggleEl = createToggle("cameraOverlay", settings.cameraOverlay);
-	const cameraInput = cameraToggleEl.querySelector("input") as HTMLInputElement;
-
-	const cameraRow = document.createElement("div");
-	cameraRow.className = "toggle-row";
-
-	const cameraTextBlock = document.createElement("div");
-	const cameraLabel = document.createElement("span");
-	cameraLabel.className = "field-label";
-	cameraLabel.textContent = "Camera overlay";
-	const cameraDesc = document.createElement("p");
-	cameraDesc.className = "field-description";
-	cameraDesc.textContent =
-		"Show your camera in a small overlay while recording";
-	cameraTextBlock.appendChild(cameraLabel);
-	cameraTextBlock.appendChild(cameraDesc);
-
-	cameraRow.appendChild(cameraTextBlock);
-	cameraRow.appendChild(cameraToggleEl);
-	const cameraGroup = document.createElement("div");
-	cameraGroup.className = "field-group";
-	cameraGroup.appendChild(cameraRow);
-	container.appendChild(cameraGroup);
-
-	cameraInput.addEventListener("change", async () => {
-		await saveSettings({ cameraOverlay: cameraInput.checked });
-		showToast("Saved");
-	});
+	// Camera overlay toggle: HIDDEN (R4) — nothing in the recording pipeline
+	// (recorder/offscreen recorder/service worker) ever reads cameraOverlay,
+	// so this control did nothing. Keeping the setting field itself untouched;
+	// just not rendering the dead UI. See CLAUDE.md R4.
+	//
+	// const cameraToggleEl = createToggle("cameraOverlay", settings.cameraOverlay);
+	// const cameraInput = cameraToggleEl.querySelector("input") as HTMLInputElement;
+	//
+	// const cameraRow = document.createElement("div");
+	// cameraRow.className = "toggle-row";
+	//
+	// const cameraTextBlock = document.createElement("div");
+	// const cameraLabel = document.createElement("span");
+	// cameraLabel.className = "field-label";
+	// cameraLabel.textContent = "Camera overlay";
+	// const cameraDesc = document.createElement("p");
+	// cameraDesc.className = "field-description";
+	// cameraDesc.textContent =
+	// 	"Show your camera in a small overlay while recording";
+	// cameraTextBlock.appendChild(cameraLabel);
+	// cameraTextBlock.appendChild(cameraDesc);
+	//
+	// cameraRow.appendChild(cameraTextBlock);
+	// cameraRow.appendChild(cameraToggleEl);
+	// const cameraGroup = document.createElement("div");
+	// cameraGroup.className = "field-group";
+	// cameraGroup.appendChild(cameraRow);
+	// container.appendChild(cameraGroup);
+	//
+	// cameraInput.addEventListener("change", async () => {
+	// 	await saveSettings({ cameraOverlay: cameraInput.checked });
+	// 	showToast("Saved");
+	// });
 
 	const captureModeGroup = document.createElement("div");
 	captureModeGroup.className = "field-group";

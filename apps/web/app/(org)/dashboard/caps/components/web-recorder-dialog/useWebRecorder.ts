@@ -1571,7 +1571,11 @@ export const useWebRecorder = ({
 		[recordingMode, cameraStreamRef],
 	);
 
-	const canToggleCamera = hasCameraStream;
+	// In camera-only mode the camera IS the recorded track — muting it would
+	// silently record black video while the preview bubble still shows a live
+	// face. Only offer the camera-off toggle in screen+camera mode, where the
+	// camera is a detachable preview overlay.
+	const canToggleCamera = hasCameraStream && recordingMode !== "camera";
 
 	const toggleCameraMute = useCallback(() => {
 		const tracks = cameraStreamRef.current?.getVideoTracks() ?? [];
