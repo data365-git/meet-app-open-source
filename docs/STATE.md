@@ -3,7 +3,37 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION d) — READ FIRST, true last point.
+## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION e) — PRODUCTION-READINESS AUDIT DONE. READ FIRST.
+
+🎯 **GOAL:** production-ready for the owner's IT team. **The audit answers exactly what's blocking that.**
+
+**VERDICT: ❌ NOT production-ready — 4 floors open (Security · Legal · Data-loss · Ops).** The app's
+engineering is genuinely solid (auth/isolation verified clean = no IDOR, signed media, cost caps,
+tsc0/vitest895, prod 0-restart); what's missing is **launch hygiene + secret rotation**. Full evidence:
+`docs/plans/2026-07-15-production-readiness-SCORECARD.md`. Method: 4 read-only evidence-based gate
+agents pinned to deployed `f2e64a6` + my spot-checks + **BOTH Fable gates passed** (gate-1 approved the
+plan +20 must-adds; gate-2 verified results = trustworthy-with-6-corrections, all folded).
+
+**🔴 OWNER-ONLY floors (no code/agent can clear — the real path to ready):**
+1. **Rotate the live admin password** — gate-2's #1 blocker (cleartext in git HISTORY; a compromised admin walks around the solid isolation at the front door).
+2. **Free-tier Gemini** — remove `GEMINI_API_KEY_FREE` from the live Coolify env (instant, byte-identical fallback to paid) — else 3rd-party Meet audio flows to a Google tier that trains/human-reviews. (Owner-decision if meetings are strictly internal+consenting; floor default given external Meet guests.)
+3. **Recording backup** — recordings are a SINGLE R2 copy; enable R2 versioning+object-lock + replicate the DB dump off-account. (Recordings ARE the product.)
+4. **Device/flow tests** (headless can't): real record→upload→process (confirm the S3 `InvalidPart` prod errors STOPPED — the fix is already in `f2e64a6`, likely stale logs); extension v0.3.2 real-Meet; guaranteed-audio real 2-person Meet; dashboard phone-walk.
+5. VPS **reboot** (staged security update); **firewall** Coolify admin ports 8000/8080/6001/6002; **domain** move off `*.duckdns.org` (Chrome "Dangerous site").
+
+**🔧 FIXABLE-BY-ME (code/config — not started; owner OK before I touch main/prod):**
+1. **Down-alert** — MY MISS: `.github/workflows/uptime-alert.yml` is on `qa-fixes`, not `main` → scheduled workflows only fire from the DEFAULT branch → it NEVER runs. Move it to `main` (needs a push to main). + owner sets the 2 Telegram secrets.
+2. **RUNBOOK.md** — rollback / DB-restore-from-R2 / rotate-each-secret (operator is a non-programmer). + run ONE real test-restore.
+3. **Deletion/erasure** (web) — wire `Videos.permanentlyDelete` (0 web callers today) to a purge so delete actually erases R2 + publish a retention period. (Also fixes unbounded R2 cost growth. Note: the desktop-app endpoint already hard-deletes; the web/extension surface doesn't.)
+4. **Consent notice** — record-time "being recorded + sent to AI" string.
+5. LOWs: transcript `<untrusted_transcript>` delimiters in Gemini prompts; `getFolderVideoIds` membership guard (ID-enumeration leak); trim server-env Zod schema from client bundle.
+
+**⏳ STILL PENDING from SESSION d (unchanged, below):** extension v0.3.2 (`4ab9a46`) device-test-gated before team deploy; `7c77b2a` cron guard rides the next deploy. prod = `f2e64a6` (healthy).
+
+**✅ /CLEAR-SAFE:** everything committed+pushed (`006618d`). Audit complete + Fable-gate-2-verified. On resume: pick from the OWNER-ONLY or FIXABLE lists above — nothing is mid-edit.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION d) — the 11-bug sweep + extension v0.3.2 (history/detail below).
 
 🎯 **GOAL (unchanged):** Ustoz production-ready for the owner's IT team — record meetings (admin shares ENTIRE SCREEN + client audio GUARANTEED) → AI-analyze, on Contabo.
 
