@@ -9,8 +9,12 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 **WHAT HAPPENED THIS SESSION:** owner hit a camera-off "black circle" regression → I fixed it, then he asked for a FULL side-effect sweep. Ran a 5-agent audit of the whole app for the "state changed, dependent surface NOT updated" bug class → found **11 real bugs** → fixed ALL (owner authorized fix+deploy).
 
-**COMMITTED `f2e64a6` + pushed qa-fixes. Contabo deploy `pk3mvtmhhx9qzznzcrfupvi3` QUEUED (~30min Docker build).** Gates I ran: **tsc 0 · vitest 895 · web build 0 · extension build 0.**
-▶ **ON RESUME: confirm the deploy landed** — `docker ps` image tag = `f2e64a6` + `/api/health` {db,storage} ok on data365. (SSH poll: `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'docker ps --format "{{.Image}}"'`.)
+**COMMITTED `f2e64a6` + pushed. ✅✅ DEPLOY CONFIRMED LIVE — `docker ps` image tag = `f2e64a6` + `/api/health` {db:ok, storage:ok}.** All 11 fixes are live. Gates: **tsc 0 · vitest 895 · web build 0 · extension build 0.**
+
+**POST-DEPLOY (this session, after owner pushback on quality):**
+- I DEEP-REVIEWED all 5 fix-agents' diffs line-by-line (owner asked "did you check the AI subagent"). Verdict: all clean EXCEPT one real race I found + fixed in the AI cron.
+- 🔧 **`7c77b2a` (pushed, NOT yet deployed)** — recover-stale-ai-jobs cron guarded: it SELECTed stale PROCESSING refinements then UPDATEd by id unconditionally → combined with the new retry-guard it could stomp a user's just-restarted refinement to ERROR. Added status+requestedAt conditions to the UPDATE WHERE (no-op if the row changed). **UNREACHABLE on prod (timestampRefinement dormant — no ELEVENLABS_API_KEY), so no live impact; rides the NEXT deploy.** → prod is `f2e64a6`, qa-fixes HEAD is `7c77b2a`.
+- ✅ **R4 DECISION CLOSED (owner):** extension is meeting-only → no camera needed there → the dead "Camera" control stays HIDDEN. (Web dashboard recorder camera still works untouched, for the rare instruction-video case. Git-confirmed the extension camera toggle was dead since the ORIGINAL Cap fork, never a regression.)
 
 **The 11 fixes (all in `f2e64a6`):**
 - Recorder: (R1) camera-off no longer offered in camera-only mode (it silently recorded BLACK while the bubble showed a live face); (R2) floating camera bubble + light torn down on recording-complete; (the original screen+camera black-circle fix stands).
