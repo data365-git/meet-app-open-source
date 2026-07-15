@@ -3,14 +3,39 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## CODEX ON-DEMAND TIMESTAMP REFINEMENT (2026-07-15) — PARTIAL, CLAUDE HANDOFF
+## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION d) — READ FIRST, true last point.
 
+🎯 **GOAL (unchanged):** Ustoz production-ready for the owner's IT team — record meetings (admin shares ENTIRE SCREEN + client audio GUARANTEED) → AI-analyze, on Contabo.
+
+**WHAT HAPPENED THIS SESSION:** owner hit a camera-off "black circle" regression → I fixed it, then he asked for a FULL side-effect sweep. Ran a 5-agent audit of the whole app for the "state changed, dependent surface NOT updated" bug class → found **11 real bugs** → fixed ALL (owner authorized fix+deploy).
+
+**COMMITTED `f2e64a6` + pushed qa-fixes. Contabo deploy `pk3mvtmhhx9qzznzcrfupvi3` QUEUED (~30min Docker build).** Gates I ran: **tsc 0 · vitest 895 · web build 0 · extension build 0.**
+▶ **ON RESUME: confirm the deploy landed** — `docker ps` image tag = `f2e64a6` + `/api/health` {db,storage} ok on data365. (SSH poll: `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'docker ps --format "{{.Image}}"'`.)
+
+**The 11 fixes (all in `f2e64a6`):**
+- Recorder: (R1) camera-off no longer offered in camera-only mode (it silently recorded BLACK while the bubble showed a live face); (R2) floating camera bubble + light torn down on recording-complete; (the original screen+camera black-circle fix stands).
+- AI: (A1) crashed timestamp-refine stuck `PROCESSING` is now retryable — server guard learns CapCard's 30-min stale rule + recover-stale-ai-jobs cron resets orphans to ERROR.
+- Dashboard: (D1) video Settings save now revalidates+refreshes (was stale until reload); (D2) folder rename + (D3) CapCard title edit roll back on failure.
+- Locale: (U1) settings switcher uses the truly-active locale (kills the re-select dead-end) + login syncs NEXT_LOCALE cookie from saved account pref (cross-device).
+- Players: (S1) audio honors default playback speed (was video-only); (S2) stale caption cleared on transcript-language switch.
+- Extension (**manifest 0.3.0→0.3.1, zip refreshed to 0.3.1**): (R3) recorder-tab timer no longer counts paused time; (R4) dead "Camera" overlay control HIDDEN (no pipeline consumer — owner chose hide-not-build; full camera-overlay feature deferred).
+
+**⏳ OWNER TODOs (device-only, re-surface):**
+1. 🔴 rotate admin password (SECURITY — cleartext still in git history; the live-app change is the real fix).
+2. 📱 After deploy: reinstall the v0.3.1 extension zip → device-test on a REAL Meet (client audio guaranteed; pause → timer freezes; camera toggle gone from popup).
+3. Phone-walk the web fixes (headless dashboard is auth-gated — owner is the visual oracle): camera-off during a screen+camera recording (no black circle), video Settings save reflects immediately, folder/title rename, language switch.
+4. (optional) activate timestamp refinement = add `ELEVENLABS_API_KEY` to Contabo env.
+5. duckdns "Dangerous site" Safe-Browsing review; Telegram down-alert `TELEGRAM_ALERT_CHAT_ID` secret.
+
+**✅ /CLEAR-SAFE:** all code committed+pushed. Deploy in flight — on resume just confirm the image tag + health.
+
+---
+## CODEX ON-DEMAND TIMESTAMP REFINEMENT (2026-07-15) — ✅ RESOLVED, COMMITTED, LIVE
+
+- ✅ CLAUDE PICKED IT UP AND FINISHED IT. All 5 Codex remaining items done by me: CapCard ⋯ icon-only trigger, PROCESSING lifecycle sync + stale-recovery, no-auto-Scribe regression test, correctness review. Committed `e1fe9a1`, pushed qa-fixes, **DEPLOY CONFIRMED LIVE `15daab5`** (image tag + /api/health {db,storage} ok). See the SESSION-c block below for full detail.
 - Owner superseded the global-setting idea: Gemini is always the default; Scribe v2 timing is an explicit per-file action in the dashboard card `...` menu.
-- Codex wrote the owner-only action, background timing workflow, Scribe v2 switch, latest-text preservation, low-confidence fallback, translated-VTT timing sync, metadata status, localized confirmation UI, and focused tests.
-- Fresh evidence: `pnpm typecheck` exit 0; 5 focused test files / 27 tests passed; production web build exit 0.
-- Not finished visually: the first browser check hit the stale port-3001 build. Owner's final `...` note is only a tiny CSS-state fix: make it icon-only with no visible circle/rectangle/selected background, while preserving a transparent 44×44 hit target and keyboard focus accessibility.
-- Exact remaining spec and risks: `CODEX_TO_CLAUDE_TIMESTAMP_REFINEMENT_2026-07-15.md`.
-- Live has no `ELEVENLABS_API_KEY`; no commit, push, deploy, or secret change was performed.
+- 🆕 **DORMANT on prod** — no `ELEVENLABS_API_KEY`, so ⋯→"Refine timestamps" returns `missing_key` and spends nothing. Ordinary transcription = Gemini text+timing only (regression-tested). OWNER TODO to activate: add the paid key to Contabo/Coolify env (~$0.22/audio-hr) + A/B on a real Uzbek/Rus meeting.
+- Only owner-side remaining: phone-walk the new ⋯ trigger + AI-progress card (headless dashboard is auth-gated, can't verify visually).
 
 ---
 ## CODEX PLAYER + AI PROGRESS POLISH (2026-07-14) — VERIFIED, UNCOMMITTED
