@@ -299,10 +299,21 @@ export async function GET(request: Request) {
 					error: "failed",
 				},
 			};
+			// Guard the write: only reset if the row is STILL a stale PROCESSING
+			// refinement. Prevents stomping a run that completed, or one the user
+			// just re-started (the retry-guard in refine-timestamps.ts now allows
+			// restarting a stale refinement — its fresh requestedAt fails the
+			// `<= refineStaleBeforeIso` check, so this update becomes a no-op).
 			await db()
 				.update(videos)
 				.set({ metadata: nextMetadata })
-				.where(eq(videos.id, candidate.id));
+				.where(
+					and(
+						eq(videos.id, candidate.id),
+						sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.timestampRefinement.status')) = 'PROCESSING'`,
+						sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.timestampRefinement.requestedAt')) <= ${refineStaleBeforeIso}`,
+					),
+				);
 			refinementReset++;
 		} catch (error) {
 			console.error(
