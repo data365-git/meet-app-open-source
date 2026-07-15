@@ -156,34 +156,56 @@ function updateBadge(state: ExtensionState): void {
 	}
 }
 
-// ── Tab-audio-lost watchdog (guaranteed client audio) ──────────────────────
+// ── Tab-audio degradation watchdog (guaranteed client audio) ───────────────
 //
 // `intentionalStop` is set true the instant ANY deliberate stop/disarm begins
 // (STOP, CANCEL, a matching MEET_CALL_ENDED) and reset false when a new
-// recording starts. Every loss signal below is gated on it being false, so a
-// normal user "Stop & upload" never raises a false "audio lost" alert (Codex
+// recording starts. Every degradation signal below is gated on it being
+// false, so a normal user "Stop & upload" never raises a false alert (Codex
 // FIX B — chrome.tabCapture.onStatusChanged fires "stopped" on ordinary stops
-// too). `tabAudioLostNotified` makes the notify/badge idempotent per recording.
+// too). Tab-audio loss is NON-FATAL (owner 2026-07-15 reversal): the
+// recording keeps going (screen+mic, and whatever client audio remains) —
+// this only surfaces a notification/badge, it never stops anything.
+// `tabAudioDegradedNotified` makes the notify/badge idempotent PER DEGRADED
+// SPAN, not per recording: it resets on recovery so a second loss re-notifies.
 let intentionalStop = false;
-let tabAudioLostNotified = false;
+let tabAudioDegradedNotified = false;
 
-function notifyTabAudioLost(): void {
-	if (tabAudioLostNotified) return;
-	tabAudioLostNotified = true;
-	chrome.notifications.create("tab-audio-lost", {
+function notifyTabAudioDegraded(cause: "muted" | "suspended" | "ended"): void {
+	if (tabAudioDegradedNotified) return;
+	tabAudioDegradedNotified = true;
+	const messages: Record<typeof cause, string> = {
+		muted:
+			"The Meet tab was muted. Recording continues (screen+mic); client audio is not being captured until it's unmuted.",
+		suspended:
+			"Client audio briefly dropped mid-recording. Recording continues; attempting to recover.",
+		ended:
+			"The Meet tab was closed or navigated away. Recording continues (screen+mic only) — client audio can't be reconnected.",
+	};
+	chrome.notifications.create("tab-audio-degraded", {
 		type: "basic",
 		iconUrl: "icons/icon-128.png",
-		title: "Client audio lost",
-		message:
-			"The client's audio was lost mid-recording. Saving the partial recording.",
+		title: "Client audio degraded",
+		message: messages[cause],
 	});
 	chrome.action.setBadgeText({ text: "!" });
 	chrome.action.setBadgeBackgroundColor({ color: "#dd6b20" });
 }
 
+/** Recovery from a degraded span (muted→unmuted, audioCtx resumed). Clears the
+ * notification/badge and re-arms notifyTabAudioDegraded for the NEXT loss —
+ * "ended" never calls this (it's permanent for the rest of the recording). */
+async function notifyTabAudioRecovered(): Promise<void> {
+	tabAudioDegradedNotified = false;
+	chrome.notifications.clear("tab-audio-degraded");
+	const st = await getState();
+	updateBadge(st);
+}
+
 /** SW-side detection (source tab closed/navigated away): tell the recorder tab
- * to stop via the loss path (NOT the ordinary STOP_CAPTURE, which would mark
- * this as an intentional stop) and notify. */
+ * about the loss via the degraded path (NOT the ordinary STOP_CAPTURE, which
+ * would mark this as an intentional stop) and notify. This is always the
+ * unrecoverable "ended" cause — the recorder tab keeps recording screen+mic. */
 async function handleSourceTabLost(tabId: number): Promise<void> {
 	const state = await getState();
 	if (
@@ -203,7 +225,7 @@ async function handleSourceTabLost(tabId: number): Promise<void> {
 			"TAB_AUDIO_LOST_REMOTE→tab",
 		);
 	}
-	notifyTabAudioLost();
+	notifyTabAudioDegraded("ended");
 }
 
 // ── Meeting ended → ask, don't auto-stop (owner's choice) ──────────────────
@@ -901,13 +923,27 @@ async function handleMessage(
 			}
 		}
 
-		// ── Recorder tab: mid-recording tab-audio loss detected locally ──────
-		// The recorder page detected the tab-audio track/context died and already
-		// stopped its own recorder (see recorder-page.ts handleTabAudioLoss). We
+		// ── Recorder tab: mid-recording tab-audio degradation detected locally ──
+		// The recorder page detected the tab-audio track/context degraded but did
+		// NOT stop its own recorder (see recorder-page.ts handleTabAudioDegraded —
+		// owner 2026-07-15: never stop, warn + auto-recover when possible). We
 		// only notify + badge — NEVER set state to "error", which would make
 		// finalizeRecording() bail (state.kind !== "recording").
-		case "TAB_AUDIO_LOST": {
-			if (!intentionalStop) notifyTabAudioLost();
+		case "TAB_AUDIO_DEGRADED": {
+			const cause = getString(msg, "cause");
+			if (
+				!intentionalStop &&
+				(cause === "muted" || cause === "suspended" || cause === "ended")
+			) {
+				notifyTabAudioDegraded(cause);
+			}
+			return { ok: true };
+		}
+
+		// ── Recorder tab: mid-recording tab-audio recovered (muted→unmuted, or
+		// audioCtx resumed) ───────────────────────────────────────────────────
+		case "TAB_AUDIO_RECOVERED": {
+			if (!intentionalStop) await notifyTabAudioRecovered();
 			return { ok: true };
 		}
 
@@ -968,9 +1004,9 @@ async function handleMessage(
 			};
 			await setState(nextState);
 			// A new recording starts clean: no stop is "in flight" yet, and any
-			// prior tab-audio-lost notification no longer applies.
+			// prior tab-audio-degraded notification no longer applies.
 			intentionalStop = false;
-			tabAudioLostNotified = false;
+			tabAudioDegradedNotified = false;
 			startKeepAlive();
 			updateBadge(nextState);
 			return { ok: true };

@@ -63,6 +63,51 @@ File: `sw.ts` (capture path) + wiring.
 - `chooseDesktopMedia` needs the `desktopCapture` permission in manifest (verify/add).
 - Everything is device-test-gated on a real Meet — owner verifies after the zip ships.
 
+## REVIEW-FOLDED (Fable, 2026-07-15) — BINDING REVISIONS
+Verdict: proceed-with-fixes. Fold ALL of these before/while building.
+
+**Item 3 — SWAP MECHANISM (do NOT use desktopCapture).** desktopCapture from the SW is
+architecturally broken here (war-story comment sw.ts L15-20) and screen capture actually
+lives in `recorder-page.ts` L260 (`getDisplayMedia`), not sw.ts. desktopCapture(['screen'])
++ video-only getUserMedia would also DELETE the system-audio fallback (L363-364) that Item 1
+newly relies on → mic-only recordings. INSTEAD keep `getDisplayMedia` and add picker hints:
+`video: { displaySurface: "monitor", ...existing caps }`, `audio: true`, plus
+`selfBrowserSurface: "exclude"`, `surfaceSwitching: "exclude"`, `monitorTypeSurfaces: "include"`.
+Opens the picker on "Entire screen". ~5 lines, no new manifest permission, no audio loss,
+onended "Stop sharing" wiring (L464-471) untouched. (desktopCapture isn't literally 1-click either.)
+
+**Item 2 — CUT auto-recover scope to the testable causes.**
+- `REQUEST_TAB_AUDIO` only answers in `kind==="arming"` (sw.ts L865-902) → cannot re-capture
+  mid-recording as-is; re-capture after tab-close is near-impossible (new tabId, no invocation).
+- Auto-recover ONLY: muted→unmute (same track resumes) and audioCtx suspended→`resume()`.
+  Tab CLOSED/ended = UNRECOVERABLE → persistent banner "Meet tab yopildi — qayta oching va
+  extension'ni bosing (ovozni qayta ulash) yoki to'xtating", keep recording (screen+mic). No
+  fake auto-retry (untestable). Full mid-recording reattach = deferred follow-up.
+- Plumbing: retain `dest` in `RecordingState` (L24-30); make `tabAudioLost` (L50) resettable;
+  re-wire onended/onmute on any recovered track; race-guard every await in the degraded handler
+  against `intentionalStop`/recorder inactive (a late tabCapture stream mutes the Meet tab → must stop it).
+
+**Item 1 — fixes.**
+- ONE decision per start: on confirm set `clientAudioWaived=true`; the liveness gate (L383-401)
+  SKIPS when waived (prevents a double modal).
+- Wire `displayStream` video `onended` BEFORE showing the modal (native "Stop sharing" during
+  the modal → treat as Bekor); re-check `readyState==="live"` after confirm.
+- `meetingRequired` stays true after a waived start (MEET_CALL_ENDED prompt keeps working) —
+  the degraded handler must tolerate `tabAudioStream===null`.
+
+**Banner:** one small state machine for `#rec-audio-warn` (priority + current cause) — it now has
+4 writers (loss, mic-only L527-536, Item 1 persistent, Item 2 rotating). Clear SW badge on recovery.
+
+**SW text/semantics to fix:** `notifyTabAudioLost` (L170-182, says "saving partial" + sets `!` badge),
+`TAB_AUDIO_LOST` handler (L904-912), `handleSourceTabLost` doc (L184-186), `TAB_AUDIO_LOST_MSG`
+(recorder-page.ts L52-53, "yozuv to'xtatildi") all encode STOP — add degraded/recovered messaging + badge-clear.
+
+**Verify recipes (real):**
+- Item 1: start "Record full-screen meeting" from a Meet tab, then close/navigate the Meet tab
+  BEFORE completing the screen picker → REQUEST_TAB_AUDIO returns null,required → confirm appears.
+- Item 2 mute: Chrome tab-level mute (right-click tab → mute site), NOT Meet participant mute.
+- Item 2 close: close the Meet tab mid-record → banner + recording continues (screen+mic).
+
 ## Ship sequence
 manifest 0.3.1 → 0.3.2 · `node scripts/build.mjs` EXIT 0 · rebuild+verify zip ·
 commit · deploy (push qa-fixes + Contabo trigger) · owner reinstalls + device-tests.

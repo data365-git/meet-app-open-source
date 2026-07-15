@@ -150,6 +150,14 @@
 				<p id="idle-msg" class="msg"></p>
 			</div>
 
+			<!-- CONFIRM: client (Meet tab) audio guarantee could not be met -->
+			<div id="view-confirm" class="hidden">
+				<h1>Diqqat</h1>
+				<p class="msg msg-error">Mijoz ovozi olinmadi. Baribir boshlaymizmi?</p>
+				<button id="btn-confirm-start" class="btn btn-primary">Boshla</button>
+				<button id="btn-confirm-cancel" class="btn btn-secondary">Bekor</button>
+			</div>
+
 			<!-- RECORDING -->
 			<div id="view-recording" class="hidden">
 				<div class="rec-row">
@@ -158,11 +166,9 @@
 				</div>
 				<div id="timer" class="timer">00:00</div>
 				<p class="sub">Recording in progress. Keep this tab open.</p>
-				<p id="rec-audio-warn" class="msg msg-error hidden">
-					⚠️ System audio is NOT shared — other people's voices won't be
-					recorded (only your mic). Stop, start again, and tick
-					<b>“Also share system audio”</b> in the picker.
-				</p>
+				<!-- Text is set dynamically by the banner state machine in
+				     recorder-page.ts (mic-only / waived / muted / suspended / ended). -->
+				<p id="rec-audio-warn" class="msg msg-error hidden"></p>
 				<button id="btn-stop" class="btn btn-danger">Stop &amp; upload</button>
 			</div>
 

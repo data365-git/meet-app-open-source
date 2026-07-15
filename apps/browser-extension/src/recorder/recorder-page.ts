@@ -24,6 +24,7 @@ interface RecorderSettings {
 interface RecordingState {
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
+	dest: MediaStreamAudioDestinationNode;
 	displayStream: MediaStream;
 	micStream: MediaStream | null;
 	tabAudioStream: MediaStream | null;
@@ -44,39 +45,108 @@ let pausedAccumMs = 0;
 // `intentionalStop` is set true BEFORE any deliberate stop begins (Stop &
 // upload button, SW-initiated STOP_CAPTURE, this tab closing) so the mid-
 // recording watchdog below never mistakes an ordinary stop for a tab-audio
-// loss. `tabAudioLost` makes the loss handler idempotent (fires once). Both
-// reset at the start of each new recording.
+// loss. `clientAudioWaived` records the Item-1 "Boshla anyway" decision (at
+// most one confirm per start — see resolveClientAudioGap). Both reset at the
+// start of each new recording.
 let intentionalStop = false;
-let tabAudioLost = false;
+let clientAudioWaived = false;
 
-const TAB_AUDIO_LOST_MSG =
-	"⚠️ Mijoz ovozi uzildi — yozuv to'xtatildi va qisman saqlanmoqda.";
+// ── Audio warning banner state machine ──────────────────────────────────────
+//
+// #rec-audio-warn has several potential writers (the mic-only fallback warning
+// at recording start, Item 1's persistent "waived" warning, Item 2's rotating
+// degraded-cause warnings) that must not clobber each other. `activeAudioWarn`
+// holds every currently-active cause; the highest-priority one is rendered.
+type AudioWarnCause = "ended" | "muted" | "suspended" | "waived" | "mic-only";
 
-/** Mid-recording loss of the client's (tab) audio — the ongoing half of the
- * guarantee (a live track only proves the browser hasn't closed the media
- * object, not that audio is truly flowing, hence this watchdog on top of the
- * start-time liveness gate). Idempotent; never fires after an intentional stop. */
-function handleTabAudioLoss(): void {
-	if (intentionalStop || tabAudioLost) return;
-	tabAudioLost = true;
-	if (state && state.recorder.state !== "inactive") {
-		// Stop ONLY — do not cleanup() streams first. The existing
-		// pendingChunks/finishStop flow (ondataavailable/onstop) finalizes the
-		// already-recorded video with whatever was captured up to this point.
-		state.recorder.stop();
-	}
-	sendMsg({ type: "TAB_AUDIO_LOST" });
+const AUDIO_WARN_TEXT: Record<AudioWarnCause, string> = {
+	ended:
+		"⚠️ Meet tab yopildi — qayta oching va extension'ni bosing, yoki yozuvni to'xtating.",
+	muted: "⚠️ Mijoz ovozi o'chirilgan — Meet tab ovozini yoqing.",
+	suspended: "⚠️ Mijoz ovozi vaqtincha uzildi — tiklanmoqda…",
+	waived: "⚠️ Mijoz ovozi olinmayapti — faqat ekran va mikrofon yozilmoqda.",
+	"mic-only":
+		"⚠️ System audio is NOT shared — other people's voices won't be recorded (only your mic). Stop, start again, and tick “Also share system audio” in the picker.",
+};
+
+// Higher wins when more than one cause is simultaneously active.
+const AUDIO_WARN_PRIORITY: Record<AudioWarnCause, number> = {
+	ended: 5,
+	muted: 4,
+	suspended: 3,
+	waived: 2,
+	"mic-only": 1,
+};
+
+const activeAudioWarn = new Set<AudioWarnCause>();
+
+function renderAudioWarn(): void {
 	const warn = $("rec-audio-warn");
-	if (warn) {
-		warn.textContent = TAB_AUDIO_LOST_MSG;
+	if (!warn) return;
+	let top: AudioWarnCause | null = null;
+	for (const c of activeAudioWarn) {
+		if (top === null || AUDIO_WARN_PRIORITY[c] > AUDIO_WARN_PRIORITY[top]) top = c;
+	}
+	if (top === null) {
+		warn.classList.add("hidden");
+		warn.textContent = "";
+	} else {
+		warn.textContent = AUDIO_WARN_TEXT[top];
 		warn.classList.remove("hidden");
 	}
+}
+
+function setAudioWarn(cause: AudioWarnCause, active: boolean): void {
+	if (active) activeAudioWarn.add(cause);
+	else activeAudioWarn.delete(cause);
+	renderAudioWarn();
+}
+
+// ── Mid-recording tab-audio degradation (non-fatal, owner 2026-07-15) ──────
+//
+// Tab-audio loss no longer stops the recording. `degradedCauses` tracks which
+// causes are CURRENTLY active (unlike the old one-shot flag) so a recovery
+// (unmute / audioCtx resume) followed by a second loss re-warns. "ended" is
+// unrecoverable and never clears — re-capturing tab audio after the source
+// tab has closed is architecturally impossible here (no live invocation to
+// re-arm from), so we don't pretend otherwise with a fake retry.
+const degradedCauses = new Set<"muted" | "suspended" | "ended">();
+
+function handleTabAudioDegraded(cause: "muted" | "suspended" | "ended"): void {
+	if (intentionalStop || !state || state.recorder.state === "inactive") return;
+	if (degradedCauses.has(cause)) return;
+	degradedCauses.add(cause);
+	setAudioWarn(cause, true);
+	sendMsg({ type: "TAB_AUDIO_DEGRADED", cause });
+}
+
+function handleTabAudioRecovered(cause: "muted" | "suspended" | "ended"): void {
+	if (intentionalStop || cause === "ended" || !degradedCauses.has(cause)) return;
+	degradedCauses.delete(cause);
+	setAudioWarn(cause, false);
+	if (degradedCauses.size === 0) sendMsg({ type: "TAB_AUDIO_RECOVERED" });
+}
+
+/** audioCtx suspending mid-recording silences the whole mix (mic included),
+ * not just the tab track — unlike a truly ended tab this is recoverable via
+ * resume(). Race-guarded: a deliberate stop may land while we await. */
+async function attemptAudioCtxResume(audioCtx: AudioContext): Promise<void> {
+	try {
+		await audioCtx.resume();
+	} catch {
+		// Banner stays up; the next onstatechange (or another watchdog tick)
+		// will retry. Not a fatal condition.
+		return;
+	}
+	if (intentionalStop || !state || state.recorder.state === "inactive") return;
+	if (audioCtx.state === "running") handleTabAudioRecovered("suspended");
 }
 
 // ── View switching ──────────────────────────────────────────────────────────
 
 const VIEWS = [
 	"view-idle",
+	"view-confirm",
 	"view-recording",
 	"view-uploading",
 	"view-complete",
@@ -243,6 +313,64 @@ function failClosedStart(
 	if (startBtn) startBtn.disabled = false;
 }
 
+// ── Confirm-instead-of-abort (guaranteed client audio, owner 2026-07-15) ────
+//
+// When the client (Meet tab) audio guarantee can't be met, ask the user
+// instead of silently failing closed. The video track's `onended` (native
+// "Stop sharing") is wired BEFORE the modal shows so a share-stop while the
+// modal is open resolves as Bekor; `readyState` is re-checked after resolve
+// too, closing the race where "Stop sharing" and the "Boshla" click land
+// almost simultaneously.
+function confirmProceedWithoutClientAudio(
+	displayStream: MediaStream,
+): Promise<boolean> {
+	return new Promise((resolve) => {
+		const videoTrack = displayStream.getVideoTracks()[0];
+		let settled = false;
+		const finish = (proceed: boolean) => {
+			if (settled) return;
+			settled = true;
+			if (videoTrack) videoTrack.onended = null;
+			resolve(proceed);
+		};
+		if (videoTrack) {
+			videoTrack.onended = () => finish(false);
+		}
+		showView("view-confirm");
+		$("btn-confirm-start")?.addEventListener("click", () => finish(true), {
+			once: true,
+		});
+		$("btn-confirm-cancel")?.addEventListener("click", () => finish(false), {
+			once: true,
+		});
+	});
+}
+
+/** Shared by both fail points (no tab audio at all, and the liveness gate).
+ * Returns true when the caller should continue starting the recording
+ * (the user chose Boshla and the display track is still live); false when
+ * the caller must fail-closed and return (already handled here). */
+async function resolveClientAudioGap(
+	streams: {
+		displayStream: MediaStream;
+		micStream: MediaStream | null;
+		tabAudioStream: MediaStream | null;
+		audioCtx?: AudioContext;
+	},
+	startBtn: HTMLButtonElement | null,
+): Promise<boolean> {
+	const proceed = await confirmProceedWithoutClientAudio(streams.displayStream);
+	const videoTrack = streams.displayStream.getVideoTracks()[0];
+	if (!proceed || !videoTrack || videoTrack.readyState !== "live") {
+		failClosedStart(TAB_AUDIO_UNAVAILABLE_MSG, streams, startBtn);
+		return false;
+	}
+	clientAudioWaived = true;
+	showView("view-idle");
+	setAudioWarn("waived", true);
+	return true;
+}
+
 // ── Start recording (called from a user gesture) ────────────────────────────
 
 async function startRecording(): Promise<void> {
@@ -251,7 +379,10 @@ async function startRecording(): Promise<void> {
 	if (startBtn) startBtn.disabled = true;
 	// A new recording starts clean.
 	intentionalStop = false;
-	tabAudioLost = false;
+	clientAudioWaived = false;
+	degradedCauses.clear();
+	activeAudioWarn.clear();
+	renderAudioWarn();
 
 	const settings = await getSettings();
 
@@ -259,12 +390,16 @@ async function startRecording(): Promise<void> {
 	try {
 		displayStream = await navigator.mediaDevices.getDisplayMedia({
 			video: {
+				displaySurface: "monitor",
 				width: { max: 1280 },
 				height: { max: 720 },
 				frameRate: { max: 24 },
 			},
 			audio: true,
-		});
+			selfBrowserSurface: "exclude",
+			surfaceSwitching: "exclude",
+			monitorTypeSurfaces: "include",
+		} as unknown as DisplayMediaStreamOptions);
 	} catch (err) {
 		// User cancelled the picker, or capture is blocked. NEVER silently
 		// pretend success — surface a clear message and stay on the idle view.
@@ -341,16 +476,16 @@ async function startRecording(): Promise<void> {
 		const haveTabAudio =
 			!!tabAudioStream && tabAudioStream.getAudioTracks().length > 0;
 
-		// FAIL-CLOSED (Codex #2/#5): streamId null, getUserMedia threw, or 0
-		// audio tracks — a meeting-required recording must never silently ship
-		// client-less. Plain mode falls back to screen + mic as before.
+		// CONFIRM, DON'T FAIL-CLOSED (owner 2026-07-15 reversal of Codex #2/#5):
+		// streamId null, getUserMedia threw, or 0 audio tracks — a meeting-
+		// required recording asks the user instead of silently aborting. Plain
+		// mode falls back to screen + mic as before (no prompt).
 		if (meetingRequired && !haveTabAudio) {
-			failClosedStart(
-				TAB_AUDIO_UNAVAILABLE_MSG,
+			const ok = await resolveClientAudioGap(
 				{ displayStream, micStream, tabAudioStream },
 				startBtn,
 			);
-			return;
+			if (!ok) return;
 		}
 
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
@@ -380,7 +515,10 @@ async function startRecording(): Promise<void> {
 		// below, after the recorder starts) remains the ongoing guarantee.
 		// Plain mode: advisory only, never blocks (no regression, Codex #5).
 		await audioCtx.resume();
-		if (meetingRequired) {
+		// ONE decision per start (plan Item 1): skip this gate entirely once the
+		// first branch above already waived client audio, so a second modal
+		// never fires for the same start attempt.
+		if (meetingRequired && !clientAudioWaived) {
 			const tabTrack = tabAudioStream?.getAudioTracks()[0];
 			const destTrack = dest.stream.getAudioTracks()[0];
 			const liveOk =
@@ -391,12 +529,11 @@ async function startRecording(): Promise<void> {
 				!!destTrack &&
 				destTrack.readyState === "live";
 			if (!liveOk) {
-				failClosedStart(
-					TAB_AUDIO_UNAVAILABLE_MSG,
+				const ok = await resolveClientAudioGap(
 					{ displayStream, micStream, tabAudioStream, audioCtx },
 					startBtn,
 				);
-				return;
+				if (!ok) return;
 			}
 		}
 
@@ -470,25 +607,36 @@ async function startRecording(): Promise<void> {
 			};
 		}
 
-		state = { recorder, audioCtx, displayStream, micStream, tabAudioStream };
+		state = { recorder, audioCtx, dest, displayStream, micStream, tabAudioStream };
 
 		// MID-RECORDING WATCHDOG (guaranteed client audio): belt-and-suspenders
-		// signals that the client's tab audio has died. `onended` is terminal
-		// (act now); `onmute` is debounced 1.5s and re-checked, since a normal
-		// SILENT client does NOT mute a tabCapture track (so this won't false-
-		// trip on quiet participants) — only a real Meet-side mute of the tab.
+		// signals that the client's tab audio has degraded. `onended` is
+		// terminal (unrecoverable, act now); `onmute` is debounced 1.5s and
+		// re-checked, since a normal SILENT client does NOT mute a tabCapture
+		// track (so this won't false-trip on quiet participants) — only a real
+		// Meet-side mute of the tab. `onunmute` clears the muted warning. None
+		// of this stops the recording (owner 2026-07-15 reversal) — it only
+		// warns + attempts recovery where possible. Tolerates tabAudioStream
+		// being null (a waived start from Item 1 has no tab track to watch).
 		if (meetingRequired) {
 			const tabTrack = tabAudioStream?.getAudioTracks()[0];
 			if (tabTrack) {
-				tabTrack.onended = () => handleTabAudioLoss();
+				tabTrack.onended = () => handleTabAudioDegraded("ended");
 				tabTrack.onmute = () => {
 					setTimeout(() => {
-						if (tabTrack.muted) handleTabAudioLoss();
+						if (tabTrack.muted) handleTabAudioDegraded("muted");
 					}, 1500);
 				};
+				tabTrack.onunmute = () => handleTabAudioRecovered("muted");
 			}
 			audioCtx.onstatechange = () => {
-				if (state && audioCtx.state !== "running") handleTabAudioLoss();
+				if (!state) return;
+				if (audioCtx.state === "running") {
+					handleTabAudioRecovered("suspended");
+				} else {
+					handleTabAudioDegraded("suspended");
+					attemptAudioCtxResume(audioCtx);
+				}
 			};
 		}
 
@@ -523,16 +671,16 @@ async function startRecording(): Promise<void> {
 		showView("view-recording");
 		// If the user didn't tick "share system audio" in the picker, the other
 		// participants' voices are NOT captured (only mic) — surface it loudly so a
-		// meeting is never silently recorded mic-only.
-		const audioWarn = $("rec-audio-warn");
-		if (audioWarn) {
+		// meeting is never silently recorded mic-only. Skipped when the stronger
+		// "waived" warning (Item 1) is already showing for this same recording.
+		if (!clientAudioWaived) {
 			// Remote audio is captured if EITHER the source tab's audio came through
 			// (tabCapture) OR the user shared system audio. Warn only when neither
 			// did, so a meeting is never silently recorded mic-only.
 			const hasRemoteAudio =
 				displayStream.getAudioTracks().length > 0 ||
 				(tabAudioStream?.getAudioTracks().length ?? 0) > 0;
-			audioWarn.classList.toggle("hidden", hasRemoteAudio);
+			setAudioWarn("mic-only", !hasRemoteAudio);
 		}
 		startTimer();
 	} catch (err) {
@@ -722,11 +870,12 @@ function wire(): void {
 			}
 			sendResponse({ ok: true });
 		} else if (msg.type === "TAB_AUDIO_LOST_REMOTE") {
-			// SW detected the loss independently (source tab closed/navigated away)
-			// — route through the same idempotent loss handler as the local
+			// SW detected the loss independently (source tab closed/navigated
+			// away) — this is always the unrecoverable "ended" cause. Route
+			// through the same degraded-not-stopped handler as the local
 			// watchdog, NOT stopRecording(), so it is never mistaken for an
 			// intentional stop.
-			handleTabAudioLoss();
+			handleTabAudioDegraded("ended");
 			sendResponse({ ok: true });
 		}
 	});
