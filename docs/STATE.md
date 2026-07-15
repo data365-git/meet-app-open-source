@@ -31,7 +31,14 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 4. (optional) activate timestamp refinement = add `ELEVENLABS_API_KEY` to Contabo env.
 5. duckdns "Dangerous site" Safe-Browsing review; Telegram down-alert `TELEGRAM_ALERT_CHAT_ID` secret.
 
-**🔜 NEXT UP — PLANNED, NOT BUILT (owner-decided 2026-07-15):** recorder resilience + one-click screen (extension v0.3.2). Plan: `docs/plans/2026-07-15-recorder-resilience-and-one-click.md` (under Fable plan-review). Owner decisions: (1) start with no client audio → **confirm once then start** (not silent abort); (2) mid-recording client-audio loss → **do NOT stop; warn + auto-recover** (mute→unmute, suspend→resume, tab-closed→one re-capture attempt then keep recording); (3) **one-click whole-screen picker** via `chrome.desktopCapture.chooseDesktopMedia(['screen'])`. REVERSES part of the earlier fail-closed guarantee — deliberately. Device-test-gated (real Meet). Build after plan-review folds in fixes.
+**🔨 BUILT — extension v0.3.2, NOT DEPLOYED (owner device-tests local dist FIRST).** Recorder resilience + one-click screen. Commit `4ab9a46`. Plan (+Fable review folded): `docs/plans/2026-07-15-recorder-resilience-and-one-click.md`.
+- Item 1: no client audio at start → **confirm "Baribir boshlaymizmi?" once** (not silent abort) → Boshla records screen+mic + persistent banner.
+- Item 2: mid-recording loss → **never stops**; muted→warn+clear-on-unmute, audioCtx suspended→resume()+clear, tab-closed→persistent "reopen+click extension" banner + keep recording. (Auto-recover scoped to the TWO testable causes — Fable proved mid-recording re-capture of a closed tab is impossible; NOT faked.)
+- Item 3: **one-click whole-screen** via getDisplayMedia `displaySurface:"monitor"` hints (NOT desktopCapture — Fable flagged it broken-from-SW + would kill system-audio fallback).
+- Gates: extension tsc clean beyond the pre-existing offscreen↔recorder-page global-scope collision · esbuild EXIT 0 · zip refreshed+verified 0.3.2. I hard-reviewed the confirm flow + watchdog races myself (Sonnet built it) — sound.
+- ⚠️ REVERSES the earlier fail-closed guarantee, DELIBERATELY (owner). Device-test-gated.
+- ▶ **RELEASE GATE:** owner loads the LOCAL `apps/browser-extension/dist/` unpacked → device-tests on a REAL Meet (confirm-then-start; mute Meet tab → banner+continue → unmute → clears; close Meet tab → "reopen" banner + keeps recording; one-click whole-screen). ONLY after his OK → deploy (push already done for code; then Contabo trigger) so the team zip ships. The committed `365-extension.zip` is already 0.3.2 but must NOT reach the team until that device-test passes.
+- Also pending the SAME deploy: `7c77b2a` (AI cron race-guard, dormant/unreachable on prod).
 
 **✅ /CLEAR-SAFE:** all code committed+pushed. Deploy in flight — on resume just confirm the image tag + health.
 
