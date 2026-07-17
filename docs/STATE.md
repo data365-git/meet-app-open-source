@@ -3,7 +3,38 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION e) — PRODUCTION-READINESS AUDIT DONE. READ FIRST.
+## ▶▶ /CLEAR HANDOFF (2026-07-17 — SESSION f) — FOUND + FIXED A LIVE RECORDING-LOSS BUG. READ FIRST.
+
+🎯 **GOAL (owner re-baselined this session):** production-ready for the IT team — and the #1 thing "ready" MEANS: **a meeting must NEVER fail to record.** Rank everything against that.
+
+**🔴 THE HEADLINE: extension recordings longer than ~2-3 min have been FAILING IN PRODUCTION, and still are for the team's installed build.**
+R2 requires *"all parts except the last must be the same size"*. `apps/browser-extension/.../upload.ts` flushed the WHOLE buffer whenever it crossed 5 MiB → every part a different size → `completeMultipart` → `InvalidPart` → recording lost, bytes stranded as an unfinished multipart upload. **`2a405a5` fixed exactly this in the WEB uploader and missed the extension twin** (the two packages share no code, so no caller/reference search links them). This is the real cause of the prod `InvalidPart` errors the SESSION-e audit waved off as "likely stale logs" — they were live.
+- ✅ **FIXED + committed `3582cb9` on qa-fixes** (pure `takeFixedSizeParts` + `handleChunk` uploads only full parts, keeps + PERSISTS the remainder — clearing it would have punched a hole in the middle of a recording on MV3 eviction; I caught that regression reviewing Sonnet's diff).
+- ⚠️ **NOT DEPLOYED, NOT re-zipped.** The team's `365-extension.zip` still has the bug. Ships with the v0.3.2 device-test gate below.
+
+**🧷 TRAPS INSTALLED (owner asked for "make these not repeat" BEFORE the fix — a nudge wasn't enough; both relevant rules already existed as hooks and both failed):**
+1. **Extension vitest suite** (the package had ZERO tests) asserting the R2 invariant + byte-integrity, incl. an integration test driving the real `handleChunk`. **Teeth verified**: restoring the old logic turns 4/5 red (`expected 5451930 to be 5242880`).
+2. **CI now runs the extension suite** — it only ran `@cap/web`, so a test added here would never have executed.
+3. **CI guard: any workflow with `schedule:` must exist on the default branch** (`ci.yml`, job `guards`).
+4. **CI split into 3 independent jobs** (`test` / `lint` / `guards`) — it was ONE job, so the perpetually-red Biome step SKIPPED everything after it. My schedule guard was originally placed after Biome and would have been dead on arrival.
+5. **Fixed the BOM check, broken since birth** — `grep -q` finding nothing exits 1, and GH steps run under `bash -e`, so it failed *precisely when nothing was wrong*. Never noticed because it was always skipped behind Biome.
+
+**✅ CRON WORKFLOWS NOW ACTUALLY RUN (PR #1, #2 merged to main).** GitHub only fires `schedule:` from the DEFAULT branch — `db-backup`, `reconcile-cron`, `uptime-alert` lived only on `qa-fixes`: **0 runs, ever**, for 10 days, with all secrets configured since 07-07. Moved to `main`, then dispatched each to PROVE it works:
+- `uptime-alert` ✅ success · `reconcile-cron` ✅ success
+- `db-backup` ❌ failed first (`E: Package 'awscli' has no installation candidate` — dropped from the runner's apt; AWS CLI v2 is preinstalled) → fixed → ✅ **first DB backup in project history exists: `data365-2026-07-17.sql.gz`, 4.9 MB, in R2 `db-backups/`.**
+
+**📋 CI STATUS (honest):** `test` ✅ green (tsc 0 · 895 web · 5 extension) · `guards` ✅ green · **`lint` (Biome) ❌ RED on a large PRE-EXISTING backlog (~1231 findings, mostly CRLF across ~676 files)** — isolated in its own job so it masks nothing. Clearing it = separate deliberate work (touches 676 files); NOT started.
+
+**🔴 NEW, UNRESOLVED — needs the owner:** the **retired Railway deployment is STILL LIVE**: `https://capweb-production-dd85.up.railway.app/api/health` → 200 `{db:ok, storage:ok}`. An old copy of the app, with a working DB + storage, publicly reachable and unmonitored. Worse: `recover-cron.yml` on `main` is a STALE copy still pinging that Railway URL (which is why it reported "success" every 30 min while never touching real prod), and it lacks the health-check + `poll-batch-jobs` steps the `qa-fixes` version has. **Two decisions needed: (a) shut down the Railway app — was the admin password rotated there too, or is that DB still reachable with the credential that leaked into git history? (b) update `recover-cron.yml` on main to the qa-fixes version.**
+
+**⚖️ OWNER DECISIONS THIS SESSION (logged below in detail — do NOT re-litigate):** admin password ROTATED ✅ · free-tier Gemini KEPT (risk accepted) · recording backup DEPRIORITIZED (capture-reliability judged higher).
+
+**⏳ Still gated on the owner + a laptop:** the v0.3.2 device test (see OWNER TODO below) — now doubly important, since it is also the only way to confirm the `InvalidPart` fix works on a real Meet.
+
+**✅ /CLEAR-SAFE:** everything committed + pushed (`qa-fixes` @ `0b33d92`+; `main` via PR #1/#2). Nothing mid-edit. Untracked QA/docs junk in the tree is pre-existing and deliberately untouched.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-15 — SESSION e) — PRODUCTION-READINESS AUDIT DONE.
 
 🎯 **GOAL (owner re-baselined 2026-07-16):** production-ready for the owner's IT team — and he named the #1 thing "ready" MEANS: **a meeting must NEVER fail to record.** A recording that never happened is the same loss as a deleted one, and far likelier. Capture-reliability outranks everything else on this board; rank work against that first.
 
