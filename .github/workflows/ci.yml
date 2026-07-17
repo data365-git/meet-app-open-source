@@ -32,8 +32,39 @@ jobs:
       - name: Unit tests (vitest)
         run: pnpm --filter @cap/web run test
 
+      - name: Unit tests (browser extension)
+        run: pnpm --filter @cap/browser-extension run test
+
       - name: Lint (Biome)
         run: pnpm exec biome check
+
+      - name: Scheduled workflows must live on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # GitHub only fires `schedule:` triggers from the DEFAULT branch. A cron
+          # workflow that exists only on a feature branch never runs — silently, with
+          # no error anywhere. That is exactly how the nightly DB backup, the storage
+          # reconcile and the uptime alert sat dead for 10 days while their secrets
+          # were configured and everyone assumed they were working.
+          git fetch --no-tags --depth=1 origin "$DEFAULT_BRANCH"
+
+          missing=""
+          for f in .github/workflows/*.yml; do
+            grep -qE '^[[:space:]]*schedule:' "$f" || continue
+            name=$(basename "$f")
+            git cat-file -e "origin/${DEFAULT_BRANCH}:.github/workflows/${name}" 2>/dev/null \
+              || missing="${missing}  - ${name}"$'\n'
+          done
+
+          if [ -n "$missing" ]; then
+            echo "ERROR: these workflows declare a 'schedule:' cron but do NOT exist on origin/${DEFAULT_BRANCH}."
+            echo "GitHub will never run them. Merge them to ${DEFAULT_BRANCH} or drop the schedule trigger."
+            echo ""
+            printf '%s' "$missing"
+            exit 1
+          fi
+          echo "Scheduled-workflow check passed — every cron workflow exists on ${DEFAULT_BRANCH}."
 
       - name: BOM check (UTF-8 BOM in .ts/.tsx files)
         run: |

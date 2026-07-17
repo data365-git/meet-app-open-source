@@ -2,7 +2,7 @@ import { createCapApi } from "./api";
 import type { CompletedPart, ExtensionSettings } from "./state";
 import { getSettings, getState, setState } from "./state";
 
-const MIN_PART_SIZE = 5 * 1024 * 1024;
+export const MIN_PART_SIZE = 5 * 1024 * 1024;
 const RETRY_QUEUE_KEY = "capExtRetryQueue";
 const DEAD_LETTER_KEY = "capExtDeadLetterQueue";
 const MAX_ATTEMPTS = 6;
@@ -160,6 +160,28 @@ function drainBuffer(): Uint8Array {
 	return drained;
 }
 
+/**
+ * Slice `buffer` into as many fixed-`partSize` parts as it contains, keeping
+ * whatever is left over (< partSize) as the remainder. Pure — no chrome.*,
+ * no network, no module-level state — so every non-trailing multipart part
+ * is guaranteed byte-identical in size, per R2's "all parts except the last
+ * must be the same size" requirement.
+ */
+export function takeFixedSizeParts(
+	buffer: Uint8Array,
+	partSize: number,
+): { parts: Uint8Array[]; remainder: Uint8Array } {
+	const parts: Uint8Array[] = [];
+	let offset = 0;
+
+	while (buffer.length - offset >= partSize) {
+		parts.push(buffer.slice(offset, offset + partSize));
+		offset += partSize;
+	}
+
+	return { parts, remainder: buffer.slice(offset) };
+}
+
 async function getRetryQueue(): Promise<RetryItem[]> {
 	const result = await chrome.storage.local.get(RETRY_QUEUE_KEY);
 	return (result[RETRY_QUEUE_KEY] as RetryItem[] | undefined) ?? [];
@@ -307,7 +329,8 @@ async function retryQueuedPartsForUpload(
 	let failed = false;
 
 	for (const item of queue) {
-		const payload = item.kind === "part" ? getPartRetryPayload(item) : undefined;
+		const payload =
+			item.kind === "part" ? getPartRetryPayload(item) : undefined;
 		if (item.kind !== "part") {
 			remaining.push(item);
 			continue;
@@ -423,15 +446,37 @@ export async function handleChunk(
 
 	const newTotalBytes = state.totalBytes + data.length;
 
-	if (inMemoryBuffer.length >= MIN_PART_SIZE) {
-		const partData = drainBuffer();
-		await clearPendingBuffer(state.uploadId);
-		const settings = await requireSettings();
+	// Slice off every fixed-MIN_PART_SIZE part the buffer now contains, keeping
+	// only the (< MIN_PART_SIZE) remainder — R2 requires all non-trailing parts
+	// to be the same size, so we must never upload a "whatever's in the buffer"
+	// sized part (see takeFixedSizeParts).
+	const { parts: fullParts, remainder } = takeFixedSizeParts(
+		inMemoryBuffer,
+		MIN_PART_SIZE,
+	);
 
+	if (fullParts.length === 0) {
+		await maybePersistPendingBuffer(state.uploadId);
+		await setState({ ...state, totalBytes: newTotalBytes });
+		return;
+	}
+
+	inMemoryBuffer = remainder;
+	// Persist the remainder rather than clear it: unlike the old drain-everything
+	// path (which left nothing behind to lose), we now keep up to partSize-1
+	// bytes in memory. Clearing here would leave those bytes RAM-only, so an SW
+	// eviction before the next chunk would punch a hole in the middle of the
+	// recording. Persist before the network calls so the window is never open.
+	await persistPendingBuffer(state.uploadId);
+	const settings = await requireSettings();
+
+	let partNumber = state.nextPartNumber;
+
+	for (const partData of fullParts) {
 		try {
 			const completedPart = await uploadPart(
 				partData,
-				state.nextPartNumber,
+				partNumber,
 				state.videoId,
 				state.uploadId,
 				settings,
@@ -443,8 +488,8 @@ export async function handleChunk(
 			await setState({
 				...freshState,
 				parts: [...freshState.parts, completedPart],
-				nextPartNumber: freshState.nextPartNumber + 1,
-				totalBytes: newTotalBytes,
+				nextPartNumber: Math.max(freshState.nextPartNumber, partNumber + 1),
+				totalBytes: Math.max(freshState.totalBytes, newTotalBytes),
 				uploadedBytes: freshState.uploadedBytes + partData.length,
 			});
 		} catch (err) {
@@ -452,7 +497,7 @@ export async function handleChunk(
 			await addToRetryQueue(
 				enqueuePartRetryPayload(
 					partData,
-					state.nextPartNumber,
+					partNumber,
 					state.videoId,
 					state.uploadId,
 				),
@@ -462,17 +507,13 @@ export async function handleChunk(
 			if (freshState.kind === "recording") {
 				await setState({
 					...freshState,
-					nextPartNumber: Math.max(
-						freshState.nextPartNumber,
-						state.nextPartNumber + 1,
-					),
-					totalBytes: newTotalBytes,
+					nextPartNumber: Math.max(freshState.nextPartNumber, partNumber + 1),
+					totalBytes: Math.max(freshState.totalBytes, newTotalBytes),
 				});
 			}
 		}
-	} else {
-		await maybePersistPendingBuffer(state.uploadId);
-		await setState({ ...state, totalBytes: newTotalBytes });
+
+		partNumber += 1;
 	}
 }
 
@@ -506,7 +547,9 @@ export async function finalizeUpload(): Promise<void> {
 
 	const MIN_VIABLE_BYTES = 10 * 1024; // header-only mp4 is ~1.2KB; a real recording is far larger
 	if (durableBytes < MIN_VIABLE_BYTES) {
-		console.error(`[upload] Recording too small (${durableBytes} durable bytes) — refusing to publish a broken video.`);
+		console.error(
+			`[upload] Recording too small (${durableBytes} durable bytes) — refusing to publish a broken video.`,
+		);
 		await setState({
 			kind: "error",
 			reason:
