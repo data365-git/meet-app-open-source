@@ -27,11 +27,22 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install mysql-client and awscli
+      - name: Install mysql-client (aws CLI is preinstalled on the runner)
         if: steps.gate.outputs.skip == 'false'
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y mysql-client awscli
+          sudo apt-get install -y mysql-client
+
+          # `awscli` was dropped from the runner image's apt sources, which is what
+          # made this job die at install time. AWS CLI v2 ships preinstalled on
+          # ubuntu-latest, so use that instead of apt — but fail loudly rather than
+          # discover it is missing halfway through a backup.
+          if ! command -v aws >/dev/null 2>&1; then
+            echo "aws CLI not found on the runner and it is no longer installable via apt."
+            exit 1
+          fi
+          aws --version
+          mysqldump --version
 
       - name: Dump, compress, and upload to R2
         if: steps.gate.outputs.skip == 'false'
