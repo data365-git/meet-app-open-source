@@ -1,4 +1,19 @@
+import { folders } from "@cap/database/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Spy on the REAL `eq` (don't stub it out) so we can assert which columns the
+// guard actually filters on — the db fakes below ignore the predicate entirely.
+const { eqSpy } = vi.hoisted(() => ({ eqSpy: vi.fn() }));
+vi.mock("drizzle-orm", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("drizzle-orm")>();
+	return {
+		...actual,
+		eq: (...args: Parameters<typeof actual.eq>) => {
+			eqSpy(...args);
+			return actual.eq(...args);
+		},
+	};
+});
 
 const getCurrentUserMock = vi.fn();
 const whereMock = vi.fn();
@@ -47,6 +62,16 @@ describe("getFolderVideoIds", () => {
 
 		expect(result.success).toBe(false);
 		expect(result.error).toBe("Folder not found or not accessible");
+
+		// The assertion with teeth. Above only proves an error branch exists — the
+		// `where` fake ignores its predicate, so a guard that looked the folder up by
+		// id ALONE (no org filter at all) would pass it just as happily, while still
+		// leaking every other org's folders. Prove the org filter is really in the
+		// predicate: the guard must scope the lookup to the CALLER's active org.
+		expect(eqSpy).toHaveBeenCalledWith(
+			folders.organizationId,
+			"org-attacker",
+		);
 	});
 
 	it("returns video ids for a caller who is a member of the folder's organization", async () => {

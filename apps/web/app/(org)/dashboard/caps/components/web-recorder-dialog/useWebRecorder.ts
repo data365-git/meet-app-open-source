@@ -89,9 +89,9 @@ type InstantVideoCreation = {
 	upload: UploadTarget;
 };
 // "recorder-error" marks a stop triggered by an unexpected mid-recording
-// MediaRecorder failure (no user Stop click) rather than a normal stop, so
-// the salvage keeps the truthful "ended early" outcome instead of the
-// cheerful "completed" one, even when the upload itself succeeds.
+// MediaRecorder failure (no user Stop click) rather than a normal stop. It
+// selects the warning wording, NOT the outcome: a salvage whose upload succeeds
+// still completes normally, share link and all.
 type StopRecordingOptions = { reason?: "user" | "recorder-error" };
 
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
@@ -702,10 +702,10 @@ export const useWebRecorder = ({
 				// A mid-recording MediaRecorder failure with no stop in
 				// flight: surface it immediately (silent failure is the
 				// worst outcome), then drive the same stop/upload path a
-				// user-initiated Stop would — tagged so the salvage lands on
-				// "error" (truthful: it ended early) instead of "completed",
-				// even if the upload itself succeeds — so whatever was
-				// captured is finalized rather than lost.
+				// user-initiated Stop would, so whatever was captured is
+				// finalized rather than lost. Tagged "recorder-error" only to
+				// pick the warning wording — if the salvage uploads, the user
+				// gets the normal completed state and their share link.
 				console.error("Recording stopped unexpectedly", error);
 				toast.error(
 					"Recording stopped unexpectedly. Saving what was captured so far…",

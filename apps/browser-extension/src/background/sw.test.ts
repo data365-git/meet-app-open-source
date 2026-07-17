@@ -574,3 +574,85 @@ describe("P1.2 — onStartup recovery", () => {
 		expect(["error", "complete"]).toContain(finalState.kind);
 	});
 });
+
+// ── Fix #2: dead-letter exhaustion must release the UI, not brick it ───────
+//
+// (adversarial-review finding, recording-loss path B) When a queued item
+// exhausts MAX_ATTEMPTS and moveToDeadLetter runs, state used to stay
+// "uploading" forever. isInProgress() (this file, above) then refused EVERY
+// new recording with "a recording is already in progress" — the user is told
+// to do the exact thing the extension then blocks, until a browser restart.
+// This test drives real retry exhaustion and proves the release through the
+// REAL isInProgress() gate (via the START_INSTRUCTION handler), not just by
+// re-reading the state string.
+
+describe("Fix 2 — dead-letter exhaustion releases the UI", () => {
+	it("a part item that exhausts retries clears 'uploading' and a new recording is accepted afterwards (isInProgress unblocked)", async () => {
+		const { captured, storage } = await freshSw();
+		const { setState, getState } = await import("./state");
+		const { retryPendingUploads } = await import("./upload");
+
+		await setState({
+			kind: "uploading",
+			videoId: "vid-dl1",
+			uploadId: "upload-dl1",
+			parts: [],
+			totalBytes: 20_000,
+			uploadedBytes: 0,
+		});
+
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 1,
+						videoId: "vid-dl1",
+						uploadId: "upload-dl1",
+						partDataBase64: Buffer.from("dead-letter-bytes").toString("base64"),
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response("boom", { status: 500 });
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		vi.useFakeTimers();
+		// BACKOFF_SECONDS = [1,4,16,64,256]; 6 total attempts dead-letters.
+		const backoffsMs = [1000, 4000, 16000, 64000, 256000, 256000];
+		for (const step of backoffsMs) {
+			vi.setSystemTime(Date.now() + step);
+			await retryPendingUploads();
+		}
+
+		const midState = await getState();
+		// The brick: before the fix, state stayed "uploading" forever once the
+		// item exhausted retries and dead-lettered.
+		expect(midState.kind).not.toBe("uploading");
+
+		// The UI must actually be released, not just the state string changed —
+		// prove it via the REAL isInProgress() gate every start handler checks.
+		const response = (await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+		})) as { ok: boolean; error?: string };
+		expect(response.ok).toBe(true);
+	});
+});

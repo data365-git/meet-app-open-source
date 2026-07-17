@@ -259,6 +259,35 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 	dead.push(item);
 	await chrome.storage.local.set({ [DEAD_LETTER_KEY]: dead });
 
+	// This upload is over — release the UI to a terminal state, or the message
+	// below is a cruel joke: state would stay "uploading" forever, isInProgress()
+	// would refuse EVERY new recording with "a recording is already in progress",
+	// and the user is told to re-record something the extension then blocks. Only
+	// release it if the live state is still this upload's — a newer recording must
+	// never be stomped (same reason as the drain's completion guard).
+	const deadVideoId = (item.payload as { videoId?: string })?.videoId;
+	if (deadVideoId) {
+		const liveState = await getState();
+		const liveVideoId =
+			liveState.kind === "error"
+				? liveState.previousVideoId
+				: "videoId" in liveState
+					? liveState.videoId
+					: undefined;
+		if (
+			liveVideoId === deadVideoId &&
+			(liveState.kind === "uploading" || liveState.kind === "finishing")
+		) {
+			await setState({
+				kind: "error",
+				reason:
+					"Upload failed and could not be recovered. Please re-record — you can start a new recording now.",
+				recoverable: true,
+				previousVideoId: deadVideoId,
+			});
+		}
+	}
+
 	chrome.notifications.create({
 		type: "basic",
 		iconUrl: "/icons/icon-48.png",
@@ -893,11 +922,37 @@ export async function retryPendingUploads(): Promise<void> {
 					});
 				}
 
-				await setState({
-					kind: "complete",
-					videoId,
-					shareUrl: `${settings.apiBaseUrl}/s/${videoId}`,
-				});
+				// Only claim the UI if the live state still belongs to THIS upload.
+				// The drain now runs every minute mid-session (not just at startup),
+				// so a late complete for an OLD recording can land while a NEW one is
+				// already recording — an unconditional write here would stomp it to
+				// "complete", after which handleChunk early-returns and
+				// finalizeRecording bails: the new meeting is lost silently, behind a
+				// ✓ badge. Same idea as recordCompletedPart's guard.
+				// "error" counts as ours via previousVideoId: the legacy path sets
+				// error when completeMultipart fails, so when the retry finally lands
+				// we MUST clear it — leaving a failure on screen for a recording that
+				// is now saved is the same lie in reverse.
+				const liveState = await getState();
+				const liveVideoId =
+					liveState.kind === "error"
+						? liveState.previousVideoId
+						: "videoId" in liveState
+							? liveState.videoId
+							: undefined;
+				const stillOurs =
+					liveVideoId === videoId &&
+					(liveState.kind === "uploading" ||
+						liveState.kind === "finishing" ||
+						liveState.kind === "error");
+
+				if (stillOurs) {
+					await setState({
+						kind: "complete",
+						videoId,
+						shareUrl: `${settings.apiBaseUrl}/s/${videoId}`,
+					});
+				}
 			} else if (item.kind === "recording-complete") {
 				const { videoId } = item.payload as { videoId: string };
 				await api.recordingComplete({ videoId });

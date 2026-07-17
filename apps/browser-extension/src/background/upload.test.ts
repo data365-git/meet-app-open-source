@@ -121,6 +121,8 @@ describe("takeFixedSizeParts (pure part-slicing logic)", () => {
 
 // ── Integration: the real handleChunk/finalizeUpload against a fake R2 ─────
 
+const RETRY_QUEUE_KEY = "capExtRetryQueue";
+
 function createFakeChromeStorage() {
 	const store = new Map<string, unknown>();
 	return {
@@ -583,5 +585,335 @@ describe("finalizeUpload nextPartNumber (M7 gapped-parts fix)", () => {
 		expect(partNumbers).toEqual([1, 2, 4, 5]);
 		// No duplicate PartNumbers in the final completeMultipart call.
 		expect(new Set(partNumbers).size).toBe(partNumbers?.length);
+	});
+});
+
+// ── Fix #1: the retry-drain's "complete" branch must not stomp a NEWER
+// recording's live state (adversarial-review finding, recording-loss path A)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("retryPendingUploads drain guard (fix #1: stale complete must not stomp a newer recording)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("closes the loss path: a stale queued complete for OLD video A must not stomp NEW video B's live 'recording' state, and B keeps working afterwards", async () => {
+		const { retryPendingUploads, handleChunk, finalizeUpload } = await import(
+			"./upload"
+		);
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// A NEW recording (B) is actively in progress.
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-B",
+			uploadId: "upload-B",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// A stale "complete" retry item for an OLDER recording (A) is queued —
+		// its completeMultipart failed once, and only succeeds on this later
+		// drain pass, well after B started recording.
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: { uploadId: "upload-A", videoId: "vid-A" },
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		let completeMultipartCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-x"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeMultipartCalls += 1;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await retryPendingUploads();
+
+		// The stale item for A completed for real on the wire...
+		expect(completeMultipartCalls).toBe(1);
+		// ...but B's live "recording" state must survive untouched — NOT be
+		// stomped to "complete" for the wrong (old) video.
+		const midState = await getState();
+		expect(midState.kind).toBe("recording");
+		if (midState.kind === "recording") {
+			expect(midState.videoId).toBe("vid-B");
+		}
+
+		// B must still be fully functional afterwards: chunks upload and
+		// finalize completes for B — the new meeting was not silently lost
+		// behind a stale ✓ badge.
+		const chunk = new Uint8Array(20_000);
+		for (let i = 0; i < chunk.length; i++) chunk[i] = i % 256;
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+		await finalizeUpload();
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+		if (finalState.kind === "complete") {
+			expect(finalState.videoId).toBe("vid-B");
+		}
+	});
+
+	it("legitimate case: a queued complete for the SAME video A that live state is 'uploading' for still lands as 'complete'", async () => {
+		const { retryPendingUploads } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		await setState({
+			kind: "uploading",
+			videoId: "vid-A",
+			uploadId: "upload-A",
+			parts: [{ PartNumber: 1, ETag: "etag-1" }],
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+		});
+
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: { uploadId: "upload-A", videoId: "vid-A" },
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		let completeMultipartParts:
+			| Array<{ partNumber: number; etag: string; size: number }>
+			| undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/complete")) {
+					const body = JSON.parse(String(init?.body)) as {
+						parts: Array<{ partNumber: number; etag: string; size: number }>;
+					};
+					completeMultipartParts = body.parts;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		await retryPendingUploads();
+
+		// Proves the live-state read path: this queued item carries no parts
+		// snapshot, so completeMultipart's parts must come from the live
+		// "uploading" state.
+		expect(completeMultipartParts?.map((p) => p.partNumber)).toEqual([1]);
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+		if (finalState.kind === "complete") {
+			expect(finalState.videoId).toBe("vid-A");
+			expect(finalState.shareUrl).toContain("vid-A");
+		}
+	});
+
+	it("error→complete case: an 'error' state carrying previousVideoId A is cleared to 'complete' once the queued complete for A lands", async () => {
+		const { retryPendingUploads } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// This is what finalizeUpload's completeMultipart-failure catch block
+		// leaves behind: an "error" state plus a durable retry item carrying its
+		// own parts snapshot (see upload.ts's legacy completeMultipart-failure
+		// path).
+		await setState({
+			kind: "error",
+			reason: "Upload finalization failed: boom",
+			recoverable: true,
+			previousVideoId: "vid-A",
+		});
+
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-A",
+						videoId: "vid-A",
+						parts: [{ partNumber: 1, etag: "etag-1", size: 0 }],
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/upload/multipart/complete")) {
+				return jsonResponse({
+					location: undefined,
+					success: true,
+					fileKey: "file",
+				});
+			}
+			if (url.includes("/api/upload/recording-complete")) {
+				return jsonResponse({});
+			}
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		await retryPendingUploads();
+
+		const finalState = await getState();
+		// The legacy path would otherwise leave the user staring at a failure
+		// banner for a recording that has, in fact, just been saved.
+		expect(finalState.kind).toBe("complete");
+		if (finalState.kind === "complete") {
+			expect(finalState.videoId).toBe("vid-A");
+		}
+	});
+});
+
+// ── Fix #2b: dead-lettering an OLD item must not stomp a NEWER recording's
+// live state either (the same stomp risk as fix #1, via moveToDeadLetter) ──
+
+describe("moveToDeadLetter drain guard (fix #2b: dead-lettering an old item must not stomp a newer recording)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("does not stomp a NEWER upload's 'uploading' state when an unrelated OLD item exhausts retries and dead-letters", async () => {
+		const { retryPendingUploads } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// A DIFFERENT, newer upload (B) is currently finalizing — this is the
+		// only live kind moveToDeadLetter's release ever touches (uploading /
+		// finishing), so it's the shape that can actually be stomped: a
+		// "recording" B is already safe by the kind check alone, regardless of
+		// the videoId guard, so it wouldn't exercise this fix.
+		await setState({
+			kind: "uploading",
+			videoId: "vid-B2",
+			uploadId: "upload-B2",
+			parts: [],
+			totalBytes: 20_000,
+			uploadedBytes: 20_000,
+		});
+
+		// An UNRELATED OLD item for video A is one failure away from
+		// MAX_ATTEMPTS — this drain pass exhausts it and dead-letters.
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 1,
+						videoId: "vid-A2",
+						uploadId: "upload-A2",
+						partDataBase64: Buffer.from("old-part-bytes").toString("base64"),
+					},
+					attempts: 5,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response("boom", { status: 500 });
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await retryPendingUploads();
+
+		// B's live "uploading" state must survive untouched — the dead-letter
+		// release must never stomp an upload it doesn't belong to, even though
+		// both share the "uploading" kind.
+		const finalState = await getState();
+		expect(finalState.kind).toBe("uploading");
+		if (finalState.kind === "uploading") {
+			expect(finalState.videoId).toBe("vid-B2");
+		}
 	});
 });
