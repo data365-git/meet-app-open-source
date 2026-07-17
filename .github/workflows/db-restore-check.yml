@@ -1,0 +1,147 @@
+name: DB restore check
+
+# Proves the nightly backup can actually be RESTORED — not just that it uploaded.
+# An untested backup is a hope, not a backup: a dump can upload happily every night
+# and still be truncated, empty, or unreadable, and you only find out on the worst
+# day of the year.
+#
+# This NEVER touches production. It pulls the latest dump from R2 and restores it
+# into a throwaway MySQL service container that exists only for this run, then
+# asserts the data is actually there.
+#
+# Reuses the same secrets as db-backup.yml (R2_* / R2_BACKUP_BUCKET). It does NOT
+# need BACKUP_DATABASE_URL — it never connects to the real database.
+#
+# Runs weekly rather than nightly: the restore is the expensive half, and a broken
+# backup that is a week old is still recoverable — one that has silently been broken
+# for months is not.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: throwaway-not-a-secret
+          MYSQL_DATABASE: restore_probe
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -p throwaway-not-a-secret"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Check secrets are configured
+        id: gate
+        env:
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          if [ -z "$R2_BACKUP_BUCKET" ]; then
+            echo "R2_BACKUP_BUCKET not set — skipping restore check."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install mysql-client (aws CLI is preinstalled on the runner)
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mysql-client
+          aws --version
+          mysql --version
+
+      - name: Fetch the most recent dump from R2
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          set -e
+
+          latest=$(aws s3api list-objects-v2 \
+            --endpoint-url "$R2_ENDPOINT" \
+            --bucket "$R2_BACKUP_BUCKET" \
+            --prefix "db-backups/" \
+            --query "sort_by(Contents,&LastModified)[-1].Key" \
+            --output text)
+
+          if [ -z "$latest" ] || [ "$latest" = "None" ]; then
+            echo "FAIL: no dump found under db-backups/ — the nightly backup is not producing anything."
+            exit 1
+          fi
+          echo "Latest dump: $latest"
+
+          # A backup that stopped running is as bad as one that never ran. Fail if the
+          # newest dump is stale — this is the check that catches a silently dead cron.
+          modified=$(aws s3api head-object \
+            --endpoint-url "$R2_ENDPOINT" \
+            --bucket "$R2_BACKUP_BUCKET" \
+            --key "$latest" \
+            --query "LastModified" --output text)
+          age_days=$(( ( $(date -u +%s) - $(date -u -d "$modified" +%s) ) / 86400 ))
+          echo "Dump age: ${age_days} day(s) (modified $modified)"
+          if [ "$age_days" -gt 3 ]; then
+            echo "FAIL: newest dump is ${age_days} days old — the nightly backup has stopped running."
+            exit 1
+          fi
+
+          aws s3 cp "s3://${R2_BACKUP_BUCKET}/${latest}" ./dump.sql.gz \
+            --endpoint-url "$R2_ENDPOINT"
+          gunzip ./dump.sql.gz
+          echo "Uncompressed size: $(wc -c < ./dump.sql) bytes"
+
+      - name: Restore into the throwaway MySQL and prove the data is there
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          set -e
+          MY="mysql -h 127.0.0.1 -P 3306 -u root -pthrowaway-not-a-secret"
+
+          $MY restore_probe < ./dump.sql
+          echo "Restore completed without error."
+
+          tables=$($MY -N -B -e \
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='restore_probe';")
+          echo "Tables restored: $tables"
+          if [ "$tables" -lt 5 ]; then
+            echo "FAIL: only ${tables} tables — the dump restored but is not a real database."
+            exit 1
+          fi
+
+          # `users` is the load-bearing table: no users means no owners, and every
+          # video row would be orphaned. An empty restore is a silent disaster, so
+          # assert real rows rather than just "the import didn't error".
+          users=$($MY -N -B -e "SELECT COUNT(*) FROM restore_probe.users;")
+          videos=$($MY -N -B -e "SELECT COUNT(*) FROM restore_probe.videos;")
+          echo "users=${users} videos=${videos}"
+          if [ "$users" -lt 1 ]; then
+            echo "FAIL: 0 users in the restored database — the backup is not usable."
+            exit 1
+          fi
+
+          echo "PASS: the latest backup restores into a working database (${tables} tables, ${users} users, ${videos} videos)."
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_ALERT_CHAT_ID" ]; then
+            echo "Telegram secrets not set — skipping alert."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_ALERT_CHAT_ID}" \
+            -d text="🔴 DB RESTORE CHECK FAILED — the backup may not be restorable. Check GitHub Actions." || true
