@@ -814,6 +814,22 @@ export async function finalizeUpload(): Promise<void> {
 	await setState({ kind: "complete", videoId, shareUrl });
 }
 
+/** (R4) True if a PART for this upload has been permanently dead-lettered —
+ * meaning the multipart is missing bytes and must never be "completed". */
+async function deadLetterHasPartForUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<boolean> {
+	const result = await chrome.storage.local.get(DEAD_LETTER_KEY);
+	const dead = (result[DEAD_LETTER_KEY] as RetryItem[] | undefined) ?? [];
+	return dead.some(
+		(d) =>
+			d.kind === "part" &&
+			d.payload.videoId === videoId &&
+			d.payload.uploadId === uploadId,
+	);
+}
+
 export async function retryPendingUploads(): Promise<void> {
 	const queue = await getRetryQueue();
 	if (queue.length === 0) return;
@@ -850,6 +866,18 @@ export async function retryPendingUploads(): Promise<void> {
 			);
 			if (siblingPartsQueued) {
 				remaining.push(item);
+				continue;
+			}
+
+			// (R4) A part for this upload permanently failed (dead-lettered) → the
+			// multipart is missing bytes and can never be completed honestly.
+			// Completing anyway produces a video with a hole that R2 accepts
+			// (part-number gaps are legal), and the stillOurs block below would
+			// then stamp it "complete" with a share link — contradicting the
+			// dead-letter's honest "lost" notification + error state. Drop this
+			// complete record: the part's dead-letter already set the terminal
+			// error and notified the user. Do not complete, re-notify, or re-queue.
+			if (await deadLetterHasPartForUpload(videoId, uploadId)) {
 				continue;
 			}
 		}

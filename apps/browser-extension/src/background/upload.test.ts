@@ -612,6 +612,114 @@ describe("moveToDeadLetter notification (P1.4 honest messaging)", () => {
 	});
 });
 
+// ── R4: a dead-lettered part must block the deferred complete — never stamp a
+// video with a permanent hole as "complete" (Fable audit) ───────────────────
+
+describe("retryPendingUploads dead-letter guard (R4 holed-complete)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("does not complete (or stamp ✓) a multipart whose part was permanently dead-lettered", async () => {
+		const { handleChunk, finalizeUpload, retryPendingUploads } = await import(
+			"./upload"
+		);
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-r4",
+			uploadId: "upload-r4",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// Two full 5 MiB parts. Part 1 uploads fine; part 2's PUT always fails, so
+		// it drains through MAX_ATTEMPTS and dead-letters — leaving the multipart
+		// permanently missing its middle 5 MiB.
+		const totalBytes = 2 * MIN_PART_SIZE;
+		const chunks = buildChunkStream(totalBytes);
+
+		let completeMultipartCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					const body = JSON.parse(String(init?.body)) as { partNumber: number };
+					return jsonResponse({
+						presignedUrl: `https://fake-r2.example/put?part=${body.partNumber}`,
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					const part = new URL(url).searchParams.get("part");
+					if (part === "2") {
+						return new Response("boom", { status: 500 });
+					}
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: `"etag-${part}"` },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeMultipartCalls += 1;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		for (let i = 0; i < chunks.length; i++) {
+			await handleChunk(chunks[i].buffer as ArrayBuffer, i, "video/webm");
+		}
+		await finalizeUpload();
+
+		vi.useFakeTimers();
+		// Drain past MAX_ATTEMPTS so part 2 dead-letters, then a couple more passes
+		// so the deferred complete record is actually processed post-dead-letter.
+		const stepsMs = [1000, 4000, 16000, 64000, 256000, 256000, 256000, 256000];
+		for (const step of stepsMs) {
+			vi.setSystemTime(Date.now() + step);
+			await retryPendingUploads();
+		}
+
+		// The bug: completeMultipart runs on the surviving [part1] list (R2 accepts
+		// the gap) and the recording is stamped "complete" with a share link,
+		// contradicting the dead-letter "lost" notification. The fix drops the
+		// complete: no completeMultipart, terminal error state preserved.
+		expect(completeMultipartCalls).toBe(0);
+		const finalState = await getState();
+		expect(finalState.kind).toBe("error");
+	});
+});
+
 // ── M7: nextPartNumber for a persisted "uploading" state must not collide
 // with a gap in already-uploaded part numbers ──────────────────────────────
 
