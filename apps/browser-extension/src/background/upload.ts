@@ -688,6 +688,19 @@ export async function finalizeUpload(): Promise<void> {
 			);
 			parts = [...parts, completedPart];
 			nextPartNumber += 1;
+			// (R1) Persist the finalize-time remainder into durable state. The
+			// deferred P1.6 "complete" record below carries no parts snapshot and
+			// the drain rebuilds the part list from live state.parts — which only
+			// ever holds parts run through recordCompletedPart. Without this, a
+			// remainder that uploaded here (but whose sibling part is still queued)
+			// is dropped from the completed multipart and the video tail is
+			// silently truncated. Idempotent (upserts by PartNumber).
+			await recordCompletedPart(
+				videoId,
+				uploadId,
+				completedPart,
+				remaining.length,
+			);
 		} catch (err) {
 			console.error("[upload] Final part upload failed:", err);
 			await addToRetryQueue(

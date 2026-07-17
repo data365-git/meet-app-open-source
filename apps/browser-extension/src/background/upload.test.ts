@@ -385,6 +385,138 @@ describe("finalizeUpload -> retryPendingUploads (P1.6 durable complete-after-dra
 	});
 });
 
+// ── R1: the finalize-time remainder must survive into the deferred complete ─
+// A remainder that uploads successfully at finalize while a sibling full part
+// is still queued must be persisted into durable state, or the later drain
+// (which rebuilds the part list from live state.parts) completes the multipart
+// WITHOUT it and silently truncates the tail of the video.
+
+describe("finalizeUpload remainder durability (R1 tail-truncation)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("includes the finalize-time remainder in the deferred complete when a sibling part was still queued", async () => {
+		const { handleChunk, finalizeUpload, retryPendingUploads } = await import(
+			"./upload"
+		);
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-r1",
+			uploadId: "upload-r1",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// One full 5 MiB part (uploaded during recording) + a < 5 MiB remainder
+		// (uploaded at finalize).
+		const totalBytes = MIN_PART_SIZE + 20_000;
+		const chunks = buildChunkStream(totalBytes);
+
+		let fullPartAttempts = 0;
+		let completeParts: Array<{ partNumber: number; etag: string }> = [];
+		let completeMultipartCalls = 0;
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					const body = init?.body;
+					const bytes =
+						body instanceof Uint8Array
+							? body
+							: new Uint8Array(
+									await new Response(body as BodyInit).arrayBuffer(),
+								);
+					// The full 5 MiB part: fail its first two PUTs (the streaming
+					// upload + finalize's in-pass retry) so it stays genuinely queued
+					// when finalize returns → P1.6 path; succeed the third (later drain).
+					if (bytes.length === MIN_PART_SIZE) {
+						fullPartAttempts += 1;
+						if (fullPartAttempts <= 2) {
+							return new Response("boom", { status: 500 });
+						}
+						return new Response(null, {
+							status: 200,
+							headers: { ETag: '"etag-full"' },
+						});
+					}
+					// The remainder (< 5 MiB) uploads once at finalize and succeeds.
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-remainder"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeMultipartCalls += 1;
+					const parsed = JSON.parse(String(init?.body)) as {
+						parts: Array<{ partNumber: number; etag: string }>;
+					};
+					completeParts = parsed.parts;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		for (let i = 0; i < chunks.length; i++) {
+			await handleChunk(chunks[i].buffer as ArrayBuffer, i, "video/webm");
+		}
+		await finalizeUpload();
+
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.now() + 2000);
+		// First drain: the queued full part succeeds; complete defers one pass.
+		await retryPendingUploads();
+		// Second drain: no sibling parts remain → complete runs for real.
+		await retryPendingUploads();
+
+		expect(completeMultipartCalls).toBe(1);
+		// The bug: completeParts would contain ONLY the full part — the remainder,
+		// uploaded to R2 at finalize, was dropped from the completed multipart.
+		const etags = completeParts.map((p) => p.etag);
+		expect(etags).toContain("etag-remainder");
+		expect(etags).toContain("etag-full");
+		expect(completeParts.length).toBe(2);
+	});
+});
+
 // ── P1.4: the dead-letter notification must not claim a local fallback ─────
 
 describe("moveToDeadLetter notification (P1.4 honest messaging)", () => {
