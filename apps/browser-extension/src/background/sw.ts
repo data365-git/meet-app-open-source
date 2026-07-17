@@ -7,6 +7,7 @@ import {
 	finalizeUpload,
 	handleChunk,
 	initializeUpload,
+	isRetryAlarm,
 	retryPendingUploads,
 } from "./upload";
 
@@ -1034,27 +1035,88 @@ async function handleMessage(
 		// ── Offscreen: recorder error ─────────────────────────────────────
 		case "RECORDER_ERROR": {
 			const error = getString(msg, "error") ?? "Unknown recorder error";
-			const state = await getState();
-			const previousVideoId =
-				state.kind === "recording" ? state.videoId : undefined;
 
-			const nextState: ExtensionState = {
-				kind: "error",
-				reason: error,
-				recoverable: true,
-				previousVideoId,
-			};
-			await setState(nextState);
-			stopKeepAlive();
-			updateBadge(nextState);
-			await closeOffscreenDocument().catch(() => {});
+			await enqueueRecorder(async () => {
+				// (P1.1 / M2) Route the WHOLE handler through enqueueRecorder: this
+				// mutates state and (via finalizeUpload) the retry queue, and
+				// handleChunk's loop bails on kind !== "recording" mid-part-upload
+				// — an un-serialized error write here could drop parts that were
+				// still being uploaded.
+				const stateBefore = await getState();
+				const wasRecording = stateBefore.kind === "recording";
+				const previousVideoId = wasRecording
+					? stateBefore.videoId
+					: undefined;
+				const bytesBefore = wasRecording ? stateBefore.uploadedBytes : 0;
 
-			chrome.notifications.create("recorder-error", {
-				type: "basic",
-				iconUrl: "icons/icon-128.png",
-				title: "Recording error",
-				message: error,
+				stopKeepAlive();
+				await closeOffscreenDocument().catch(() => {});
+
+				// (M1) Salvage first — every part already uploaded (potentially a
+				// long meeting) must not be abandoned mid-multipart just because
+				// the recorder itself errored out.
+				if (wasRecording) {
+					await finalizeUpload();
+				}
+
+				const stateAfter = await getState();
+
+				if (stateAfter.kind === "complete") {
+					updateBadge(stateAfter);
+					chrome.notifications.create("recorder-error", {
+						type: "basic",
+						iconUrl: "icons/icon-128.png",
+						title: "Recording error — saved",
+						message: `A recording error occurred (${error}), but ${bytesBefore} bytes were salvaged and saved.`,
+					});
+					return;
+				}
+
+				if (stateAfter.kind === "uploading") {
+					// (P1.6) finalizeUpload left a durable, retryable "complete"
+					// record because some parts are still queued — do not stomp
+					// this with a generic error state; it will keep draining.
+					updateBadge(stateAfter);
+					chrome.notifications.create("recorder-error", {
+						type: "basic",
+						iconUrl: "icons/icon-128.png",
+						title: "Recording error — retrying upload",
+						message: `A recording error occurred (${error}); the upload is retrying in the background.`,
+					});
+					return;
+				}
+
+				if (stateAfter.kind === "error") {
+					// finalizeUpload already set a more specific reason (too short,
+					// retry failed, ...) — keep it rather than overwriting.
+					updateBadge(stateAfter);
+					chrome.notifications.create("recorder-error", {
+						type: "basic",
+						iconUrl: "icons/icon-128.png",
+						title: "Recording error",
+						message: stateAfter.reason,
+					});
+					return;
+				}
+
+				// Nothing was recording (or finalizeUpload didn't run) — fall back
+				// to a plain error report.
+				const nextState: ExtensionState = {
+					kind: "error",
+					reason: error,
+					recoverable: true,
+					previousVideoId,
+				};
+				await setState(nextState);
+				updateBadge(nextState);
+				chrome.notifications.create("recorder-error", {
+					type: "basic",
+					iconUrl: "icons/icon-128.png",
+					title: "Recording error",
+					message: error,
+				});
 			});
+
 			return { ok: true };
 		}
 
@@ -1238,6 +1300,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 	if (isKeepAliveAlarm(alarm.name)) {
 		chrome.storage.local.get("capExtState");
 	}
+	if (isRetryAlarm(alarm.name)) {
+		// (P1.5 / M4) Routed through enqueueRecorder — the SAME serialization
+		// chain as handleChunk/finalizeRecording — so a drain can never race a
+		// live recording's addToRetryQueue call. Without this, getRetryQueue/
+		// setRetryQueue's get-then-set would be a classic lost update: a part
+		// queued by a live recording mid-drain could silently vanish.
+		enqueueRecorder(() => retryPendingUploads()).catch(() => {});
+	}
 });
 
 // ── SW startup recovery ────────────────────────────────────────────────────
@@ -1267,9 +1337,28 @@ chrome.runtime.onStartup.addListener(async () => {
 
 	if (state.kind === "recording" || state.kind === "uploading") {
 		startKeepAlive();
+		// (P1.2 / M5) Widened past the "recording" branch: a persisted
+		// "uploading" state (crash mid-finalize) needs this exactly as much —
+		// finalizeUpload already accepts it. Without this, state parked at
+		// "uploading" forever and isInProgress() refused every future
+		// recording until the user found CANCEL.
+		await enqueueRecorder(() => finalizeUpload());
+	} else if (state.kind === "finishing") {
+		// (P1.2 / M5) FinishingState (state.ts) persists only a videoId — no
+		// uploadId, no parts — so it cannot be resumed. Map it to a terminal
+		// state so isInProgress() stops refusing every future recording.
+		const nextState: ExtensionState = {
+			kind: "error",
+			reason:
+				"The browser restarted while finishing an upload. Check your dashboard — the recording may have completed; otherwise please re-record.",
+			recoverable: true,
+			previousVideoId: state.videoId,
+		};
+		await setState(nextState);
+		updateBadge(nextState);
 	}
 
-	await retryPendingUploads();
+	await enqueueRecorder(() => retryPendingUploads());
 });
 
 // ── Install hook: hydrate badge from persisted state ──────────────────────

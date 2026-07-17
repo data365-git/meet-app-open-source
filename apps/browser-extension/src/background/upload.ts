@@ -9,6 +9,19 @@ const MAX_ATTEMPTS = 6;
 
 const BACKOFF_SECONDS = [1, 4, 16, 64, 256];
 
+// (P1.5 / M3) A dedicated alarm drives periodic drains of the retry queue.
+// Deliberately NOT the keepalive alarm (see keepalive.ts) — that one is
+// cleared exactly when retries are needed (RECORDER_ERROR, finalizeRecording
+// in sw.ts), so piggybacking it would barely fire at all. This alarm's
+// lifecycle is centralized in setRetryQueue below, so it can never drift out
+// of sync with whether the queue actually has anything to drain.
+export const RETRY_ALARM_NAME = "cap-retry-queue";
+const RETRY_ALARM_INTERVAL_MINUTES = 1;
+
+export function isRetryAlarm(name: string): boolean {
+	return name === RETRY_ALARM_NAME;
+}
+
 interface RetryItem {
 	kind: "part" | "complete" | "recording-complete";
 	payload: Record<string, unknown>;
@@ -182,6 +195,36 @@ export function takeFixedSizeParts(
 	return { parts, remainder: buffer.slice(offset) };
 }
 
+/**
+ * (M7) The next PartNumber to use for a persisted "uploading" state's
+ * trailing remainder. `parts.length + 1` is wrong whenever the part numbers
+ * have a gap (e.g. parts [1,2,4] because part 3 is still queued elsewhere
+ * from a prior crash) — it would reassign an already-used number (4), and
+ * the non-upsert append in finalizeUpload then produces a duplicate
+ * PartNumber in the completeMultipart call. Use max(PartNumber)+1 instead,
+ * accounting for both already-uploaded parts AND any part still queued for
+ * retry for this exact upload (which will also eventually claim a number).
+ */
+function computeNextPartNumberForUploading(
+	parts: CompletedPart[],
+	queue: RetryItem[],
+	videoId: string,
+	uploadId: string,
+): number {
+	let maxPartNumber = 0;
+	for (const part of parts) {
+		if (part.PartNumber > maxPartNumber) maxPartNumber = part.PartNumber;
+	}
+	for (const item of queue) {
+		if (item.kind !== "part") continue;
+		const payload = getPartRetryPayload(item);
+		if (!payload) continue;
+		if (payload.videoId !== videoId || payload.uploadId !== uploadId) continue;
+		if (payload.partNumber > maxPartNumber) maxPartNumber = payload.partNumber;
+	}
+	return maxPartNumber + 1;
+}
+
 async function getRetryQueue(): Promise<RetryItem[]> {
 	const result = await chrome.storage.local.get(RETRY_QUEUE_KEY);
 	return (result[RETRY_QUEUE_KEY] as RetryItem[] | undefined) ?? [];
@@ -189,6 +232,17 @@ async function getRetryQueue(): Promise<RetryItem[]> {
 
 async function setRetryQueue(queue: RetryItem[]): Promise<void> {
 	await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: queue });
+	// Every writer of the retry queue (addToRetryQueue, retryQueuedPartsForUpload,
+	// retryPendingUploads) funnels through here, so the alarm's lifecycle stays
+	// in lockstep with the persisted queue by construction — it can't be created
+	// without something to drain, or left running once drained.
+	if (queue.length > 0) {
+		chrome.alarms.create(RETRY_ALARM_NAME, {
+			periodInMinutes: RETRY_ALARM_INTERVAL_MINUTES,
+		});
+	} else {
+		chrome.alarms.clear(RETRY_ALARM_NAME);
+	}
 }
 
 async function addToRetryQueue(
@@ -209,7 +263,8 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 		type: "basic",
 		iconUrl: "/icons/icon-48.png",
 		title: "data365 upload failed",
-		message: "Upload failed — recording saved locally as fallback",
+		message:
+			"Upload failed and could not be recovered. This recording is lost — please re-record.",
 	});
 }
 
@@ -321,7 +376,11 @@ async function retryQueuedPartsForUpload(
 	uploadId: string,
 	parts: CompletedPart[],
 	settings: ExtensionSettings,
-): Promise<{ parts: CompletedPart[]; failed: boolean }> {
+): Promise<{
+	parts: CompletedPart[];
+	failed: boolean;
+	remainingPartsQueued: boolean;
+}> {
 	const queue = await getRetryQueue();
 	const remaining: RetryItem[] = [];
 	const now = Date.now();
@@ -383,8 +442,14 @@ async function retryQueuedPartsForUpload(
 		}
 	}
 
+	const remainingPartsQueued = remaining.some(
+		(item) =>
+			item.kind === "part" &&
+			item.payload.videoId === videoId &&
+			item.payload.uploadId === uploadId,
+	);
 	await setRetryQueue(remaining);
-	return { parts: nextParts, failed };
+	return { parts: nextParts, failed, remainingPartsQueued };
 }
 
 export async function initializeUpload(
@@ -526,7 +591,14 @@ export async function finalizeUpload(): Promise<void> {
 
 	let parts = [...state.parts];
 	let nextPartNumber =
-		state.kind === "recording" ? state.nextPartNumber : state.parts.length + 1;
+		state.kind === "recording"
+			? state.nextPartNumber
+			: computeNextPartNumberForUploading(
+					state.parts,
+					await getRetryQueue(),
+					state.videoId,
+					state.uploadId,
+				);
 	const totalBytes = state.totalBytes;
 	const uploadedBytes =
 		"uploadedBytes" in state ? (state.uploadedBytes as number) : 0;
@@ -604,6 +676,25 @@ export async function finalizeUpload(): Promise<void> {
 	parts = queuedPartsResult.parts;
 
 	if (queuedPartsResult.failed) {
+		if (queuedPartsResult.remainingPartsQueued) {
+			// (P1.6 / invariant b) At least one part is still queued for retry —
+			// the multipart can still be completed once it lands, so this must NOT
+			// dead-end in "error" with nothing durable behind it (that stranded a
+			// fully-uploadable recording forever). Enqueue a durable, retryable
+			// "complete" record and leave state at "uploading": the drain (retry
+			// alarm / onStartup) will finish the job once the queued part(s)
+			// succeed. recordCompletedPart keeps enriching `state.parts` on each
+			// successful part retry because state stays "uploading".
+			await addToRetryQueue({
+				kind: "complete",
+				payload: { uploadId, videoId },
+			});
+			return;
+		}
+
+		// No parts remain queued for this upload — the failure(s) above were
+		// dead-lettered outright (no reschedule left), so there is nothing left
+		// to retry and the recording cannot be completed. Terminal state.
 		await setState({
 			kind: "error",
 			reason: "Upload part retry failed. Check network and try again.",
@@ -699,6 +790,28 @@ export async function retryPendingUploads(): Promise<void> {
 			continue;
 		}
 
+		if (item.kind === "complete") {
+			const { uploadId, videoId } = item.payload as {
+				uploadId: string;
+				videoId: string;
+			};
+			// (P1.6 / invariant b) A sibling "part" item for the same upload is
+			// still in the queue — completing now would call R2 with a partial
+			// part list and produce a truncated video. Defer without consuming an
+			// attempt; the next drain pass (once the part has resolved) retries.
+			const siblingPartsQueued = queue.some(
+				(other) =>
+					other !== item &&
+					other.kind === "part" &&
+					other.payload.videoId === videoId &&
+					other.payload.uploadId === uploadId,
+			);
+			if (siblingPartsQueued) {
+				remaining.push(item);
+				continue;
+			}
+		}
+
 		try {
 			if (item.kind === "part") {
 				const payload = getPartRetryPayload(item);
@@ -722,16 +835,68 @@ export async function retryPendingUploads(): Promise<void> {
 					partData.length,
 				);
 			} else if (item.kind === "complete") {
-				const { uploadId, videoId, parts } = item.payload as {
+				const {
+					uploadId,
+					videoId,
+					parts: snapshotParts,
+				} = item.payload as {
 					uploadId: string;
 					videoId: string;
-					parts: Array<{ partNumber: number; etag: string; size: number }>;
+					parts?: Array<{ partNumber: number; etag: string; size: number }>;
 				};
+
+				// The P1.6 durable-completion record carries no parts snapshot (it
+				// was enqueued before all parts were known) — read the live,
+				// durably-tracked state instead, which recordCompletedPart has kept
+				// enriched on every successful part retry above. The legacy
+				// completeMultipart-failure record (enqueued elsewhere, once all
+				// parts were already final) still carries its own snapshot; use it
+				// directly.
+				let parts = snapshotParts;
+				if (!parts) {
+					const liveState = await getState();
+					parts =
+						liveState.kind === "uploading" &&
+						liveState.videoId === videoId &&
+						liveState.uploadId === uploadId
+							? liveState.parts.map((p) => ({
+									partNumber: p.PartNumber,
+									etag: p.ETag,
+									size: 0,
+								}))
+							: [];
+				}
+
 				await api.completeMultipart({
 					uploadId,
 					parts,
 					videoId,
 					subpath: "result.mp4",
+				});
+
+				try {
+					await api.recordingComplete({ videoId });
+				} catch (recErr) {
+					console.error(
+						"[upload] recordingComplete failed after drained complete:",
+						recErr,
+					);
+					// Push directly into `remaining` (not addToRetryQueue): this loop
+					// writes the queue exactly once via setRetryQueue(remaining) after
+					// the loop below, so a separate get-then-set here would be
+					// clobbered by that final write.
+					remaining.push({
+						kind: "recording-complete",
+						payload: { videoId },
+						attempts: 0,
+						nextRetryAt: Date.now() + 1000,
+					});
+				}
+
+				await setState({
+					kind: "complete",
+					videoId,
+					shareUrl: `${settings.apiBaseUrl}/s/${videoId}`,
 				});
 			} else if (item.kind === "recording-complete") {
 				const { videoId } = item.payload as { videoId: string };

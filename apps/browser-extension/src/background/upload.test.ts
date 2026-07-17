@@ -194,6 +194,7 @@ describe("handleChunk -> finalizeUpload (live R2 multipart invariant)", () => {
 			runtime: { sendMessage: async () => undefined },
 			tabs: { query: async () => [], sendMessage: async () => undefined },
 			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
 		});
 	});
 
@@ -252,5 +253,335 @@ describe("handleChunk -> finalizeUpload (live R2 multipart invariant)", () => {
 		const reconstructed = concatBytes(putBodies);
 		expect(reconstructed.length).toBe(original.length);
 		expect(bytesEqual(reconstructed, original)).toBe(true);
+	});
+});
+
+// ── P1.6: a failed retry-drain must not strand a fully-uploadable recording ─
+
+describe("finalizeUpload -> retryPendingUploads (P1.6 durable complete-after-drain)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("enqueues a durable complete record when parts remain queued, and a later drain finishes the job (completeMultipart runs, recording lands)", async () => {
+		const { handleChunk, finalizeUpload, retryPendingUploads } = await import(
+			"./upload"
+		);
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-p16",
+			uploadId: "upload-p16",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// Small recording: well under MIN_PART_SIZE but above MIN_VIABLE_BYTES
+		// (10KB), so only the trailing "remaining" part gets uploaded at
+		// finalize — the simplest way to force exactly one part through the
+		// failure path below.
+		const chunk = new Uint8Array(20_000);
+		for (let i = 0; i < chunk.length; i++) chunk[i] = i % 256;
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		let putAttempts = 0;
+		let completeMultipartCalls = 0;
+		let recordingCompleteCalls = 0;
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					putAttempts += 1;
+					// Fail the first two PUT attempts (finalizeUpload's own attempt, plus
+					// its immediate in-pass retry via retryQueuedPartsForUpload) so the
+					// part is still genuinely queued when finalizeUpload returns. The
+					// third attempt (the LATER drain, simulating a subsequent alarm tick)
+					// succeeds.
+					if (putAttempts <= 2) {
+						return new Response("boom", { status: 500 });
+					}
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-final"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeMultipartCalls += 1;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					recordingCompleteCalls += 1;
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await finalizeUpload();
+
+		// The old (buggy) behaviour set kind:"error" here and never enqueued
+		// anything durable — completeMultipart would never run again even after
+		// a later successful drain. Assert the fix: state stays "uploading"
+		// (durable, retryable), not "error".
+		const midState = await getState();
+		expect(midState.kind).toBe("uploading");
+		expect(completeMultipartCalls).toBe(0);
+
+		// Simulate time passing so the queued part's backoff has elapsed.
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.now() + 2000);
+
+		// First later drain: the queued part succeeds; the durable "complete"
+		// record defers one more pass since its sibling part item was still
+		// present in the same queue snapshot.
+		await retryPendingUploads();
+		// Second later drain: no sibling parts remain, so the complete record
+		// runs for real.
+		await retryPendingUploads();
+
+		expect(completeMultipartCalls).toBe(1);
+		expect(recordingCompleteCalls).toBe(1);
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+		if (finalState.kind === "complete") {
+			expect(finalState.shareUrl).toContain("vid-p16");
+		}
+	});
+});
+
+// ── P1.4: the dead-letter notification must not claim a local fallback ─────
+
+describe("moveToDeadLetter notification (P1.4 honest messaging)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("never claims the recording was saved locally as a fallback once dead-lettered", async () => {
+		const notifications: Array<{ title?: string; message?: string }> = [];
+
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: {
+				create: (a: unknown, b?: { title?: string; message?: string }) => {
+					// upload.ts calls chrome.notifications.create(options) (no id arg)
+					// for the dead-letter notification specifically.
+					const opts = (b ?? a) as { title?: string; message?: string };
+					notifications.push(opts);
+				},
+			},
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+
+		const { handleChunk, finalizeUpload, retryPendingUploads } = await import(
+			"./upload"
+		);
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-p14",
+			uploadId: "upload-p14",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		const chunk = new Uint8Array(20_000);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		// Every PUT fails permanently, driving the queued part all the way to
+		// dead-letter (MAX_ATTEMPTS = 6 reschedules) rather than ever succeeding.
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response("boom", { status: 500 });
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					// The P1.6 durable-complete record (enqueued alongside the failing
+					// part) also gets attempted on each drain pass here; it must fail
+					// too since the part it depends on never succeeds in this scenario.
+					return new Response("boom", { status: 500 });
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await finalizeUpload();
+
+		vi.useFakeTimers();
+		// BACKOFF_SECONDS = [1,4,16,64,256]; 6 total attempts dead-letters.
+		const backoffsMs = [1000, 4000, 16000, 64000, 256000, 256000];
+		for (const step of backoffsMs) {
+			vi.setSystemTime(Date.now() + step);
+			await retryPendingUploads();
+		}
+
+		expect(notifications.length).toBeGreaterThan(0);
+		const deadLetterNotif = notifications.find((n) =>
+			n.title?.includes("upload failed"),
+		);
+		expect(deadLetterNotif).toBeDefined();
+		expect(deadLetterNotif?.message).not.toMatch(/saved locally/i);
+		expect(deadLetterNotif?.message).toMatch(/lost|re-record|not.*recover/i);
+	});
+});
+
+// ── M7: nextPartNumber for a persisted "uploading" state must not collide
+// with a gap in already-uploaded part numbers ──────────────────────────────
+
+describe("finalizeUpload nextPartNumber (M7 gapped-parts fix)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("uses max(PartNumber)+1, not parts.length+1, so a gapped part list never produces a duplicate PartNumber", async () => {
+		const { finalizeUpload } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// Parts [1, 2, 4]: part 3 is missing (e.g. still queued elsewhere from a
+		// prior crash). parts.length is 3, so the OLD buggy formula
+		// (parts.length + 1 = 4) would assign the trailing remainder PartNumber
+		// 4 — colliding with the part 4 that's already in the array.
+		await setState({
+			kind: "uploading",
+			videoId: "vid-m7",
+			uploadId: "upload-m7",
+			parts: [
+				{ PartNumber: 1, ETag: "etag-1" },
+				{ PartNumber: 2, ETag: "etag-2" },
+				{ PartNumber: 4, ETag: "etag-4" },
+			],
+			totalBytes: 4 * MIN_PART_SIZE + 20_000,
+			uploadedBytes: 3 * MIN_PART_SIZE,
+		});
+
+		// A persisted pending buffer (the trailing remainder) for this upload —
+		// finalizeUpload restores and uploads this as the "remaining" part.
+		const remainderBytes = new Uint8Array(20_000);
+		for (let i = 0; i < remainderBytes.length; i++) remainderBytes[i] = i % 256;
+		await chrome.storage.local.set({
+			"pendingBuffer:upload-m7": Buffer.from(remainderBytes).toString("base64"),
+		});
+
+		const presignedPartNumbers: number[] = [];
+		let completedParts:
+			| Array<{ partNumber: number; etag: string; size: number }>
+			| undefined;
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					const body = JSON.parse(String(init?.body)) as {
+						partNumber: number;
+					};
+					presignedPartNumbers.push(body.partNumber);
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-remainder"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					const body = JSON.parse(String(init?.body)) as {
+						parts: Array<{ partNumber: number; etag: string; size: number }>;
+					};
+					completedParts = body.parts;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await finalizeUpload();
+
+		// The remainder must be presigned/uploaded as PartNumber 5 (max(1,2,4)+1),
+		// never 4 (parts.length+1) — which would collide with the existing part 4.
+		expect(presignedPartNumbers).toEqual([5]);
+
+		const partNumbers = completedParts
+			?.map((p) => p.partNumber)
+			.sort((a, b) => a - b);
+		expect(partNumbers).toEqual([1, 2, 4, 5]);
+		// No duplicate PartNumbers in the final completeMultipart call.
+		expect(new Set(partNumbers).size).toBe(partNumbers?.length);
 	});
 });
