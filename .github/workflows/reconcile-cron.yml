@@ -1,0 +1,35 @@
+name: Reconcile storage
+
+# Hits the app's nightly storage reconciliation endpoint so videos whose S3
+# object went missing (or uploads stuck mid-flight) get flagged automatically.
+# Requires the repo secret CRON_SECRET (same value as the app's CRON_SECRET env).
+# Until that secret is added, each run safely skips (no failures).
+
+on:
+  schedule:
+    - cron: "0 21 * * *" # nightly at 21:00 UTC (02:00 Tashkent)
+  workflow_dispatch: {}
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping reconcile-storage
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://data365.duckdns.org
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET secret not set yet — skipping."
+            echo "Add it in: repo Settings -> Secrets and variables -> Actions -> New repository secret (name CRON_SECRET)."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/out.txt -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/reconcile-storage")
+          echo "HTTP $code"
+          cat /tmp/out.txt || true
+          if [ "$code" != "200" ]; then
+            echo "Reconcile ping failed"
+            exit 1
+          fi
