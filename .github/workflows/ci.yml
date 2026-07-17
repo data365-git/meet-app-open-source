@@ -106,8 +106,16 @@ jobs:
 
       - name: BOM check (UTF-8 BOM in .ts/.tsx files)
         run: |
+          # `grep -q` exits 1 when a file has no BOM, which made the whole command
+          # substitution exit 1; GitHub runs steps under `bash -e`, so the step died
+          # right here — reporting failure with no output even when nothing was wrong.
+          # It went unnoticed because this step sat behind the perpetually-red Biome
+          # step in a single job and was always skipped. Use an explicit `if` so the
+          # loop exits 0 when it finds nothing.
           bom_files=$(git ls-files '*.ts' '*.tsx' | while read -r f; do
-            head -c 3 "$f" | od -An -tx1 | grep -q 'ef bb bf' && echo "$f"
+            if head -c 3 "$f" | od -An -tx1 | grep -q 'ef bb bf'; then
+              echo "$f"
+            fi
           done)
           if [ -n "$bom_files" ]; then
             echo "ERROR: These files start with a UTF-8 BOM:"
