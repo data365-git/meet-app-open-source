@@ -28,7 +28,11 @@ import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withDeadline } from "@/lib/deadline";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
-import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
+import {
+	MIXED_LANGUAGE_PRESERVATION_RULES,
+	UNTRUSTED_TRANSCRIPT_INSTRUCTION,
+	wrapUntrustedTranscript,
+} from "@/lib/prompt-rules";
 import { restoreRussianScriptDeep } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { normalizeWebVttVoiceText } from "@/lib/transcript-vtt";
@@ -1233,7 +1237,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function buildReadableRefinePrompt(transcript: string): string {
+export function buildReadableRefinePrompt(transcript: string): string {
 	return `You are an expert note-taker. Below is a meeting/video transcript excerpt (the content may be in Uzbek, Russian, or English). Each line is "Speaker: text".
 
 Rewrite it into clean, readable notes in flowing prose — as if a person listened to the conversation and wrote down everything important in an easy-to-read short-form style. This is NOT a short summary: it is a full, faithful rendition with the clutter removed.
@@ -1249,8 +1253,10 @@ HARD rules:
 
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
 
+${UNTRUSTED_TRANSCRIPT_INSTRUCTION}
+
 Transcript:
-${transcript}`;
+${wrapUntrustedTranscript(transcript)}`;
 }
 
 export function splitReadableParagraphs(text: string): string[] {
@@ -1417,9 +1423,10 @@ Rules:
 - Keep ALL JSON property names exactly as shown
 - In aiSummary.overview, topics[].title, topics[].body and nextSteps, use markdown **bold** VERY sparingly — bold at most the 1–2 single most important terms or names per field. Do NOT bold every foreign/technical word and do NOT copy the transcript's bold density.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
+${UNTRUSTED_TRANSCRIPT_INSTRUCTION}
 
 Transcript:
-${transcriptWithTimestamps}`;
+${wrapUntrustedTranscript(transcriptWithTimestamps)}`;
 
 	const apiResult = await callAiApi(prompt, {}, context);
 	const parsed = parseAiResponse(apiResult.content);
@@ -1775,9 +1782,10 @@ List in "tasks" EVERY action item, commitment, decision-to-do, deadline, or next
 IMPORTANT: All chapter "start" values MUST be between ${chunk.startTime} and ${chunk.endTime} seconds. The total video is only ${videoDuration} seconds long.
 Be thorough - this summary will be combined with other sections to create a comprehensive overview.
 ${MIXED_LANGUAGE_PRESERVATION_RULES}
+${UNTRUSTED_TRANSCRIPT_INSTRUCTION}
 Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
-${chunk.text}`;
+${wrapUntrustedTranscript(chunk.text)}`;
 
 			const { parsed, inputTokens, outputTokens, model } =
 				await parseJsonWithRetry(

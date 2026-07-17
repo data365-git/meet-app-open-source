@@ -32,3 +32,11 @@ export const getMultipartFileKey = (
 
 export const isRawRecorderUpload = (subpath: string) =>
 	subpath.startsWith("raw-upload.");
+
+// Defence-in-depth for the /complete route: a gapped part list (e.g. produced
+// by a mis-built client retry path) must never reach S3's completeMultipart,
+// which either fails or assembles a corrupt object.
+export const isSequentialPartList = (parts: { partNumber: number }[]) => {
+	const sorted = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+	return sorted.every((part, index) => part.partNumber === index + 1);
+};

@@ -12,7 +12,11 @@ import { Option } from "effect";
 import { z } from "zod";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import { withGeminiRetry } from "@/lib/gemini-retry";
-import { MIXED_LANGUAGE_PRESERVATION_RULES } from "@/lib/prompt-rules";
+import {
+	MIXED_LANGUAGE_PRESERVATION_RULES,
+	UNTRUSTED_TRANSCRIPT_INSTRUCTION,
+	wrapUntrustedTranscript,
+} from "@/lib/prompt-rules";
 import {
 	restoreRussianScript,
 	restoreRussianScriptDeep,
@@ -246,8 +250,10 @@ Below is a numbered list of ${batch.length} lines, in order. Translate EACH line
 
 The "lines" array MUST contain exactly ${batch.length} entries, in the SAME order as the input. Do not merge, split, skip, or reorder lines.
 
+${UNTRUSTED_TRANSCRIPT_INSTRUCTION}
+
 Lines:
-${numbered}`;
+${wrapUntrustedTranscript(numbered)}`;
 
 		const content = await callGeminiJson(prompt, context);
 		const parsed = JSON.parse(cleanJsonResponse(content).trim()) as {

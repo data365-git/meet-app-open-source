@@ -47,6 +47,7 @@ import {
 } from "./web-recorder-constants";
 import type {
 	ChunkUploadState,
+	RecorderErrorEvent,
 	RecorderPhase,
 	RecordingFailureDownload,
 	RecoveredRecordingDownload,
@@ -87,6 +88,11 @@ type InstantVideoCreation = {
 	shareUrl: string;
 	upload: UploadTarget;
 };
+// "recorder-error" marks a stop triggered by an unexpected mid-recording
+// MediaRecorder failure (no user Stop click) rather than a normal stop, so
+// the salvage keeps the truthful "ended early" outcome instead of the
+// cheerful "completed" one, even when the upload itself succeeds.
+type StopRecordingOptions = { reason?: "user" | "recorder-error" };
 
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
 	if (Exit.isFailure(exit)) {
@@ -241,7 +247,9 @@ export const useWebRecorder = ({
 		height?: number;
 		fps?: number;
 	}>({});
-	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const stopRecordingRef = useRef<
+		((options?: StopRecordingOptions) => Promise<void>) | null
+	>(null);
 	const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
 	const instantUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const recordingPipelineRef = useRef<RecordingPipeline | null>(null);
@@ -688,6 +696,26 @@ export const useWebRecorder = ({
 		return stopRecordingInternal(cleanupStreams, clearTimer);
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
+	const handleRecorderError = useCallback(
+		(event: RecorderErrorEvent) => {
+			onRecorderError(event, (error) => {
+				// A mid-recording MediaRecorder failure with no stop in
+				// flight: surface it immediately (silent failure is the
+				// worst outcome), then drive the same stop/upload path a
+				// user-initiated Stop would — tagged so the salvage lands on
+				// "error" (truthful: it ended early) instead of "completed",
+				// even if the upload itself succeeds — so whatever was
+				// captured is finalized rather than lost.
+				console.error("Recording stopped unexpectedly", error);
+				toast.error(
+					"Recording stopped unexpectedly. Saving what was captured so far…",
+				);
+				void stopRecordingRef.current?.({ reason: "recorder-error" });
+			});
+		},
+		[onRecorderError],
+	);
+
 	const startRecording = async () => {
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
@@ -1065,7 +1093,7 @@ export const useWebRecorder = ({
 			});
 			recorder.ondataavailable = handleRecorderDataAvailable;
 			recorder.onstop = onRecorderStop;
-			recorder.onerror = onRecorderError;
+			recorder.onerror = handleRecorderError;
 
 			const handleVideoEnded = () => {
 				window.focus();
@@ -1171,7 +1199,8 @@ export const useWebRecorder = ({
 		startInstantChunkInterval,
 	]);
 
-	const stopRecording = useCallback(async () => {
+	const stopRecording = useCallback(async (options?: StopRecordingOptions) => {
+		const isRecorderErrorSalvage = options?.reason === "recorder-error";
 		stopInstantChunkInterval();
 		clearInstantChunkGuard();
 		instantChunkModeRef.current = null;
@@ -1402,12 +1431,26 @@ export const useWebRecorder = ({
 
 			setUploadStatus(undefined);
 			setCompletedShareUrl(creationResult.shareUrl);
+			// The salvage SUCCEEDED — the recording exists and is shareable, so the
+			// phase is "completed" either way. Showing "error" here would hand the
+			// user a red failure screen and withhold the share link for a recording
+			// that is actually saved: they re-record, and the salvaged cap is
+			// orphaned. That is the same harm as losing it. The truth that it ended
+			// early belongs in the warning toast, not in a phase that hides the link.
 			updatePhase("completed");
-			toast.success(
-				pipeline.mode === "streaming-webm"
-					? "Recording uploaded. Processing will continue shortly."
-					: "Recording uploaded.",
-			);
+			if (isRecorderErrorSalvage) {
+				toast.warning(
+					pipeline.mode === "streaming-webm"
+						? "Recording stopped unexpectedly, but what was captured was saved. Processing will continue shortly."
+						: "Recording stopped unexpectedly, but what was captured was saved.",
+				);
+			} else {
+				toast.success(
+					pipeline.mode === "streaming-webm"
+						? "Recording uploaded. Processing will continue shortly."
+						: "Recording uploaded.",
+				);
+			}
 			openShareUrl(creationResult.shareUrl);
 			router.refresh();
 		} catch (err) {

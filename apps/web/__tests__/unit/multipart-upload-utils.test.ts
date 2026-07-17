@@ -3,6 +3,7 @@ import {
 	getMultipartFileKey,
 	getSubpath,
 	isRawRecorderUpload,
+	isSequentialPartList,
 } from "@/app/api/upload/[...route]/multipart-utils";
 
 describe("multipart upload utils", () => {
@@ -51,5 +52,47 @@ describe("multipart upload utils", () => {
 				subpath: "raw-upload.webm",
 			}),
 		).toThrow("Video id not found");
+	});
+
+	// P3.3 — server-side backstop against a gapped part list (e.g. produced by
+	// a mis-built client retry path). /complete must reject before it ever
+	// reaches completeMultipart, which would otherwise fail or assemble a
+	// corrupt object.
+	describe("isSequentialPartList", () => {
+		it("accepts a sequential, in-order part list", () => {
+			expect(
+				isSequentialPartList([
+					{ partNumber: 1 },
+					{ partNumber: 2 },
+					{ partNumber: 3 },
+				]),
+			).toBe(true);
+		});
+
+		it("accepts a sequential part list submitted out of order", () => {
+			expect(
+				isSequentialPartList([
+					{ partNumber: 2 },
+					{ partNumber: 3 },
+					{ partNumber: 1 },
+				]),
+			).toBe(true);
+		});
+
+		it("rejects a gapped part list (part 2 missing)", () => {
+			expect(
+				isSequentialPartList([
+					{ partNumber: 1 },
+					{ partNumber: 3 },
+					{ partNumber: 4 },
+				]),
+			).toBe(false);
+		});
+
+		it("rejects a part list that doesn't start at 1", () => {
+			expect(isSequentialPartList([{ partNumber: 2 }, { partNumber: 3 }])).toBe(
+				false,
+			);
+		});
 	});
 });

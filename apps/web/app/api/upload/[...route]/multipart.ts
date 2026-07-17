@@ -24,6 +24,7 @@ import {
 	getMultipartFileKey,
 	getSubpath,
 	isRawRecorderUpload,
+	isSequentialPartList,
 } from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
@@ -350,6 +351,18 @@ app.post(
 					);
 				}
 
+				// Last line of defence against a gapped part list (e.g. a mis-built
+				// client retry path): reject before completeMultipart, which would
+				// otherwise fail or assemble a corrupt object (P3.3).
+				if (!isSequentialPartList(parts)) {
+					return c.json(
+						{
+							error: "Part numbers are not sequential",
+						},
+						400,
+					);
+				}
+
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
 						`Completing multipart upload ${uploadId} with ${parts.length} parts for key: ${fileKey}`,
@@ -361,16 +374,6 @@ app.post(
 					const sortedParts = [...parts].sort(
 						(a, b) => a.partNumber - b.partNumber,
 					);
-
-					const sequentialCheck = sortedParts.every(
-						(part, index) => part.partNumber === index + 1,
-					);
-
-					if (!sequentialCheck) {
-						console.warn(
-							"WARNING: Part numbers are not sequential! This may cause issues with the assembled file.",
-						);
-					}
 
 					const needsEtagResolution = sortedParts.some(
 						(p) => !p.etag || p.etag === "RESOLVE_SERVER_SIDE",
