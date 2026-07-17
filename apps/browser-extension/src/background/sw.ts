@@ -601,9 +601,20 @@ async function handleMessage(
 				);
 			}
 			if (pauseState.kind === "recording") {
-				const nextState = { ...pauseState, paused: true, pausedAt: Date.now() };
-				await setState(nextState);
-				updateBadge(nextState);
+				// (R2) Serialize the state write through enqueueRecorder and re-read
+				// FRESH inside it. sendControlWithRetry above is a multi-hundred-ms
+				// window in which handleChunk (also serialized on this queue) can
+				// record a new part; writing back the stale pre-send snapshot dropped
+				// that part from state.parts and rewound nextPartNumber, so the next
+				// part reused its number and overwrote 5 MiB in R2. Mutate only the
+				// pause fields.
+				await enqueueRecorder(async () => {
+					const fresh = await getState();
+					if (fresh.kind !== "recording") return;
+					const nextState = { ...fresh, paused: true, pausedAt: Date.now() };
+					await setState(nextState);
+					updateBadge(nextState);
+				});
 			}
 			return { ok: true };
 		}
@@ -638,16 +649,23 @@ async function handleMessage(
 				);
 			}
 			if (resumeState.kind === "recording") {
-				const nextState = {
-					...resumeState,
-					paused: false,
-					pausedAt: undefined,
-					pausedAccumMs:
-						(resumeState.pausedAccumMs ?? 0) +
-						(resumeState.pausedAt ? Date.now() - resumeState.pausedAt : 0),
-				};
-				await setState(nextState);
-				updateBadge(nextState);
+				// (R2) Same lost-update race as PAUSE — serialize through
+				// enqueueRecorder and re-read fresh so a part recorded during the
+				// resume-control window is not clobbered. Mutate only the pause fields.
+				await enqueueRecorder(async () => {
+					const fresh = await getState();
+					if (fresh.kind !== "recording") return;
+					const nextState = {
+						...fresh,
+						paused: false,
+						pausedAt: undefined,
+						pausedAccumMs:
+							(fresh.pausedAccumMs ?? 0) +
+							(fresh.pausedAt ? Date.now() - fresh.pausedAt : 0),
+					};
+					await setState(nextState);
+					updateBadge(nextState);
+				});
 			}
 			return { ok: true };
 		}

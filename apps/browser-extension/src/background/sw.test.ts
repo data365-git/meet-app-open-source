@@ -656,3 +656,75 @@ describe("Fix 2 — dead-letter exhaustion releases the UI", () => {
 		expect(response.ok).toBe(true);
 	});
 });
+
+// ── R2: PAUSE/RESUME must not clobber a part recorded during the control
+// window (lost-update race — Fable audit) ──────────────────────────────────
+
+describe("R2 — PAUSE state write must not clobber a concurrent chunk", () => {
+	it("keeps a part recorded during the pause-control window (no stale-snapshot rollback)", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-r2",
+			uploadId: "upload-r2",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// Simulate handleChunk landing a new part (part 2) DURING the PAUSE control
+		// send — the exact window in which the old code re-wrote a stale snapshot.
+		// No recorderTabId/contentRecorderTabId → PAUSE routes to sendToOffscreen,
+		// which calls chrome.runtime.sendMessage(msg, cb); override it to inject.
+		// chrome.runtime.sendMessage is used two ways here: sendToOffscreen uses
+		// the (message, callback) form; broadcastState (inside every setState) uses
+		// the promise form and calls .catch on the result. Support BOTH.
+		let injected = false;
+		const injectPartOnPause = async (msg: { type?: string }) => {
+			if (msg?.type === "PAUSE_CAPTURE" && !injected) {
+				injected = true;
+				const s = await getState();
+				if (s.kind === "recording") {
+					await setState({
+						...s,
+						parts: [...s.parts, { PartNumber: 2, ETag: '"e2"' }],
+						nextPartNumber: 3,
+						uploadedBytes: s.uploadedBytes + MIN_PART_SIZE,
+					});
+				}
+			}
+		};
+		chrome.runtime.sendMessage = ((message: unknown, callback?: unknown) => {
+			const msg = message as { type?: string };
+			if (typeof callback === "function") {
+				void injectPartOnPause(msg).then(() =>
+					(callback as (r: unknown) => void)(undefined),
+				);
+				return undefined;
+			}
+			return Promise.resolve(undefined);
+		}) as typeof chrome.runtime.sendMessage;
+
+		await sendMessage(captured, { type: "PAUSE" });
+
+		const final = await getState();
+		expect(final.kind).toBe("recording");
+		if (final.kind === "recording") {
+			expect(final.paused).toBe(true);
+			const partNums = final.parts.map((p) => p.PartNumber);
+			// The bug: the stale snapshot rolled parts back to [1] and nextPartNumber
+			// to 2, so the concurrently-recorded part 2 was dropped and its number
+			// reused — overwriting 5 MiB in R2.
+			expect(partNums).toContain(2);
+			expect(partNums).toContain(1);
+			expect(final.nextPartNumber).toBe(3);
+		}
+	});
+});
