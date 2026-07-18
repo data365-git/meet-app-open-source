@@ -222,16 +222,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			}),
 
 			/*
-			 * Permanently delete a video and ALL its media (irreversible). Used by
-			 * the Trash "delete now" action and the 7-day purge. Resolves the row
-			 * even when already soft-deleted. Fails if the user does not own it.
+			 * Permanently delete a video and ALL its media (irreversible). Backs the
+			 * recorder's "permanently discard" and any future Trash "delete now".
+			 * Resolves the row even when already soft-deleted. Fails if the user
+			 * does not own it.
 			 */
 			permanentlyDelete: Effect.fn("Videos.permanentlyDelete")(function* (
 				videoId: Video.VideoId,
 			) {
 				const maybeVideo = yield* repo.getByIdIncludingDeleted(videoId);
-				if (Option.isNone(maybeVideo))
-					return yield* Effect.fail(new Video.NotFoundError());
+				// Idempotent: an already-erased video is the state the caller asked
+				// for, so report success rather than NotFound. A discard can be
+				// queued offline and retried, and a retry of one that already
+				// worked must not surface as a failure.
+				if (Option.isNone(maybeVideo)) {
+					yield* Effect.log(`Video ${videoId} is already permanently deleted`);
+					return;
+				}
 				const [video] = maybeVideo.value;
 
 				// Authorize against the already-fetched video so ownership is
@@ -244,10 +251,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
-				yield* repo.delete(video.id);
-
-				yield* Effect.log(`Permanently deleted video ${video.id}`);
-
+				// Storage FIRST, database LAST. If object deletion fails the row must
+				// survive, so the owner still has a record to retry from; dropping the
+				// row first would strand the media in the bucket with nothing pointing
+				// at it, and nothing left to retry from.
 				const prefix = `${video.ownerId}/${video.id}/`;
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
@@ -259,6 +266,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						})),
 					);
 				}
+
+				yield* repo.delete(video.id);
+
+				yield* Effect.log(`Permanently deleted video ${video.id}`);
 			}),
 
 			/*

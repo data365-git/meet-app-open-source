@@ -1706,3 +1706,408 @@ describe("Fix 1 — dead offscreen + idle recorder tab: STOP must still finalize
 		expect(getCompleteCalls()).toBe(1);
 	});
 });
+
+// ── HIGH #2: "Cancel upload" was a false promise ───────────────────────────
+//
+// The uploading view's only action used to be "Cancel upload", which set state
+// to idle and called abortUpload — and abortUpload only forgets the LOCAL
+// buffer. Nothing aborted the server-side multipart, nothing cleared that
+// upload's queued retries or dead letters, and nothing deleted an object whose
+// multipart had already completed. The user was told it was cancelled while
+// orphan parts piled up in R2 and hidden retries kept running.
+
+const DEAD_LETTER_KEY = "capExtDeadLetterQueue";
+
+function uploadingState(videoId: string, uploadId: string) {
+	return {
+		kind: "uploading" as const,
+		videoId,
+		uploadId,
+		parts: [{ ETag: "etag-1", PartNumber: 1 }],
+		totalBytes: MIN_PART_SIZE,
+		uploadedBytes: MIN_PART_SIZE,
+	};
+}
+
+function partItem(videoId: string, uploadId: string, partNumber: number) {
+	return {
+		kind: "part",
+		payload: {
+			partNumber,
+			videoId,
+			uploadId,
+			partDataBase64: Buffer.from("bytes").toString("base64"),
+		},
+		attempts: 0,
+		nextRetryAt: Date.now() + 60_000,
+	};
+}
+
+/** Records every server call the discard makes. */
+function stubDiscardFetch(opts: { failServer?: boolean } = {}) {
+	const calls: Array<{ url: string; method: string; body?: string }> = [];
+	vi.stubGlobal(
+		"fetch",
+		async (input: string | URL | Request, init?: RequestInit) => {
+			const url = input.toString();
+			const method = init?.method ?? "GET";
+			calls.push({
+				url,
+				method,
+				body: typeof init?.body === "string" ? init.body : undefined,
+			});
+			if (opts.failServer) return new Response("boom", { status: 500 });
+			return jsonResponse({ success: true });
+		},
+	);
+	return calls;
+}
+
+describe('HIGH #2 — "permanently discard" actually discards', () => {
+	it("aborts the server multipart, deletes the video, and clears queued + dead-lettered work for that upload", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-discard", "upload-discard"));
+
+		// Work belonging to THIS upload (must go) alongside an unrelated
+		// recording's work (must survive — discarding one recording must never
+		// take another one's durable bytes with it).
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				partItem("vid-discard", "upload-discard", 2),
+				{
+					kind: "recording-complete",
+					payload: { videoId: "vid-discard" },
+					attempts: 0,
+					nextRetryAt: Date.now() + 60_000,
+				},
+				partItem("vid-other", "upload-other", 1),
+			],
+			[DEAD_LETTER_KEY]: [
+				partItem("vid-discard", "upload-discard", 3),
+				partItem("vid-other", "upload-other", 2),
+			],
+		});
+
+		const calls = stubDiscardFetch();
+		await sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		const abort = calls.find((c) =>
+			c.url.includes("/api/upload/multipart/abort"),
+		);
+		expect(abort, "no multipart abort was sent").toBeDefined();
+		expect(abort?.method).toBe("POST");
+		expect(JSON.parse(abort?.body ?? "{}")).toMatchObject({
+			uploadId: "upload-discard",
+			videoId: "vid-discard",
+		});
+
+		const del = calls.find((c) => c.url.includes("/api/video/delete-permanent"));
+		expect(del, "the video was never deleted").toBeDefined();
+		expect(del?.method).toBe("DELETE");
+		expect(del?.url).toContain("videoId=vid-discard");
+
+		const queue = (await storage.get(RETRY_QUEUE_KEY))[RETRY_QUEUE_KEY] as
+			| Array<{ payload: { videoId: string } }>
+			| undefined;
+		expect(queue?.map((i) => i.payload.videoId)).toEqual(["vid-other"]);
+
+		const dead = (await storage.get(DEAD_LETTER_KEY))[DEAD_LETTER_KEY] as
+			| Array<{ payload: { videoId: string } }>
+			| undefined;
+		expect(dead?.map((i) => i.payload.videoId)).toEqual(["vid-other"]);
+
+		const { getState } = await import("./state");
+		expect((await getState()).kind).toBe("idle");
+	});
+
+	it("does not claim the recording is gone when the server could not be reached", async () => {
+		const { captured, setState, notifications } = await freshSw();
+		await setState(uploadingState("vid-offline", "upload-offline"));
+
+		stubDiscardFetch({ failServer: true });
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			ok?: boolean;
+			serverCleaned?: boolean;
+		};
+		await flushAsync();
+
+		expect(res.serverCleaned).toBe(false);
+		const note = notifications.find((n) => n.id === "discard-partial");
+		expect(note, "no honest warning was surfaced").toBeDefined();
+		expect(note?.message ?? "").toMatch(/couldn't reach the server/i);
+		// Copy must never claim more than it did.
+		expect(`${note?.title} ${note?.message}`).not.toMatch(/deleted from/i);
+	});
+
+	// The common late discard: the multipart already completed, so there is
+	// genuinely nothing to abort and S3 says so. Treating that as a failure
+	// would warn the user their data might still be on the server when the
+	// delete had in fact removed it.
+	it("does not warn when the multipart was already completed (nothing to abort)", async () => {
+		const { captured, setState, notifications } = await freshSw();
+		await setState(uploadingState("vid-late", "upload-late"));
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/abort")) {
+					return new Response(
+						JSON.stringify({
+							error: "Failed to abort multipart upload",
+							details: "NoSuchUpload: The specified upload does not exist.",
+						}),
+						{ status: 500 },
+					);
+				}
+				return jsonResponse({ success: true });
+			},
+		);
+
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			serverCleaned?: boolean;
+		};
+		await flushAsync();
+
+		expect(res.serverCleaned).toBe(true);
+		expect(notifications.find((n) => n.id === "discard-partial")).toBeUndefined();
+	});
+
+	it("is a no-op when the upload already moved on (stale popup click)", async () => {
+		const { captured, setState } = await freshSw();
+		await setState({
+			kind: "complete",
+			videoId: "vid-done",
+			shareUrl: "https://example.test/s/vid-done",
+		});
+
+		const calls = stubDiscardFetch();
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			ok?: boolean;
+		};
+		await flushAsync();
+
+		expect(res.ok).toBe(false);
+		expect(calls).toHaveLength(0);
+		const { getState } = await import("./state");
+		expect((await getState()).kind).toBe("complete");
+	});
+
+	// The critical stomp: DISCARD_UPLOAD's guard reads state ONCE, then awaits
+	// discardUpload's real (slow) network calls before writing "idle"
+	// unconditionally. In that window the retry-alarm drain can legitimately
+	// flip state to "complete", from which the user is allowed to start a
+	// brand-new recording (RECORDER_STARTED is admitted — isInProgress()
+	// excludes "complete"). When the stale discard's tail finally runs, an
+	// unconditional reset lands on top of that LIVE new recording: handleChunk
+	// requires kind === "recording", so every later chunk of the new recording
+	// is silently dropped and finalizeRecording no-ops. Meeting lost, silently,
+	// by the button meant to be safe. Proved by driving the real handlers
+	// through the exact interleaving with deterministic fetch gates.
+	it("does not stomp a NEW recording that starts while an earlier discard's server calls are still resolving", async () => {
+		const { captured, storage, setState } = await freshSw();
+		const { getState } = await import("./state");
+
+		// Upload A parked in "uploading" with a due deferred-complete retry item.
+		await setState(uploadingState("vid-A", "upload-A"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-A",
+						videoId: "vid-A",
+						parts: [{ partNumber: 1, etag: "etag-1", size: 0 }],
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		// Gates make each interleaving step deterministic instead of a lucky race.
+		let releaseComplete!: () => void;
+		const completeGate = new Promise<void>((r) => {
+			releaseComplete = r;
+		});
+		let releaseAbort!: () => void;
+		const abortGate = new Promise<void>((r) => {
+			releaseAbort = r;
+		});
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/multipart/complete")) {
+					await completeGate;
+					return jsonResponse({ success: true });
+				}
+				if (url.includes("/multipart/abort")) {
+					await abortGate;
+					return jsonResponse({ success: true });
+				}
+				if (url.includes("/api/video/delete-permanent")) return jsonResponse({ ok: true });
+				if (url.includes("/recording-complete")) return jsonResponse({ ok: true });
+				if (url.includes("/desktop/video/create"))
+					return jsonResponse({ id: "vid-B" });
+				if (url.includes("/multipart/initiate"))
+					return jsonResponse({ uploadId: "upload-B" });
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		// (2) drain enters the queue and parks on completeMultipart.
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		// (3) user clicks "Permanently discard"; the guard reads "uploading" ->
+		// passes, and discardUpload is enqueued BEHIND the in-flight drain.
+		const discardResp = sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		// (4) drain finishes: multipart A completes server-side, state -> "complete".
+		releaseComplete();
+		await flushAsync();
+		expect((await getState()).kind).toBe("complete");
+
+		// (5) discard is now running, parked on its abort fetch.
+		// (6) the user starts a NEW recording B — RECORDER_STARTED is admitted
+		// from "complete" (not in-progress).
+		const startResp = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			OFFSCREEN_SENDER,
+		)) as { ok?: boolean };
+		expect(startResp.ok).toBe(true);
+		const during = await getState();
+		expect(during.kind).toBe("recording");
+		expect(during.kind === "recording" && during.videoId).toBe("vid-B");
+
+		// (7) discard's server calls finally resolve; the SW handler's tail runs.
+		releaseAbort();
+		await discardResp;
+		await flushAsync();
+
+		// Recording B must SURVIVE the old discard's tail write.
+		const final = await getState();
+		expect(final.kind).toBe("recording");
+		expect(final.kind === "recording" && final.videoId).toBe("vid-B");
+
+		// And it must still be functionally alive: a later chunk is accepted,
+		// not silently dropped (handleChunk requires kind === "recording").
+		const before =
+			final.kind === "recording" ? final.totalBytes : Number.NaN;
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(4096)),
+			index: 0,
+			mime: "video/webm",
+		});
+		const after = await getState();
+		expect(after.kind).toBe("recording");
+		expect(after.kind === "recording" && after.totalBytes).toBe(before + 4096);
+	});
+});
+
+// ── MEDIUM: pause/resume must not lie ──────────────────────────────────────
+//
+// The persisted paused flag was written whether or not the PAUSE_CAPTURE /
+// RESUME_CAPTURE control message ever reached the recorder. sendControlWithRetry
+// already reports delivery, so a dead offscreen document produced a popup
+// cheerfully showing "Paused" over a recorder that never stopped recording (and
+// the mirror image on resume: "Recording" over a still-paused recorder).
+
+/** Make every runtime.sendMessage to the recorder fail the way Chrome does when
+ * the receiving end is gone, so sendControlWithRetry exhausts its attempts. */
+function breakControlChannel(chrome: {
+	runtime: {
+		lastError?: { message: string };
+		sendMessage: unknown;
+	};
+}) {
+	chrome.runtime.sendMessage = ((
+		_msg: unknown,
+		cb?: (r: unknown) => void,
+	) => {
+		chrome.runtime.lastError = {
+			message: "Could not establish connection. Receiving end does not exist.",
+		};
+		cb?.(undefined);
+		chrome.runtime.lastError = undefined;
+		return Promise.resolve(undefined);
+	}) as unknown as typeof chrome.runtime.sendMessage;
+}
+
+function recordingStateFor(paused: boolean) {
+	return {
+		kind: "recording" as const,
+		mode: "meeting" as const,
+		videoId: "vid-pause",
+		uploadId: "upload-pause",
+		startedAt: Date.now(),
+		parts: [],
+		nextPartNumber: 1,
+		totalBytes: 0,
+		uploadedBytes: 0,
+		mime: "video/webm",
+		paused,
+	};
+}
+
+describe("MEDIUM — pause/resume state follows the recorder, not the intent", () => {
+	it("does not persist 'paused' when PAUSE_CAPTURE never reached the recorder", async () => {
+		const { captured, chrome, setState } = await freshSw();
+		await setState(recordingStateFor(false));
+		breakControlChannel(chrome);
+
+		const res = (await sendMessage(captured, { type: "PAUSE" })) as {
+			ok?: boolean;
+		};
+
+		const { getState } = await import("./state");
+		const after = await getState();
+		expect(after.kind).toBe("recording");
+		expect(after.kind === "recording" && after.paused).toBe(false);
+		expect(res.ok).toBe(false);
+	});
+
+	it("does not persist 'resumed' when RESUME_CAPTURE never reached the recorder", async () => {
+		const { captured, chrome, setState } = await freshSw();
+		await setState(recordingStateFor(true));
+		breakControlChannel(chrome);
+
+		const res = (await sendMessage(captured, { type: "RESUME" })) as {
+			ok?: boolean;
+		};
+
+		const { getState } = await import("./state");
+		const after = await getState();
+		expect(after.kind === "recording" && after.paused).toBe(true);
+		expect(res.ok).toBe(false);
+	});
+
+	it("still persists the pause when the recorder acknowledges", async () => {
+		const { captured, chrome, setState } = await freshSw();
+		await setState(recordingStateFor(false));
+		// The base harness's sendMessage never invokes the callback, which
+		// sendToOffscreen waits on forever; a live recorder does ack.
+		chrome.runtime.sendMessage = ((
+			_msg: unknown,
+			cb?: (r: unknown) => void,
+		) => {
+			cb?.({ ok: true });
+			return Promise.resolve(undefined);
+		}) as unknown as typeof chrome.runtime.sendMessage;
+
+		const res = (await sendMessage(captured, { type: "PAUSE" })) as {
+			ok?: boolean;
+		};
+
+		const { getState } = await import("./state");
+		const after = await getState();
+		expect(after.kind === "recording" && after.paused).toBe(true);
+		expect(res.ok).toBe(true);
+	});
+});

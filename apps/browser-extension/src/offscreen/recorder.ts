@@ -16,6 +16,12 @@
 // RECORDER_STOPPED / RECORDER_ERROR) is shared with recorder.html so the upload
 // pipeline in the SW is identical for both paths.
 
+import {
+	TAB_AUDIO_PROBLEM,
+	isTabAudioLive,
+	tabAudioStatus,
+} from "../shared/client-audio";
+
 interface StartCaptureMsg {
 	type: "START_CAPTURE";
 	streamId: string;
@@ -50,6 +56,21 @@ interface RecordingState {
 }
 
 let state: RecordingState | null = null;
+
+// (H1) "Record Meet tab only" is a MEETING recording by construction — the popup
+// only offers it on a Meet tab. Capturing that tab without its audio means the
+// other participants are not recorded at all, which is the one outcome this
+// product must never produce silently. Unlike the full-screen path
+// (recorder.html) there is no UI here to warn in or ask with — an offscreen
+// document is invisible and has no user activation — so the only honest outcome
+// is to refuse and let the service worker surface the reason. The full-screen
+// path remains available and CAN ask, so the user is never left with no way to
+// record the meeting.
+function noClientAudioError(problem: string): Error {
+	return new Error(
+		`Can't record this meeting: ${problem}, so the other participants wouldn't be recorded. Unmute the tab and try again, or use "Record full-screen meeting".`,
+	);
+}
 
 function pickMimeType(): string {
 	const candidates = [
@@ -114,17 +135,25 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 					},
 				} as unknown as MediaTrackConstraints,
 			});
-		} catch {
-			// The tab may expose no audio — fall back to video-only so the
-			// meeting screen is still captured rather than failing outright.
-			displayStream = await navigator.mediaDevices.getUserMedia({
-				video: {
-					mandatory: {
-						chromeMediaSource: "tab",
-						chromeMediaSourceId: msg.streamId,
-					},
-				} as unknown as MediaTrackConstraints,
-			});
+		} catch (err) {
+			// (H1) This used to silently retry VIDEO-ONLY and then report a
+			// perfectly ordinary successful start — a meeting recorded with none of
+			// the other participants' voices, presented to the user as a win.
+			throw noClientAudioError(
+				`${TAB_AUDIO_PROBLEM.missing} (${err instanceof Error ? err.message : String(err)})`,
+			);
+		}
+
+		// (H1) LIVENESS GATE — the same decision the full-screen path makes before
+		// recorder.start() (recorder-page.ts), via the ONE shared rule in
+		// shared/client-audio.ts. Counting audio tracks is not enough: a Meet tab
+		// the user already muted from Chrome's tab strip hands back a track that
+		// EXISTS but is `muted`, and since no `mute` transition ever fires, the
+		// watchdog wired below would never trip either.
+		const startStatus = tabAudioStatus(displayStream.getAudioTracks()[0]);
+		if (startStatus !== "live") {
+			for (const t of displayStream.getTracks()) t.stop();
+			throw noClientAudioError(TAB_AUDIO_PROBLEM[startStatus]);
 		}
 
 		let micStream: MediaStream | null = null;
@@ -232,6 +261,65 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 
 		state = { recorder, audioCtx, displayStream, micStream, chunkIndex };
 
+		// (H1) MID-RECORDING WATCHDOG. Client-audio loss after start (typically the
+		// user muting the Meet tab from Chrome's tab strip) was completely
+		// invisible on this path. The user-facing DECISION is not re-implemented
+		// here: the SW already owns it for the full-screen path
+		// (TAB_AUDIO_DEGRADED / TAB_AUDIO_RECOVERED → notifyTabAudioDegraded,
+		// including the intentionalStop gate), so this only emits the signal.
+		//
+		// Debounced 1.5s like the full-screen path: a merely SILENT participant
+		// does not mute a tabCapture track, so this cannot false-trip on a quiet
+		// meeting, but a momentary blip shouldn't nag either. Only "muted" is
+		// wired: on a tab-only capture the audio and video come from the SAME tab,
+		// so a genuine "ended" takes the video track with it and the existing
+		// videoTracks[0].onended already stops and finalizes the recording — there
+		// is no screen+mic remainder left to keep warning about.
+		const tabAudioTrack = displayStream.getAudioTracks()[0];
+		if (tabAudioTrack) {
+			// A stale timer from a PREVIOUS capture must not speak for this one.
+			const isThisRecording = () => state?.displayStream === displayStream;
+			tabAudioTrack.onmute = () => {
+				setTimeout(() => {
+					// `recorder.state === "recording"` is load-bearing, not belt-and-
+					// braces: a recording that is simply ENDING drops its tab audio as
+					// a matter of course, and in the window between recorder.stop() and
+					// the chunk drain the state object is still alive. Re-checking only
+					// the track there fires a false "your Meet tab was muted" alarm on
+					// a perfectly good recording.
+					// "recording" was too narrow and diverged from the twin it was
+					// written to match: a tab muted while PAUSED fires onmute once, the
+					// recheck sees "paused" and suppresses, and nothing re-fires on
+					// resume — so the rest of the meeting recorded with no client audio
+					// and no warning. The recorder-page twin warns while paused
+					// (handleTabAudioDegraded excludes only "inactive").
+					// "!== inactive" keeps the false-alarm protection this guard exists
+					// for — MediaRecorder.stop() flips to "inactive" immediately, which
+					// is what the ending-window test relies on — while closing the pause
+					// hole.
+					if (
+						isThisRecording() &&
+						state?.recorder.state !== undefined &&
+						state.recorder.state !== "inactive" &&
+						!isTabAudioLive(tabAudioTrack)
+					) {
+						sendMsg({ type: "TAB_AUDIO_DEGRADED", cause: "muted" });
+					}
+				}, 1500);
+			};
+			tabAudioTrack.onunmute = () => {
+				// Deliberately NOT gated on "recording" (unlike the warning): a stale
+				// banner must still clear if the tab is unmuted while paused.
+				if (
+					isThisRecording() &&
+					state?.recorder.state !== "inactive" &&
+					isTabAudioLive(tabAudioTrack)
+				) {
+					sendMsg({ type: "TAB_AUDIO_RECOVERED" });
+				}
+			};
+		}
+
 		// Wait for the SW to initialize the upload (state → "recording") BEFORE
 		// capturing. If we started immediately, the first tab-capture chunks
 		// would arrive while the SW is still "arming" and be dropped → 0 bytes.
@@ -297,19 +385,25 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
 		return;
 	}
 
+	// (M) Ack ONLY when we actually acted. PAUSE_CAPTURE/RESUME_CAPTURE arrive by
+	// broadcast, so an idle context used to answer "ok" for a pause that never
+	// happened — sendControlWithRetry reported delivery and the SW persisted
+	// "paused" over a recorder that kept recording. Same reasoning as the
+	// conditional STOP_CAPTURE ack in recorder-page.ts: staying silent is the
+	// honest signal, and Chrome only raises lastError when NO listener answers.
 	if (msg.type === "PAUSE_CAPTURE") {
 		if (state && state.recorder.state === "recording") {
 			state.recorder.pause();
+			sendResponse({ ok: true });
 		}
-		sendResponse({ ok: true });
 		return;
 	}
 
 	if (msg.type === "RESUME_CAPTURE") {
 		if (state && state.recorder.state === "paused") {
 			state.recorder.resume();
+			sendResponse({ ok: true });
 		}
-		sendResponse({ ok: true });
 		return;
 	}
 });

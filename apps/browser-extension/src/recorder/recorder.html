@@ -140,8 +140,12 @@
 
 			<!-- IDLE: must click to start (provides the user gesture for getDisplayMedia) -->
 			<div id="view-idle">
-				<h1>Record Instruction</h1>
-				<p class="sub">
+				<!-- Both strings are replaced at load on the meeting path (?meeting=1)
+				     by applyMeetingCopy() in recorder-page.ts — the popup button that
+				     opens that path says "Record full-screen meeting", and arriving at
+				     a page headed "Record Instruction" read as the wrong screen. -->
+				<h1 id="idle-title">Record Instruction</h1>
+				<p class="sub" id="idle-sub">
 					Click below, then choose the screen, window, or tab you want to
 					record. Keep this tab open while recording.
 				</p>

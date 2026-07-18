@@ -575,6 +575,82 @@ export async function abortUpload(uploadId: string): Promise<void> {
 	await clearPendingBuffer(uploadId);
 }
 
+/** Drop every queued retry and dead-letter entry belonging to this video.
+ * Keyed on videoId, not uploadId: "recording-complete" items carry only the
+ * videoId, and leaving one behind would resurrect a finalize for a recording
+ * the user just asked us to destroy. */
+async function purgeQueuedWorkForVideo(videoId: string): Promise<void> {
+	const belongsToVideo = (item: RetryItem) =>
+		(item.payload as { videoId?: string })?.videoId === videoId;
+
+	const queue = await getRetryQueue();
+	const keptQueue = queue.filter((item) => !belongsToVideo(item));
+	// Always route through setRetryQueue — it owns the retry alarm's lifecycle,
+	// so a direct storage write would leave the alarm running with nothing to
+	// drain (or, worse, silently stopped while work remains).
+	if (keptQueue.length !== queue.length) await setRetryQueue(keptQueue);
+
+	const deadResult = await chrome.storage.local.get(DEAD_LETTER_KEY);
+	const dead = (deadResult[DEAD_LETTER_KEY] as RetryItem[] | undefined) ?? [];
+	const keptDead = dead.filter((item) => !belongsToVideo(item));
+	if (keptDead.length !== dead.length) {
+		await chrome.storage.local.set({ [DEAD_LETTER_KEY]: keptDead });
+	}
+}
+
+/**
+ * PERMANENTLY destroy a recording, everywhere it exists.
+ *
+ * `abortUpload` above only forgets the local buffer, which is right for its
+ * callers but was catastrophically wrong as the implementation of a button
+ * labelled "Cancel upload": the user was told the recording was cancelled while
+ * orphan parts accumulated in R2 and queued retries kept running in the
+ * background. For a confidential meeting "was that actually deleted?" has to
+ * have an answer.
+ *
+ * Returns whether the SERVER side was cleaned. The caller must not tell the user
+ * the recording is gone when this is false — the local state is idle either way,
+ * but bytes may still be sitting in R2.
+ */
+export async function discardUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<{ serverCleaned: boolean }> {
+	// Local first, and unconditionally: these can't fail in a way worth
+	// reporting, and doing them first guarantees no background retry re-uploads
+	// a part we are in the middle of deleting.
+	await clearPendingBuffer(uploadId);
+	await purgeQueuedWorkForVideo(videoId);
+
+	const settings = await getSettings();
+	if (!settings.apiKey) return { serverCleaned: false };
+	const api = createCapApi(settings.apiBaseUrl, settings.apiKey);
+
+	let serverCleaned = true;
+
+	// Abort BEFORE delete: aborting releases the parts R2 is holding for an
+	// in-flight multipart. Tolerated failure — the multipart may already have
+	// been completed, in which case there is nothing to abort and the delete
+	// below is what actually removes the bytes.
+	try {
+		await api.abortMultipart({ uploadId, videoId, subpath: "result.mp4" });
+	} catch (err) {
+		console.warn("[upload] discard: multipart abort failed", err);
+		serverCleaned = false;
+	}
+
+	// Delete covers the case the abort cannot: a multipart that already
+	// completed, leaving a finished object plus a video record.
+	try {
+		await api.deleteVideo({ videoId });
+	} catch (err) {
+		console.warn("[upload] discard: video delete failed", err);
+		serverCleaned = false;
+	}
+
+	return { serverCleaned };
+}
+
 export async function handleChunk(
 	chunk: ArrayBuffer,
 	_index: number,

@@ -16,6 +16,8 @@
 // posted in — that is exactly why the capture must originate from this page.
 // This tab must stay open for the duration of the recording.
 
+import { isTabAudioLive } from "../shared/client-audio";
+
 interface RecorderSettings {
 	micEnabled: boolean;
 	micDeviceId: string;
@@ -543,11 +545,13 @@ async function startRecording(): Promise<void> {
 		if (meetingRequired && !clientAudioWaived) {
 			const tabTrack = tabAudioStream?.getAudioTracks()[0];
 			const destTrack = dest.stream.getAudioTracks()[0];
+			// The tab-track half of this decision is shared with the offscreen
+			// "Record Meet tab only" path (shared/client-audio.ts) — the two used to
+			// be written out separately and drifted, letting a tab-strip-muted
+			// meeting record with no client audio on the other path.
 			const liveOk =
 				audioCtx.state === "running" &&
-				!!tabTrack &&
-				tabTrack.readyState === "live" &&
-				!tabTrack.muted &&
+				isTabAudioLive(tabTrack) &&
 				!!destTrack &&
 				destTrack.readyState === "live";
 			if (!liveOk) {
@@ -927,17 +931,21 @@ function wire(): void {
 				sendResponse({ ok: true });
 			}
 		} else if (msg.type === "PAUSE_CAPTURE") {
+			// (M) Conditional ack, for exactly the reason STOP_CAPTURE above is:
+			// this tab receives the broadcast even when it owns no capture, and an
+			// unconditional "ok" told the SW the pause was delivered — so it
+			// persisted "paused" while the real recorder carried on.
 			if (state && state.recorder.state === "recording") {
 				state.recorder.pause();
 				pauseTimer();
+				sendResponse({ ok: true });
 			}
-			sendResponse({ ok: true });
 		} else if (msg.type === "RESUME_CAPTURE") {
 			if (state && state.recorder.state === "paused") {
 				state.recorder.resume();
 				resumeTimer();
+				sendResponse({ ok: true });
 			}
-			sendResponse({ ok: true });
 		} else if (msg.type === "TAB_AUDIO_LOST_REMOTE") {
 			// SW detected the loss independently (source tab closed/navigated
 			// away) — this is always the unrecoverable "ended" cause. Route
@@ -962,5 +970,25 @@ function wire(): void {
 	});
 }
 
+/** The popup's "Record full-screen meeting" button opens THIS page with
+ * ?meeting=1, and the page then announced itself as "Record Instruction" and
+ * offered "screen, window, or tab" with no hint which one to pick. Same screen,
+ * two different names for it, and no guidance at the one moment guidance is
+ * needed. Text only — the picker itself is unchanged. */
+function applyMeetingCopy(): void {
+	if (!meetingRequiredParam) return;
+	document.title = "data365 — Record full-screen meeting";
+	const title = $("idle-title");
+	if (title) title.textContent = "Record full-screen meeting";
+	const sub = $("idle-sub");
+	if (sub) {
+		sub.textContent =
+			'Click below, then choose "Entire Screen" so everything you show is recorded. The other participants\' voices are captured from your Meet tab automatically — leave that tab open, and keep this one open too.';
+	}
+	const start = $("btn-start");
+	if (start) start.textContent = "Choose screen & start meeting recording";
+}
+
 showView("view-idle");
+applyMeetingCopy();
 wire();

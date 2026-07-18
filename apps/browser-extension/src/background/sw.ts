@@ -4,6 +4,7 @@ import { getSettings, getState, setSettings, setState } from "./state";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
 import {
 	abortUpload,
+	discardUpload,
 	finalizeUpload,
 	handleChunk,
 	initializeUpload,
@@ -637,8 +638,13 @@ async function handleMessage(
 				pauseState.kind === "recording" && pauseState.mode === "instruction"
 					? pauseState.recorderTabId
 					: undefined;
+			// (M) The persisted flag must follow the RECORDER, not the intent. It
+			// used to be written unconditionally, so a control message that never
+			// arrived (dead offscreen document, closed recorder tab) left the popup
+			// showing "Paused" over a recorder that was still merrily recording.
+			let pauseDelivered: boolean;
 			if (pauseTabId !== undefined) {
-				await sendControlWithRetry(
+				pauseDelivered = await sendControlWithRetry(
 					() => chrome.tabs.sendMessage(pauseTabId, { type: "PAUSE_CAPTURE" }),
 					"PAUSE_CAPTURE→tab",
 				);
@@ -646,7 +652,7 @@ async function handleMessage(
 				pauseState.kind === "recording" &&
 				pauseState.contentRecorderTabId !== undefined
 			) {
-				await sendControlWithRetry(
+				pauseDelivered = await sendControlWithRetry(
 					() =>
 						chrome.tabs.sendMessage(pauseState.contentRecorderTabId!, {
 							type: "PAUSE_CAPTURE",
@@ -654,11 +660,12 @@ async function handleMessage(
 					"PAUSE_CAPTURE→tab",
 				);
 			} else {
-				await sendControlWithRetry(
+				pauseDelivered = await sendControlWithRetry(
 					() => sendToOffscreen({ type: "PAUSE_CAPTURE" }),
 					"PAUSE_CAPTURE→offscreen",
 				);
 			}
+			if (!pauseDelivered) return { ok: false };
 			if (pauseState.kind === "recording") {
 				// (R2) Serialize the state write through enqueueRecorder and re-read
 				// FRESH inside it. sendControlWithRetry above is a multi-hundred-ms
@@ -685,8 +692,12 @@ async function handleMessage(
 				resumeState.kind === "recording" && resumeState.mode === "instruction"
 					? resumeState.recorderTabId
 					: undefined;
+			// (M) Same as PAUSE: an undelivered RESUME_CAPTURE must not clear the
+			// persisted pause, or the popup shows "Recording" over a recorder that
+			// is still paused and producing nothing.
+			let resumeDelivered: boolean;
 			if (resumeTabId !== undefined) {
-				await sendControlWithRetry(
+				resumeDelivered = await sendControlWithRetry(
 					() => chrome.tabs.sendMessage(resumeTabId, { type: "RESUME_CAPTURE" }),
 					"RESUME_CAPTURE→tab",
 				);
@@ -694,7 +705,7 @@ async function handleMessage(
 				resumeState.kind === "recording" &&
 				resumeState.contentRecorderTabId !== undefined
 			) {
-				await sendControlWithRetry(
+				resumeDelivered = await sendControlWithRetry(
 					() =>
 						chrome.tabs.sendMessage(resumeState.contentRecorderTabId!, {
 							type: "RESUME_CAPTURE",
@@ -702,11 +713,12 @@ async function handleMessage(
 					"RESUME_CAPTURE→tab",
 				);
 			} else {
-				await sendControlWithRetry(
+				resumeDelivered = await sendControlWithRetry(
 					() => sendToOffscreen({ type: "RESUME_CAPTURE" }),
 					"RESUME_CAPTURE→offscreen",
 				);
 			}
+			if (!resumeDelivered) return { ok: false };
 			if (resumeState.kind === "recording") {
 				// (R2) Same lost-update race as PAUSE — serialize through
 				// enqueueRecorder and re-read fresh so a part recorded during the
@@ -791,6 +803,65 @@ async function handleMessage(
 			await setState({ kind: "idle" });
 			updateBadge({ kind: "idle" });
 			return { ok: true };
+		}
+
+		// ── Popup: permanently discard an in-flight upload ────────────────
+		// Distinct from CANCEL and from simply closing the popup. The popup's
+		// non-destructive escape from "uploading" is now closing the window (the
+		// upload continues in the background, which is what an impatient user
+		// actually wants); THIS is the destructive one, and it is only reachable
+		// behind a two-step confirmation. It must therefore actually destroy the
+		// recording everywhere — local buffer, queued retries, dead letters, the
+		// server-side multipart, and any object that already completed.
+		case "DISCARD_UPLOAD": {
+			const discardState = await getState();
+			if (discardState.kind !== "uploading") {
+				// Not an error the user should see: a background retry may simply
+				// have moved the upload on (to finishing/complete) between the popup
+				// rendering the button and the click landing.
+				return { ok: false, reason: "not-uploading" };
+			}
+			// The recording is going away on purpose — suppress the watchdog
+			// notifications that would otherwise announce it as a loss.
+			intentionalStop = true;
+			// (P1.5 / M4) Serialized like every other retry-queue writer: an
+			// unserialized purge could race the alarm's drain and lose the update,
+			// leaving exactly the queued retries this discard exists to remove.
+			const { serverCleaned } = await enqueueRecorder(() =>
+				discardUpload(discardState.videoId, discardState.uploadId),
+			);
+			// stillOurs (upload.ts uses the same pattern): the guard above read state
+			// BEFORE enqueueing, and the discard's server calls take seconds. In that
+			// window the drain can legitimately flip state to complete/error, and the
+			// user can start a NEW recording from there — the error copy literally
+			// tells them to re-record. An unconditional reset to idle then landed on
+			// top of the LIVE recording B: handleChunk requires kind === "recording",
+			// so every later chunk was dropped and finalize no-opped. Proved by an
+			// adversarial test driving the real handlers: state went recording(vid-B)
+			// -> idle when A's discard resolved. That is the owner's #1 failure —
+			// a meeting lost, silently — caused by the button meant to be safe.
+			const afterDiscard = await getState();
+			const stillOurs =
+				afterDiscard.kind === "uploading" &&
+				afterDiscard.videoId === discardState.videoId &&
+				afterDiscard.uploadId === discardState.uploadId;
+			if (stillOurs) {
+				await setState({ kind: "idle" });
+				updateBadge({ kind: "idle" });
+			}
+			if (!serverCleaned) {
+				// Do not claim more than we did. The local side is genuinely gone,
+				// but bytes may still be in storage, and for a confidential meeting
+				// that difference is the whole point of the button.
+				chrome.notifications.create("discard-partial", {
+					type: "basic",
+					iconUrl: "icons/icon-128.png",
+					title: "Recording discarded on this device",
+					message:
+						"We couldn't reach the server to delete the uploaded part of this recording. Please delete it from your dashboard.",
+				});
+			}
+			return { ok: true, serverCleaned };
 		}
 
 		// ── Popup / content: get state ────────────────────────────────────

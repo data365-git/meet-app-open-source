@@ -713,15 +713,45 @@ function renderUploading(
 	const progressText = `${formatBytes(state.uploadedBytes)} uploaded (${pct}%)`;
 	const partsEl = el("p", { className: "parts-count" }, progressText);
 
-	const cancelLink = el("button", { className: "link-btn" }, "Cancel upload");
-	cancelLink.addEventListener("click", () => {
-		sendMsg({ type: "CANCEL" });
+	// TWO DISTINCT ACTIONS. This used to be a single "Cancel upload" link, which
+	// was a false promise in both directions: it destroyed the finalize for the
+	// user who only wanted the popup gone (the upload deliberately parks here for
+	// up to ~2h across an offline spell, and every byte is already durable), and
+	// it did NOT actually delete anything server-side for the user who really did
+	// want it gone. Closing is now the default and non-destructive; deleting is
+	// explicit and confirmed.
+	const closeBtn = el(
+		"button",
+		{ className: "btn btn-primary" },
+		"Close — upload continues in the background",
+	);
+	closeBtn.addEventListener("click", () => {
+		window.close();
+	});
+
+	const discardBtn = el(
+		"button",
+		{ className: "link-btn link-btn--danger" },
+		"Permanently discard",
+	);
+	// Step two of two. Deliberately in-place rather than a confirm() dialog: the
+	// popup closes the moment it loses focus, which would dismiss a native modal.
+	discardBtn.addEventListener("click", () => {
+		if (discardBtn.dataset.confirming === "1") {
+			discardBtn.textContent = "Discarding...";
+			discardBtn.disabled = true;
+			sendMsg({ type: "DISCARD_UPLOAD" });
+			return;
+		}
+		discardBtn.dataset.confirming = "1";
+		discardBtn.textContent = "Tap again to delete this recording for good";
 	});
 
 	wrap.appendChild(title);
 	wrap.appendChild(spinner);
 	wrap.appendChild(partsEl);
-	wrap.appendChild(cancelLink);
+	wrap.appendChild(closeBtn);
+	wrap.appendChild(discardBtn);
 	root.appendChild(wrap);
 }
 

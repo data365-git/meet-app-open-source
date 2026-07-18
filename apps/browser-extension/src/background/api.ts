@@ -49,6 +49,17 @@ export interface CapApi {
 		subpath?: string;
 	}): Promise<CompleteMultipartResponse>;
 	recordingComplete(params: { videoId: string }): Promise<void>;
+	/** Abort the server-side multipart so R2 stops holding the uploaded parts.
+	 * Used only by the "permanently discard" flow. */
+	abortMultipart(params: {
+		uploadId: string;
+		videoId: string;
+		subpath?: string;
+	}): Promise<void>;
+	/** Delete the video record and its stored object. Used only by the
+	 * "permanently discard" flow, and needed in addition to abortMultipart
+	 * because the multipart may already have been completed. */
+	deleteVideo(params: { videoId: string }): Promise<void>;
 }
 
 async function handleResponse<T>(res: Response, label: string): Promise<T> {
@@ -133,6 +144,54 @@ export function createCapApi(baseUrl: string, apiKey: string): CapApi {
 				return;
 			}
 			await handleResponse<unknown>(res, "recordingComplete");
+		},
+
+		async abortMultipart({ uploadId, videoId, subpath }) {
+			const body: Record<string, string> = { uploadId, videoId };
+			if (subpath) body.subpath = subpath;
+
+			const res = await fetch(`${baseUrl}/api/upload/multipart/abort`, {
+				method: "POST",
+				headers: { ...authHeader, "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			// 404 means the video is already gone. S3/R2 answer NoSuchUpload for an
+			// upload that was already aborted or already COMPLETED - the completed
+			// case is the common one when a discard lands late, and the abort route
+			// surfaces it as a 500 carrying the message. Both mean "there is no
+			// multipart left to abort", which is the outcome we wanted; treating
+			// them as failures would raise a false "we could not clean up" alarm on
+			// a discard that actually worked.
+			if (res.status === 404) return;
+			if (!res.ok) {
+				const detail = await res.text().catch(() => "");
+				if (detail.includes("NoSuchUpload")) return;
+				throw new Error(`[api] abortMultipart failed ${res.status}: ${detail}`);
+			}
+		},
+
+		async deleteVideo({ videoId }) {
+			// delete-permanent, NOT /api/video/delete. The latter is a SOFT delete:
+			// it moves the row to Trash and keeps the media for seven days so it can
+			// be restored. "Permanently discard" said the recording was destroyed
+			// while it sat fully recoverable in R2 — and for a confidential meeting
+			// that gap is the entire reason the button exists. The permanent route
+			// deletes storage first and the row last (so a failed object delete
+			// leaves a record to retry from) and succeeds on an already-absent
+			// video, which is what makes the offline retry safe.
+			const url = new URL(`${baseUrl}/api/video/delete-permanent`);
+			url.searchParams.set("videoId", videoId);
+
+			const res = await fetch(url.toString(), {
+				method: "DELETE",
+				headers: authHeader,
+			});
+			// Already deleted is the state the caller asked for.
+			if (res.status === 404) return;
+			if (!res.ok) {
+				const detail = await res.text().catch(() => "");
+				throw new Error(`[api] deleteVideo failed ${res.status}: ${detail}`);
+			}
 		},
 	};
 }
