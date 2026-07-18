@@ -16,6 +16,7 @@
 // posted in — that is exactly why the capture must originate from this page.
 // This tab must stay open for the duration of the recording.
 
+import { sendCaptureCommand } from "../shared/capture-command";
 import { isTabAudioLive } from "../shared/client-audio";
 
 interface RecorderSettings {
@@ -188,6 +189,34 @@ function setIdleMsg(text: string, isError: boolean): void {
 	el.classList.toggle("msg-error", isError);
 }
 
+// ── Pause/Resume control ────────────────────────────────────────────────────
+//
+// Its own message node, NOT #rec-audio-warn: that one carries the persistent
+// client-audio warning (see the priority machine above), and a pause error must
+// not clobber it.
+function setCtlMsg(text: string): void {
+	const el = $("rec-ctl-msg");
+	if (!el) return;
+	el.textContent = text;
+	el.classList.toggle("hidden", text === "");
+}
+
+// True while this page's own Pause/Resume round-trip is unresolved. The SW
+// broadcasts PAUSE_CAPTURE back to us BEFORE it replies, so without this the
+// button would re-enable itself mid-command and accept a second click into an
+// unresolved first.
+let controlInFlight = false;
+
+/** This tab owns the real MediaRecorder, so the button can always be labelled
+ * from the truth rather than from what we hoped the command would do. */
+function syncPauseLabel(): void {
+	if (controlInFlight) return;
+	const btn = $("btn-pause") as HTMLButtonElement | null;
+	if (!btn) return;
+	btn.textContent = state?.recorder.state === "paused" ? "Resume" : "Pause";
+	btn.disabled = false;
+}
+
 // ── SW messaging ────────────────────────────────────────────────────────────
 
 function sendMsg(msg: Record<string, unknown>): void {
@@ -228,6 +257,9 @@ function startTimer(): void {
 	pausedAccumMs = 0;
 	const el = $("timer");
 	if (el) el.textContent = "00:00";
+	// Entering the recording view: no stale command error, label matches truth.
+	setCtlMsg("");
+	syncPauseLabel();
 	timerInterval = setInterval(() => {
 		const t = $("timer");
 		if (t) t.textContent = formatElapsed(elapsedMs());
@@ -305,6 +337,19 @@ async function getSettings(): Promise<RecorderSettings> {
 
 const TAB_AUDIO_UNAVAILABLE_MSG =
 	"Mijoz ovozini ulab bo'lmadi — Meet tabini yangilab, qaytadan boshlang.";
+
+// Meeting mode only. `displaySurface: "monitor"` in the getDisplayMedia
+// constraints below is a picker HINT, not a guarantee — it merely pre-selects
+// the "Entire Screen" pane; the user can still switch to "Window" or "Chrome
+// Tab" and the promise resolves normally. Nothing used to re-read the resolved
+// track, so a meeting the user believed was capturing their whole screen
+// silently recorded a single tab/window instead, and reported ordinary success.
+// (Note the remote VOICES survive a wrong pick — they come from tabCapture of
+// the Meet tab, which is independent of the chosen surface. What is lost is the
+// full-screen video the meeting mode exists to capture.)
+const SURFACE_NOT_MONITOR_MSG =
+	"To'liq ekranni tanlang — \"Entire Screen\". Tab yoki oyna tanlansa, " +
+	"suhbat to'liq yozilmaydi. Qaytadan urinib ko'ring.";
 
 function failClosedStart(
 	message: string,
@@ -429,6 +474,47 @@ async function startRecording(): Promise<void> {
 		setIdleMsg(friendly, true);
 		if (startBtn) startBtn.disabled = false;
 		return;
+	}
+
+	// SURFACE GATE (meeting mode only). Re-ask ONLY when the resolved track is
+	// affirmatively a tab or window; allow everything else. Gated on
+	// meetingRequiredParam — NOT on the SW's echo (same reasoning as the
+	// REQUEST_TAB_AUDIO call below), and it is also the only thing keeping the
+	// plain "Record screen" path free to capture a single tab or window.
+	// Runs BEFORE the try below so nothing else is allocated yet: no mic
+	// stream, no tab-audio stream, no AudioContext — only the display tracks
+	// need stopping, which is why this is not routed through failClosedStart.
+	//
+	// FAIL OPEN ON UNKNOWN, CLOSED ONLY ON KNOWN-BAD. It is NOT verified that
+	// real Chrome reports displaySurface === "monitor" for an entire-screen pick
+	// under this exact constraint set (selfBrowserSurface/surfaceSwitching
+	// "exclude" + monitorTypeSurfaces "include"), and the native picker cannot be
+	// driven headlessly to confirm it. A false refusal breaks 100% of meetings,
+	// while a missed detection only returns us to the pre-existing behaviour — so
+	// the asymmetry demands rejecting ONLY the surfaces affirmatively known to be
+	// wrong ("browser"/"window") and allowing "monitor", undefined, "", or any
+	// unrecognised token (with a loud console warning naming what was seen). The
+	// real bug — the user deliberately picking a tab or window — is still caught,
+	// because Chrome does report a concrete value in exactly those cases.
+	// The reject path mirrors the picker-cancel branch above verbatim
+	// (INSTRUCTION_CANCEL + idle message + re-enabled button, staying on
+	// view-idle), so the next click simply re-opens the picker.
+	if (meetingRequiredParam) {
+		const surface = displayStream.getVideoTracks()[0]?.getSettings()
+			.displaySurface;
+		if (surface === "browser" || surface === "window") {
+			for (const t of displayStream.getTracks()) t.stop();
+			sendMsg({ type: "INSTRUCTION_CANCEL" });
+			setIdleMsg(SURFACE_NOT_MONITOR_MSG, true);
+			showView("view-idle");
+			if (startBtn) startBtn.disabled = false;
+			return;
+		}
+		if (surface !== "monitor") {
+			console.warn(
+				`[recorder] meeting surface gate: displaySurface is ${JSON.stringify(surface)}, not "monitor" — allowing the recording to start (fail-open on unknown).`,
+			);
+		}
 	}
 
 	try {
@@ -854,6 +940,32 @@ function wire(): void {
 		window.close();
 	});
 
+	// Pause/Resume. The command goes through the SERVICE WORKER even though the
+	// MediaRecorder is right here: the SW owns the persisted paused flag and the
+	// popup's view, and it broadcasts PAUSE_CAPTURE back into this page's own
+	// listener below, which performs the local pause. Acting on the recorder here
+	// as well would pause it twice.
+	$("btn-pause")?.addEventListener("click", () => {
+		void (async () => {
+			if (!state || state.recorder.state === "inactive") return;
+			const command = state.recorder.state === "paused" ? "RESUME" : "PAUSE";
+			const btn = $("btn-pause") as HTMLButtonElement | null;
+			if (btn) {
+				btn.disabled = true;
+				btn.textContent = command === "PAUSE" ? "Pausing…" : "Resuming…";
+			}
+			setCtlMsg("");
+			controlInFlight = true;
+			const result = await sendCaptureCommand(sendMsgAwait, command);
+			controlInFlight = false;
+			// Label from the recorder's REAL state, never from the intent — and say
+			// so out loud when the command didn't take, because a silent no-op is
+			// indistinguishable from success.
+			setCtlMsg(result.ok ? "" : result.error);
+			syncPauseLabel();
+		})();
+	});
+
 	$("btn-stop")?.addEventListener("click", () => {
 		const btn = $("btn-stop") as HTMLButtonElement | null;
 		if (btn) {
@@ -938,12 +1050,15 @@ function wire(): void {
 			if (state && state.recorder.state === "recording") {
 				state.recorder.pause();
 				pauseTimer();
+				// The popup can drive this too — keep OUR button telling the truth.
+				syncPauseLabel();
 				sendResponse({ ok: true });
 			}
 		} else if (msg.type === "RESUME_CAPTURE") {
 			if (state && state.recorder.state === "paused") {
 				state.recorder.resume();
 				resumeTimer();
+				syncPauseLabel();
 				sendResponse({ ok: true });
 			}
 		} else if (msg.type === "TAB_AUDIO_LOST_REMOTE") {

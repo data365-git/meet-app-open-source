@@ -1,5 +1,7 @@
 import type { ExtensionSettings, ExtensionState } from "../background/state";
+import { sendCaptureCommand } from "../shared/capture-command";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
+import { attachFlash, type FlashState, NO_FLASH, reconcileFlash } from "./flash-message";
 
 interface PopupData {
 	state: ExtensionState;
@@ -10,6 +12,12 @@ interface PopupData {
 }
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
+// The data render() last drew, and the honest one-line message layered over it.
+// Both live at module scope so an async reply (pause failure, discard result) can
+// fold its message into RENDERED STATE and re-render, instead of appending a node
+// to a root the next ~5/s re-render has already detached. See flash-message.ts.
+let currentData: PopupData | null = null;
+let flash: FlashState = NO_FLASH;
 let micStream: MediaStream | null = null;
 let audioCtx: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
@@ -662,13 +670,29 @@ function renderRecording(
 	const pauseLabel = state.paused ? "Resume" : "Pause";
 	const pauseBtn = el("button", { className: "btn btn-secondary" }, pauseLabel);
 	pauseBtn.addEventListener("click", () => {
-		pauseBtn.disabled = true;
-		pauseBtn.textContent = state.paused ? "Resuming..." : "Pausing...";
-		sendMsg({ type: state.paused ? "RESUME" : "PAUSE" });
-		setTimeout(() => {
-			pauseBtn.disabled = false;
-			pauseBtn.textContent = state.paused ? "Resume" : "Pause";
-		}, 200);
+		void (async () => {
+			const command = state.paused ? "RESUME" : "PAUSE";
+			pauseBtn.disabled = true;
+			pauseBtn.textContent = command === "PAUSE" ? "Pausing..." : "Resuming...";
+			// AWAIT the answer. This used to fire-and-forget and re-enable itself on
+			// a fixed 200ms timer — shorter than the SW's own retry budget, so the
+			// button went live while the command was still retrying, and a command
+			// the SW reported as FAILED ({ok:false}, recorder never paused) was
+			// indistinguishable from one that worked.
+			const result = await sendCaptureCommand(sendMsgAwait, command);
+			if (result.ok) {
+				// setState in the SW broadcasts STATE_CHANGED and the whole view
+				// re-renders from truth. The paused flag flips, which reconcileFlash
+				// treats as a transition and clears any prior failure line.
+				return;
+			}
+			// Do NOT move to the new state. Put the reason into RENDERED STATE so the
+			// ~5/s recording re-render REDRAWS it, instead of appending a node to a
+			// root that a re-render has already detached (the wave-1 bug: the error
+			// was never seen). showFlash re-renders, which also restores the button
+			// to "Pause"/"Resume", enabled, from the unchanged state.
+			showFlash({ text: result.error, isError: true });
+		})();
 	});
 
 	const stopBtn = el("button", { className: "btn btn-danger" }, "Stop");
@@ -740,7 +764,43 @@ function renderUploading(
 		if (discardBtn.dataset.confirming === "1") {
 			discardBtn.textContent = "Discarding...";
 			discardBtn.disabled = true;
-			sendMsg({ type: "DISCARD_UPLOAD" });
+			// AWAIT the reply. Fire-and-forget left "Discarding..." on screen forever
+			// and, worse, would have had to claim success blind. Only two honest
+			// endings exist: the server side is provably clean, or the cleanup is
+			// queued and will retry. Never an unconditional "Deleted".
+			void sendMsgAwait({ type: "DISCARD_UPLOAD" }).then((res) => {
+				// Into RENDERED STATE, not this button's label: the uploading view
+				// re-renders on every progress broadcast, which replaced the button
+				// (and its result text) with a fresh "Permanently discard" before the
+				// user could read it. showFlash survives those re-renders.
+				//
+				// Render exactly the outcome the reply names — never more (W3c). The
+				// reply distinguishes three real endings: "deleted" (server provably
+				// clean), "queued" (a durable retry is genuinely pending), and "noop"
+				// (the upload already moved on, so nothing was attempted or queued).
+				// Fall back to deriving the outcome from ok/serverCleaned for any
+				// reply that predates the explicit field — but never fold the "noop"
+				// (ok === false) case into "queued", which was the false promise.
+				const outcome =
+					res.outcome === "deleted" ||
+					res.outcome === "queued" ||
+					res.outcome === "noop"
+						? res.outcome
+						: res.ok === true
+							? res.serverCleaned === true
+								? "deleted"
+								: "queued"
+							: "noop";
+				showFlash({
+					text:
+						outcome === "deleted"
+							? "Deleted"
+							: outcome === "queued"
+								? "Delete queued; will retry"
+								: "Nothing to delete — this recording already moved on",
+					isError: false,
+				});
+			});
 			return;
 		}
 		discardBtn.dataset.confirming = "1";
@@ -846,9 +906,28 @@ function renderArming(root: HTMLElement): void {
 	root.appendChild(msg);
 }
 
+// Fold an async reply's honest message into RENDERED STATE, then re-render so it
+// is drawn as part of the popup rather than appended to a soon-detached root.
+function showFlash(message: { text: string; isError: boolean }): void {
+	if (!currentData) return;
+	flash = attachFlash(currentData.state, message);
+	render(currentData);
+}
+
+// The single entry point for a new app-state from the SW: drop a now-stale flash
+// (its state has transitioned), record the state, and re-render.
+function applyState(newState: ExtensionState): void {
+	if (!currentData) return;
+	flash = reconcileFlash(flash, newState);
+	currentData = { ...currentData, state: newState };
+	render(currentData);
+}
+
 function render(data: PopupData): void {
 	stopTimer();
 	teardownMic();
+
+	currentData = data;
 
 	const root = document.getElementById("root");
 	if (!root) return;
@@ -876,6 +955,15 @@ function render(data: PopupData): void {
 		renderArming(popup);
 	} else {
 		renderIdlePanel(popup, settings, isMeetTab, meetingId, activeTabId);
+	}
+
+	// Drawn on every rebuild so a re-render preserves the message instead of
+	// destroying it. .inline-msg has no CSS rule, so the colour is set inline (as
+	// at the sign-in error), and an absent message adds no empty node.
+	if (flash.message) {
+		const msgEl = el("p", { className: "inline-msg" }, flash.message.text);
+		if (flash.message.isError) msgEl.style.color = "#e53e3e";
+		popup.appendChild(msgEl);
 	}
 
 	root.appendChild(popup);
@@ -1018,27 +1106,30 @@ async function init(): Promise<void> {
 	const meetingId = getMeetingId(tabUrl);
 	const isMeetTab = meetingId !== null;
 
-	let currentData: PopupData = {
+	const data: PopupData = {
 		state,
 		settings,
 		isMeetTab,
 		meetingId,
 		activeTabId: activeTab?.id,
 	};
+	currentData = data;
 
 	const root = document.getElementById("root");
 	if (!root) return;
 
-	if (await maybeStartPendingMeet(currentData)) return;
+	if (await maybeStartPendingMeet(data)) return;
 
 	const firstRunResult = await chrome.storage.local.get("capExtFirstRun");
 	if (firstRunResult.capExtFirstRun !== false) {
 		renderOnboarding(root, () => {
 			while (root.firstChild) root.removeChild(root.firstChild);
-			render(currentData);
+			// currentData, not `data`: a STATE_CHANGED may have arrived while the
+			// onboarding screen was up, and applyState keeps currentData current.
+			render(currentData ?? data);
 		});
 	} else {
-		render(currentData);
+		render(data);
 	}
 
 	chrome.runtime.onMessage.addListener((message: unknown) => {
@@ -1047,18 +1138,15 @@ async function init(): Promise<void> {
 			message !== null &&
 			(message as Record<string, unknown>).type === "STATE_CHANGED"
 		) {
-			const newState = (message as Record<string, unknown>)
-				.state as ExtensionState;
-			currentData = { ...currentData, state: newState };
-			render(currentData);
+			applyState(
+				(message as Record<string, unknown>).state as ExtensionState,
+			);
 		}
 	});
 
 	chrome.storage.onChanged.addListener((changes, area) => {
 		if (area === "local" && changes.capExtState?.newValue) {
-			const newState = changes.capExtState.newValue as ExtensionState;
-			currentData = { ...currentData, state: newState };
-			render(currentData);
+			applyState(changes.capExtState.newValue as ExtensionState);
 		}
 	});
 }

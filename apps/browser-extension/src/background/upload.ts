@@ -33,7 +33,7 @@ export function isRetryAlarm(name: string): boolean {
 }
 
 interface RetryItem {
-	kind: "part" | "complete" | "recording-complete";
+	kind: "part" | "complete" | "recording-complete" | "discard";
 	payload: Record<string, unknown>;
 	attempts: number;
 	nextRetryAt: number;
@@ -310,6 +310,21 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 	// and the user is told to re-record something the extension then blocks. Only
 	// release it if the live state is still this upload's — a newer recording must
 	// never be stomped (same reason as the drain's completion guard).
+	// A discard that ran out of retries is a CLEANUP failure, not a lost
+	// recording: the user already has their local state back, and "please
+	// re-record" / an error state would be nonsense for a recording they asked
+	// us to destroy. Record it and stay quiet about re-recording.
+	if (item.kind === "discard") {
+		chrome.notifications.create({
+			type: "basic",
+			iconUrl: "/icons/icon-48.png",
+			title: "Could not delete recording from the server",
+			message:
+				"This recording was removed from this device, but we could not delete it from the server. Please delete it from your dashboard.",
+		});
+		return;
+	}
+
 	const deadVideoId = (item.payload as { videoId?: string })?.videoId;
 	if (deadVideoId) {
 		const liveState = await getState();
@@ -435,8 +450,13 @@ function enqueuePartRetryPayload(
 
 function scheduleRetry(item: RetryItem, now: number): RetryItem | undefined {
 	const nextAttempts = item.attempts + 1;
+	// "discard" joins the long-horizon class: it carries no bytes, and giving up
+	// on it leaves a confidential recording sitting in R2 — the exact outcome the
+	// button exists to prevent. It must outlive an overnight outage.
 	const isFinalization =
-		item.kind === "complete" || item.kind === "recording-complete";
+		item.kind === "complete" ||
+		item.kind === "recording-complete" ||
+		item.kind === "discard";
 	const maxAttempts = isFinalization
 		? FINALIZE_MAX_ATTEMPTS
 		: PART_MAX_ATTEMPTS;
@@ -580,7 +600,12 @@ export async function abortUpload(uploadId: string): Promise<void> {
  * videoId, and leaving one behind would resurrect a finalize for a recording
  * the user just asked us to destroy. */
 async function purgeQueuedWorkForVideo(videoId: string): Promise<void> {
+	// "discard" is exempt: it IS the destruction this purge serves, not work to
+	// be destroyed. Without this exemption the purge would eat the very retry
+	// task a failed discard leaves behind — the cleanup would look queued and
+	// then silently vanish.
 	const belongsToVideo = (item: RetryItem) =>
+		item.kind !== "discard" &&
 		(item.payload as { videoId?: string })?.videoId === videoId;
 
 	const queue = await getRetryQueue();
@@ -616,39 +641,164 @@ export async function discardUpload(
 	videoId: string,
 	uploadId: string,
 ): Promise<{ serverCleaned: boolean }> {
-	// Local first, and unconditionally: these can't fail in a way worth
-	// reporting, and doing them first guarantees no background retry re-uploads
-	// a part we are in the middle of deleting.
+	// (W3a) The durable marker goes FIRST — before ANY destructive step, local
+	// or remote. Queuing after a failure was observed lost the cleanup for good
+	// whenever the browser died mid-request (nothing was queued, so nothing ever
+	// retried and a confidential recording sat in R2 forever); queuing after the
+	// local mutations left a narrower but real window where an interruption had
+	// already destroyed the local evidence yet planted no marker — startup then
+	// saw an ordinary in-progress upload and RESURRECTED the recording the user
+	// destroyed. Marker-first / remove-on-success makes an interruption at ANY
+	// point recoverable: startup sees the pending discard and finishes the
+	// destruction instead of publishing it. (purgeQueuedWorkForVideo exempts
+	// "discard" items, so the purge below cannot eat this marker.)
+	await enqueueDiscardRetry(videoId, uploadId);
+
+	// Local next, and unconditionally: these can't fail in a way worth
+	// reporting, and doing them before the network attempt guarantees no
+	// background retry re-uploads a part we are in the middle of deleting.
 	await clearPendingBuffer(uploadId);
 	await purgeQueuedWorkForVideo(videoId);
 
 	const settings = await getSettings();
-	if (!settings.apiKey) return { serverCleaned: false };
+	if (!settings.apiKey) {
+		// Nothing can be cleaned without credentials; the durable task already
+		// stands, so the drain finishes it once a key exists.
+		return { serverCleaned: false };
+	}
+
+	const serverCleaned = await cleanUpDiscardedVideoOnServer(
+		videoId,
+		uploadId,
+		settings,
+	);
+	if (serverCleaned) await removeDiscardRetry(videoId, uploadId);
+
+	return { serverCleaned };
+}
+
+/**
+ * The server half of a discard, in the ONLY safe order. Returns whether storage
+ * was fully cleaned; never throws.
+ *
+ * The ordering is load-bearing, not stylistic. `deleteVideo` hits
+ * /api/video/delete-permanent, which HARD-deletes the video row — and that row is
+ * the ownership record the abort route authorizes against. Deleting it after a
+ * FAILED abort is unrecoverable in both directions: R2's ListObjectsV2 cannot see
+ * the parts of an incomplete multipart, so the delete never removes them, and a
+ * later abort retry now finds no row, gets a 404, and api.ts reports that 404 as
+ * SUCCESS. The result is orphaned parts in R2 plus a UI confidently claiming the
+ * recording was deleted. So: if the abort does not succeed, stop — leave the row
+ * standing so the queued retry can still authorize itself. Only fully-successful
+ * storage cleanup earns the right to remove the row.
+ *
+ * Safe to repeat at every interruption point: abort tolerates an already-aborted
+ * or already-completed multipart (api.ts), and delete-permanent is idempotent on
+ * an already-erased video.
+ */
+async function cleanUpDiscardedVideoOnServer(
+	videoId: string,
+	uploadId: string,
+	settings: ExtensionSettings,
+): Promise<boolean> {
 	const api = createCapApi(settings.apiBaseUrl, settings.apiKey);
 
-	let serverCleaned = true;
-
-	// Abort BEFORE delete: aborting releases the parts R2 is holding for an
-	// in-flight multipart. Tolerated failure — the multipart may already have
-	// been completed, in which case there is nothing to abort and the delete
-	// below is what actually removes the bytes.
 	try {
 		await api.abortMultipart({ uploadId, videoId, subpath: "result.mp4" });
 	} catch (err) {
 		console.warn("[upload] discard: multipart abort failed", err);
-		serverCleaned = false;
+		return false;
 	}
 
-	// Delete covers the case the abort cannot: a multipart that already
-	// completed, leaving a finished object plus a video record.
+	// Only now, with the multipart provably released: delete covers the case the
+	// abort cannot — a multipart that already completed, leaving a finished
+	// object plus a video record — and takes the ownership row with it.
 	try {
 		await api.deleteVideo({ videoId });
 	} catch (err) {
 		console.warn("[upload] discard: video delete failed", err);
-		serverCleaned = false;
+		return false;
 	}
 
-	return { serverCleaned };
+	return true;
+}
+
+/** Queue (or refresh) the ONE durable discard task for this upload. Upserts
+ * rather than pushes: a repeated discard of the same upload must not stack
+ * duplicate tasks. Routed through setRetryQueue so the retry alarm is armed by
+ * construction — a raw storage write would leave the task with nothing to drain
+ * it. Callers are already inside enqueueRecorder's serialization. */
+async function enqueueDiscardRetry(
+	videoId: string,
+	uploadId: string,
+): Promise<void> {
+	const queue = await getRetryQueue();
+	const withoutExisting = queue.filter(
+		(item) =>
+			!(
+				item.kind === "discard" &&
+				item.payload.videoId === videoId &&
+				item.payload.uploadId === uploadId
+			),
+	);
+	withoutExisting.push({
+		kind: "discard",
+		payload: { videoId, uploadId },
+		attempts: 0,
+		nextRetryAt: Date.now() + 1000,
+	});
+	await setRetryQueue(withoutExisting);
+}
+
+/** Remove the durable discard task for this upload — the mirror of
+ * enqueueDiscardRetry, run once the server cleanup has FULLY succeeded so the
+ * drain has nothing left to repeat. Routed through setRetryQueue for the same
+ * alarm-lifecycle reason. */
+async function removeDiscardRetry(
+	videoId: string,
+	uploadId: string,
+): Promise<void> {
+	const queue = await getRetryQueue();
+	const without = queue.filter(
+		(item) =>
+			!(
+				item.kind === "discard" &&
+				item.payload.videoId === videoId &&
+				item.payload.uploadId === uploadId
+			),
+	);
+	if (without.length !== queue.length) await setRetryQueue(without);
+}
+
+/** (W3b) True if a durable discard task is queued for this recording. Every
+ * startup/resume path that could finalize or re-publish an upload must consult
+ * this first: the user permanently discarded the recording, so reviving it
+ * would resurrect exactly what they destroyed. */
+export async function hasPendingDiscard(videoId: string): Promise<boolean> {
+	const queue = await getRetryQueue();
+	return queue.some(
+		(item) => item.kind === "discard" && item.payload.videoId === videoId,
+	);
+}
+
+/** (W3a) Finish the LOCAL half of a pending discard. discardUpload plants the
+ * durable marker before its local cleanup, so a browser death in between leaves
+ * the marker standing while the pending buffer and queued part work for the
+ * video survive. Startup calls this when it finds a pending discard: without it
+ * the drain would re-upload parts of a destroyed recording (each failing after
+ * the abort) and the orphaned buffer would linger in storage. Idempotent — both
+ * steps no-op when there is nothing left to clean. Must NOT run inside the
+ * drain loop (purgeQueuedWorkForVideo writes the queue; see the drain's
+ * discard-handler comment). */
+export async function finishLocalDiscardTraces(videoId: string): Promise<void> {
+	const queue = await getRetryQueue();
+	for (const item of queue) {
+		if (item.kind === "discard" && item.payload.videoId === videoId) {
+			const uploadId = (item.payload as { uploadId?: string }).uploadId;
+			if (uploadId) await clearPendingBuffer(uploadId);
+		}
+	}
+	await purgeQueuedWorkForVideo(videoId);
 }
 
 export async function handleChunk(
@@ -1209,6 +1359,24 @@ export async function retryPendingUploads(): Promise<void> {
 			} else if (item.kind === "recording-complete") {
 				const { videoId } = item.payload as { videoId: string };
 				await api.recordingComplete({ videoId });
+			} else if (item.kind === "discard") {
+				const { videoId, uploadId } = item.payload as {
+					videoId: string;
+					uploadId: string;
+				};
+				// The server-only helper, NOT discardUpload: discardUpload runs
+				// purgeQueuedWorkForVideo, which would write the queue from under this
+				// loop while it holds a stale `remaining` that it then writes over —
+				// the same lost-update class as every unserialized queue writer here.
+				// The local side was already done when the discard was first attempted.
+				const cleaned = await cleanUpDiscardedVideoOnServer(
+					videoId,
+					uploadId,
+					settings,
+				);
+				// Throw so the shared catch below reschedules it with backoff; the
+				// helper reports failure by value rather than by throwing.
+				if (!cleaned) throw new Error("[upload] discard retry: cleanup failed");
 			}
 		} catch (err) {
 			console.error(`[upload] Retry failed for ${item.kind}:`, err);

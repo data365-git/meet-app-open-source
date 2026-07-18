@@ -1874,6 +1874,392 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(notifications.find((n) => n.id === "discard-partial")).toBeUndefined();
 	});
 
+	// ── B2: the discard sequence must be ATOMIC and DURABLE ────────────────
+	//
+	// delete-permanent HARD-deletes the video row, and that row is the ownership
+	// record the abort route authorizes against (it 404s once the row is gone —
+	// which api.ts treats as success). So deleting the row after a FAILED abort
+	// strands the multipart's parts in R2 forever AND makes every later abort
+	// retry report a false success. The row must therefore be the LAST thing
+	// removed, and only after storage-side cleanup fully succeeded.
+	/** Fails ONLY the abort, with a body that does NOT contain "NoSuchUpload"
+	 * (api.ts deliberately treats that string as success — using it here would
+	 * make this test pass against broken code). */
+	function stubAbortFailsFetch(state: { abortFails: boolean }) {
+		const calls: Array<{ url: string; method: string; body?: string }> = [];
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				calls.push({
+					url,
+					method: init?.method ?? "GET",
+					body: typeof init?.body === "string" ? init.body : undefined,
+				});
+				if (url.includes("/api/upload/multipart/abort") && state.abortFails) {
+					return new Response("upstream boom", { status: 500 });
+				}
+				return jsonResponse({ success: true });
+			},
+		);
+		return calls;
+	}
+
+	type QueueItem = { kind: string; payload: Record<string, unknown> };
+
+	async function readQueue(
+		storage: ReturnType<typeof createFakeChrome>["storage"],
+	): Promise<QueueItem[]> {
+		return ((await storage.get(RETRY_QUEUE_KEY))[RETRY_QUEUE_KEY] ??
+			[]) as QueueItem[];
+	}
+
+	it("when the multipart abort fails, the video row survives and the discard is queued for retry", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-abortfail", "upload-abortfail"));
+
+		const calls = stubAbortFailsFetch({ abortFails: true });
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			serverCleaned?: boolean;
+		};
+		await flushAsync();
+
+		expect(
+			calls.find((c) => c.url.includes("/api/video/delete-permanent")),
+			"the ownership row was deleted even though the abort failed — a later abort retry can no longer authorize itself, so the multipart parts are unrecoverable",
+		).toBeUndefined();
+
+		const discards = (await readQueue(storage)).filter(
+			(i) => i.kind === "discard",
+		);
+		expect(discards, "no durable discard retry was queued").toHaveLength(1);
+		expect(discards[0]?.payload).toMatchObject({
+			videoId: "vid-abortfail",
+			uploadId: "upload-abortfail",
+		});
+
+		expect(res.serverCleaned).toBe(false);
+	});
+
+	// ── W3a: the discard must be durable BEFORE the network call ───────────
+	//
+	// The old code only queued the durable task AFTER a failure was observed. An
+	// interruption DURING the request (before any failure is seen) then queued
+	// nothing at all — the confidential recording sat in R2 forever with nothing
+	// ever retrying. Prove the task is durable the instant the network attempt
+	// begins, not after it returns.
+	it("queues the durable discard BEFORE the network call, so an interruption mid-request is recoverable", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-midflight", "upload-midflight"));
+
+		// The abort never resolves — this is the browser being interrupted
+		// mid-request, before any failure is observed.
+		let releaseAbort!: () => void;
+		const abortHang = new Promise<void>((r) => {
+			releaseAbort = r;
+		});
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/upload/multipart/abort")) {
+				await abortHang;
+				return jsonResponse({ success: true });
+			}
+			return jsonResponse({ success: true });
+		});
+
+		// Fire the discard but do NOT await it — it is parked on the hung abort,
+		// exactly where an interrupted browser would die.
+		const discardResp = sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		const discards = (await readQueue(storage)).filter(
+			(i) => i.kind === "discard",
+		);
+		expect(
+			discards,
+			"no durable discard was queued before the network attempt — an interruption here loses the cleanup forever",
+		).toHaveLength(1);
+		expect(discards[0]?.payload).toMatchObject({
+			videoId: "vid-midflight",
+			uploadId: "upload-midflight",
+		});
+
+		releaseAbort();
+		await discardResp;
+	});
+
+	// ── W3b: startup must NOT resurrect a discarded recording ──────────────
+	//
+	// If the browser dies during the discard's server calls, state is still
+	// "uploading" AND a durable discard task is queued. onStartup used to see
+	// only the "uploading" state and run finalizeUpload — completing the
+	// multipart and publishing a share link for a recording the user explicitly
+	// destroyed. Startup must recognise the pending discard and finish the
+	// destruction instead.
+	it("onStartup does not resurrect a recording that has a pending discard", async () => {
+		const { captured, storage, setState } = await freshSw();
+		const { getState } = await import("./state");
+
+		await setState(uploadingState("vid-killed", "upload-killed"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "discard",
+					payload: { videoId: "vid-killed", uploadId: "upload-killed" },
+					attempts: 0,
+					nextRetryAt: Date.now() - 1,
+				},
+			],
+		});
+
+		const calls: Array<{ url: string; method: string }> = [];
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({
+					url: input.toString(),
+					method: init?.method ?? "GET",
+				});
+				return jsonResponse({ success: true });
+			},
+		);
+
+		await captured.startup?.();
+		await flushAsync();
+
+		expect(
+			calls.find((c) => c.url.includes("/api/upload/multipart/complete")),
+			"onStartup published (completed) a recording the user had discarded",
+		).toBeUndefined();
+		expect(
+			(await getState()).kind,
+			"a discarded recording came back as complete",
+		).not.toBe("complete");
+	});
+
+	// ── W3a-strict: the marker must precede ANY destruction, local included ─
+	//
+	// Queuing the marker before the NETWORK call but after the LOCAL mutations
+	// left a window where an interruption had already destroyed the pending
+	// buffer and purged the queued parts, yet planted nothing durable — startup
+	// then saw an ordinary in-progress upload and resurrected the recording.
+	// Prove that at the instant either local destruction lands, the durable
+	// discard marker is ALREADY in the queue.
+	it("plants the durable discard before any local destruction, so no interruption window can orphan the cleanup", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-order", "upload-order"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [partItem("vid-order", "upload-order", 2)],
+			"pendingBuffer:upload-order": Buffer.from("tail").toString("base64"),
+		});
+
+		stubDiscardFetch();
+
+		const violations: string[] = [];
+		const hasDiscardMarker = () => {
+			const queue = (storage.store.get(RETRY_QUEUE_KEY) ?? []) as Array<{
+				kind: string;
+			}>;
+			return queue.some((i) => i.kind === "discard");
+		};
+		const origRemove = storage.remove.bind(storage);
+		storage.remove = async (key: string) => {
+			if (key === "pendingBuffer:upload-order" && !hasDiscardMarker()) {
+				violations.push(
+					"pending buffer destroyed while no durable discard was queued",
+				);
+			}
+			return origRemove(key);
+		};
+		const origSet = storage.set.bind(storage);
+		storage.set = async (items: Record<string, unknown>) => {
+			const next = items[RETRY_QUEUE_KEY] as
+				| Array<{ kind: string; payload: { videoId?: string } }>
+				| undefined;
+			if (next) {
+				const prev = (storage.store.get(RETRY_QUEUE_KEY) ?? []) as Array<{
+					kind: string;
+					payload: { videoId?: string };
+				}>;
+				const partGone =
+					prev.some(
+						(i) => i.kind === "part" && i.payload.videoId === "vid-order",
+					) &&
+					!next.some(
+						(i) => i.kind === "part" && i.payload.videoId === "vid-order",
+					);
+				if (partGone && !next.some((i) => i.kind === "discard")) {
+					violations.push(
+						"queued part purged while no durable discard was queued",
+					);
+				}
+			}
+			return origSet(items);
+		};
+
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			serverCleaned?: boolean;
+		};
+		await flushAsync();
+
+		expect(violations, violations.join("; ")).toEqual([]);
+		expect(res.serverCleaned).toBe(true);
+	});
+
+	// ── W3b-2: startup also finishes the LOCAL half of a pending discard ───
+	//
+	// The marker is planted before the local cleanup, so a browser death in
+	// between leaves the marker standing while the pending buffer and queued
+	// part work survive. Startup must finish that local half — otherwise the
+	// drain re-uploads parts of a recording the user destroyed and the orphaned
+	// buffer lingers in storage forever.
+	it("onStartup clears the pending buffer and queued parts of a half-discarded recording, sparing unrelated work", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-halfway", "upload-halfway"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "discard",
+					payload: { videoId: "vid-halfway", uploadId: "upload-halfway" },
+					attempts: 0,
+					nextRetryAt: Date.now() - 1,
+				},
+				partItem("vid-halfway", "upload-halfway", 2),
+				partItem("vid-other", "upload-other", 1),
+			],
+			"pendingBuffer:upload-halfway": Buffer.from("tail").toString("base64"),
+		});
+
+		const calls = stubDiscardFetch();
+		await captured.startup?.();
+		await flushAsync();
+
+		expect(
+			calls.find((c) => c.url.includes("/api/upload/multipart/presign-part")),
+			"a part of the destroyed recording was re-uploaded",
+		).toBeUndefined();
+		expect(
+			(await storage.get("pendingBuffer:upload-halfway"))[
+				"pendingBuffer:upload-halfway"
+			],
+			"the orphaned pending buffer was not cleared",
+		).toBeUndefined();
+
+		const queue = await readQueue(storage);
+		expect(
+			queue.some(
+				(i) =>
+					i.kind === "part" &&
+					(i.payload as { videoId?: string }).videoId === "vid-halfway",
+			),
+			"queued part work for the destroyed recording survived startup",
+		).toBe(false);
+		expect(
+			queue.some(
+				(i) => (i.payload as { videoId?: string }).videoId === "vid-other",
+			),
+			"unrelated work was destroyed by the discard cleanup",
+		).toBe(true);
+
+		const { getState } = await import("./state");
+		expect((await getState()).kind).toBe("idle");
+	});
+
+	// ── W3c: the reply must not claim work that never happened ─────────────
+	//
+	// A stale popup click (the upload already moved on) does nothing and queues
+	// nothing, so the reply must not carry the "queued; will retry" outcome. The
+	// popup renders whatever outcome the reply names.
+	it("reports outcome 'noop' when the upload already moved on (nothing queued, nothing deleted)", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState({
+			kind: "complete",
+			videoId: "vid-moved",
+			shareUrl: "https://example.test/s/vid-moved",
+		});
+
+		const res = (await sendMessage(captured, { type: "DISCARD_UPLOAD" })) as {
+			ok?: boolean;
+			outcome?: string;
+		};
+		await flushAsync();
+
+		expect(res.ok).toBe(false);
+		expect(res.outcome).toBe("noop");
+		const discards = (await readQueue(storage)).filter(
+			(i) => i.kind === "discard",
+		);
+		expect(discards, "a no-op discard must queue nothing").toHaveLength(0);
+	});
+
+	it("names outcome 'deleted' on a clean server discard and 'queued' when the server is unreachable", async () => {
+		const cleanSw = await freshSw();
+		await cleanSw.setState(uploadingState("vid-clean", "upload-clean"));
+		stubDiscardFetch();
+		const cleanRes = (await sendMessage(cleanSw.captured, {
+			type: "DISCARD_UPLOAD",
+		})) as { outcome?: string };
+		await flushAsync();
+		expect(cleanRes.outcome).toBe("deleted");
+
+		const failSw = await freshSw();
+		await failSw.setState(uploadingState("vid-unreach", "upload-unreach"));
+		stubDiscardFetch({ failServer: true });
+		const failRes = (await sendMessage(failSw.captured, {
+			type: "DISCARD_UPLOAD",
+		})) as { outcome?: string };
+		await flushAsync();
+		expect(failRes.outcome).toBe("queued");
+	});
+
+	it("the queued discard finishes the job on a later drain, exactly once, and survives repetition", async () => {
+		const { captured, storage, setState } = await freshSw();
+		await setState(uploadingState("vid-drain", "upload-drain"));
+
+		const fetchState = { abortFails: true };
+		const calls = stubAbortFailsFetch(fetchState);
+		await sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		expect(
+			(await readQueue(storage)).filter((i) => i.kind === "discard"),
+			"nothing was queued to retry",
+		).toHaveLength(1);
+
+		// Simulate the backoff elapsing (the enqueue stamps nextRetryAt in the
+		// future, and the drain skips items that are not yet due).
+		const dueQueue = (await readQueue(storage)).map((i) => ({
+			...i,
+			nextRetryAt: Date.now() - 1,
+		}));
+		await storage.set({ [RETRY_QUEUE_KEY]: dueQueue });
+
+		// Server is reachable again; drive the EXISTING retry alarm.
+		fetchState.abortFails = false;
+		calls.length = 0;
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		const deletes = calls.filter((c) =>
+			c.url.includes("/api/video/delete-permanent"),
+		);
+		expect(deletes, "the queued discard never completed on the drain").toHaveLength(1);
+		expect(deletes[0]?.url).toContain("videoId=vid-drain");
+		expect(
+			(await readQueue(storage)).filter((i) => i.kind === "discard"),
+			"the discard task was not cleared after succeeding",
+		).toHaveLength(0);
+
+		// Repeating the whole sequence must be safe: no duplicate work.
+		calls.length = 0;
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+		expect(
+			calls.filter((c) => c.url.includes("/api/video/delete-permanent")),
+			"a second drain re-issued the delete",
+		).toHaveLength(0);
+	});
+
 	it("is a no-op when the upload already moved on (stale popup click)", async () => {
 		const { captured, setState } = await freshSw();
 		await setState({

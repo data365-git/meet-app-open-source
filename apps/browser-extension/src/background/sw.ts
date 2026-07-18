@@ -6,7 +6,9 @@ import {
 	abortUpload,
 	discardUpload,
 	finalizeUpload,
+	finishLocalDiscardTraces,
 	handleChunk,
+	hasPendingDiscard,
 	initializeUpload,
 	isRetryAlarm,
 	resumeInterruptedFinishing,
@@ -818,8 +820,10 @@ async function handleMessage(
 			if (discardState.kind !== "uploading") {
 				// Not an error the user should see: a background retry may simply
 				// have moved the upload on (to finishing/complete) between the popup
-				// rendering the button and the click landing.
-				return { ok: false, reason: "not-uploading" };
+				// rendering the button and the click landing. Nothing was attempted
+				// and nothing was queued — the reply must say so ("noop") so the
+				// popup does not falsely promise a retry (W3c).
+				return { ok: false, reason: "not-uploading", outcome: "noop" };
 			}
 			// The recording is going away on purpose — suppress the watchdog
 			// notifications that would otherwise announce it as a loss.
@@ -852,16 +856,28 @@ async function handleMessage(
 			if (!serverCleaned) {
 				// Do not claim more than we did. The local side is genuinely gone,
 				// but bytes may still be in storage, and for a confidential meeting
-				// that difference is the whole point of the button.
+				// that difference is the whole point of the button. The cleanup is now
+				// a durable queued task (survives a restart, retried for ~28h), so we
+				// promise the retry instead of handing the user a chore — a promise we
+				// may only make because discardUpload actually enqueued it.
 				chrome.notifications.create("discard-partial", {
 					type: "basic",
 					iconUrl: "icons/icon-128.png",
 					title: "Recording discarded on this device",
 					message:
-						"We couldn't reach the server to delete the uploaded part of this recording. Please delete it from your dashboard.",
+						"We couldn't reach the server yet. Deleting it there is queued and will keep retrying automatically.",
 				});
 			}
-			return { ok: true, serverCleaned };
+			// (W3c) Name the real outcome so the popup renders exactly what
+			// happened: fully deleted, or genuinely queued for retry. Since the
+			// durable discard is now queued before the network attempt and only
+			// removed on full success, serverCleaned === false always means a task
+			// is really pending — the retry promise is honest.
+			return {
+				ok: true,
+				serverCleaned,
+				outcome: serverCleaned ? "deleted" : "queued",
+			};
 		}
 
 		// ── Popup / content: get state ────────────────────────────────────
@@ -1554,6 +1570,30 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onStartup.addListener(async () => {
 	const state = await getState();
+
+	// (W3b) A pending discard means the user permanently destroyed this recording
+	// and the browser died before the server cleanup finished — so state is still
+	// an in-progress kind AND a durable discard task is queued. NONE of the revive
+	// branches below may run: finalizeUpload / resumeInterruptedFinishing would
+	// complete the multipart and publish a share link for a recording the user
+	// killed. Release the UI to idle and let the queued discard (drained at the
+	// end) finish the destruction — mirroring the normal discard's idle+cleanup.
+	const inProgressVideoId =
+		state.kind === "recording" ||
+		state.kind === "uploading" ||
+		state.kind === "finishing"
+			? state.videoId
+			: undefined;
+	if (inProgressVideoId && (await hasPendingDiscard(inProgressVideoId))) {
+		// The marker is planted before the local cleanup, so the browser may have
+		// died in between — finish the local half here (idempotent) or the drain
+		// below would re-upload parts of a recording the user destroyed.
+		await finishLocalDiscardTraces(inProgressVideoId);
+		await setState({ kind: "idle" });
+		updateBadge({ kind: "idle" });
+		await enqueueRecorder(() => retryPendingUploads());
+		return;
+	}
 
 	if (state.kind === "recording") {
 		chrome.notifications.create("recording-interrupted", {
