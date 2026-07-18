@@ -911,6 +911,80 @@ describe("handleChunk identity guard (R7 cross-recording poisoning)", () => {
 	});
 });
 
+// ── R10: a pending-buffer persist failure must not discard the parts already
+// sliced out of the buffer (silent mid-video hole) ─────────────────────────
+
+describe("handleChunk persist failure (R10 sliced parts must survive)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("still uploads the already-sliced full part when persisting the remainder fails", async () => {
+		// Storage that fails ONLY for the pending-buffer key — state writes still
+		// work, exactly like a quota/IO error hitting the large base64 blob.
+		const store = new Map<string, unknown>();
+		vi.stubGlobal("chrome", {
+			storage: {
+				local: {
+					async get(key: string) {
+						return { [key]: store.get(key) };
+					},
+					async set(items: Record<string, unknown>) {
+						for (const [k, v] of Object.entries(items)) {
+							if (k.startsWith("pendingBuffer:")) {
+								throw new Error("QUOTA_BYTES quota exceeded");
+							}
+							store.set(k, v);
+						}
+					},
+					async remove(key: string) {
+						store.delete(key);
+					},
+				},
+			},
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+
+		const { handleChunk } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-r10",
+			uploadId: "upload-r10",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		const putBodies: Uint8Array[] = [];
+		vi.stubGlobal(
+			"fetch",
+			createFakeFetch((bytes) => putBodies.push(bytes)),
+		);
+
+		// Exactly one full part's worth — it is sliced out of the buffer BEFORE
+		// the (failing) persist.
+		const chunk = new Uint8Array(MIN_PART_SIZE);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		// The bug: the persist threw, handleChunk unwound, and the already-sliced
+		// 5 MiB part was never uploaded and never queued — a silent hole that R2
+		// happily accepts (part-number gaps are legal).
+		expect(putBodies).toHaveLength(1);
+		expect(putBodies[0].length).toBe(MIN_PART_SIZE);
+	});
+});
+
 // ── M7: nextPartNumber for a persisted "uploading" state must not collide
 // with a gap in already-uploaded part numbers ──────────────────────────────
 

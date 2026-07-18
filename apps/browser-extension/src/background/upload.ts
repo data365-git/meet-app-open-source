@@ -576,7 +576,21 @@ export async function handleChunk(
 	// bytes in memory. Clearing here would leave those bytes RAM-only, so an SW
 	// eviction before the next chunk would punch a hole in the middle of the
 	// recording. Persist before the network calls so the window is never open.
-	await persistPendingBuffer(state.uploadId);
+	//
+	// (R10) A storage failure here must NOT be fatal. `fullParts` has already
+	// been sliced out of inMemoryBuffer above, so letting this throw would drop
+	// those bytes on the floor — never uploaded, never queued — and the
+	// recording would complete with a silent 5 MiB hole (R2 accepts the gap).
+	// Losing the persisted remainder only re-opens the documented eviction
+	// window; losing a sliced part is real, immediate data loss. Keep going.
+	try {
+		await persistPendingBuffer(state.uploadId);
+	} catch (err) {
+		console.error(
+			"[upload] Failed to persist pending buffer — continuing so the already-sliced parts are still uploaded:",
+			err,
+		);
+	}
 	const settings = await requireSettings();
 
 	let partNumber = state.nextPartNumber;
