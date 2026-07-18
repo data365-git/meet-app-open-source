@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MIN_PART_SIZE, takeFixedSizeParts } from "./upload";
+import {
+	MIN_PART_SIZE,
+	PART_MAX_ATTEMPTS,
+	takeFixedSizeParts,
+} from "./upload";
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -596,8 +600,10 @@ describe("moveToDeadLetter notification (P1.4 honest messaging)", () => {
 
 		vi.useFakeTimers();
 		// BACKOFF_SECONDS = [1,4,16,64,256]; 6 total attempts dead-letters.
-		const backoffsMs = [1000, 4000, 16000, 64000, 256000, 256000];
-		for (const step of backoffsMs) {
+		// Drive past PART_MAX_ATTEMPTS (R6 raised the retry horizon so a long
+		// outage no longer loses a recording) until the part finally dead-letters.
+		for (let i = 0; i < PART_MAX_ATTEMPTS + 2; i++) {
+			const step = 256000;
 			vi.setSystemTime(Date.now() + step);
 			await retryPendingUploads();
 		}
@@ -704,8 +710,10 @@ describe("retryPendingUploads dead-letter guard (R4 holed-complete)", () => {
 		vi.useFakeTimers();
 		// Drain past MAX_ATTEMPTS so part 2 dead-letters, then a couple more passes
 		// so the deferred complete record is actually processed post-dead-letter.
-		const stepsMs = [1000, 4000, 16000, 64000, 256000, 256000, 256000, 256000];
-		for (const step of stepsMs) {
+		// Drive past PART_MAX_ATTEMPTS so part 2 dead-letters, then a couple more
+		// passes so the deferred complete is processed post-dead-letter.
+		for (let i = 0; i < PART_MAX_ATTEMPTS + 4; i++) {
+			const step = 256000;
 			vi.setSystemTime(Date.now() + step);
 			await retryPendingUploads();
 		}
@@ -717,6 +725,99 @@ describe("retryPendingUploads dead-letter guard (R4 holed-complete)", () => {
 		expect(completeMultipartCalls).toBe(0);
 		const finalState = await getState();
 		expect(finalState.kind).toBe("error");
+	});
+});
+
+// ── R6: a temporary outage must NOT permanently lose a fully-uploaded
+// recording — the "complete" item has no bytes left to lose, so it must keep
+// retrying far past the old flat 6-attempt (~10 min) death clock ───────────
+
+describe("retry horizon for finalization (R6 outage must not lose a saved recording)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("keeps retrying a queued complete through a long outage and finishes the recording when the server returns", async () => {
+		const { retryPendingUploads } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		// Every byte is already in R2; only the finalize call is left.
+		await setState({
+			kind: "uploading",
+			videoId: "vid-r6",
+			uploadId: "upload-r6",
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+		});
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-r6",
+						videoId: "vid-r6",
+						parts: [{ partNumber: 1, etag: "e1", size: 0 }],
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		// The server is down for 15 drain passes — far longer than the old
+		// 6-attempt horizon — then comes back.
+		const OUTAGE_PASSES = 15;
+		let completeAttempts = 0;
+		let recordingCompleteCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeAttempts += 1;
+					if (completeAttempts <= OUTAGE_PASSES) {
+						return new Response("gateway down", { status: 502 });
+					}
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					recordingCompleteCalls += 1;
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		vi.useFakeTimers();
+		for (let i = 0; i < OUTAGE_PASSES + 5; i++) {
+			vi.setSystemTime(Date.now() + 256_000);
+			await retryPendingUploads();
+		}
+
+		// The bug: after 6 failures the complete dead-lettered and the recording
+		// was declared lost ("please re-record") even though every byte was safely
+		// in R2 and the server came back minutes later.
+		expect(completeAttempts).toBeGreaterThan(OUTAGE_PASSES);
+		expect(recordingCompleteCalls).toBe(1);
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
 	});
 });
 

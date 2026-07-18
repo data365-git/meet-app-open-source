@@ -5,7 +5,17 @@ import { getSettings, getState, setState } from "./state";
 export const MIN_PART_SIZE = 5 * 1024 * 1024;
 const RETRY_QUEUE_KEY = "capExtRetryQueue";
 const DEAD_LETTER_KEY = "capExtDeadLetterQueue";
-const MAX_ATTEMPTS = 6;
+// (R6) Retry horizons. The old flat MAX_ATTEMPTS = 6 with a 256s backoff cap gave
+// EVERY queued item a ~10-minute death clock: an ordinary 10-minute WiFi drop or
+// server restart permanently lost a meeting whose bytes were already safe. Both
+// classes of item hold durable data, so giving up early is never the right trade:
+//   - "part": the bytes live in chrome.storage.local (durable across SW eviction).
+//   - "complete"/"recording-complete": carry NO bytes at all — the whole recording
+//     is already in R2 and only the finalize API call remains. Abandoning one loses
+//     a fully-saved meeting, which is the worst failure this product has.
+// Both are still bounded, so a genuinely permanent failure cannot spin forever.
+export const PART_MAX_ATTEMPTS = 30; // ≈ 1.9h of retrying at the 256s backoff cap
+export const FINALIZE_MAX_ATTEMPTS = 400; // ≈ 28h — survives any realistic outage
 
 const BACKOFF_SECONDS = [1, 4, 16, 64, 256];
 
@@ -390,7 +400,12 @@ function enqueuePartRetryPayload(
 
 function scheduleRetry(item: RetryItem, now: number): RetryItem | undefined {
 	const nextAttempts = item.attempts + 1;
-	if (nextAttempts >= MAX_ATTEMPTS) return undefined;
+	const isFinalization =
+		item.kind === "complete" || item.kind === "recording-complete";
+	const maxAttempts = isFinalization
+		? FINALIZE_MAX_ATTEMPTS
+		: PART_MAX_ATTEMPTS;
+	if (nextAttempts >= maxAttempts) return undefined;
 
 	const delaySec = BACKOFF_SECONDS[nextAttempts - 1] ?? 256;
 	return {

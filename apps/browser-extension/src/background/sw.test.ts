@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MIN_PART_SIZE } from "./upload";
+import { MIN_PART_SIZE, PART_MAX_ATTEMPTS } from "./upload";
 
 // ── Shared fake-chrome harness for sw.ts ────────────────────────────────────
 //
@@ -637,8 +637,10 @@ describe("Fix 2 — dead-letter exhaustion releases the UI", () => {
 
 		vi.useFakeTimers();
 		// BACKOFF_SECONDS = [1,4,16,64,256]; 6 total attempts dead-letters.
-		const backoffsMs = [1000, 4000, 16000, 64000, 256000, 256000];
-		for (const step of backoffsMs) {
+		// Drive past PART_MAX_ATTEMPTS (R6 raised the retry horizon) until the
+		// part finally dead-letters and the UI is released.
+		for (let i = 0; i < PART_MAX_ATTEMPTS + 2; i++) {
+			const step = 256000;
 			vi.setSystemTime(Date.now() + step);
 			await retryPendingUploads();
 		}
