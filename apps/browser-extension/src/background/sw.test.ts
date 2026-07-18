@@ -659,6 +659,72 @@ describe("Fix 2 — dead-letter exhaustion releases the UI", () => {
 	});
 });
 
+// ── R8: if the stop command never reaches the recorder, STOP must finalize
+// anyway — otherwise the recording sits in "recording" forever and its already
+// uploaded parts are never completed ───────────────────────────────────────
+
+describe("R8 — STOP falls back to finalize when the recorder is unreachable", () => {
+	it("finalizes the recording instead of leaving it stuck when STOP_CAPTURE cannot be delivered", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		// A live recording with one part already safely in R2.
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-r8",
+			uploadId: "upload-r8",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// The offscreen document is dead: every STOP_CAPTURE delivery fails.
+		// Only the callback form (sendToOffscreen) fails — the promise form is
+		// broadcastState inside setState and must keep working.
+		chrome.runtime.sendMessage = ((message: unknown, callback?: unknown) => {
+			if (typeof callback === "function") {
+				chrome.runtime.lastError = { message: "Receiving end does not exist" };
+				(callback as (r: unknown) => void)(undefined);
+				chrome.runtime.lastError = undefined;
+				return undefined;
+			}
+			return Promise.resolve(undefined);
+		}) as typeof chrome.runtime.sendMessage;
+
+		let completeCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeCalls += 1;
+					return jsonResponse({ success: true, fileKey: "file" });
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		await sendMessage(captured, { type: "STOP" });
+		await flushAsync();
+
+		// The bug: STOP returned {ok:true} while the recorder never stopped, so
+		// nothing ever emitted RECORDER_STOPPED — the recording stayed
+		// "recording" forever and its uploaded parts were never completed.
+		const finalState = await getState();
+		expect(finalState.kind).not.toBe("recording");
+		expect(finalState.kind).toBe("complete");
+		expect(completeCalls).toBe(1);
+	});
+});
+
 // ── R2: PAUSE/RESUME must not clobber a part recorded during the control
 // window (lost-update race — Fable audit) ──────────────────────────────────
 

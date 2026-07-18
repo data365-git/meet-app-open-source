@@ -107,27 +107,33 @@ function sendToOffscreen(message: Record<string, unknown>): Promise<unknown> {
 // ready yet (SW waking, offscreen just created, tab still loading) — Chrome then
 // rejects with "Receiving end does not exist". These commands are idempotent, so
 // retry a few times with a short backoff instead of silently dropping the action.
+/** Returns true if the control message was delivered, false if every attempt
+ * failed. (R8) Callers whose command is load-bearing for SAVING a recording —
+ * STOP and the Meet-ended auto-stop — must check this: a swallowed failure used
+ * to leave the recording stuck in "recording" forever with its uploaded parts
+ * never completed. */
 async function sendControlWithRetry(
 	send: () => Promise<unknown>,
 	label: string,
 	attempts = 4,
 	delayMs = 150,
-): Promise<void> {
+): Promise<boolean> {
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		try {
 			await send();
-			return;
+			return true;
 		} catch (err) {
 			if (attempt === attempts) {
 				console.warn(
 					`[sw] control send failed after ${attempts} attempts: ${label}`,
 					err,
 				);
-				return;
+				return false;
 			}
 			await new Promise((r) => setTimeout(r, delayMs));
 		}
 	}
+	return false;
 }
 
 // ── Badge ─────────────────────────────────────────────────────────────────
@@ -549,24 +555,35 @@ async function handleMessage(
 					: stopState.kind === "arming" && stopState.contentRecorderTabId !== undefined
 					  ? stopState.contentRecorderTabId
 					  : undefined;
+			let stopDelivered: boolean;
 			if (stopTabId !== undefined) {
 				// Instruction recording: tell the recorder tab to stop.
 				// SW state advances only when the tab sends RECORDER_STOPPED.
-				await sendControlWithRetry(
+				stopDelivered = await sendControlWithRetry(
 					() => chrome.tabs.sendMessage(stopTabId, { type: "STOP_CAPTURE" }),
 					"STOP_CAPTURE→tab",
 				);
 			} else if (contentStopTabId !== undefined) {
-				await sendControlWithRetry(
+				stopDelivered = await sendControlWithRetry(
 					() =>
 						chrome.tabs.sendMessage(contentStopTabId, { type: "STOP_CAPTURE" }),
 					"STOP_CAPTURE→tab",
 				);
 			} else {
-				await sendControlWithRetry(
+				stopDelivered = await sendControlWithRetry(
 					() => sendToOffscreen({ type: "STOP_CAPTURE" }),
 					"STOP_CAPTURE→offscreen",
 				);
+			}
+			// (R8) The recorder never received the stop (crashed offscreen document,
+			// closed recorder tab, dead listener). Nothing else will ever emit
+			// RECORDER_STOPPED, so without this the recording sits in "recording"
+			// forever, its already-uploaded parts are never completed, and the
+			// user's natural next move (CANCEL) destroys them = meeting lost.
+			// Finalize here instead: serialized, and finalizeRecording no-ops unless
+			// the state is still a live recording.
+			if (!stopDelivered) {
+				await enqueueRecorder(() => finalizeRecording());
 			}
 			return { ok: true };
 		}
@@ -766,8 +783,9 @@ async function handleMessage(
 				// Deliberate stop — see the STOP case for why this guards the
 				// tab-audio-loss watchdog.
 				intentionalStop = true;
+				let autoStopDelivered: boolean;
 				if (state.contentRecorderTabId !== undefined) {
-					await sendControlWithRetry(
+					autoStopDelivered = await sendControlWithRetry(
 						() =>
 							chrome.tabs.sendMessage(state.contentRecorderTabId!, {
 								type: "STOP_CAPTURE",
@@ -775,10 +793,16 @@ async function handleMessage(
 						"STOP_CAPTURE→tab",
 					);
 				} else {
-					await sendControlWithRetry(
+					autoStopDelivered = await sendControlWithRetry(
 						() => sendToOffscreen({ type: "STOP_CAPTURE" }),
 						"STOP_CAPTURE→offscreen",
 					);
+				}
+				// (R8) Same fallback as the STOP case: the meeting ended and the
+				// recorder never got the stop, so finalize here rather than leave
+				// the recording stuck with uncompleted parts.
+				if (!autoStopDelivered) {
+					await enqueueRecorder(() => finalizeRecording());
 				}
 			} else if (
 				state.kind === "recording" &&
