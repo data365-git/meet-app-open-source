@@ -52,10 +52,17 @@ function findRouteFiles(dir: string, found: string[] = []): string[] {
 	return found;
 }
 
-/** Top-level `export const|function|async function|class NAME` and
- * `export { a, b }`. Deliberately simple: it must not need a TS parser to run
- * in the unit suite, and every real violation so far has been a plain
- * top-level export. */
+/** Top-level exports, without needing a TS parser in the unit suite.
+ *
+ * Covers four shapes. The last two were added after checking what Next.js
+ * itself does: there is no official ESLint rule for this — Next only catches it
+ * during `next build` — so this check has to stand on its own, and a form it
+ * cannot see is a form that ships.
+ *  - `export const|let|var|function|async function|class NAME`
+ *  - `export { a, b as c }`
+ *  - `export default ...`      (route files have no valid default export)
+ *  - `export * from "./x"`     (re-exports arbitrary names; unresolvable here,
+ *                               so it is reported rather than silently allowed) */
 function exportedNames(source: string): string[] {
 	const names: string[] = [];
 	for (const m of source.matchAll(
@@ -69,6 +76,8 @@ function exportedNames(source: string): string[] {
 			if (name) names.push(name);
 		}
 	}
+	if (/^export\s+default\b/m.test(source)) names.push("default");
+	if (/^export\s*\*/m.test(source)) names.push("* (star re-export)");
 	return names;
 }
 
