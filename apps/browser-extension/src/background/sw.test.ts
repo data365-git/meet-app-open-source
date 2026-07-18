@@ -850,6 +850,54 @@ describe("Fix 3 — startup 'finishing' resume must not hold the availability lo
 // anyway — otherwise the recording sits in "recording" forever and its already
 // uploaded parts are never completed ───────────────────────────────────────
 
+// ── R6-b: byte-carrying parts must get the FINALIZE retry horizon ──────────
+//
+// Independent audit (2026-07-19, PROVED with an executed attack): "part" items
+// had a 30-attempt (~1.8 h) death clock while metadata-only finalize items got
+// 400 (~28 h). In a sustained outage with the browser open, the pieces holding
+// the recording's actual bytes dead-lettered FIRST — stranding a meeting whose
+// bytes were 100% durable on disk, with an error telling the user to re-record
+// a meeting that already happened. The bytes are durable; giving up on them
+// early is never the right trade (the code's own R6 comment said so and then
+// applied the long horizon only to the metadata item).
+describe("R6-b — parts survive as long as finalize items", () => {
+	it("does not dead-letter a queued part at an attempt count a finalize item would survive", async () => {
+		const { captured, storage } = await freshSw();
+		// The network is down for the whole test — every retry fails.
+		vi.stubGlobal("fetch", async () => {
+			throw new TypeError("Failed to fetch");
+		});
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 2,
+						videoId: "vid-outage",
+						uploadId: "up-outage",
+						partDataBase64: Buffer.from("durable bytes").toString("base64"),
+					},
+					// Far past the OLD 30-attempt part horizon, well under the
+					// 400-attempt finalize horizon a sibling "complete" would get.
+					attempts: 350,
+					nextRetryAt: Date.now() - 1,
+				},
+			],
+		});
+
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		const queue = (await storage.get(RETRY_QUEUE_KEY))[RETRY_QUEUE_KEY] as
+			| Array<{ kind: string }>
+			| undefined;
+		expect(
+			queue?.some((i) => i.kind === "part"),
+			"the part was dead-lettered while its bytes were still durable on disk — byte-carrying parts must get the same horizon as the finalize items that depend on them",
+		).toBe(true);
+	});
+});
+
 describe("R8 — STOP falls back to finalize when the recorder is unreachable", () => {
 	it("finalizes the recording instead of leaving it stuck when STOP_CAPTURE cannot be delivered", async () => {
 		const { chrome, captured } = await freshSw();

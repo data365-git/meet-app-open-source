@@ -14,7 +14,15 @@ const DEAD_LETTER_KEY = "capExtDeadLetterQueue";
 //     is already in R2 and only the finalize API call remains. Abandoning one loses
 //     a fully-saved meeting, which is the worst failure this product has.
 // Both are still bounded, so a genuinely permanent failure cannot spin forever.
-export const PART_MAX_ATTEMPTS = 30; // ≈ 1.9h of retrying at the 256s backoff cap
+// (R6-b, audit 2026-07-19) BOTH horizons are 400 (≈ 28h) — deliberately equal.
+// The old 30-attempt part horizon was a ~1.8h death clock on the items that
+// hold the recording's actual BYTES, while the metadata-only finalize items
+// outlived them by a day: a two-hour outage with the browser open dead-lettered
+// a fully-captured meeting and told the user to re-record it. The bytes are
+// durable in chrome.storage.local; abandoning them before the finalize that
+// depends on them is never the right trade. Keep the two constants separate so
+// a future divergence is a visible decision, not an accident.
+export const PART_MAX_ATTEMPTS = 400; // ≈ 28h — must NOT be shorter than FINALIZE
 export const FINALIZE_MAX_ATTEMPTS = 400; // ≈ 28h — survives any realistic outage
 
 const BACKOFF_SECONDS = [1, 4, 16, 64, 256];
