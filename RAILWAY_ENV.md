@@ -1,5 +1,13 @@
 # Railway Environment Variables
 
+> # ⛔ HISTORICAL — DO NOT FOLLOW THIS FILE
+>
+> The Railway deployment is retired. This list is also **incomplete** — it predates
+> several variables the app now reads.
+>
+> **`.env.example` is the authoritative environment manifest.** Use it.
+> For a server move, see `docs/MIGRATION.md` §4.
+
 All variables below must be set in Railway's service environment settings. No sensitive values are committed to the repo.
 
 ---

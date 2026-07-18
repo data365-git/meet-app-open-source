@@ -1,5 +1,20 @@
 # DEPLOY — One-Shot Deployment Runbook
 
+> # ⛔ HISTORICAL — DO NOT FOLLOW THIS FILE
+>
+> This is the **Railway** deployment guide. That deployment is retired and its
+> steps (Railway project, MySQL plugin, Railway domain, Railway Variables) no
+> longer apply.
+>
+> Its provider-neutral content has been **salvaged into `docs/MIGRATION.md`** —
+> the R2 bucket + CORS setup, the `CAP_AWS_*` env-plumbing outage note, the
+> build-time-variable trap, and the database initialisation steps. Use that file;
+> it is maintained. This one is not.
+>
+> **Standing the app up anywhere → `docs/MIGRATION.md`**
+> **Deploying the current app → `docs/RUNBOOK.md` §3a**
+> **Every environment variable → `.env.example`**
+
 Self-hosted deployment guide for a **brand-new account** with no prior history.
 Follow steps in order. Every gotcha we hit the hard way is marked ⚠️.
 
