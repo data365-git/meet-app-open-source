@@ -73,7 +73,7 @@
     "deleteAccountSubtext": "O'chirilgandan so'ng, hisobingizni tiklash mumkin emas.",
     "deleteAccountButton": "Hisobimni o'chirish",
     "deleteAccountDialogTitle": "Hisobni o'chirish",
-    "deleteAccountDialogDescription": "O'chirishni tasdiqlash uchun elektron pochta manzilingizni ({email}) kiriting. Bu amal doimiy va qaytarib bo'lmaydi.",
+    "deleteAccountDialogDescription": "Bu hisobingizni va BARCHA videolaringizni butunlay o'chiradi. Tasdiqlash uchun aynan \"{phrase}\" deb yozing. Bu amalni qaytarib bo'lmaydi.",
     "deleteAccountPending": "O'chirilmoqda...",
     "deleteAccountConfirm": "O'chirishni tasdiqlash",
     "deleteAccountError": "Hisobni o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."

@@ -73,7 +73,7 @@
     "deleteAccountSubtext": "После удаления аккаунт невозможно восстановить.",
     "deleteAccountButton": "Удалить мой аккаунт",
     "deleteAccountDialogTitle": "Удалить аккаунт",
-    "deleteAccountDialogDescription": "Введите адрес электронной почты ({email}) для подтверждения удаления. Это действие постоянное и не может быть отменено.",
+    "deleteAccountDialogDescription": "Это навсегда удалит ваш аккаунт и ВСЕ ваши видео и записи. Для подтверждения введите точно \"{phrase}\". Это действие не может быть отменено.",
     "deleteAccountPending": "Удаление...",
     "deleteAccountConfirm": "Подтвердить удаление",
     "deleteAccountError": "Не удалось удалить аккаунт. Пожалуйста, попробуйте снова."

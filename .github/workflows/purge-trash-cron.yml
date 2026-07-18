@@ -1,0 +1,42 @@
+name: Purge trashed videos
+
+# Hits the app's nightly trash-purge endpoint so videos soft-deleted more than
+# 7 days ago get their storage objects and rows permanently deleted — the
+# other half of the Trash "kept for 7 days" promise.
+# Requires the repo secret CRON_SECRET (same value as the app's CRON_SECRET
+# env). Until that secret is added, each run safely skips (no failures).
+#
+# HONEST LIMITATION: GitHub Actions evaluates `schedule:` triggers only on the
+# DEFAULT branch (main). This file is inert on qa-fixes — the nightly purge
+# fires only after this workflow is merged to main. Until then the endpoint
+# can be driven manually:
+#   curl -H "Authorization: Bearer $CRON_SECRET" https://data365.duckdns.org/api/cron/purge-trashed-videos
+
+on:
+  schedule:
+    - cron: "30 21 * * *" # nightly at 21:30 UTC (02:30 Tashkent), 30 min after reconcile-storage
+  workflow_dispatch: {}
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping purge-trashed-videos
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://data365.duckdns.org
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET secret not set yet — skipping."
+            echo "Add it in: repo Settings -> Secrets and variables -> Actions -> New repository secret (name CRON_SECRET)."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/out.txt -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/purge-trashed-videos")
+          echo "HTTP $code"
+          cat /tmp/out.txt || true
+          if [ "$code" != "200" ]; then
+            echo "Purge ping failed"
+            exit 1
+          fi

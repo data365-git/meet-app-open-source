@@ -73,7 +73,7 @@
     "deleteAccountSubtext": "Once deleted, your account cannot be recovered.",
     "deleteAccountButton": "Delete my account",
     "deleteAccountDialogTitle": "Delete Account",
-    "deleteAccountDialogDescription": "Type your email address ({email}) to confirm deletion. This action is permanent and cannot be undone.",
+    "deleteAccountDialogDescription": "This permanently erases your account and ALL of your videos and recordings. To confirm, type \"{phrase}\" exactly. This cannot be undone.",
     "deleteAccountPending": "Deleting...",
     "deleteAccountConfirm": "Confirm delete",
     "deleteAccountError": "Failed to delete account. Please try again."

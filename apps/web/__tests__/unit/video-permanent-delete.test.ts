@@ -173,6 +173,36 @@ describe("permanent delete is reachable and is a hard delete", () => {
 	});
 });
 
+describe("desktop delete route reuses the permanent-delete machinery", () => {
+	// The desktop /delete handler had the identical defect class: rows first,
+	// objects second, not idempotent. The fix is to route it through the SAME
+	// Videos.permanentlyDelete proven above — not a second copy of the logic.
+	it("routes through Videos.permanentlyDelete", () => {
+		const source = readRoute("api/desktop/[...route]/video.ts");
+
+		expect(source).toContain("permanentlyDelete");
+	});
+
+	// The twin's signature: inline hard-deletes of the rows before storage.
+	// (`.delete(videoUploads)` is NOT asserted file-wide because the /progress
+	// handler legitimately clears finished uploads.)
+	it("no longer hard-deletes video rows inline", () => {
+		const source = readRoute("api/desktop/[...route]/video.ts");
+
+		expect(source).not.toContain("delete(importedVideos)");
+		expect(source).not.toMatch(/\.delete\(videos\)/);
+	});
+
+	// Authorization must stay exactly as strict as today: a non-owner gets the
+	// same 404 body an absent video gets, leaking nothing about existence. The
+	// machinery fails PolicyDenied for a non-owner, so the route must map it.
+	it("maps PolicyDenied so a non-owner still gets the not-found response", () => {
+		const source = readRoute("api/desktop/[...route]/video.ts");
+
+		expect(source).toContain("PolicyDenied");
+	});
+});
+
 describe("Videos.permanentlyDelete", () => {
 	// Defect (c): the row was dropped first, so a storage failure orphaned the
 	// media in R2 with nothing left pointing at it.

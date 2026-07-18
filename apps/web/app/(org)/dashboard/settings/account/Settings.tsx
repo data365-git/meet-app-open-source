@@ -111,11 +111,15 @@ const NotificationPreferences = ({
 	);
 };
 
-const DangerZone = ({ userEmail }: { userEmail: string }) => {
+// The server verifies this exact literal before erasing anything; the dialog
+// must render it verbatim in every locale so the user can copy it.
+const DELETE_CONFIRMATION_PHRASE = "delete my all data";
+
+const DangerZone = () => {
 	const t = useTranslations("settings");
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
-	const [confirmEmail, setConfirmEmail] = useState("");
+	const [confirmPhrase, setConfirmPhrase] = useState("");
 	const inputId = useId();
 
 	const {
@@ -123,7 +127,7 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 		isPending,
 		error: deleteError,
 	} = useMutation({
-		mutationFn: deleteAccount,
+		mutationFn: () => deleteAccount(confirmPhrase),
 		onSuccess: (result) => {
 			if (!result.ok) {
 				toast.error(result.error);
@@ -139,7 +143,7 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 	const handleOpenChange = (next: boolean) => {
 		if (!isPending) {
 			setOpen(next);
-			if (!next) setConfirmEmail("");
+			if (!next) setConfirmPhrase("");
 		}
 	};
 
@@ -173,17 +177,19 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogContent>
 					<DialogHeader
-						description={t("deleteAccountDialogDescription", { email: userEmail })}
+						description={t("deleteAccountDialogDescription", {
+							phrase: DELETE_CONFIRMATION_PHRASE,
+						})}
 					>
 						<DialogTitle>{t("deleteAccountDialogTitle")}</DialogTitle>
 					</DialogHeader>
 					<div className="p-5 space-y-3">
 						<Input
 							id={inputId}
-							type="email"
-							value={confirmEmail}
-							onChange={(e) => setConfirmEmail(e.target.value)}
-							placeholder={userEmail}
+							type="text"
+							value={confirmPhrase}
+							onChange={(e) => setConfirmPhrase(e.target.value)}
+							placeholder={DELETE_CONFIRMATION_PHRASE}
 							autoComplete="off"
 						/>
 						{deleteError && (
@@ -205,7 +211,7 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 							variant="destructive"
 							type="button"
 							spinner={isPending}
-							disabled={confirmEmail !== userEmail || isPending}
+							disabled={confirmPhrase !== DELETE_CONFIRMATION_PHRASE || isPending}
 							onClick={() => doDelete()}
 						>
 							{isPending ? t("deleteAccountPending") : t("deleteAccountConfirm")}
@@ -552,7 +558,7 @@ export const Settings = () => {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-			<DangerZone userEmail={user?.email as string} />
+			<DangerZone />
 		</>
 	);
 };
