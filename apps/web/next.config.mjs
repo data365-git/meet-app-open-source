@@ -118,6 +118,49 @@ const nextConfig = {
 				source: "/dashboard/:path*",
 				headers: [{ key: "Cache-Control", value: "no-store, must-revalidate" }],
 			},
+			{
+				// Baseline headers, safe on every route including /embed and /api.
+				source: "/:path*",
+				headers: [
+					// Deliberately short + no includeSubDomains/preload. HSTS is sticky
+					// per-host in the browser, so a lapsed cert on the self-hosted box
+					// would hard-lock users out for the whole max-age with no
+					// click-through. Ramp to 1 week -> 6 months -> 1 year only once cert
+					// renewal has proven itself over several cycles. Never add `preload`:
+					// it is effectively irreversible and would bake a throwaway hostname
+					// into browsers permanently.
+					{ key: "Strict-Transport-Security", value: "max-age=86400" },
+					{ key: "X-Content-Type-Options", value: "nosniff" },
+					{
+						key: "Referrer-Policy",
+						value: "strict-origin-when-cross-origin",
+					},
+					// Denies ONLY features this app never uses. camera/microphone/
+					// display-capture are deliberately omitted so they keep their default
+					// `self` allowlist — the web recorder needs them and denying them
+					// breaks recording with no error that points back here. autoplay and
+					// fullscreen are omitted for the same reason on the video player.
+					{
+						key: "Permissions-Policy",
+						value:
+							"geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()",
+					},
+				],
+			},
+			{
+				// Clickjacking protection everywhere EXCEPT the routes that are meant to
+				// be embedded (/embed, /s, /c) and /login, whose frame policy is already
+				// owned by proxy.ts — browsers intersect multiple CSP headers, so adding
+				// frame-ancestors here would silently override that.
+				source: "/:path((?!embed/|s/|c/|login).*)",
+				headers: [
+					{ key: "X-Frame-Options", value: "SAMEORIGIN" },
+					{
+						key: "Content-Security-Policy",
+						value: "frame-ancestors 'self'",
+					},
+				],
+			},
 		];
 	},
 	async rewrites() {
