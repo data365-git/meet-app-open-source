@@ -24,13 +24,17 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 **✅ ALSO CONFIRMED SAFE by both models:** the equal-size/length guarantee itself (`takeFixedSizeParts` — neither could break it, so a **2-hour meeting is fine**); ETag `RESOLVE_SERVER_SIDE` really is resolved server-side via `listParts`; the developer-SDK `/complete` is unreachable for extension videos; `inMemoryBuffer` stays < 5 MiB.
 
-**🔨 DEPLOY-READY, NOT DEPLOYED:** `dist/` + `apps/web/public/365-extension.zip` rebuilt with ALL fixes (verified in both bundle and zip). **prod is still `f2e64a6`; qa-fixes HEAD = `963772c`.**
+**🎨 UI (owner ask, same session) — `197c41f`:** the transcript-language picker (uz/ru/en) was an ugly 3-dot overlay floating on the video (`absolute right-3 top-3`). Owner chose to move it into the **player's settings (gear) menu**; it is now a submenu there beside playback speed/quality — same items, labels, i18n keys and behaviour. The overlay component is deleted, `LANGUAGE_LABELS`/`ALL_LANGUAGES`/`TranscriptLanguageOptions` are exported for the menu, the prop is threaded ShareVideo → CapVideoPlayer → MediaPlayerSettings, and the now-dead docked-chrome.css rule that hid the old overlay was removed. The actively-recording placeholder deliberately does NOT get the picker (no transcript yet). Built by a Sonnet subagent to a tight spec; **I reviewed the diff and re-ran the gates myself** (its "tsc 0" claim was checked, not trusted). ⚠️ **VISUAL confirm still owed** — fold it into the owner's device walk: open a share page → gear menu → the language submenu appears, switching still works, and nothing overlaps while the mini-player is docked.
+
+**🔨 DEPLOY-READY, NOT DEPLOYED:** `dist/` + `apps/web/public/365-extension.zip` rebuilt with ALL extension fixes (verified in both bundle and zip). **prod is still `f2e64a6`; qa-fixes HEAD = `197c41f`.** Gates at handoff: web tsc **0** · web **906** · extension **27**.
 
 **⛔ OWNER TODO — THE RELEASE GATE (unchanged, needs a LAPTOP + real Meet):** device-test v0.3.2 from `chrome://extensions` → Developer mode → Load unpacked → `apps/browser-extension/dist/`, then a real Meet: no-client-audio confirm → records; mute tab → banner + recording continues; close tab → reopen banner + continues; one-click whole screen; **finish a 2-3-min+ recording → it appears in the dashboard and PLAYS.** Nothing ships to the team until this passes.
 
 **▶ DEPLOY when the gate passes (I can run it):** `git push origin qa-fixes` → `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'CT=$(cat /root/.ct); curl -s -X POST -H "Authorization: Bearer $CT" -H "Content-Type: application/json" http://localhost:8000/api/v1/deploy -d "{\"uuid\":\"pokroz1qrj8wfc82bl63ns2c\"}"'` → poll `docker ps` image tag + `/api/health`. Build ~30 min.
 
-**✅ /CLEAR-SAFE:** everything committed + pushed (`963772c`). Nothing mid-edit.
+**⛔ OWNER TODO (carried, add the UI check to it):** the release-gate device test above **plus** the share-page visual check of the moved language menu.
+
+**✅ /CLEAR-SAFE:** everything committed + pushed. Nothing mid-edit. On resume: the ONLY thing blocking deploy is the owner's device test — the code side of "a meeting must never fail to record" has now been through two independent adversarial audits and nine fixes (R1–R11), each with a RED-first regression test.
 
 ---
 ## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION g) — FABLE AUDITED "RECORDING NEVER LOST" → BROKEN → 3 SAVE-LOSS BUGS FIXED. READ FIRST.
