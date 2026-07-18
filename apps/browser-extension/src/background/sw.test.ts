@@ -149,10 +149,11 @@ function jsonResponse(data: unknown): Response {
 function sendMessage(
 	captured: ReturnType<typeof createFakeChrome>["captured"],
 	message: unknown,
+	sender: unknown = {},
 ): Promise<unknown> {
 	return new Promise((resolve) => {
 		if (!captured.message) throw new Error("onMessage listener not captured");
-		captured.message(message, {}, resolve);
+		captured.message(message, sender, resolve);
 	});
 }
 
@@ -851,5 +852,182 @@ describe("R2 — PAUSE state write must not clobber a concurrent chunk", () => {
 			expect(partNums).toContain(1);
 			expect(final.nextPartNumber).toBe(3);
 		}
+	});
+});
+
+// ── Guaranteed client audio must survive a cleared "arming" record ─────────
+//
+// The "this is a meeting, client audio is REQUIRED" guarantee used to live
+// ONLY in the volatile SW "arming" state record. An ordinary user gesture —
+// picker cancel, error→RETRY, or even ANY OTHER recorder.html tab's
+// beforeunload — fires INSTRUCTION_CANCEL, which resets arming to idle with
+// no sender check. REQUEST_TAB_AUDIO / RECORDER_STARTED then re-read
+// `required`/sourceTabId from that (now-idle) arming record, so the very next
+// attempt silently downgrades to mic-only with NO error — indistinguishable
+// from a plain non-meeting screen recording. The fix makes the guarantee
+// travel with the recorder TAB itself (parsed once from its own URL, resent
+// on every message) instead of with arming's volatile lifetime.
+
+describe("Guaranteed client audio survives a cleared arming record", () => {
+	const MEET_TAB_ID = 42;
+	const MEET_URL = "https://meet.google.com/abc-defg-hij";
+	const RECORDER_SENDER = {
+		tab: { id: 1 },
+		url: "chrome-extension://fake/recorder.html?source=42&meeting=1",
+	};
+
+	it("REQUEST_TAB_AUDIO after INSTRUCTION_CANCEL still returns required:true and a real streamId (RED on the pre-fix arming-only design)", async () => {
+		const { chrome, captured } = await freshSw();
+		chrome.tabs.get = (async (id: number) => ({
+			id,
+			url: MEET_URL,
+		})) as unknown as typeof chrome.tabs.get;
+
+		const startResp = (await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: MEET_TAB_ID,
+			meeting: true,
+		})) as { ok: boolean };
+		expect(startResp.ok).toBe(true);
+
+		// Picker cancel / error-retry / another tab's beforeunload — any of
+		// these fires INSTRUCTION_CANCEL and used to wipe the guarantee.
+		await sendMessage(captured, { type: "INSTRUCTION_CANCEL" });
+
+		// The SECOND attempt: the recorder tab (recorderTabId=1, from the fake
+		// chrome.tabs.create) asks for tab audio again, carrying its own
+		// guarantee fields on the message instead of trusting the now-idle
+		// arming state.
+		const resp = (await sendMessage(
+			captured,
+			{ type: "REQUEST_TAB_AUDIO", sourceTabId: MEET_TAB_ID, meeting: true },
+			RECORDER_SENDER,
+		)) as { streamId: string | null; required: boolean };
+
+		// The bug: today this returns { streamId: null, required: false } —
+		// indistinguishable from a plain non-meeting screen recording, so the
+		// recorder silently mixes no tab audio and shows only the soft
+		// mic-only banner instead of the fail-visible confirm/liveness gate.
+		expect(resp.required).toBe(true);
+		expect(resp.streamId).not.toBeNull();
+	});
+
+	it("a source tab that is not a Meet URL fails VISIBLE (required stays true) instead of silently downgrading", async () => {
+		const { chrome, captured } = await freshSw();
+		chrome.tabs.get = (async () => ({
+			url: "https://example.com/not-a-meet",
+		})) as unknown as typeof chrome.tabs.get;
+
+		await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: MEET_TAB_ID,
+			meeting: true,
+		});
+
+		const resp = (await sendMessage(
+			captured,
+			{ type: "REQUEST_TAB_AUDIO", sourceTabId: MEET_TAB_ID, meeting: true },
+			RECORDER_SENDER,
+		)) as { streamId: string | null; required: boolean };
+
+		expect(resp.required).toBe(true);
+		expect(resp.streamId).toBeNull();
+	});
+
+	it("REQUEST_TAB_AUDIO from a non-extension sender (e.g. a Meet content script) is refused even with meeting:true in the message", async () => {
+		const { chrome, captured } = await freshSw();
+		chrome.tabs.get = (async () => ({ url: MEET_URL })) as unknown as typeof chrome.tabs.get;
+
+		await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: MEET_TAB_ID,
+			meeting: true,
+		});
+
+		// A content script's sender.url is the WEB PAGE's URL, not an extension
+		// page — this must not be trusted to assert the guarantee.
+		const untrustedSender = { tab: { id: 1 }, url: MEET_URL };
+		const resp = (await sendMessage(
+			captured,
+			{ type: "REQUEST_TAB_AUDIO", sourceTabId: MEET_TAB_ID, meeting: true },
+			untrustedSender,
+		)) as { streamId: string | null; required: boolean };
+
+		expect(resp.streamId).toBeNull();
+		expect(resp.required).toBe(false);
+	});
+
+	it("RECORDER_STARTED after a cleared arming still persists meetingRequired and sourceTabId (keeps the mid-recording watchdogs alive)", async () => {
+		const { chrome, captured } = await freshSw();
+		chrome.tabs.get = (async () => ({ url: MEET_URL })) as unknown as typeof chrome.tabs.get;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/desktop/video/create")) {
+					return jsonResponse({ id: "vid-guarantee" });
+				}
+				if (url.includes("/api/upload/multipart/initiate")) {
+					return jsonResponse({ uploadId: "upload-guarantee" });
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: MEET_TAB_ID,
+			meeting: true,
+		});
+		await sendMessage(captured, { type: "INSTRUCTION_CANCEL" });
+
+		const resp = (await sendMessage(
+			captured,
+			{
+				type: "RECORDER_STARTED",
+				mime: "video/webm",
+				hasVideo: true,
+				hasAudio: true,
+				sourceTabId: MEET_TAB_ID,
+				meeting: true,
+			},
+			RECORDER_SENDER,
+		)) as { ok: boolean };
+		expect(resp.ok).toBe(true);
+
+		const { getState } = await import("./state");
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			expect(state.sourceTabId).toBe(MEET_TAB_ID);
+			expect(state.meetingRequired).toBe(true);
+			// recorderTabId must ALSO survive the cleared arming. Without it the
+			// meet-ended notification's stop button sends no STOP_CAPTURE while still
+			// setting intentionalStop (recording runs on, degraded-audio warnings
+			// muted), and the tabs.onRemoved finalize fallback never matches - so
+			// closing the recorder tab strands the state in "recording", where the
+			// user's natural next move, CANCEL, destroys the uploaded parts.
+			expect(state.recorderTabId).toBe(RECORDER_SENDER.tab?.id);
+		}
+	});
+
+	it("the intact-arming happy path (no cancel/retry in between) is unchanged", async () => {
+		const { chrome, captured } = await freshSw();
+		chrome.tabs.get = (async () => ({ url: MEET_URL })) as unknown as typeof chrome.tabs.get;
+
+		await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: MEET_TAB_ID,
+			meeting: true,
+		});
+
+		const resp = (await sendMessage(
+			captured,
+			{ type: "REQUEST_TAB_AUDIO", sourceTabId: MEET_TAB_ID, meeting: true },
+			RECORDER_SENDER,
+		)) as { streamId: string | null; required: boolean };
+
+		expect(resp.required).toBe(true);
+		expect(resp.streamId).not.toBeNull();
 	});
 });

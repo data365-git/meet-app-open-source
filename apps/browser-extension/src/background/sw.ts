@@ -54,12 +54,27 @@ function getTabMediaStreamId(
 // that owns the whole capture and streams chunks back here using the same
 // RECORDER_* protocol as the offscreen recorder.
 
-async function openInstructionRecorder(): Promise<number> {
-	const url = chrome.runtime.getURL("recorder.html");
-	// Reuse an existing recorder tab if one is already open.
-	const existing = await chrome.tabs.query({ url });
+async function openInstructionRecorder(
+	sourceTabId?: number,
+	meeting?: boolean,
+): Promise<number> {
+	const base = chrome.runtime.getURL("recorder.html");
+	// The guarantee travels with the TAB from here on (see state.ts
+	// ArmingState.meetingRequired comment) — only the guaranteed path gets the
+	// params; a plain screen recording opens with none.
+	const url =
+		meeting === true && sourceTabId !== undefined
+			? `${base}?source=${sourceTabId}&meeting=1`
+			: base;
+	// Reuse an existing recorder tab if one is already open. Match with a
+	// wildcard so a tab left over from a PREVIOUS start (possibly carrying
+	// different/stale query params) is still found, then force it to reload
+	// via tabs.update({ url }) — merely re-activating a reused tab would keep
+	// its stale page-load-time params (sourceTabId/meeting are parsed once at
+	// load in recorder-page.ts), silently losing the guarantee.
+	const existing = await chrome.tabs.query({ url: `${base}*` });
 	if (existing.length > 0 && existing[0].id != null) {
-		await chrome.tabs.update(existing[0].id, { active: true });
+		await chrome.tabs.update(existing[0].id, { url, active: true });
 		if (existing[0].windowId != null) {
 			await chrome.windows.update(existing[0].windowId, { focused: true });
 		}
@@ -330,6 +345,29 @@ function originOf(url: string | undefined): string | null {
 	}
 }
 
+/**
+ * Security: is this message from one of OUR OWN extension pages (recorder.html,
+ * popup.html, ...) rather than a content script's web page? Content scripts
+ * (e.g. injected into meet.google.com) also reach chrome.runtime.onMessage,
+ * but their sender.url is the WEB PAGE's URL, not a chrome-extension:// URL —
+ * a plain web page can never forge this (only onMessageExternal can be
+ * reached from outside the extension, never onMessage). Used to gate which
+ * senders are trusted to carry the guaranteed-client-audio fields on a
+ * message instead of the (volatile) SW "arming" state — see REQUEST_TAB_AUDIO
+ * and RECORDER_STARTED below.
+ *
+ * Deliberately a startsWith prefix check, not originOf() comparison: the URL
+ * spec gives chrome-extension:// URLs an OPAQUE origin (the literal string
+ * "null") since it isn't a "special" scheme, so comparing origins would match
+ * ANY chrome-extension:// sender rather than only this extension's own.
+ */
+function isOwnExtensionSender(senderUrl: string | undefined): boolean {
+	return (
+		typeof senderUrl === "string" &&
+		senderUrl.startsWith(chrome.runtime.getURL(""))
+	);
+}
+
 function isTrustedTokenSender(
 	senderUrl: string | undefined,
 	configuredApiBaseUrl: string,
@@ -478,7 +516,10 @@ async function handleMessage(
 			});
 			let recorderTabId: number;
 			try {
-				recorderTabId = await openInstructionRecorder();
+				recorderTabId = await openInstructionRecorder(
+					sourceTabId,
+					meetingRequired,
+				);
 			} catch (err) {
 				await setState({ kind: "idle" });
 				updateBadge({ kind: "idle" });
@@ -929,22 +970,23 @@ async function handleMessage(
 		// (never starts / hard-stops) instead of silently dropping client audio
 		// when required is true.
 		case "REQUEST_TAB_AUDIO": {
-			const st = await getState();
-			const sourceTabId = st.kind === "arming" ? st.sourceTabId : undefined;
-			const required = st.kind === "arming" && st.meetingRequired === true;
+			// Derived from the MESSAGE, not the volatile "arming" state — arming
+			// gets cleared by INSTRUCTION_CANCEL (picker cancel, error→RETRY, or
+			// ANY other recorder.html tab's beforeunload) well before a retried
+			// start reaches here, which used to silently turn `required` false on
+			// the very next attempt. The recorder page re-sends these fields
+			// (parsed once from its own URL) on every call, so the guarantee now
+			// lives with THAT TAB instead. Trust requires the sender to be our own
+			// recorder page (isOwnExtensionSender) — a content script cannot forge
+			// this even if it sends the same field names.
+			const senderIsOwnRecorderPage = isOwnExtensionSender(_sender.url);
+			const sourceTabId = senderIsOwnRecorderPage
+				? getNumber(msg, "sourceTabId")
+				: undefined;
+			const required =
+				senderIsOwnRecorderPage && _getBoolean(msg, "meeting") === true;
 			const consumerTabId = _sender.tab?.id;
-			// The requester MUST be the recorder tab this arming session opened —
-			// guards against a stale/racing recorder tab grabbing audio for a
-			// different (or overwritten) source tab.
-			const isCurrentRecorderTab =
-				st.kind === "arming" &&
-				st.recorderTabId !== undefined &&
-				consumerTabId === st.recorderTabId;
-			if (
-				sourceTabId === undefined ||
-				consumerTabId === undefined ||
-				!isCurrentRecorderTab
-			) {
+			if (sourceTabId === undefined || consumerTabId === undefined) {
 				return { streamId: null, required };
 			}
 			// Re-verify the source tab still exists AND is still a Meet tab before
@@ -998,14 +1040,51 @@ async function handleMessage(
 			const mode = state.kind === "arming" ? state.mode : "instruction";
 			const meetingId = state.kind === "arming" ? state.meetingId : undefined;
 			const tabId = state.kind === "arming" ? state.tabId : undefined;
+			const senderIsOwnRecorderPage = isOwnExtensionSender(_sender.url);
+			// The sender IS the recorder tab, so use it when arming is gone. Without
+			// this, every flow this fix rescues (cancel->retry, error->Try again)
+			// recorded with recorderTabId undefined, which silently broke two things:
+			// the meet-ended notification's stop button sent no STOP_CAPTURE while
+			// still setting intentionalStop (recording ran on, degraded-audio warnings
+			// muted), and the tabs.onRemoved finalize fallback never matched, so
+			// closing the recorder tab left the state stuck in "recording" - where the
+			// user's natural next move, CANCEL, destroys the uploaded parts.
+			// The offscreen document has no sender.tab, so this only affects the
+			// recorder page.
 			const recorderTabId =
-				state.kind === "arming" ? state.recorderTabId : undefined;
+				state.kind === "arming"
+					? state.recorderTabId
+					: senderIsOwnRecorderPage
+						? _sender.tab?.id
+						: undefined;
 			const contentRecorderTabId =
 				state.kind === "arming" ? state.contentRecorderTabId : undefined;
+			// Prefer the guarantee fields carried on THIS message (same trust rule
+			// as REQUEST_TAB_AUDIO — sender must be our own recorder page) over
+			// arming state: an INSTRUCTION_CANCEL/RETRY between START_INSTRUCTION
+			// and this message wipes arming, and without this fallback the
+			// RecordingState would lose sourceTabId/meetingRequired, silently
+			// killing the mid-recording watchdogs that key off them
+			// (handleSourceTabLost, the meet-ended prompt) for the rest of the
+			// recording — see state.ts ArmingState.meetingRequired.
+			const messageSourceTabId = senderIsOwnRecorderPage
+				? getNumber(msg, "sourceTabId")
+				: undefined;
+			const messageMeetingRequired = senderIsOwnRecorderPage
+				? _getBoolean(msg, "meeting")
+				: undefined;
 			const sourceTabId =
-				state.kind === "arming" ? state.sourceTabId : undefined;
+				messageSourceTabId !== undefined
+					? messageSourceTabId
+					: state.kind === "arming"
+					  ? state.sourceTabId
+					  : undefined;
 			const meetingRequired =
-				state.kind === "arming" ? state.meetingRequired : undefined;
+				messageMeetingRequired !== undefined
+					? messageMeetingRequired
+					: state.kind === "arming"
+					  ? state.meetingRequired
+					  : undefined;
 
 			let videoId: string;
 			let uploadId: string;

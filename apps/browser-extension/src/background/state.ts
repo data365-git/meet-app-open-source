@@ -38,8 +38,14 @@ interface ArmingState {
 	// tabCapture and mix it in — no "share system audio" tick needed.
 	sourceTabId?: number;
 	// Guaranteed-client-audio mode: the "Record full-screen meeting" popup button
-	// sets this true. It fails-closed (never starts / hard-stops) if the source
-	// tab's audio can't be captured, instead of silently recording client-less.
+	// sets this true, which becomes the ?meeting=1 param on the recorder.html tab
+	// URL (see sw.ts openInstructionRecorder). From then on the guarantee lives
+	// with THAT TAB, not this record — this record is volatile (INSTRUCTION_CANCEL/
+	// RETRY/another recorder tab's beforeunload can clear it mid-flow), so
+	// REQUEST_TAB_AUDIO and RECORDER_STARTED re-derive `required`/sourceTabId from
+	// the recorder page's own message (validated by sender origin) instead of
+	// reading this field back. Used only as the RECORDER_STARTED fallback when
+	// that message field is absent.
 	meetingRequired?: boolean;
 }
 

@@ -21,6 +21,20 @@ interface RecorderSettings {
 	micDeviceId: string;
 }
 
+// ── Guaranteed-audio params (travel with THIS TAB, not the volatile SW
+// "arming" state) ────────────────────────────────────────────────────────
+//
+// The SW opens this tab with ?source=<tabId>&meeting=1 for the guaranteed
+// path (background/sw.ts openInstructionRecorder). Parsed once here at load
+// so an INSTRUCTION_CANCEL (picker cancel, error→RETRY, or another recorder
+// tab's beforeunload) that wipes the SW's arming record can never downgrade
+// THIS tab's own guarantee — REQUEST_TAB_AUDIO and RECORDER_STARTED send
+// these values on every call instead of relying on SW state to remember them.
+const _recorderUrlParams = new URLSearchParams(location.search);
+const sourceTabIdParam = _recorderUrlParams.get("source");
+const sourceTabId = sourceTabIdParam ? Number(sourceTabIdParam) : undefined;
+const meetingRequiredParam = _recorderUrlParams.get("meeting") === "1";
+
 interface RecordingState {
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
@@ -449,10 +463,18 @@ async function startRecording(): Promise<void> {
 		let tabAudioStream: MediaStream | null = null;
 		let meetingRequired = false;
 		try {
-			const resp = (await sendMsgAwait({ type: "REQUEST_TAB_AUDIO" })) as
-				| { streamId?: string | null; required?: boolean }
-				| undefined;
-			meetingRequired = resp?.required === true;
+			const resp = (await sendMsgAwait({
+				type: "REQUEST_TAB_AUDIO",
+				sourceTabId,
+				meeting: meetingRequiredParam,
+			})) as { streamId?: string | null; required?: boolean } | undefined;
+			// Never let a TRANSPORT failure downgrade the guarantee. This page was
+			// opened with ?meeting=1, so it already knows a meeting was requested;
+			// deriving the decision only from the SW's echo means an ok:false reply
+			// (service-worker wake-up hiccup, page orphaned by an extension update,
+			// sender.url unset) silently reverts to the mic-only path - the exact
+			// bug this whole change exists to kill, in a narrower hat.
+			meetingRequired = meetingRequiredParam || resp?.required === true;
 			const streamId = resp?.streamId;
 			if (streamId) {
 				try {
@@ -652,6 +674,8 @@ async function startRecording(): Promise<void> {
 			mime,
 			hasVideo: displayStream.getVideoTracks().length > 0,
 			hasAudio: dest.stream.getAudioTracks().length > 0,
+			sourceTabId,
+			meeting: meetingRequiredParam,
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
