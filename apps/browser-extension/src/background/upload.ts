@@ -797,7 +797,10 @@ export async function finalizeUpload(): Promise<void> {
 		return;
 	}
 
-	await setState({ kind: "finishing", videoId });
+	// (R9) Carry the uploadId + parts into "finishing" so a crash/restart during
+	// completeMultipart can RESUME the finalize instead of writing off a
+	// recording whose bytes are already fully in R2.
+	await setState({ kind: "finishing", videoId, uploadId, parts });
 
 	try {
 		const apiParts = parts.map((p) => ({
@@ -846,6 +849,35 @@ export async function finalizeUpload(): Promise<void> {
 
 	const shareUrl = `${settings.apiBaseUrl}/s/${videoId}`;
 	await setState({ kind: "complete", videoId, shareUrl });
+}
+
+/**
+ * (R9) Resume a finalize that a crash/restart interrupted. The "finishing"
+ * state now carries the uploadId + parts, so the completeMultipart can simply
+ * be re-queued durably and the normal drain will finish the recording — every
+ * byte is already in R2. Returns false for a legacy persisted state that has
+ * no snapshot (nothing to resume from).
+ */
+export async function resumeInterruptedFinishing(
+	videoId: string,
+	uploadId: string | undefined,
+	parts: CompletedPart[] | undefined,
+): Promise<boolean> {
+	if (!uploadId || !parts || parts.length === 0) return false;
+
+	await addToRetryQueue({
+		kind: "complete",
+		payload: {
+			uploadId,
+			videoId,
+			parts: parts.map((p) => ({
+				partNumber: p.PartNumber,
+				etag: p.ETag,
+				size: 0,
+			})),
+		},
+	});
+	return true;
 }
 
 /** (R4) True if a PART for this upload has been permanently dead-lettered —

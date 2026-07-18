@@ -89,6 +89,12 @@ interface UploadingState {
 interface FinishingState {
 	kind: "finishing";
 	videoId: string;
+	// (R9) Enough to RESUME the finalize after a crash/restart. Without these
+	// a persisted "finishing" was unrecoverable — every byte sat in R2 and the
+	// user was told to re-record because we no longer knew which multipart to
+	// complete. Optional so older persisted states still parse.
+	uploadId?: string;
+	parts?: CompletedPart[];
 }
 
 interface CompleteState {

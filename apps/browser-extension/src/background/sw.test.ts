@@ -659,6 +659,63 @@ describe("Fix 2 — dead-letter exhaustion releases the UI", () => {
 	});
 });
 
+// ── R9: a crash while finishing must RESUME the finalize, not write off a
+// recording whose bytes are all already in R2 ──────────────────────────────
+
+describe("R9 — persisted 'finishing' resumes instead of being written off", () => {
+	it("re-queues the completeMultipart on startup and finishes the recording", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		// Crashed mid-completeMultipart: every byte is in R2, only the finalize
+		// call is left — and now the state carries what it takes to redo it.
+		await setState({
+			kind: "finishing",
+			videoId: "vid-r9",
+			uploadId: "upload-r9",
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+		});
+
+		let completeCalls = 0;
+		let recordingCompleteCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeCalls += 1;
+					return jsonResponse({ success: true, fileKey: "file" });
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					recordingCompleteCalls += 1;
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		if (!captured.startup) throw new Error("startup listener not captured");
+		await captured.startup();
+		await flushAsync();
+
+		// The re-queued complete is scheduled ~1s out (addToRetryQueue), so the
+		// startup drain itself is too early — the 1-minute retry alarm picks it
+		// up. Simulate that next drain.
+		const { retryPendingUploads } = await import("./upload");
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.now() + 5000);
+		await retryPendingUploads();
+
+		// The bug: the old FinishingState kept only a videoId, so the restart
+		// could only tell the user "the recording may have completed; otherwise
+		// re-record" — a fully-uploaded meeting written off.
+		expect(completeCalls).toBe(1);
+		expect(recordingCompleteCalls).toBe(1);
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+	});
+});
+
 // ── R8: if the stop command never reaches the recorder, STOP must finalize
 // anyway — otherwise the recording sits in "recording" forever and its already
 // uploaded parts are never completed ───────────────────────────────────────

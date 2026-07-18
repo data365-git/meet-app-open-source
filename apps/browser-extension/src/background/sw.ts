@@ -8,6 +8,7 @@ import {
 	handleChunk,
 	initializeUpload,
 	isRetryAlarm,
+	resumeInterruptedFinishing,
 	retryPendingUploads,
 } from "./upload";
 
@@ -1386,13 +1387,25 @@ chrome.runtime.onStartup.addListener(async () => {
 		// recording until the user found CANCEL.
 		await enqueueRecorder(() => finalizeUpload());
 	} else if (state.kind === "finishing") {
-		// (P1.2 / M5) FinishingState (state.ts) persists only a videoId — no
-		// uploadId, no parts — so it cannot be resumed. Map it to a terminal
-		// state so isInProgress() stops refusing every future recording.
+		// (R9) A crash during completeMultipart. Every byte is already in R2, so
+		// re-queue the finalize durably instead of writing the recording off —
+		// the drain below finishes it (and R6's horizon lets it survive a long
+		// outage). The state is still released to a recoverable error so
+		// isInProgress() stops refusing new recordings; when the queued complete
+		// lands, the drain flips it to "complete" with the share link (its
+		// stillOurs guard accepts error + previousVideoId).
+		// (P1.2 / M5) A legacy persisted state carries no snapshot — nothing to
+		// resume from, so it keeps the original write-off message.
+		const resumed = await resumeInterruptedFinishing(
+			state.videoId,
+			state.uploadId,
+			state.parts,
+		);
 		const nextState: ExtensionState = {
 			kind: "error",
-			reason:
-				"The browser restarted while finishing an upload. Check your dashboard — the recording may have completed; otherwise please re-record.",
+			reason: resumed
+				? "The browser restarted while finishing an upload — we're completing it in the background. You can start a new recording."
+				: "The browser restarted while finishing an upload. Check your dashboard — the recording may have completed; otherwise please re-record.",
 			recoverable: true,
 			previousVideoId: state.videoId,
 		};
