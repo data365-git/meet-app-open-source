@@ -51,6 +51,10 @@ Bu eng muhimi. Faqat shu o'tsa, qolganlari mayda-chuyda.
 
 ✅ **Ko'rishingiz kerak:** yozuv ro'yxatda paydo bo'ladi → uni ochasiz →
 **oxirigacha o'ynaydi** va **o'z ovozingiz eshitiladi**. Davomiyligi ~3 daqiqa.
+
+Qo'shimcha (siz so'ragan avto-ochiq): yozuvning **Share havolasini** nusxalab,
+Chrome'ning **Incognito** oynasida oching (login'siz). Video o'sha yerda ham
+o'ynashi kerak — endi har yangi yozuv havola orqali darhol ochiq.
 ❌ **Xato bo'lsa:** yozuv umuman chiqmasa · ochilmasa · yarmida to'xtasa ·
 davomiyligi noto'g'ri bo'lsa (masalan 3 daqiqa yozdingiz, 40 soniya chiqdi) ·
 ovoz umuman yo'q bo'lsa.

@@ -3,6 +3,54 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 late night — SESSION k, LATEST) — PRODUCTION PUSH IN FLIGHT, READ FIRST
+
+🎯 **GOAL (unchanged):** production-ready for the IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.** Owner directive tonight: *"hammasi bajarilmaguncha to'xtama"* — work continues until the machine-side list is done; the human device gate (OWNER_QA_SCRIPT) is the only remaining owner half.
+
+**STATUS at last update (~00:20):** recorder fixes COMMITTED + PUSHED as **`78c8aee`** (112 extension tests, was 61; tsc 2 pre-existing only; build clean; dist/ rebuilt with markers verified; EOL normalized — diffstat 843/41 vs -w 842/40). Three streams IN FLIGHT:
+1. **Deletion-twins workflow** (`wf_7786ac1f-99a`) — editing `apps/web/**`: desktop delete ordering, real account erasure (typed "delete my all data" server-side gate), 7-day trash purge cron. Do not touch apps/web until it lands.
+2. **Fable heart re-audit round 2** (subagent, model fable) — attacking the frozen worktree `D:\vibecoding\_audit-frozen-78c8aee` with executed scratch-vitest attacks.
+3. **Independent audit #2** — Codex hit its ChatGPT usage limit (blocked until Jul 25); per the standing fallback rule a FRESH Opus subagent (not the author) runs the Codex brief instead, same frozen worktree, firewalled from Fable's brief/report and from this file.
+Also done since the block below was written: **W3 critical from wave-2 review fixed by main session** — the durable discard marker is now planted BEFORE the local destruction too (was: after), startup finishes the local half of a half-done discard (`finishLocalDiscardTraces`), ordering proven by a storage-instrumented test that was sabotage-verified RED. Old `_audit-frozen-94af12d` worktree deregistered but its directory is locked by a process — delete manually later.
+**Webpack production build (the real Docker path): PASSED locally, exit 0** — run-8's "unproven" Medium closed.
+
+### What happened this session (k)
+1. **Wave 1** (workflow, 16 agents): implemented the 3 blockers from the Codex deep-research — B1 surface validation, B2 offline-discard durable retry, B3 pause/resume truth. Extension tests went 61→91, all green. **BUT the 3-lens adversarial review found critical defects in all three** (the review layer fired again, as it has every time):
+   - B1: gate fails CLOSED on an unverified premise → possible TOTAL meeting outage. (Later web-verified via MDN/Chrome docs: Chrome DOES report `monitor`/`browser`/`window` from `getSettings().displaySurface` — but the fail-open-on-unknown polarity is still the right design.)
+   - B2/B3 shared root cause: popup `render()` wipes and rebuilds the DOM ~5×/sec, so every new inline message (discard result, pause error) is appended to a DETACHED node — invisible in production, silent no-op remains.
+   - B2: discard task enqueued only AFTER a failure is observed (interruption mid-flight loses it); onStartup can RESURRECT a discarded recording; popup claims "Delete queued" on paths where nothing was queued.
+2. **Wave 2** (running now) fixes exactly those three: W1 invert gate polarity (reject only known-bad `browser`/`window`, allow unknown), W2 popup messages become rendered state, W3 enqueue-before-attempt + startup respects pending-discard + truthful reply shape.
+3. **Owner decisions tonight (BINDING):**
+   - **Meeting mode rejects tab/window picks** — acceptance line: recording must NOT start; "To'liq ekranni tanlang" + re-ask. Same gate covers no-remote-audio, BUT wave-1 empirically proved the literal version would reject valid recordings (tab-audio present + system-audio unticked is a GOOD meeting recording) — the existing waiver modal already catches the genuinely-bad case. Documented in wave-1 notFixed; needs no further owner input.
+   - **`CAP_VIDEOS_DEFAULT_PUBLIC=true`** — new recordings link-accessible immediately (owner: "auto ochiq bo'lsin"). Already SET in Coolify (uuid `p11qgbc89liojlb1fmgvqj5m`, verified by reading back) — inert until next deploy. Documented in `.env.example`.
+4. **Committed + pushed `2141b68`** — portability pack: `docs/MIGRATION.md`, `deploy/server/` (backup script byte-verified vs live VPS), honest RUNBOOK (§2a capdb-vs-data365 backup truth, §3a deploy procedure), DEPLOY/OPERATIONS/RAILWAY_ENV marked historical, `railway.json` deleted, **`docs/OWNER_QA_SCRIPT.md`** (the road-step-3 owner gate, 7 steps, simple Uzbek). **The old "DR snippet installs no cron" blocker was FALSE** — deploy/server/README.md installs the crontab correctly; verified.
+5. **Flake diagnosis CLOSED:** the nondeterministic `health-readiness.test.ts` from QA run-8 is NOT in the tree — it was an orphan of the rejected health-fail-closed sweep stream, parked in `Temp/claude/sweep-orphan-tests`. The current 1049-test suite does not contain it; "tests pass" is stronger evidence than STATE previously claimed.
+6. **Webpack production build** (the real Docker build path, never locally proven) running in background.
+7. Codex post-Claude verification (owner-pasted) independently CONFIRMED the same 3 blockers + added the abort-500 atomicity requirement — folded into wave-2's W3 spec.
+
+### NEXT (in order, no stopping)
+1. Wave-2 lands → review verdicts + diff myself → gates (extension 91+, web ~1049, tsc, build).
+2. Commit recorder fixes, rebuild `dist/`, verify marker in bundle.
+3. Launch INDEPENDENT Fable + Codex re-audits vs new HEAD (road step 2; Codex brief `docs/CODEX_TASK_meeting-record-audit_2026-07-18.md` — update HEAD ref first).
+4. Update this file + finish OWNER_QA_SCRIPT (auto-public note added already).
+5. ⛔ OWNER TODO (morning, ~15 min): run `docs/OWNER_QA_SCRIPT.md` — steps 1 (solo 3-min recording plays to end) and 6 (two-person Meet, remote voice audible) are the deploy blockers; steps 2-5 catch the rest.
+6. Deploy only after audits + owner steps 1&6 pass (owner "ha" at the button). Then live-verify: image sha, /api/health, security headers (curl), auto-public incognito check.
+
+---
+## CODEX QA RUN 10 — 2026-07-18 — POST-CLAUDE RECORDER VERIFICATION: THREE GROUPS STILL OPEN
+
+Codex independently verified `qa-fixes` candidate `81827a1` and recorder commit `cdf521b` without changing app behavior or production state. Full evidence: `docs/qa/run-10/`.
+
+- Fresh gates: extension 61/61, permanent-delete 7/7, route-export guard 56/56, extension build PASS, web tsc PASS, Turbopack production build PASS.
+- Verified at code/test level: tab-only fails closed instead of falling back to video-only; successful permanent delete uses storage-first/database-last hard delete; failed Pause/Resume delivery no longer changes canonical state; old discard completion cannot stomp a newer recording.
+- **High OPEN:** discard is not durable/atomic across offline/failure. No `discard` retry item exists. A fresh dynamic probe proved that an abort 500 is followed by `/delete-permanent`, so the video row can disappear while multipart parts survive and no cleanup retry remains.
+- **High OPEN:** meeting mode still only hints `displaySurface: "monitor"`; it never validates the returned surface or rejects known window/tab selection before upload initialization.
+- **Medium OPEN:** popup Pause/Resume and permanent discard remain fire-and-forget; the persistent recorder page still has only Stop, with no Pause/Resume or inline command-failure feedback.
+- Live Chrome/device gate is UNVERIFIED: Chrome was not running, its ChatGPT control extension was absent in the selected profile, and the in-app browser blocked the built `file://` extension page by policy.
+
+**NEXT:** implement only the three open groups, rerun Run 10 probes/gates, then load the exact unpacked candidate in Chrome and execute the two-person Meet, Pause interval, wrong-surface, offline restart/finalize, tab-only remote-voice, and offline permanent-discard cleanup gate. Do not release before that.
+
+---
 > ⚠️ **THE BLOCK DIRECTLY BELOW IS SUPERSEDED — scroll to "/CLEAR HANDOFF (SESSION j, LATEST)" for the current truth.**
 > Codex wrote it against the dirty tree at "59/59 tests, four blockers open". Three of those four were closed and committed afterwards (`cdf521b`): permanent discard is now a real storage-first/database-last idempotent erase at `/api/video/delete-permanent`, tab-only fails closed, and Pause/Resume no longer persists undelivered state. Kept for its evidence and its device-gate checklist, which remain valid.
 

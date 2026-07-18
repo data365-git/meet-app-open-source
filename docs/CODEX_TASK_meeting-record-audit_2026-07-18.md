@@ -6,8 +6,11 @@
 
 ---
 
-Repo: `D:\vibecoding\ustoz-github`, branch `qa-fixes`, HEAD `0327eea`.
+Repo: **`D:\vibecoding\_audit-frozen-78c8aee`** — a FROZEN git worktree pinned at commit `78c8aee`.
+**Audit THAT path, not `D:\vibecoding\ustoz-github`.** The main checkout is being actively edited by other agents right now; reading it would show you half-written code and you would report in-flight work as defects. The frozen copy cannot change under you.
 **READ-ONLY. Do not edit, stage, commit or push anything.** You may run tests and read-only commands.
+
+Note on running tests there: the worktree shares the repo's git objects but has no `node_modules` of its own. If a test run needs dependencies, either run the suite from the main checkout while reading code from the frozen copy (say so in your report if you do), or install into the frozen copy — but never modify tracked files in either place.
 
 ## Your job: try to REFUTE a guarantee
 
@@ -38,6 +41,9 @@ Secondary: `apps/web/app/api/upload/[...route]/multipart.ts` (server-side comple
 Recent commits to audit against — several written today, do not assume they are correct:
 - `0327eea` — meeting audio guarantee moved from volatile SW state into recorder-tab URL params; `recorderTabId` fallback; page no longer trusts only the SW echo.
 - `c7efcda` — queued retry bytes counted toward startup viability; idempotent completion on `NoSuchUpload`.
+- `94af12d` — four proved recording-loss holes closed at the entry/exit seams: `RECORDER_STARTED` now strictly refuses any re-send while a recording is in progress; `finalizeUpload` keeps the pending buffer until the tail is durable elsewhere; the startup finishing-resume no longer holds the in-progress lock behind the retry drain; an idle recorder tab no longer answers — or acks — a broadcast `STOP_CAPTURE`. Written hours ago, twice-reviewed, and the review round found that three of the FIRST attempts made things worse than the bug. Audit them hardest.
+- `cdf521b` — tab-only fails closed via a shared `shared/client-audio.ts` rule; "Cancel upload" split into "Close — upload continues" vs a two-step "Permanently discard" that now really is permanent (storage-first, database-last, idempotent `/api/video/delete-permanent`).
+- `78c8aee` (the frozen HEAD you are auditing) — three more blockers closed, each adversarially reviewed, one critical caught and re-fixed after review: **(1)** meeting mode reads `getSettings().displaySurface` from the RESOLVED track and refuses known-bad surfaces (`browser`/`window`) with re-ask copy, failing OPEN on unknown values; **(2)** permanent discard is durable AND atomic — the durable `discard` marker is planted BEFORE any destruction, removed only after fully-successful server cleanup, and startup finishes a half-done discard instead of resurrecting the recording; **(3)** popup/recorder-page pause/resume/discard UI awaits acks and renders failure state that survives the popup's ~200ms re-render loop (`flash-message.ts`), recorder page gains Pause/Resume via `shared/capture-command.ts`. These are HOURS old and the exact kind of code this project keeps finding critical defects in on review — attack them hardest of all.
 
 ## Known and ACCEPTED — do not re-report these
 
