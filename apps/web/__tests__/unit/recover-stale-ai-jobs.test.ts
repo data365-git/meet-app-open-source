@@ -66,7 +66,7 @@ const {
 	shouldAutoRetry,
 	staleThresholdMsForMetadata,
 	withIncrementedAutoRecoverAttempts,
-} = await import("@/app/api/cron/recover-stale-ai-jobs/route");
+} = await import("@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers");
 
 describe("hasPendingBatchJobs (recovery skips the collector's jobs)", () => {
 	const job = {
