@@ -12,7 +12,7 @@ import {
 	organizationMembers,
 } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
-import { eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { buildEnv } from "@cap/env";
 
 async function requireAdmin() {
@@ -41,6 +41,114 @@ export async function getUsers() {
 		.orderBy(desc(users.created_at));
 
 	return allUsers;
+}
+
+/**
+ * The workspace an approved requester is added to: the admin's own default
+ * organization, falling back to the organization they own.
+ */
+async function getAdminOrganizationId(admin: {
+	id: User.UserId;
+	defaultOrgId: Organisation.OrganisationId | null;
+}): Promise<Organisation.OrganisationId | null> {
+	if (admin.defaultOrgId) return admin.defaultOrgId;
+
+	const [ownedOrg] = await db()
+		.select({ id: organizations.id })
+		.from(organizations)
+		.where(eq(organizations.ownerId, admin.id))
+		.limit(1);
+
+	return ownedOrg?.id ?? null;
+}
+
+/**
+ * Users who signed up themselves but belong to no organization yet. These are
+ * sales leads waiting for the owner to open a workspace for them. Users whose
+ * access has been revoked (no passwordHash) are excluded, so dismissing a
+ * request via `revokeUser` removes it from this list.
+ */
+export async function getPendingRequests() {
+	await requireAdmin();
+
+	const [allUsers, memberships] = await Promise.all([
+		db()
+			.select({
+				id: users.id,
+				name: users.name,
+				email: users.email,
+				isAdmin: users.isAdmin,
+				createdAt: users.created_at,
+				passwordHash: users.passwordHash,
+			})
+			.from(users)
+			.orderBy(desc(users.created_at)),
+		db()
+			.select({ userId: organizationMembers.userId })
+			.from(organizationMembers),
+	]);
+
+	const memberIds = new Set(memberships.map((m) => m.userId));
+
+	return allUsers
+		.filter((u) => !memberIds.has(u.id) && !u.isAdmin && u.passwordHash)
+		.map(({ passwordHash: _passwordHash, ...u }) => u);
+}
+
+/**
+ * Approve a requester: add them to the admin's workspace as a regular member.
+ * Mirrors the membership grant in the organization-invite redemption path.
+ */
+export async function approveRequest(userId: string) {
+	const admin = await requireAdmin();
+
+	const organizationId = await getAdminOrganizationId(admin);
+	if (!organizationId) {
+		return {
+			success: false as const,
+			error: "No workspace found to add this member to.",
+		};
+	}
+
+	const [targetUser] = await db()
+		.select({ id: users.id })
+		.from(users)
+		.where(eq(users.id, userId as User.UserId))
+		.limit(1);
+
+	if (!targetUser) {
+		return { success: false as const, error: "User not found." };
+	}
+
+	await db().transaction(async (tx) => {
+		const [existingMembership] = await tx
+			.select({ id: organizationMembers.id })
+			.from(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.userId, userId as User.UserId),
+					eq(organizationMembers.organizationId, organizationId),
+				),
+			)
+			.limit(1);
+
+		if (!existingMembership) {
+			await tx.insert(organizationMembers).values({
+				id: nanoId(),
+				userId: userId as User.UserId,
+				organizationId,
+				// Lowest privilege role. Never owner/admin via approval.
+				role: "member",
+			});
+		}
+
+		await tx
+			.update(users)
+			.set({ activeOrganizationId: organizationId, defaultOrgId: organizationId })
+			.where(eq(users.id, userId as User.UserId));
+	});
+
+	return { success: true as const };
 }
 
 export async function createUser(

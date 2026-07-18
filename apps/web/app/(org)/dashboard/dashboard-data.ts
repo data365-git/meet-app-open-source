@@ -478,6 +478,9 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			anyNewNotifications,
 			userPreferences,
 			userCapsCount,
+			// Fetch succeeded — an empty organizationSelect here is a genuine
+			// no-membership (pending requester) state, not a lookup failure.
+			hasError: false,
 		};
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
@@ -488,6 +491,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			anyNewNotifications: false,
 			userPreferences: null,
 			organizationSettings: null,
+			// The lookup itself failed (e.g. a DB blip). Callers must not treat
+			// this the same as a real "no organization" requester — failing
+			// closed on access is correct, but the reason must stay honest.
+			hasError: true,
 		};
 	}
 }

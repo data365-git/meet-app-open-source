@@ -743,5 +743,16 @@
       "cancel": "Bekor qilish",
       "tooBigAudio": "Bu audio bu yerda kesish uchun juda katta, shuning uchun to'liq fayl yuklandi."
     }
+  },
+  "pendingAccess": {
+    "title": "So'rovingiz qabul qilindi",
+    "body": "Ro'yxatdan o'tganingiz uchun rahmat. Ish maydoningiz hali ochilmagan — tez orada siz bilan bog'lanib, uni sozlab beramiz.",
+    "contact": "Bu tezroq kerak bo'lsa, ro'yxatdan o'tgan email manzilingizga kelgan xatga javob yozing.",
+    "signOut": "Chiqish"
+  },
+  "dashboardLoadError": {
+    "title": "Ish maydoningizni yuklab bo'lmadi",
+    "body": "Hisobingizni tekshirishda xatolik yuz berdi. Odatda bu vaqtinchalik — biroz o'tib qayta urinib ko'ring.",
+    "retry": "Qayta urinish"
   }
 }

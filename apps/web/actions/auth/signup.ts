@@ -3,14 +3,10 @@
 import bcrypt from "bcryptjs";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import {
-	organizationMembers,
-	organizations,
-	users,
-} from "@cap/database/schema";
+import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Organisation, User } from "@cap/web-domain";
-import { and, asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 type SignUpResult = { success: true } | { success: false; error: string };
 
@@ -34,55 +30,20 @@ function isEmailDomainAllowed(email: string): boolean {
 }
 
 /**
- * Resolve the single default organization that new self-signups join as
- * regular members. This is a single-org teacher tool: the org owned by the
- * platform admin (seeded via `npm run seed:admin`) is the shared workspace.
- *
- * We intentionally DO NOT create a fresh organization for self-signups, since
- * an org owner is granted the highest role. New users must only ever join the
- * existing default org as a `member`.
- */
-async function getDefaultOrganizationId(): Promise<Organisation.OrganisationId | null> {
-	// Prefer the admin user's default organization.
-	const [admin] = await db()
-		.select({ id: users.id, defaultOrgId: users.defaultOrgId })
-		.from(users)
-		.where(eq(users.isAdmin, true))
-		.orderBy(asc(users.created_at))
-		.limit(1);
-
-	if (admin?.defaultOrgId) return admin.defaultOrgId;
-
-	if (admin) {
-		const [ownedOrg] = await db()
-			.select({ id: organizations.id })
-			.from(organizations)
-			.where(eq(organizations.ownerId, admin.id))
-			.orderBy(asc(organizations.createdAt))
-			.limit(1);
-
-		if (ownedOrg) return ownedOrg.id;
-	}
-
-	// Fallback: the oldest organization in the system (the default workspace).
-	const [oldestOrg] = await db()
-		.select({ id: organizations.id })
-		.from(organizations)
-		.orderBy(asc(organizations.createdAt))
-		.limit(1);
-
-	return oldestOrg?.id ?? null;
-}
-
-/**
  * Open, public sign-up: anyone can self-register with name + email + password.
+ *
+ * A self-signup creates an ACCOUNT ONLY — no organization membership and no
+ * active/default organization. Such a user is a "requester": they can sign in,
+ * but until the platform admin explicitly adds them to the workspace (see
+ * `approveRequest` in `actions/admin/access.ts`) they only see a pending
+ * screen. This keeps the owner's workspace closed to strangers while still
+ * capturing interested users as sales leads.
  *
  * Security guarantees:
  * - Never sets `isAdmin` (platform admin), so a self-signup can never become a
  *   platform admin.
- * - Joins ONLY the existing default organization, with the lowest org role
- *   (`member`) — never `owner`/`admin`, so they cannot manage members,
- *   billing, or settings, and cannot see other orgs' data.
+ * - Never joins any organization, so a self-signup cannot read or record any
+ *   workspace content until an admin approves them.
  * - Passwords are hashed with bcrypt (same path as the admin seed + invite
  *   flow); plaintext is never stored.
  * - All DB access is parameterised via Drizzle (no SQL/email injection).
@@ -132,17 +93,6 @@ export async function signUp(
 		};
 	}
 
-	const organizationId = await getDefaultOrganizationId();
-	if (!organizationId) {
-		// No workspace exists yet (admin not seeded). Do not silently create an
-		// org here, as that would grant the new user owner-level access.
-		return {
-			success: false,
-			error:
-				"Sign-up is not available yet. Please ask your admin to finish setup.",
-		};
-	}
-
 	const passwordHash = await bcrypt.hash(password, 10);
 	const userId = nanoId() as User.UserId;
 
@@ -165,32 +115,14 @@ export async function signUp(
 				name: trimmedName,
 				passwordHash,
 				emailVerified: new Date(),
-				activeOrganizationId: organizationId,
-				defaultOrgId: organizationId,
 				inviteQuota: 1,
 				// isAdmin omitted -> defaults to false. Never grant admin here.
+				// No defaultOrgId and no organizationMembers row: a self-signup
+				// joins no workspace until an admin approves it. The column is
+				// nullable in the database (`varchar(15)`, migration 0000), but the
+				// shared `nanoId` column helper types it as non-null, hence the cast.
+				activeOrganizationId: null as unknown as Organisation.OrganisationId,
 			});
-
-			const [existingMembership] = await tx
-				.select({ id: organizationMembers.id })
-				.from(organizationMembers)
-				.where(
-					and(
-						eq(organizationMembers.userId, userId),
-						eq(organizationMembers.organizationId, organizationId),
-					),
-				)
-				.limit(1);
-
-			if (!existingMembership) {
-				await tx.insert(organizationMembers).values({
-					id: nanoId(),
-					userId,
-					organizationId,
-					// Lowest privilege role. Never owner/admin for self-signups.
-					role: "member",
-				});
-			}
 		});
 	} catch (error) {
 		if (error instanceof Error && error.message === "EMAIL_TAKEN") {

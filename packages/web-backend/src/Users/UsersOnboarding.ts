@@ -84,6 +84,28 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								.where(Dz.eq(Db.users.id, currentUser.id)),
 						);
 
+						// A self-signup is a REQUESTER: an account with no organization
+						// membership, waiting for an admin to add them. Onboarding must not
+						// hand them a workspace of their own - that is what unlocks
+						// recording and paid AI on the owner's bill. Admins and existing
+						// members pass.
+						if (!user.isAdmin) {
+							const [membership] = yield* db.use((db) =>
+								db
+									.select({ id: Db.organizationMembers.id })
+									.from(Db.organizationMembers)
+									.where(Dz.eq(Db.organizationMembers.userId, currentUser.id))
+									.limit(1),
+							);
+							if (!membership) {
+								return yield* Effect.die(
+									new Error(
+										"Unauthorized: account is not part of a workspace yet",
+									),
+								);
+							}
+						}
+
 						const organizationName =
 							data.organizationName.trim() || data.organizationName;
 						let organizationId =
@@ -261,6 +283,26 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.from(Db.users)
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
+
+					// Same gate as organizationSetup: "Skip to dashboard" also creates an
+					// org when the user has none, which is exactly the bypass a parked
+					// requester would reach for.
+					if (!user.isAdmin) {
+						const [membership] = yield* db.use((db) =>
+							db
+								.select({ id: Db.organizationMembers.id })
+								.from(Db.organizationMembers)
+								.where(Dz.eq(Db.organizationMembers.userId, currentUser.id))
+								.limit(1),
+						);
+						if (!membership) {
+							return yield* Effect.die(
+								new Error(
+									"Unauthorized: account is not part of a workspace yet",
+								),
+							);
+						}
+					}
 
 					const shouldUsePlaceholder = !user.onboardingSteps?.welcome;
 					const userName = shouldUsePlaceholder ? "Your name" : user.name;

@@ -743,5 +743,16 @@
       "cancel": "Cancel",
       "tooBigAudio": "This audio is too big to cut here, so the whole file was uploaded."
     }
+  },
+  "pendingAccess": {
+    "title": "Your request has been received",
+    "body": "Thanks for signing up. Your workspace isn't open yet — we'll get in touch shortly to set it up for you.",
+    "contact": "If you need this sooner, just reply to the email you signed up with.",
+    "signOut": "Sign out"
+  },
+  "dashboardLoadError": {
+    "title": "We couldn't load your workspace",
+    "body": "Something went wrong on our end while checking your account. This is usually temporary — try again in a moment.",
+    "retry": "Try again"
   }
 }

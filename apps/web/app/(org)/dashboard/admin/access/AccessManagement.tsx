@@ -14,6 +14,7 @@ import {
 } from "@cap/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Check,
 	Copy,
 	KeyRound,
 	Link2,
@@ -27,15 +28,18 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import {
+	approveRequest,
 	createUser,
 	generateInviteLink,
 	getInvites,
+	getPendingRequests,
 	getUsers,
 	resetUserPassword,
 	revokeInvite,
 	revokeUser,
 	toggleUserAdmin,
 } from "@/actions/admin/access";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 
 export function AccessManagement() {
 	return (
@@ -52,10 +56,194 @@ export function AccessManagement() {
 				</div>
 			</div>
 
+			<PendingRequestsSection />
 			<UsersSection />
 			<CreateUserSection />
 			<InviteLinksSection />
 		</div>
+	);
+}
+
+function PendingRequestsSection() {
+	const queryClient = useQueryClient();
+	const [dismissTarget, setDismissTarget] = useState<{
+		id: string;
+		name: string | null;
+		email: string;
+	} | null>(null);
+
+	const { data: requests, isLoading } = useQuery({
+		queryKey: ["admin-pending-requests"],
+		queryFn: () => getPendingRequests(),
+	});
+
+	const approveMutation = useMutation({
+		mutationFn: (userId: string) => approveRequest(userId),
+		onSuccess: (result) => {
+			if (result.success) {
+				toast.success("Request approved");
+				queryClient.invalidateQueries({ queryKey: ["admin-pending-requests"] });
+				queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+			} else {
+				toast.error(result.error);
+			}
+		},
+		onError: () => toast.error("Failed to approve request"),
+	});
+
+	const dismissMutation = useMutation({
+		mutationFn: (userId: string) => revokeUser(userId),
+		onSuccess: (result) => {
+			if (result.success) {
+				toast.success("Request dismissed");
+				queryClient.invalidateQueries({ queryKey: ["admin-pending-requests"] });
+				queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+				setDismissTarget(null);
+			} else {
+				toast.error(result.error);
+			}
+		},
+		onError: () => toast.error("Failed to dismiss request"),
+	});
+
+	if (isLoading || !requests?.length) {
+		return null;
+	}
+
+	return (
+		<>
+		<Card className="flex flex-col gap-4">
+			<div className="space-y-1">
+				<CardTitle>Pending Requests</CardTitle>
+				<CardDescription>
+					People who signed up and are waiting to be given access to a
+					workspace.
+				</CardDescription>
+			</div>
+
+			<div className="grid gap-3 sm:hidden">
+				{requests.map((r) => (
+					<div
+						key={r.id}
+						className="rounded-xl border border-gray-4 bg-gray-1 p-4"
+					>
+						<div className="min-w-0">
+							<p className="truncate text-sm font-semibold text-gray-12">
+								{r.name || "—"}
+							</p>
+							<p className="mt-1 break-all text-xs text-gray-10">
+								{r.email}
+							</p>
+						</div>
+						<div className="mt-3 text-xs text-gray-10">
+							{new Date(r.createdAt).toLocaleDateString()}
+						</div>
+						<div className="mt-4 grid grid-cols-2 gap-2">
+							<Button
+								variant="dark"
+								size="xs"
+								onClick={() => approveMutation.mutate(r.id)}
+								disabled={approveMutation.isPending || dismissMutation.isPending}
+								className="min-h-10"
+							>
+								<Check className="size-3" />
+								<span>Approve</span>
+							</Button>
+							<Button
+								variant="gray"
+								size="xs"
+								onClick={() =>
+									setDismissTarget({ id: r.id, name: r.name, email: r.email })
+								}
+								disabled={approveMutation.isPending || dismissMutation.isPending}
+								className="min-h-10"
+							>
+								<Trash2 className="size-3" />
+								<span>Dismiss</span>
+							</Button>
+						</div>
+					</div>
+				))}
+			</div>
+			<div className="hidden overflow-x-auto -mx-5 sm:block">
+				<table className="w-full text-sm">
+					<thead>
+						<tr className="border-b border-gray-4">
+							<th className="px-5 py-2 text-left font-medium text-gray-11">
+								Name
+							</th>
+							<th className="px-5 py-2 text-left font-medium text-gray-11">
+								Email
+							</th>
+							<th className="px-5 py-2 text-left font-medium text-gray-11">
+								Requested
+							</th>
+							<th className="px-5 py-2 text-right font-medium text-gray-11">
+								Actions
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						{requests.map((r) => (
+							<tr key={r.id} className="border-b border-gray-3 last:border-0">
+								<td className="px-5 py-3 text-gray-12">{r.name || "—"}</td>
+								<td className="px-5 py-3 text-gray-11">{r.email}</td>
+								<td className="px-5 py-3 text-gray-11 text-xs">
+									{new Date(r.createdAt).toLocaleDateString()}
+								</td>
+								<td className="px-5 py-3 text-right">
+									<div className="flex items-center justify-end gap-1">
+										<Button
+											variant="dark"
+											size="xs"
+											onClick={() => approveMutation.mutate(r.id)}
+											disabled={
+												approveMutation.isPending || dismissMutation.isPending
+											}
+										>
+											<Check className="size-3" />
+											<span className="hidden sm:inline ml-1">Approve</span>
+										</Button>
+										<Button
+											variant="gray"
+											size="xs"
+											onClick={() =>
+												setDismissTarget({ id: r.id, name: r.name, email: r.email })
+											}
+											disabled={
+												approveMutation.isPending || dismissMutation.isPending
+											}
+										>
+											<Trash2 className="size-3" />
+											<span className="hidden sm:inline ml-1">Dismiss</span>
+										</Button>
+									</div>
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+		</Card>
+		<ConfirmationDialog
+			open={!!dismissTarget}
+			icon={<Trash2 className="size-4" />}
+			title="Dismiss request"
+			description={
+				dismissTarget
+					? `Are you sure you want to dismiss ${dismissTarget.name || dismissTarget.email}'s request? This permanently disables their login, and they will not be able to sign up again with this email.`
+					: ""
+			}
+			confirmLabel={dismissMutation.isPending ? "Dismissing..." : "Dismiss"}
+			cancelLabel="Cancel"
+			confirmVariant="destructive"
+			loading={dismissMutation.isPending}
+			onConfirm={() => {
+				if (dismissTarget) dismissMutation.mutate(dismissTarget.id);
+			}}
+			onCancel={() => setDismissTarget(null)}
+		/>
+		</>
 	);
 }
 

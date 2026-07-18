@@ -13,11 +13,15 @@ import { ImageUpload, Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { assertMayProvisionWorkspace } from "@/lib/access/workspace-provisioning";
 import { runPromise } from "@/lib/server";
 
 export async function createOrganization(formData: FormData) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
+	// A membership-less self-signup must not be able to provision itself a
+	// workspace and start spending storage/AI on the owner's bill.
+	await assertMayProvisionWorkspace(user);
 
 	// Extract the name from the FormData
 	const name = formData.get("name") as string;
