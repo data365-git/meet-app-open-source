@@ -3,6 +3,55 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## CODEX MEETING RECORDER DEEP RESEARCH / CLAUDE PLAN — 2026-07-18
+
+Codex traced the current dirty recorder work across both capture contexts, the MV3 service worker/retry queue, web upload routes, `Videos`, and R2 cleanup. No app behavior or production state was changed in this research pass.
+
+- Current in-flight extension tests pass 59/59 and the extension build passes, but four cross-layer blockers remain.
+- “Permanently discard” currently calls `/api/video/delete`, which is a seven-day soft delete, not permanent deletion.
+- Offline discard clears local upload evidence without retaining a durable server-cleanup retry.
+- `displaySurface: "monitor"` is only a picker hint; meeting mode does not validate the returned surface.
+- Capture-context Pause/Resume acknowledgements are improved, but popup controls remain fire-and-forget and the persistent recorder page has no Pause/Resume.
+- Binding decisions preserved: keep both capture modes; full-screen may proceed only after the existing explicit no-audio waiver plus persistent warning; tab-only fails closed.
+
+Implementation plan: `docs/plans/2026-07-18-meeting-recorder-final-hardening.md`
+
+Claude task: `CODEX_TO_CLAUDE_MEETING_RECORDER_FINAL_FIX_2026-07-18.md`
+
+**NEXT:** Claude implements the plan in RED-to-GREEN waves without overwriting the active dirty work. Codex then reviews the diff and reruns gates. Production readiness remains blocked until the exact packaged candidate passes the real two-person Meet, pause interval, offline restart/finalize, offline permanent-discard cleanup, tab-only remote-voice, and wrong-surface rejection gate.
+
+---
+## CODEX QA RUN 9 — 2026-07-18 — RECORDING + UX/UI DEEP AUDIT: NOT PRODUCTION-READY
+
+Codex audited the frozen read-only candidate `94af12d`, compared the dirty main checkout without treating it as release proof, and inspected older live production. Full evidence is in `docs/qa/run-9/`.
+
+- Frozen extension tests passed 42/42, but two High product defects remain outside that coverage.
+- High: `Record Meet tab only` can silently fall back to video-only, so a successful file can lack remote voices.
+- High: uploading `Cancel upload` is not a true abort/discard; it can return to idle without clearing server multipart state or retry work.
+- Medium: Pause/Resume ignores delivery failure and can make UI state disagree with actual capture state.
+- UX: the persistent recorder tab has no Pause/Resume, meeting copy becomes `Record Instruction`, and critical states lack keyboard/live-region support.
+- Live desktop public playback advanced and paused cleanly; summary/tasks/transcript/text rendered. Mobile remains unverified.
+- The dirty comparison tree passed 48 extension tests, 42 focused web recording tests, and extension build, but fresh root typecheck failed. It is not a frozen release candidate.
+
+**NEXT:** fix the two High findings and Pause/Resume truth, freeze a clean candidate, rerun gates, then execute the real Meet → restart/offline recovery → dashboard playback-to-end device gate.
+
+---
+## CODEX QA RUN 8 — 2026-07-18 — NOT PRODUCTION-READY
+
+Codex independently inspected the dirty `qa-fixes` working tree and live `https://data365.duckdns.org` without changing app code or production state. Full evidence is in `docs/qa/run-8/`.
+
+- Live public playback is healthy: the known 52:51 video loaded and advanced to 32.32 seconds without a media error.
+- Fresh gates: typecheck passed; extension tests 42/42; extension build passed; Turbopack build passed.
+- Release gates are not reliable yet: the repeated full web suite produced 6 health-readiness failures (the focused file then passed 7/7), and the production webpack build did not finish within 15 minutes.
+- New High findings: one admin password-reset path does not revoke active sessions; an unignored reusable admin auth-state file exists locally; Stripe credit idempotency is raceable if Stripe is enabled.
+- Existing High product risk remains: Meet-tab-only can silently fall back to video-only.
+- Live production is older than this tree and does not expose the newer global security headers.
+- The dirty working tree changed during QA because another writer was active; freeze one release candidate and rerun all gates before relying on these results.
+- Mobile visual proof and the real three-minute Meet → dashboard → play-to-end device gate remain unverified.
+
+**NEXT:** fix/review the High findings and deterministic release gates, then run the real device gate before deployment.
+
+---
 ## ⭐ OWNER DECISIONS — infra & data (2026-07-18, SESSION i) — BINDING
 
 1. **Domain: STAY on the free `*.duckdns.org` for now.** Owner explicitly declined buying a domain at this stage. Consequence to remember: no mail provider can be verified on it (so transactional email stays unavailable — fine, the access model needs none), and it must be revisited before any wider/commercial launch. Do NOT re-raise this before then.
@@ -40,6 +89,54 @@ The Railway → Contabo/Coolify migration was painful. Owner's directive: **buil
 **⛔ OWNER TODO — THE RELEASE GATE, now SHRUNK to ~3 minutes ALONE (was a maximal checklist restated unchanged across five handoffs, and died five times):** load unpacked `apps/browser-extension/dist` (v0.3.2) → start a solo Google Meet → record ~3 min → stop → open the dashboard → **the recording appears and PLAYS to the end**. That single path exercises what R1-R11 actually fix ("captured bytes must survive and finalize"). No guest, no network drop, no second device needed.
 
 **▶ NEXT (blocking, do not skip under shipping pressure):** step 2 of the road below — **Fable AND Codex re-audit independently against current HEAD**. The SESSION-h audits predate R6-R11 and everything above.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION j, LATEST) — READ THIS FIRST
+
+🎯 **GOAL (unchanged):** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
+
+**STATUS: NOT production-ready.** Four independent audits today (Fable adversarial ×2, Codex live QA, Codex UX/UI, Codex deep-research) all said so, and they converged rather than contradicting — which is why the findings are trusted.
+
+### ✅ COMMITTED + PUSHED this session (branch `qa-fixes`; prod is still `f2e64a6`)
+- `0327eea` meeting audio guarantee moved from volatile SW state into recorder-tab URL params (a picker-cancel + retry silently downgraded the recording to mic-only — the owner's actual bug).
+- `94af12d` four PROVED recording-loss holes at the entry/exit seams (F1 `RECORDER_STARTED` hijack, F2 tail un-durabled before its PUT, F3 startup resume racing the drain, F4 idle tab answering a broadcast STOP). **Note: three of the FIRST attempts at these were worse than the bugs** — caught by review, fixed before commit.
+- `592af96` cron route helpers moved out of the route file (latent **production-build failure**) + js-cookie 3.0.5→3.0.8.
+- `6f9a11c` + `cabe1b6` route-export guard test — teeth proven by sabotage; also catches `export default` and `export *`.
+- `255472e` BOTH admin password-reset paths now revoke sessions AND API keys (twin defect; `revokeUser` was fixed earlier and its two siblings missed).
+
+### 🔬 UNCOMMITTED, UNDER ADVERSARIAL REVIEW when the session ended
+`apps/browser-extension/**` (api.ts, sw.ts, upload.ts, offscreen/recorder.ts, popup.*, recorder-page.ts, recorder.html, new `shared/client-audio.ts`) — the two HIGH fixes:
+1. tab-only mode no longer silently falls back to video-only (shared `tabAudioStatus`, gates on `readyState === "live" && !muted`),
+2. "Cancel upload" split into "Close — upload continues" vs two-step "Permanently discard".
+Plus conditional PAUSE/RESUME acks and meeting-mode copy. Extension tests 59/59, tsc dropped 53→2 errors (three files became ES modules — **that claim needs independent confirmation**).
+**A Fable review of exactly this diff was in flight and its verdict was never seen. Do not commit it without re-running that review.**
+
+### 🚨 CODEX DEEP-RESEARCH — FOUR BLOCKERS THE ABOVE WORK DOES NOT SOLVE
+Full doc: `C:\Users\mirko\Documents\Codex\2026-07-18\files-mentioned-by-the-user-devor\outputs\USTOZ_MEETING_RECORDER_DEEP_RESEARCH_AND_CLAUDE_PLAN_2026-07-18.md` (contains a ready-to-paste implementation prompt).
+1. **"Permanently discard" is a LIE** — it calls `/api/video/delete`, which soft-deletes into a **7-day Trash**. The fix written to cure a false promise makes a false promise. Needs a real owner-authorized endpoint: storage-first, database-last, idempotent.
+2. **Offline discard has no durable retry** — the local trace is cleared but nothing re-attempts the server cleanup. Needs one queued `discard` task surviving Chrome restart, no duplicates, UI showing only `Deleted` or `Delete queued; will retry`.
+3. **`Entire Screen` is only a HINT** — `displaySurface: "monitor"` is a request, not a guarantee. If the user picks a tab or window, nothing validates it. Meeting mode must read the returned track's `displaySurface`, close the stream and re-ask if it is not `monitor`. **This may be what the owner hit.**
+4. **Pause/Resume still partly fire-and-forget** — the popup does not await the reply, and the always-open recorder page has no Pause/Resume at all.
+
+Binding constraints from that doc: keep BOTH capture modes · keep the full-screen no-audio waiver with a persistent warning · tab-only fails closed · no `desktopCapture` · no audio-energy detection · **do not claim tab-strip mute behaviour without a real-device proof**.
+
+### ⚠️ ALSO OPEN (found, not fixed)
+- **The web test suite is FLAKY** — an independent run saw 6 failures then green with no code change. Until this is diagnosed, "all tests pass" is weak evidence. Not yet investigated.
+- `apps/web/.auth/admin-storage-state.json` holds a REAL admin session, untracked but **not gitignored** — one `git add .` from being committed.
+- Stripe credit idempotency is raceable if Stripe is ever enabled.
+- Accessibility gaps in the recorder (focus, live regions, non-semantic modal, no reduced-motion); language is split (site Uzbek, popup English, recorder mixed); mobile unverified.
+- 5 sweep streams are in **`git stash@{0}` ("sweep-needs-fixes")** — account-erasure (would have deleted OTHER tenants' spaces/folders — do not restore blind), health fail-closed (reintroduced the rejected un-healing 503), CI gates (its new jobs are red on the current tree), portability docs (its DR install snippet installs no cron), and the earlier F5 attempt. Their orphaned test files are parked at `C:\Users\mirko\AppData\Local\Temp\claude\sweep-orphan-tests`.
+- Uncommitted non-extension files in the tree: `.env.example`, `DEPLOY.md`, `OPERATIONS.md`, `RAILWAY_ENV.md`, `docs/RUNBOOK.md`, `railway.json` DELETED — all from the portability stream, reviewed ACCEPT_AFTER_FIXES, **not yet committed**.
+- `_audit-frozen-94af12d` is a frozen worktree pinned at `94af12d` for Codex to audit without racing the live tree. Remove with `git worktree remove` when done.
+
+### ✅ SETTLED — do not re-litigate
+- The AI-chat rate limiter is NOT bypassable: Traefik has no `trustedIPs` configured, so it strips client-supplied `X-Forwarded-For`. The audit's suggested `[0]`→`.pop()` change is **wrong for this deployment**. Revisit only if `trustedIPs` is ever set or a CDN is put in front.
+- Opera is NOT the cause of the missing client audio (the owner reproduced it in Chrome).
+
+### ⛔ OWNER-ONLY, still open
+- **The real-device gate** (the one thing no test can replace): a TWO-PERSON Meet where the remote person says something unique and it is audible in playback; pause freezes the timer and drops that interval; offline stop → Chrome restart → finalizes; tab-only remote audio; offline discard leaves nothing behind; deliberately picking a tab in meeting mode is REFUSED.
+- Firewall: a lockout-safe plan exists (Contabo panel firewall, not UFW — Docker bypasses UFW). Needs owner approval; the panel is the un-blockable rollback channel.
+- Deploy. Domain stays on free duckdns (owner decided).
 
 ---
 ## 🔴 FABLE HEART AUDIT (2026-07-18, vs HEAD `0327eea`) — VERDICT: **NOT SOUND, do not ship**
