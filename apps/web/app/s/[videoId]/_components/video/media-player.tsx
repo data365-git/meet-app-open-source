@@ -28,6 +28,7 @@ import {
 	PictureInPicture2Icon,
 	PictureInPictureIcon,
 	PlayIcon,
+	PlusIcon,
 	RefreshCcwIcon,
 	RepeatIcon,
 	RewindIcon,
@@ -62,6 +63,11 @@ import {
 	normalizePlaybackSpeed,
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
+import {
+	ALL_LANGUAGES,
+	LANGUAGE_LABELS,
+	type TranscriptLanguageOptions,
+} from "../LanguagePicker";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
@@ -3446,10 +3452,12 @@ interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	enhancedAudioEnabled?: boolean;
 	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+	transcriptLanguages?: TranscriptLanguageOptions;
 }
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const t = useTranslations("mediaPlayer");
+	const shareT = useTranslations("share");
 	const {
 		open,
 		defaultOpen,
@@ -3463,6 +3471,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		enhancedAudioStatus,
 		enhancedAudioEnabled,
 		setEnhancedAudioEnabled,
+		transcriptLanguages,
 		...settingsProps
 	} = props;
 
@@ -3656,6 +3665,71 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 										</DropdownMenuItem>
 									);
 								})}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
+				{transcriptLanguages && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger>
+							<span className="flex-1">{shareT("languageMenu")}</span>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent>
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => transcriptLanguages.onSelect("base")}
+							>
+								{transcriptLanguages.baseLanguage
+									? LANGUAGE_LABELS[transcriptLanguages.baseLanguage]
+									: shareT("languageOriginal")}
+								{transcriptLanguages.selected === "base" && <CheckIcon />}
+							</DropdownMenuItem>
+							{ALL_LANGUAGES.map((lang) => {
+								if (lang === transcriptLanguages.baseLanguage) return null;
+								const isAvailable = transcriptLanguages.available.includes(lang);
+								const isGenerating =
+									transcriptLanguages.generatingLanguage === lang;
+
+								if (!isAvailable && !transcriptLanguages.canGenerate) {
+									return null;
+								}
+
+								if (isGenerating) {
+									return (
+										<DropdownMenuItem
+											key={lang}
+											disabled
+											className="justify-between"
+										>
+											{LANGUAGE_LABELS[lang]}
+											<Loader2Icon className="animate-spin size-3.5" />
+										</DropdownMenuItem>
+									);
+								}
+
+								if (isAvailable) {
+									return (
+										<DropdownMenuItem
+											key={lang}
+											className="justify-between"
+											onSelect={() => transcriptLanguages.onSelect(lang)}
+										>
+											{LANGUAGE_LABELS[lang]}
+											{transcriptLanguages.selected === lang && <CheckIcon />}
+										</DropdownMenuItem>
+									);
+								}
+
+								return (
+									<DropdownMenuItem
+										key={lang}
+										className="justify-between"
+										onSelect={() => transcriptLanguages.onGenerate(lang)}
+									>
+										{LANGUAGE_LABELS[lang]}
+										<PlusIcon className="size-3.5" />
+									</DropdownMenuItem>
+								);
+							})}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}

@@ -9,11 +9,12 @@
    import (same pattern as ai-chat.css) since DockableVideo wraps ShareVideo's
    already-built player tree and can't pass a `docked` prop into it. */
 
-/* In-player LanguagePicker overlay (ShareVideo.tsx, "absolute right-3 top-3
-   z-10" — not editable from here, targeted by its exact Tailwind class
-   combo) and the playback-status pill (CapVideoPlayer.tsx) — both collide
-   with the mini's own expand/× chips in the cramped mobile width. */
-[data-docked="true"] .right-3.top-3.z-10,
+/* The playback-status pill (CapVideoPlayer.tsx) collides with the mini's own
+   expand/× chips in the cramped mobile width.
+   (The old in-player LanguagePicker overlay used to be hidden here too via its
+   ".right-3.top-3.z-10" class combo. That overlay is gone — the transcript
+   language picker now lives inside the player's settings menu, which is
+   already hidden while docked by the control-bar rule further down.) */
 [data-docked="true"] [data-slot="playback-status-badge"] {
 	display: none !important;
 }

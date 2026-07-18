@@ -32,7 +32,7 @@ import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { DockableVideo } from "./DockableVideo";
 import { GenerateAiPanel } from "./GenerateAiPanel";
-import { detectShareLanguage, LanguagePicker } from "./LanguagePicker";
+import { detectShareLanguage } from "./LanguagePicker";
 import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
@@ -672,17 +672,6 @@ export const ShareVideo = forwardRef<
 					}`}
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
-					<div className="absolute right-3 top-3 z-10">
-						<LanguagePicker
-							baseLanguage={baseLanguage}
-							available={available}
-							selected={selectedLanguage}
-							onSelect={setSelectedLanguage}
-							canGenerate={canGenerate}
-							generatingLanguage={generatingLanguage}
-							onGenerate={handleGenerateTranslation}
-						/>
-					</div>
 					{isActivelyRecording ? (
 						<div className="relative h-full overflow-hidden rounded-xl bg-black">
 							<CapVideoPlayer
@@ -755,6 +744,15 @@ export const ShareVideo = forwardRef<
 							}
 							isAudio={data.metadata?.isAudio}
 							videoName={data.name}
+							transcriptLanguages={{
+								baseLanguage,
+								available,
+								selected: selectedLanguage,
+								onSelect: setSelectedLanguage,
+								canGenerate,
+								generatingLanguage,
+								onGenerate: handleGenerateTranslation,
+							}}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

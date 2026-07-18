@@ -40,6 +40,7 @@ import {
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
 import { VideoPreviewGif } from "./VideoPreviewGif";
+import type { TranscriptLanguageOptions } from "./LanguagePicker";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -139,6 +140,7 @@ interface Props {
 	chapters?: { startSec: number; title: string }[];
 	isAudio?: boolean;
 	videoName?: string;
+	transcriptLanguages?: TranscriptLanguageOptions;
 }
 
 export function CapVideoPlayer({
@@ -171,6 +173,7 @@ export function CapVideoPlayer({
 	chapters = [],
 	isAudio = false,
 	videoName,
+	transcriptLanguages,
 }: Props) {
 	const t = useTranslations("share");
 	const getProgressStatusText = (
@@ -993,6 +996,7 @@ export function CapVideoPlayer({
 							// enhancedAudioStatus={enhancedAudioStatus}
 							// enhancedAudioEnabled={enhancedAudioEnabled}
 							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+							transcriptLanguages={transcriptLanguages}
 							/>
 							<MediaPlayerPiP />
 							<MediaPlayerFullscreen />
