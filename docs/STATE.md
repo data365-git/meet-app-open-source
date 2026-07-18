@@ -3,6 +3,36 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION h) — FABLE **+ CODEX** RE-AUDITED THE HEART; 6 MORE SAVE-LOSS BUGS FIXED. READ FIRST.
+
+🎯 **GOAL (unchanged):** production-ready for the IT team. #1 = **a meeting must NEVER fail to record.**
+
+**WHAT HAPPENED:** owner called meeting-record "the heart of the project" and asked for BOTH Fable and Codex to review it. Both ran independently against HEAD (after R1/R2/R4) and **both returned STILL BROKEN** — converging on the same defects, which is why they were trusted and fixed. All six below are committed on `qa-fixes`, each with a regression test **proven RED first**.
+
+- **R6 `a640bff` (CRITICAL, both models):** the flat `MAX_ATTEMPTS = 6` + 256s backoff gave every queued item a **~10-minute death clock**. A 10-min WiFi drop mid-meeting dead-lettered a part (R4 then correctly blocks completion → whole 2h meeting lost); a 10-min server outage after a meeting dead-lettered the `complete` item, declaring the recording lost **while every byte sat safely in R2**. Now kind-aware: `PART_MAX_ATTEMPTS = 30` (~1.9h), `FINALIZE_MAX_ATTEMPTS = 400` (~28h), both still bounded.
+- **R7 `becee42` (MAJOR, both):** `handleChunk`'s two post-PUT continuations checked only `kind === "recording"`, not videoId/uploadId. CANCEL and RECORDER_STARTED write state outside `enqueueRecorder`, so cancel-mid-PUT + start-a-new-meeting wrote the OLD upload's part into the NEW recording → foreign/non-sequential part list that can never complete = new meeting lost. Added the identity guard `recordCompletedPart` already had.
+- **R8 `6d7dc3b` (MAJOR, both):** `sendControlWithRetry` swallowed total delivery failure, so STOP / Meet-ended answered `{ok:true}` while the recorder never stopped. With a dead offscreen doc nothing ever emits `RECORDER_STOPPED` → stuck in "recording" forever, uploaded parts never completed, and CANCEL (the user's next move) destroys them. Now returns a delivered flag and falls back to `finalizeRecording()`.
+- **R9 `62bcffa` (CRITICAL, Codex):** `FinishingState` persisted only a videoId, so a crash during completeMultipart destroyed the data needed to retry — startup could only say "may have completed; otherwise re-record". Now carries uploadId + parts and `resumeInterruptedFinishing()` re-queues the finalize on startup (UI still released so new recordings work; drain flips it to "complete" with the share link).
+- **R10 `748d2f6` (CRITICAL, Codex):** a `chrome.storage.local.set()` throw (quota/IO) unwound `handleChunk` **after** the full parts were sliced out of the buffer — never uploaded, never queued = silent 5 MiB mid-video hole (R2 accepts gaps). The persist is now non-fatal.
+- **R11 `963772c` (owner-raised, web recorder):** crossing the 128 MiB in-flight cap threw a fatal "Upload could not keep up" and destroyed an otherwise-healthy recording on a slow uplink. Now backpressure (bytes stay buffered, finalize loops); only a >512 MiB total backlog still fails loudly.
+
+**🧪 GATES:** extension **27** tests (was 19) · web **906** · web tsc **0** · extension tsc: no new errors (pre-existing `recorder-page.ts`/`sw.ts` cast debt — the extension is NOT tsc-gated in CI, noted in RUNBOOK §7).
+
+**🔍 TWIN CHECK (done, clean):** the web recorder (`instant-mp4-uploader.ts`) does NOT share R1/R2/R4 — different architecture (in-page, single `parts` array, sorted complete, fail-fast). Its equal-size invariant is correct (fixed 16 MiB parts, smallest part always highest partNumber). Web recorder = instruction videos; **meetings = the extension.**
+
+**⚖️ ACCEPTED, NOT FIXED (owner decisions — do NOT re-raise):** R3 crash-mid-upload loses the in-flight ~5 MiB slice (needs a process crash at the exact instant); R5 ~48 GiB / ~24–50 h single-recording cap. Both documented in RUNBOOK §7.
+
+**✅ ALSO CONFIRMED SAFE by both models:** the equal-size/length guarantee itself (`takeFixedSizeParts` — neither could break it, so a **2-hour meeting is fine**); ETag `RESOLVE_SERVER_SIDE` really is resolved server-side via `listParts`; the developer-SDK `/complete` is unreachable for extension videos; `inMemoryBuffer` stays < 5 MiB.
+
+**🔨 DEPLOY-READY, NOT DEPLOYED:** `dist/` + `apps/web/public/365-extension.zip` rebuilt with ALL fixes (verified in both bundle and zip). **prod is still `f2e64a6`; qa-fixes HEAD = `963772c`.**
+
+**⛔ OWNER TODO — THE RELEASE GATE (unchanged, needs a LAPTOP + real Meet):** device-test v0.3.2 from `chrome://extensions` → Developer mode → Load unpacked → `apps/browser-extension/dist/`, then a real Meet: no-client-audio confirm → records; mute tab → banner + recording continues; close tab → reopen banner + continues; one-click whole screen; **finish a 2-3-min+ recording → it appears in the dashboard and PLAYS.** Nothing ships to the team until this passes.
+
+**▶ DEPLOY when the gate passes (I can run it):** `git push origin qa-fixes` → `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'CT=$(cat /root/.ct); curl -s -X POST -H "Authorization: Bearer $CT" -H "Content-Type: application/json" http://localhost:8000/api/v1/deploy -d "{\"uuid\":\"pokroz1qrj8wfc82bl63ns2c\"}"'` → poll `docker ps` image tag + `/api/health`. Build ~30 min.
+
+**✅ /CLEAR-SAFE:** everything committed + pushed (`963772c`). Nothing mid-edit.
+
+---
 ## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION g) — FABLE AUDITED "RECORDING NEVER LOST" → BROKEN → 3 SAVE-LOSS BUGS FIXED. READ FIRST.
 
 🎯 **GOAL (unchanged, owner-set):** production-ready for the owner's IT team. The #1 thing "ready" MEANS: **a meeting must NEVER fail to record.** Rank everything against that.
