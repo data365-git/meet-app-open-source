@@ -235,6 +235,41 @@ function computeNextPartNumberForUploading(
 	return maxPartNumber + 1;
 }
 
+/**
+ * (H1) Decoded byte length of a base64 payload, without decoding it. Part
+ * payloads are multi-megabyte, so materialising them just to measure them
+ * would be wasteful — base64 is a pure size transform, so the count is exact.
+ */
+function base64DecodedLength(base64: string): number {
+	const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+	return (base64.length / 4) * 3 - padding;
+}
+
+/**
+ * (H1) Bytes of THIS upload that are already durable in the retry queue.
+ * A part whose PUT failed is persisted whole in chrome.storage.local, so its
+ * bytes are exactly as recoverable as an uploaded part's — the viability
+ * check in finalizeUpload must count them or it declares a real recording
+ * "too short" and strands them (see the comment at the call site).
+ */
+async function queuedPartBytesForUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<number> {
+	const queue = await getRetryQueue();
+	let bytes = 0;
+
+	for (const item of queue) {
+		if (item.kind !== "part") continue;
+		const payload = getPartRetryPayload(item);
+		if (!payload) continue;
+		if (payload.videoId !== videoId || payload.uploadId !== uploadId) continue;
+		bytes += base64DecodedLength(payload.partDataBase64);
+	}
+
+	return bytes;
+}
+
 async function getRetryQueue(): Promise<RetryItem[]> {
 	const result = await chrome.storage.local.get(RETRY_QUEUE_KEY);
 	return (result[RETRY_QUEUE_KEY] as RetryItem[] | undefined) ?? [];
@@ -692,7 +727,19 @@ export async function finalizeUpload(): Promise<void> {
 	// a running counter that also includes bytes from a buffer that could have
 	// been evicted before persistence caught up — using it here would let a
 	// recording with genuinely-lost tail bytes pass the viability check.
-	const durableBytes = uploadedBytes + inMemoryBuffer.length;
+	//
+	// (H1) Queued part payloads are durable too — they live in
+	// chrome.storage.local, not just in RAM. Omitting them lost recordings
+	// outright: stop while offline and every full part sits in the retry queue
+	// with uploadedBytes still 0, so a recording whose pending buffer happens to
+	// hold less than MIN_VIABLE_BYTES at stop time was declared "too short" and
+	// flipped to a terminal error. The drain would then upload the queued
+	// megabytes while nothing was left to complete the multipart with — the
+	// meeting was gone despite every byte being safe.
+	const durableBytes =
+		uploadedBytes +
+		inMemoryBuffer.length +
+		(await queuedPartBytesForUpload(videoId, uploadId));
 
 	const MIN_VIABLE_BYTES = 10 * 1024; // header-only mp4 is ~1.2KB; a real recording is far larger
 	if (durableBytes < MIN_VIABLE_BYTES) {

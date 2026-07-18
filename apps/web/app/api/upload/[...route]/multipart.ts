@@ -33,6 +33,41 @@ const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
 
+/**
+ * (H3) True when a storage failure means the multipart upload no longer
+ * exists. S3/R2 answer NoSuchUpload for an upload that was aborted AND for one
+ * that already completed — and "already completed" is exactly what a lost
+ * completion response leaves behind. Errors arrive wrapped (StorageError ->
+ * S3Error -> the AWS error), so walk the cause chain.
+ */
+function isMissingMultipartUploadError(error: unknown): boolean {
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+
+	while (current && typeof current === "object" && !seen.has(current)) {
+		seen.add(current);
+		const candidate = current as {
+			name?: unknown;
+			Code?: unknown;
+			message?: unknown;
+			cause?: unknown;
+		};
+
+		if (
+			candidate.name === "NoSuchUpload" ||
+			candidate.Code === "NoSuchUpload" ||
+			(typeof candidate.message === "string" &&
+				candidate.message.includes("NoSuchUpload"))
+		) {
+			return true;
+		}
+
+		current = candidate.cause;
+	}
+
+	return false;
+}
+
 const abortRequestSchema = z
 	.object({
 		uploadId: z.string(),
@@ -461,7 +496,44 @@ app.post(
 					);
 
 					return { result, formattedParts };
-				});
+				}).pipe(
+					Effect.catchAll((completeError) => {
+						// (H3) Completion must be idempotent. Storage can assemble the
+						// object and still lose the response (network drop, gateway
+						// timeout); the client then retries with the same uploadId and
+						// gets NoSuchUpload — from listParts on the extension's
+						// placeholder-ETag path, or from complete itself. Reporting 500
+						// forever makes EVERY retry fail until the client dead-letters a
+						// meeting whose bytes are all safely in storage: the worst
+						// failure this product has. So probe for the finished object
+						// under this user-scoped key and, if it is there with real
+						// content, carry on down the success path — which also runs the
+						// DB and processing side-effects the lost response skipped.
+						// Anything else (including a still-open upload that merely
+						// erred) keeps failing, so the client retries against a live
+						// multipart instead of being told a lie.
+						if (!isMissingMultipartUploadError(completeError))
+							return Effect.fail(completeError);
+
+						return bucket.headObject(fileKey).pipe(
+							Effect.flatMap((head) =>
+								(head.ContentLength ?? 0) > 0
+									? Effect.logWarning(
+											`Multipart upload ${uploadId} no longer exists, but ${fileKey} is already assembled (ContentLength=${head.ContentLength}) — reconciling as an already-completed upload.`,
+										)
+									: Effect.fail(completeError),
+							),
+							Effect.map(() => ({
+								result: { Location: undefined },
+								formattedParts: parts.map((part) => ({
+									PartNumber: part.partNumber,
+									ETag: part.etag,
+								})),
+							})),
+							Effect.catchAll(() => Effect.fail(completeError)),
+						);
+					}),
+				);
 
 				return yield* Effect.gen(function* () {
 					console.log(
@@ -475,7 +547,7 @@ app.post(
 					// request instead of proceeding — otherwise we'd mark the upload
 					// complete in the DB while the underlying file may not exist
 					// (a DB-row-without-file / "NoSuchKey" bug).
-					yield* bucket.headObject(fileKey).pipe(
+					const headResult = yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((headResult) =>
 							Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
@@ -489,6 +561,24 @@ app.post(
 							Effect.logError(`Unable to verify object: ${headError}`),
 						),
 					);
+
+					// (H5) Storage is the only trustworthy source of the stored size.
+					// The browser extension declares size: 0 for every part, so the
+					// client sum records 0 bytes of usage and makes the quota
+					// unenforceable. The object is already assembled by this point, so
+					// a mismatch is logged rather than rejected — failing here would
+					// throw away a recording that is safely stored, which is never the
+					// right trade.
+					const storedBytes = headResult.ContentLength ?? incomingBytes;
+					if (
+						headResult.ContentLength !== undefined &&
+						incomingBytes > 0 &&
+						headResult.ContentLength !== incomingBytes
+					) {
+						yield* Effect.logWarning(
+							`Client declared ${incomingBytes} bytes for ${fileKey} but storage holds ${headResult.ContentLength} — recording the storage value.`,
+						);
+					}
 
 					if (isRawRecorderUpload(subpath)) {
 						yield* db.use((db) =>
@@ -514,8 +604,8 @@ app.post(
 									db
 										.update(Db.videoUploads)
 										.set({
-											uploaded: incomingBytes,
-											total: incomingBytes,
+											uploaded: storedBytes,
+											total: storedBytes,
 											updatedAt: new Date(),
 										})
 										.where(

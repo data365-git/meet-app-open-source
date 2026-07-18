@@ -1422,3 +1422,133 @@ describe("moveToDeadLetter drain guard (fix #2b: dead-lettering an old item must
 		}
 	});
 });
+
+// ── H1: durable bytes sitting in the retry queue must count as "viable" ─────
+// Stopping a recording while offline leaves every full part in the retry queue
+// (durable in chrome.storage.local) with uploadedBytes still 0. If finalize
+// only counts uploaded bytes + the pending buffer, a recording whose buffer
+// happens to hold less than MIN_VIABLE_BYTES at stop time is declared "too
+// short" and flipped to a terminal error — while megabytes of its real video
+// sit queued. The drain then uploads those parts and nothing ever completes
+// the multipart, so the meeting is lost for good.
+
+describe("finalizeUpload viability (H1 queued bytes are durable too)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("does not declare a recording 'too short' when its bytes are queued for retry, and finishes it once the network returns", async () => {
+		const { handleChunk, finalizeUpload, retryPendingUploads } = await import(
+			"./upload"
+		);
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-h1",
+			uploadId: "upload-h1",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		let offline = true;
+		let completeMultipartCalls = 0;
+		let recordingCompleteCalls = 0;
+		const uploadedBodies: Uint8Array[] = [];
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+
+				if (offline) throw new TypeError("Failed to fetch");
+
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					const body = init?.body;
+					uploadedBodies.push(
+						body instanceof Uint8Array
+							? body
+							: new Uint8Array(
+									await new Response(body as BodyInit).arrayBuffer(),
+								),
+					);
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: `"etag-${uploadedBodies.length}"` },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeMultipartCalls += 1;
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					recordingCompleteCalls += 1;
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		// One full 5 MiB part (its PUT fails while offline -> queued, durable)
+		// plus a 4 KB tail, which is BELOW the 10 KB viability floor on its own.
+		const TAIL_BYTES = 4096;
+		const chunk = new Uint8Array(MIN_PART_SIZE + TAIL_BYTES);
+		for (let i = 0; i < chunk.length; i++) chunk[i] = i % 256;
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		// Stop while still offline.
+		await finalizeUpload();
+
+		// The queued part holds 5 MiB of real, durable video — this recording is
+		// emphatically not "too short". The old behaviour set kind:"error" here.
+		const midState = await getState();
+		expect(midState.kind).toBe("uploading");
+
+		// Network returns; the alarm-driven drain must now finish the recording.
+		offline = false;
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.now() + 2000);
+
+		await retryPendingUploads();
+		await retryPendingUploads();
+
+		expect(completeMultipartCalls).toBe(1);
+		expect(recordingCompleteCalls).toBe(1);
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+
+		// Every captured byte reached storage — nothing was stranded.
+		const uploadedBytes = uploadedBodies.reduce((sum, b) => sum + b.length, 0);
+		expect(uploadedBytes).toBe(MIN_PART_SIZE + TAIL_BYTES);
+	});
+});
