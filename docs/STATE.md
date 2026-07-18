@@ -104,7 +104,25 @@ The Railway → Contabo/Coolify migration was painful. Owner's directive: **buil
 - `6f9a11c` + `cabe1b6` route-export guard test — teeth proven by sabotage; also catches `export default` and `export *`.
 - `255472e` BOTH admin password-reset paths now revoke sessions AND API keys (twin defect; `revokeUser` was fixed earlier and its two siblings missed).
 
-### 🔬 UNCOMMITTED, UNDER ADVERSARIAL REVIEW when the session ended
+### ✅ LATE-SESSION (committed after the block below was first written)
+- `cdf521b` — **the two HIGH findings, now closed and committed.** Tab-only fails closed via one shared `shared/client-audio.ts` rule both recorders call (not a copy). "Cancel upload" split into "Close — upload continues" vs two-step "Permanently discard". **And the discard is finally permanent**: it used to call `/api/video/delete`, a SOFT delete keeping the media seven days. Behind that sat two more defects — `Videos.permanentlyDelete` existed with ZERO callers (dead code documenting a Trash "delete now" that does not exist), and it deleted the DB row BEFORE the objects, so a storage failure orphaned media and a repeat call 404'd. Now storage-first, database-last, idempotent, exposed at `/api/video/delete-permanent`. Also: the `DISCARD_UPLOAD` tail reset state to idle unconditionally and could stomp a NEW live recording (PROVED); the offscreen watchdog missed a mute-while-paused; Pause/Resume persisted undelivered state; and the route test matched a SUBSTRING of the permanent path so it passed either way.
+- `255472e` both admin password-reset paths revoke sessions AND API keys.
+- `6f9a11c`/`cabe1b6` route-export guard (a latent production-build failure that every local "tsc 0" was blind to).
+- `081831d` this handoff + the three Codex reports copied into `docs/plans/` + `apps/web/.auth/` gitignored (it holds a REAL admin session).
+- `d350b1b` and earlier: see the list further down.
+
+**Gates at handoff: web tsc 0 · web 1049 passed / 26 skipped · extension 61 · EOL diffstats identical.** `dist/` rebuilt and `delete-permanent` verified present in the bundle.
+
+### 🔻 TWINS FOUND, NOT FIXED — highest-value next work
+Each was found by asking "who else does this same job?", never by a reference search:
+- **`apps/web/app/api/desktop/[...route]/video.ts:356-378`** carries the IDENTICAL delete bug just fixed — hard-deletes rows then objects, so a storage failure orphans media; also not idempotent.
+- **`apps/web/actions/account/delete-account.ts` deletes NO videos and NO R2 objects at all.** Account deletion leaves media in storage indefinitely — a real erasure/privacy gap, and the owner has already decided the policy (real deletion + a typed "delete my all data" confirmation).
+- **No 7-day purge job exists.** `grep purge` finds only comments, and `apps/web/app/api/cron/` has no purge route — so trashed videos are never actually purged and their media is retained forever. The Trash feature is half-built.
+
+### ⚠️ RESIDUAL on the discard fix (known, low severity, not fixed)
+If the discard resolves while state already moved to `complete`/`error` for the SAME upload, the `stillOurs` guard correctly leaves state alone — but the UI then shows "Recording saved!" with a share link to a video that was just deleted, or an error telling the user to re-record something already gone. No data loss; a stale, misleading terminal state.
+
+### 🔬 SUPERSEDED — the block below described this work while it was still uncommitted
 `apps/browser-extension/**` (api.ts, sw.ts, upload.ts, offscreen/recorder.ts, popup.*, recorder-page.ts, recorder.html, new `shared/client-audio.ts`) — the two HIGH fixes:
 1. tab-only mode no longer silently falls back to video-only (shared `tabAudioStatus`, gates on `readyState === "live" && !muted`),
 2. "Cancel upload" split into "Close — upload continues" vs two-step "Permanently discard".
