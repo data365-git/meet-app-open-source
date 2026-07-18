@@ -3,6 +3,9 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+> ⚠️ **THE BLOCK DIRECTLY BELOW IS SUPERSEDED — scroll to "/CLEAR HANDOFF (SESSION j, LATEST)" for the current truth.**
+> Codex wrote it against the dirty tree at "59/59 tests, four blockers open". Three of those four were closed and committed afterwards (`cdf521b`): permanent discard is now a real storage-first/database-last idempotent erase at `/api/video/delete-permanent`, tab-only fails closed, and Pause/Resume no longer persists undelivered state. Kept for its evidence and its device-gate checklist, which remain valid.
+
 ## CODEX MEETING RECORDER DEEP RESEARCH / CLAUDE PLAN — 2026-07-18
 
 Codex traced the current dirty recorder work across both capture contexts, the MV3 service worker/retry queue, web upload routes, `Videos`, and R2 cleanup. No app behavior or production state was changed in this research pass.
@@ -112,6 +115,11 @@ The Railway → Contabo/Coolify migration was painful. Owner's directive: **buil
 - `d350b1b` and earlier: see the list further down.
 
 **Gates at handoff: web tsc 0 · web 1049 passed / 26 skipped · extension 61 · EOL diffstats identical.** `dist/` rebuilt and `delete-permanent` verified present in the bundle.
+
+### 📦 UNCOMMITTED IN THE TREE AT HANDOFF (deliberate, not forgotten)
+From the portability stream, reviewed **ACCEPT_AFTER_FIXES** — its documented DR install snippet installs no cron, so committing it as-is would ship a false recovery procedure:
+`.env.example` · `DEPLOY.md` · `OPERATIONS.md` · `RAILWAY_ENV.md` · `docs/RUNBOOK.md` · `railway.json` DELETED · `docs/CODEX_TASK_meeting-record-audit_2026-07-18.md`.
+Fix the cron snippet, then commit. Everything else in the tree is untracked scratch.
 
 ### 🔻 TWINS FOUND, NOT FIXED — highest-value next work
 Each was found by asking "who else does this same job?", never by a reference search:
