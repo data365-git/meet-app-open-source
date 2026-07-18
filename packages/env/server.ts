@@ -84,7 +84,7 @@ function createServerEnv() {
 			CLOUDFLARE_R2_PUBLIC_URL: z.string().optional(),
 
 			/// Settings
-			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
+			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(false).describe(
 				"Should videos be public or private by default",
 			),
 			CAP_ALLOWED_SIGNUP_DOMAINS: z

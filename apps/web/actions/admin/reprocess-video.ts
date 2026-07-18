@@ -1,22 +1,13 @@
 "use server";
 
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
+import { requireAdmin } from "@/lib/admin/require-admin";
 import { after } from "next/server";
 import { adminReprocessVideoWorkflow } from "@/workflows/admin-reprocess-video";
-
-async function requireAdmin() {
-	const user = await getCurrentUser();
-	if (!user || user.email !== MESSENGER_ADMIN_EMAIL) {
-		throw new Error("Unauthorized");
-	}
-	return user;
-}
 
 function parseVideoId(input: string) {
 	const trimmed = input.trim();

@@ -1,6 +1,5 @@
 import type { MessengerAgent } from "@cap/database/schema";
 
-export const MESSENGER_ADMIN_EMAIL = "richie@cap.so";
 export const MESSENGER_ANON_COOKIE = "cap-messenger-anon-id";
 export const MESSENGER_DEFAULT_KNOWLEDGE_TAG = "cap-support-knowledge";
 

@@ -5,7 +5,6 @@ import {
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
@@ -13,16 +12,8 @@ import { S3Bucket, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
-import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
+import { requireAdmin } from "@/lib/admin/require-admin";
 import { runPromise } from "@/lib/server";
-
-async function requireAdmin() {
-	const user = await getCurrentUser();
-	if (!user || user.email !== MESSENGER_ADMIN_EMAIL) {
-		throw new Error("Unauthorized");
-	}
-	return user;
-}
 
 async function getVideoOrThrow(videoId: string) {
 	const [video] = await db()

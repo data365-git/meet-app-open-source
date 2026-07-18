@@ -6,6 +6,7 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export async function POST(
@@ -16,6 +17,11 @@ export async function POST(
 		const user = await getCurrentUser();
 		if (!user) {
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
+		}
+
+		// Paid AI spend is admin-only, same gate as generate/continue-paid/translate.
+		if (!canUseAI(user)) {
+			return Response.json({ error: AI_ACCESS_DENIED_CODE }, { status: 403 });
 		}
 
 		const { videoId } = (await props.params) as { videoId: Video.VideoId };

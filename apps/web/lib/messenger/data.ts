@@ -10,7 +10,7 @@ import {
 } from "@cap/database/schema";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { cookies } from "next/headers";
-import { MESSENGER_ADMIN_EMAIL, MESSENGER_ANON_COOKIE } from "./constants";
+import { MESSENGER_ANON_COOKIE } from "./constants";
 
 const anonCookieOptions = {
 	httpOnly: true,
@@ -23,7 +23,7 @@ const anonCookieOptions = {
 export const getViewerContext = async () => {
 	const [user, cookieStore] = await Promise.all([getCurrentUser(), cookies()]);
 	const anonymousId = cookieStore.get(MESSENGER_ANON_COOKIE)?.value ?? null;
-	const isAdmin = user?.email === MESSENGER_ADMIN_EMAIL;
+	const isAdmin = user?.isAdmin === true;
 
 	return {
 		user,

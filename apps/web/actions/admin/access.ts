@@ -5,6 +5,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
+	authApiKeys,
 	invites,
 	users,
 	organizations,
@@ -163,11 +164,16 @@ export async function revokeUser(userId: string) {
 		return { success: false as const, error: "User not found." };
 	}
 
-	// Soft-disable by clearing passwordHash (prevents login) and bumping authSessionVersion (invalidates active sessions)
-	await db()
-		.update(users)
-		.set({ passwordHash: null, authSessionVersion: sql`${users.authSessionVersion} + 1` })
-		.where(eq(users.id, userId as User.UserId));
+	// Soft-disable by clearing passwordHash (prevents login), bumping authSessionVersion
+	// (invalidates active sessions), and deleting all API/extension keys (prevents
+	// cak_... bearer auth from surviving revocation). Atomic: all-or-nothing.
+	await db().transaction(async (tx) => {
+		await tx
+			.update(users)
+			.set({ passwordHash: null, authSessionVersion: sql`${users.authSessionVersion} + 1` })
+			.where(eq(users.id, userId as User.UserId));
+		await tx.delete(authApiKeys).where(eq(authApiKeys.userId, userId as User.UserId));
+	});
 
 	return { success: true as const };
 }
