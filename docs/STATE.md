@@ -3,6 +3,56 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ⭐ OWNER DECISIONS — infra & data (2026-07-18, SESSION i) — BINDING
+
+1. **Domain: STAY on the free `*.duckdns.org` for now.** Owner explicitly declined buying a domain at this stage. Consequence to remember: no mail provider can be verified on it (so transactional email stays unavailable — fine, the access model needs none), and it must be revisited before any wider/commercial launch. Do NOT re-raise this before then.
+2. **Account deletion = REAL deletion, with a hard confirmation gate.** Owner rejected soft-delete/grace-period. Data is actually erased; the safety net is friction, not retention: require the user to TYPE an exact confirmation phrase (e.g. "delete my all data") before anything is destroyed — so nobody wipes their account by misclicking. This answers audit finding H13: the erasure workflow must inventory and purge recordings, storage objects, transcripts, AI data, comments, analytics and API keys — not just the user row (`apps/web/actions/account/delete-account.ts:32-39` currently deletes only membership/session/OAuth/user).
+3. **Firewall: owner asked for an independent check first** (Codex or Fable) rather than acting on Claude's word alone — correct instinct, since a wrong rule locks everyone out of the VPS.
+
+## 🔁 STANDING REQUIREMENT — SERVER PORTABILITY (owner, 2026-07-18)
+
+The Railway → Contabo/Coolify migration was painful. Owner's directive: **build so that changing servers is never that painful again.** Treat host-portability as a real requirement, not a nice-to-have — no hidden coupling to one provider, everything needed to stand the app up elsewhere must be written down and reproducible. Judge future infra choices against "how hard is it to move off this?"
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION i) — CODEX AUDIT ACTED ON; 8 HOLES CLOSED, 2 STREAMS REJECTED. READ FIRST.
+
+🎯 **GOAL (unchanged):** production-ready for the IT team. #1 = **a meeting must NEVER fail to record.**
+
+**WHAT HAPPENED:** owner brought a Codex production-readiness review (`C:\Users\mirko\Documents\Codex\2026-07-18\g\outputs\USTOZ_PRODUCTION_READINESS_REVIEW_2026-07-18.md`, verdict NOT PRODUCTION-READY). Every claim acted on was first re-verified against the real code — the auditor was right on most, overstated on some (8080 is dead, not exposed; C4 only covers ABSENT storage config, present-but-wrong already 503s; "readiness gate" is a stretch, no deploy gate exists at all).
+
+**✅ COMMITTED + PUSHED on `qa-fixes` (prod is still `f2e64a6`):**
+- **`79e01ca`** — four privilege/exposure holes: hardcoded `richie@cap.so` admin gate (upstream Cap.so leftover; open signup meant anyone could register it and overwrite ANY video via a presigned URL) → DB `users.isAdmin`; `revokeUser` left `authApiKeys` intact so a removed employee kept full API access incl. video delete → now deleted in the same transaction; `retry-ai` had NO `canUseAI` gate so any video owner could trigger paid Gemini spend → gated; videos defaulted PUBLIC → private (migration 0037, column default only, existing rows untouched).
+- **`c0a35f0`** — `.dockerignore` was 4 lines while the builder does `COPY . .`: local `.env`, `.git` and deploy secret worksheets went into the builder layer and remote cache. Also the `WEB_URL` build-arg fallbacks still pointed at the dead Railway host.
+- **`b390e3a`** — global security headers (HSTS, nosniff, Referrer-Policy, Permissions-Policy) with carve-outs for `/embed`, `/s`, `/c`, `/login`. **Nonce CSP deliberately excluded** — breakage-prone, tracked separately. ⚠️ No header yet observed on a real response: **curl after deploy**.
+- **`c7efcda`** — H1 (queued retry bytes now count toward startup viability; offline-stop + restart could mark a valid recording "too short" and strand durable bytes) and H3 (completion is now idempotent: HEAD + reconcile on NoSuchUpload instead of turning every error into a 500 and dead-lettering a meeting that already exists in R2). Also declares `vitest.config.ts testTimeout: 20000` — measured 1-in-8 false failures from real 2.8-4.5s backoff waits against a 5s default.
+- **`6f4ef3d`** — the access model (see OWNER PRODUCT DECISIONS below). Biggest hole: every self-signup joined the OWNER'S org. Also closed two side doors an adversarial review found — `/onboarding` "Skip to dashboard" and the `createOrganization` action both let a parked requester self-provision a workspace and spend storage/AI on the owner's bill.
+
+**❌ REJECTED, reverted, do NOT resurrect as-is:**
+- **ops-fail-closed (C4/H11)** — the fix shipped a NEW readiness lie (`recordMigrationStatus("ok")` runs even though `runMigrations()` is a no-op unless `NEXT_PUBLIC_DOCKER_BUILD`, so it reports "ok" for migrations that never ran) and a **permanent un-healing 503 latch** on a slow-DB boot that the OLD code survived. One reviewer graded it FLAWED. Redo with: record ok only inside the Docker branch, and never latch connectivity-class errors.
+- **release-gates (H10)** — `build-web` was `continue-on-error: true` AND ran `next build --turbopack` while production builds `--webpack` + `output: standalone`. It neither blocked nor tested the real thing. Secret scan also masks a bad-regex exit 128 as "no match".
+
+**⚠️ NOT FIXED, stated honestly:** H5 (server trusts client sizes) — the stream CLAIMED it fixed; three reviewers and I each verified it did not. `storedBytes` is only read inside `isRawRecorderUpload(subpath)` and the extension hardcodes `result.mp4`, so the extension quota hole is untouched.
+
+**🧪 GATES at handoff:** web tsc **0** · web **984** passed / 26 skipped · extension **28**. EOL clean (normal and `-w` diffstats match).
+
+**🔍 METHOD NOTE worth keeping:** 5 parallel streams, each reviewed by 3 independent agents on distinct lenses (correctness / regression / honesty). **Only 1 of 5 passed 3/3.** Three streams reported "fixed" for things they had not fixed. Without the verify layer all three would have been committed — including the ops one, which could have taken production down. Adversarial review has now fired productively on every single occasion it has been run in this project.
+
+**⛔ OWNER TODO — THE RELEASE GATE, now SHRUNK to ~3 minutes ALONE (was a maximal checklist restated unchanged across five handoffs, and died five times):** load unpacked `apps/browser-extension/dist` (v0.3.2) → start a solo Google Meet → record ~3 min → stop → open the dashboard → **the recording appears and PLAYS to the end**. That single path exercises what R1-R11 actually fix ("captured bytes must survive and finalize"). No guest, no network drop, no second device needed.
+
+**▶ NEXT (blocking, do not skip under shipping pressure):** step 2 of the road below — **Fable AND Codex re-audit independently against current HEAD**. The SESSION-h audits predate R6-R11 and everything above.
+
+---
+## 🚦 AGREED ROAD TO PRODUCTION (owner, 2026-07-18) — follow this order, do not skip a step
+
+1. **Claude finishes the code fixes** (audit findings C1–C4, H1–H16, M1–M12 as scoped).
+2. **Fable AND Codex each re-audit production-readiness independently** — separately, neither seeing the other's report, same as the SESSION-h heart audit that both returned "STILL BROKEN" and was trusted precisely because they converged.
+3. **Only after both sign off** → Claude writes a step-by-step OWNER QA SCRIPT: one instruction at a time, each saying where to click, what should happen, and what "wrong" looks like. Owner is a non-programmer — no jargon, no batched steps.
+4. **Owner executes the human-only half**: real Google Meet capture on a laptop, real device playback, phone checks. Claude does everything a machine can do; the owner does only what genuinely needs hands and a real device.
+5. Deploy only after that.
+
+Owner's framing: *"qila oladiganingni sen qilasan"* — do not hand the owner a task a tool could have done. Manufactured busywork trains him to ignore the list.
+
+---
 ## ⭐ OWNER PRODUCT DECISIONS (2026-07-18, SESSION i) — BINDING, do NOT re-litigate
 
 Pinned during the Codex production-readiness review. These define the access/billing model:
