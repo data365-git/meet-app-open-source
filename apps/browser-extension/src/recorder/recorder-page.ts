@@ -755,6 +755,28 @@ function formatBytes(bytes: number): string {
 
 function handleStateChange(s: BroadcastState): void {
 	switch (s.kind) {
+		case "recording": {
+			// (F1) A recording is live somewhere else — this tab owns no capture
+			// (its own would have set `state`), which is exactly the leftover
+			// tab that used to sit at the idle view offering an inviting "Choose
+			// screen & start" for the whole of a meeting recording. Clicking it
+			// overwrote the live recording's state and orphaned the meeting's
+			// uploaded parts. The SW now refuses that start, but a button that
+			// appears to do nothing is just as confusing — so disable it and say
+			// plainly what is going on. The "idle" case below re-enables it when
+			// the SW resets.
+			if (!state) {
+				stopTimer();
+				showView("view-idle");
+				const startBtn = $("btn-start") as HTMLButtonElement | null;
+				if (startBtn) startBtn.disabled = true;
+				setIdleMsg(
+					"A recording is already in progress. Stop it before starting a new one.",
+					false,
+				);
+			}
+			break;
+		}
 		case "uploading": {
 			stopTimer();
 			const pct =
@@ -879,8 +901,31 @@ function wire(): void {
 			const s = msg.state as BroadcastState;
 			if (s) handleStateChange(s);
 		} else if (msg.type === "STOP_CAPTURE") {
-			stopRecording();
-			sendResponse({ ok: true });
+			// (F4) STOP / CANCEL / the Meet-ended auto-stop reach the offscreen
+			// path via chrome.runtime.sendMessage, which BROADCASTS to every
+			// extension context — including a leftover recorder tab sitting at the
+			// idle/complete/error view. With no capture of its own, that tab used
+			// to answer immediately with RECORDER_STOPPED (stopRecording's
+			// no-state branch), beating the offscreen document's real stop, which
+			// still has to flush its final chunks asynchronously. The SW finalized
+			// on the stale tab's reply and every late RECORDER_CHUNK was silently
+			// excluded — the last ~200-400ms plus anything in flight, lost on
+			// EVERY offscreen-path stop whenever an idle recorder tab existed.
+			// The offscreen twin already no-ops an idle stop
+			// (offscreen/recorder.ts) — match it.
+			// The ack must be conditional too. Acking without acting told
+			// sendControlWithRetry the STOP was delivered, so the R8 dead-offscreen
+			// fallback never fired and NOTHING emitted RECORDER_STOPPED: state stuck
+			// at "recording", multipart never completed, and the user's natural next
+			// move (CANCEL) destroys the recovery data. That traded a ~300ms tail for
+			// the whole meeting. Staying silent is the correct signal — Chrome
+			// resolves sendMessage from whichever listener DOES respond and only
+			// raises lastError when every listener closes unanswered, which is
+			// exactly what R8 is waiting for.
+			if (state) {
+				stopRecording();
+				sendResponse({ ok: true });
+			}
 		} else if (msg.type === "PAUSE_CAPTURE") {
 			if (state && state.recorder.state === "recording") {
 				state.recorder.pause();

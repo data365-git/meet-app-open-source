@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MIN_PART_SIZE, PART_MAX_ATTEMPTS } from "./upload";
+import { MIN_PART_SIZE, PART_MAX_ATTEMPTS, RETRY_ALARM_NAME } from "./upload";
 
 // ── Shared fake-chrome harness for sw.ts ────────────────────────────────────
 //
@@ -717,6 +717,135 @@ describe("R9 — persisted 'finishing' resumes instead of being written off", ()
 	});
 });
 
+// ── Fix 3: onStartup's "finishing" resume must release START_INSTRUCTION
+// immediately — never hold the availability lock behind the retry drain ────
+//
+// Awaiting the resume chain held "finishing" (isInProgress() === true) until
+// resumeInterruptedFinishing AND whatever was already ahead of it on
+// recorderQueue (the overdue retry alarm's drain, which exists precisely
+// because the queue is non-empty) both finished. Measured: the extension
+// refused to record a meeting right after its own restart. `resumed` is now a
+// pure predicate computed synchronously, and the queue WRITE is fire-and-forget
+// — so the state releases immediately while the queue write still lands.
+
+describe("Fix 3 — startup 'finishing' resume must not hold the availability lock behind the retry drain", () => {
+	it("answers START_INSTRUCTION ok:true immediately after restart even while the overdue alarm's drain is still in flight, and still queues the interrupted upload's complete", async () => {
+		const { captured, storage } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		// Crashed mid-completeMultipart: every byte is in R2, only the finalize
+		// call is left.
+		await setState({
+			kind: "finishing",
+			videoId: "vid-fix3",
+			uploadId: "upload-fix3",
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+		});
+
+		// A non-empty retry queue from an earlier, unrelated interruption — the
+		// overdue alarm exists precisely BECAUSE the queue is non-empty
+		// (setRetryQueue's alarm-lifecycle invariant), and at a real restart it
+		// fires around the same moment as onStartup.
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 1,
+						videoId: "vid-earlier-fix3",
+						uploadId: "upload-earlier-fix3",
+						partDataBase64: Buffer.from("earlier-bytes").toString("base64"),
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000, // already due
+				},
+			],
+		});
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-earlier"' },
+					});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		// Deterministically gate the FIRST capExtRetryQueue read — whichever of
+		// {the alarm's retryPendingUploads, the finishing branch's
+		// resumeInterruptedFinishing} reaches it first — so the recorderQueue
+		// chain is PROVABLY still draining when START_INSTRUCTION is checked,
+		// exactly like a real restart where the overdue alarm and onStartup both
+		// fire around the same moment (same technique as the P1.5 test above).
+		let gateRelease: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			gateRelease = resolve;
+		});
+		let delayNextRetryQueueRead = true;
+		const realGet = storage.get.bind(storage);
+		storage.get = (async (key: string) => {
+			const result = await realGet(key);
+			if (key === RETRY_QUEUE_KEY && delayNextRetryQueueRead) {
+				delayNextRetryQueueRead = false;
+				await gate;
+			}
+			return result;
+		}) as typeof storage.get;
+
+		expect(captured.alarm).toBeDefined();
+		expect(captured.startup).toBeDefined();
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		const startupPromise = captured.startup?.();
+
+		// Let the synchronous/microtask portion of both handlers run. Everything
+		// resolvable without the gate (including, in the fixed version, the
+		// "finishing" branch's own state release) completes here; the gated read
+		// keeps the recorderQueue chain itself parked on `gate`.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const resp = (await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+		})) as { ok: boolean; error?: string };
+
+		// The bug: with the awaited version, state was still "finishing" here and
+		// this answered "A recording is already in progress" — the extension
+		// refused to record a meeting immediately after its own restart.
+		expect(resp.ok).toBe(true);
+
+		gateRelease?.();
+		await startupPromise;
+		await flushAsync();
+
+		// The whole point of F3: the interrupted upload's "complete" still gets
+		// queued durably, even though the state release no longer waits for it.
+		const finalQueue =
+			(storage.store.get(RETRY_QUEUE_KEY) as Array<{
+				kind: string;
+				payload: Record<string, unknown>;
+			}>) ?? [];
+		expect(
+			finalQueue.some(
+				(item) =>
+					item.kind === "complete" &&
+					item.payload.videoId === "vid-fix3" &&
+					item.payload.uploadId === "upload-fix3",
+			),
+		).toBe(true);
+	});
+});
+
 // ── R8: if the stop command never reaches the recorder, STOP must finalize
 // anyway — otherwise the recording sits in "recording" forever and its already
 // uploaded parts are never completed ───────────────────────────────────────
@@ -1029,5 +1158,551 @@ describe("Guaranteed client audio survives a cleared arming record", () => {
 
 		expect(resp.required).toBe(true);
 		expect(resp.streamId).not.toBeNull();
+	});
+});
+
+// ── Adversarial audit F1-F4: "a meeting must NEVER fail to record" ─────────
+//
+// Four proved holes in the core guarantee. Each test below drives the REAL
+// handlers and fails on the pre-fix code.
+
+/** The offscreen document has no sender.tab at all — that absence is what
+ * distinguishes it from a recorder.html tab in the F1 ownership check. */
+const OFFSCREEN_SENDER = { url: "chrome-extension://fake/offscreen.html" };
+
+/** A live "Record Meet tab only" (offscreen path) meeting recording. The
+ * offscreen document owns the capture, so there is no recorderTabId. */
+function liveMeetingRecording() {
+	return {
+		kind: "recording" as const,
+		mode: "meeting" as const,
+		videoId: "vid-live-meeting",
+		uploadId: "upload-live-meeting",
+		startedAt: Date.now(),
+		parts: [{ PartNumber: 1, ETag: "etag-1" }],
+		nextPartNumber: 2,
+		totalBytes: MIN_PART_SIZE,
+		uploadedBytes: MIN_PART_SIZE,
+		meetingId: "meet-abc",
+		mime: "video/webm",
+		paused: false,
+	};
+}
+
+describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
+	/** Counts the calls that would MINT a second video/multipart on top of the
+	 * live one — the act that orphans the running meeting's uploaded parts. */
+	function stubInitializeUploadFetch() {
+		let createCalls = 0;
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/desktop/video/create")) {
+				createCalls += 1;
+				return jsonResponse({ id: "vid-hijack" });
+			}
+			if (url.includes("/api/upload/multipart/initiate")) {
+				return jsonResponse({ uploadId: "upload-hijack" });
+			}
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+		return () => createCalls;
+	}
+
+	it("refuses a stale idle recorder tab's start while a meeting is recording (the meeting's parts are never orphaned)", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveMeetingRecording());
+		const getCreateCalls = stubInitializeUploadFetch();
+
+		// The leftover recorder.html tab. It sits at the idle view with "Choose
+		// screen & start" ENABLED for the whole of an offscreen-path recording
+		// (recorder-page.ts handleStateChange had no "recording" case at all),
+		// so this is one ordinary click, not an exotic state.
+		const resp = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ tab: { id: 7 }, url: "chrome-extension://fake/recorder.html" },
+		)) as { ok: boolean };
+
+		expect(resp.ok).toBe(false);
+		// A second video/multipart must never even be minted: the live meeting's
+		// already-uploaded parts would be orphaned forever, its multipart never
+		// completed, with no error and no notification.
+		expect(getCreateCalls()).toBe(0);
+
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			expect(state.videoId).toBe("vid-live-meeting");
+			expect(state.uploadId).toBe("upload-live-meeting");
+		}
+	});
+
+	it("keeps the still-running meeting's chunks in ITS upload instead of interleaving them into a hijacked one", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveMeetingRecording());
+		stubInitializeUploadFetch();
+
+		await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ tab: { id: 7 }, url: "chrome-extension://fake/recorder.html" },
+		);
+
+		// The meeting recorder is still running and keeps emitting. handleChunk
+		// only checks kind === "recording", so after a successful hijack these
+		// bytes land in the NEW upload's buffer — two MediaRecorder streams
+		// interleaved into one object: old meeting lost AND new video corrupt.
+		const LATE = 4096;
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(LATE)),
+			index: 5,
+			mime: "video/webm",
+		});
+
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			expect(state.videoId).toBe("vid-live-meeting");
+			expect(state.totalBytes).toBe(MIN_PART_SIZE + LATE);
+		}
+	});
+
+	it("still accepts the normal start: the offscreen document reporting against an 'arming' state", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState({ kind: "arming", mode: "meeting", meetingId: "meet-ok" });
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/desktop/video/create")) {
+				return jsonResponse({ id: "vid-normal" });
+			}
+			if (url.includes("/api/upload/multipart/initiate")) {
+				return jsonResponse({ uploadId: "upload-normal" });
+			}
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		const resp = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			OFFSCREEN_SENDER,
+		)) as { ok: boolean };
+
+		// "arming" is not isInProgress(), so the guard never even looks at the
+		// sender here — both legitimate senders keep working unchanged.
+		expect(resp.ok).toBe(true);
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") expect(state.videoId).toBe("vid-normal");
+	});
+
+	it("STRICT: refuses even the recording's OWN recorder tab re-sending RECORDER_STARTED — no legitimate mid-recording re-send exists", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState({ ...liveMeetingRecording(), recorderTabId: 5 });
+		const getCreateCalls = stubInitializeUploadFetch();
+
+		// An earlier version tried to admit "the recording's own recorder tab"
+		// (sender tab id === state.recorderTabId), but the ownership test
+		// collapsed to `undefined === undefined` for every sender failing the
+		// extension-origin check — on the offscreen path (recorderTabId is also
+		// undefined there) that admitted content scripts and the popup, i.e. the
+		// exact hijack this guard exists to stop. Closing the hole costs nothing:
+		// both legitimate senders (offscreen/recorder.ts, recorder-page.ts) fire
+		// RECORDER_STARTED exactly once, inside their own start function, right
+		// before recorder.start() — no legitimate mid-recording re-send exists,
+		// from the owning tab or anyone else. And legitimate starts never even
+		// reach this guard: isInProgress() deliberately excludes "arming", and
+		// the cancel→RETRY / error→"Try again" paths always begin from
+		// "idle"/"error" — by the time a genuine RECORDER_STARTED lands, state is
+		// "arming", not "recording".
+		const owner = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ tab: { id: 5 }, url: "chrome-extension://fake/recorder.html" },
+		)) as { ok: boolean; error?: string };
+		expect(owner.ok).toBe(false);
+		expect(owner.error).toMatch(/already in progress/);
+		expect(getCreateCalls()).toBe(0);
+
+		// Any OTHER tab is refused identically — the rule is uniform, not
+		// sender-dependent.
+		const stranger = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ tab: { id: 6 }, url: "chrome-extension://fake/recorder.html" },
+		)) as { ok: boolean };
+		expect(stranger.ok).toBe(false);
+
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			expect(state.videoId).toBe("vid-live-meeting");
+		}
+	});
+});
+
+describe("F2 — the finalize tail stays durable until it is safely uploaded", () => {
+	it("keeps pendingBuffer on disk while the remainder PUT is in flight (an eviction mid-PUT must not lose the tail)", async () => {
+		const { captured, storage } = await freshSw();
+		const { setState } = await import("./state");
+
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			videoId: "vid-tail",
+			uploadId: "upload-tail",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: "etag-1" }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// A sub-part-size tail: it stays in the in-memory buffer, is persisted to
+		// pendingBuffer:<uploadId>, and is only ever uploaded by finalizeUpload.
+		const TAIL = 4096;
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(TAIL)),
+			index: 0,
+			mime: "video/webm",
+		});
+		const PENDING_KEY = "pendingBuffer:upload-tail";
+		expect(storage.store.has(PENDING_KEY)).toBe(true);
+
+		let pendingPresentDuringTailPut: boolean | undefined;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					// The remainder is on the wire RIGHT NOW. If the SW were evicted
+					// (or the browser died) at this instant — stopping on bad WiFi —
+					// the ONLY surviving copy of these bytes is the pending-buffer
+					// record. Clearing it BEFORE this point let a respawn's
+					// finalizeUpload find state "uploading" with an empty buffer,
+					// pass the viability check on uploadedBytes alone, and complete
+					// the multipart without the tail: "complete", share link issued,
+					// the meeting's last seconds silently gone.
+					pendingPresentDuringTailPut = storage.store.has(PENDING_KEY);
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-tail"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					return jsonResponse({ success: true, fileKey: "file" });
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await sendMessage(captured, { type: "RECORDER_STOPPED" });
+		await flushAsync();
+
+		expect(pendingPresentDuringTailPut).toBe(true);
+		// ...and it must still be cleaned up once the tail is durable elsewhere,
+		// so it can never leak or be re-uploaded on a later respawn.
+		expect(storage.store.has(PENDING_KEY)).toBe(false);
+	});
+});
+
+describe("F3 — startup finishing-resume must not race the retry drain", () => {
+	it("re-queues the interrupted 'complete' without a concurrent alarm drain clobbering it (the multipart really completes)", async () => {
+		const { captured, storage } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		await setState({
+			kind: "finishing",
+			videoId: "vid-fin",
+			uploadId: "upload-fin",
+			parts: [{ PartNumber: 1, ETag: "etag-1" }],
+		});
+
+		// A persisted, already-overdue retry alarm fires at browser startup too —
+		// and the alarm exists precisely when the queue is non-empty, which is
+		// exactly the situation a crashed finalize leaves behind.
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 1,
+						videoId: "vid-other",
+						uploadId: "upload-other",
+						partDataBase64: Buffer.from("other-part-bytes").toString("base64"),
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		let completeCallsForFin = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-other"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					const body = JSON.parse(String(init?.body)) as { uploadId?: string };
+					if (body.uploadId === "upload-fin") completeCallsForFin += 1;
+					return jsonResponse({ success: true, fileKey: "file" });
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		// Deterministically force the interleave rather than hoping for it: park
+		// the FIRST capExtRetryQueue read (the alarm drain's getRetryQueue) until
+		// AFTER the startup resume has read-modify-written the SAME key. The
+		// drain then writes back its stale snapshot — the classic lost update —
+		// unless the two are actually serialized through the one FIFO chain.
+		let gateRelease: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			gateRelease = resolve;
+		});
+		let delayNextRetryQueueRead = true;
+		const realGet = storage.get.bind(storage);
+		storage.get = (async (key: string) => {
+			const result = await realGet(key);
+			if (key === RETRY_QUEUE_KEY && delayNextRetryQueueRead) {
+				delayNextRetryQueueRead = false;
+				await gate;
+			}
+			return result;
+		}) as typeof storage.get;
+
+		expect(captured.alarm).toBeDefined();
+		captured.alarm?.({ name: "cap-retry-queue" });
+		const startupPromise = captured.startup?.();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		gateRelease?.();
+		await startupPromise;
+		await flushAsync();
+
+		// The re-queued "complete" must have survived the drain's write-back.
+		const queue =
+			(storage.store.get(RETRY_QUEUE_KEY) as Array<{
+				kind: string;
+				payload: Record<string, unknown>;
+				nextRetryAt: number;
+			}>) ?? [];
+		expect(
+			queue.some(
+				(item) => item.kind === "complete" && item.payload.uploadId === "upload-fin",
+			),
+		).toBe(true);
+
+		// ...and it must actually finish the recording once due, so the state's
+		// "we're completing it in the background" is a promise with something
+		// behind it instead of every byte sitting in R2 uncompleted forever.
+		for (const item of queue) {
+			item.nextRetryAt = Date.now() - 1000;
+		}
+		await storage.set({ [RETRY_QUEUE_KEY]: queue });
+		captured.alarm?.({ name: "cap-retry-queue" });
+		await flushAsync();
+
+		expect(completeCallsForFin).toBe(1);
+		expect((await getState()).kind).toBe("complete");
+	});
+});
+
+describe("F4 — an idle recorder tab must not answer a broadcast STOP", () => {
+	it("does not emit a spurious RECORDER_STOPPED that finalizes before the offscreen document has flushed its final chunks", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		const swOnMessage = captured.message;
+		expect(swOnMessage).toBeDefined();
+
+		// Load the REAL recorder page in this same fake-chrome world: a leftover
+		// recorder.html tab that never started a capture, so its `state` is null.
+		// (Every DOM lookup in the page is null-safe, so a stub this thin is
+		// enough to exercise its message handling.)
+		vi.stubGlobal("document", { getElementById: () => null });
+		vi.stubGlobal("window", { addEventListener: () => undefined });
+		vi.stubGlobal("location", { search: "" });
+		// Imported through a variable specifier: recorder-page.ts has no
+		// top-level import/export, so TypeScript classes it as a global script
+		// rather than a module and rejects a literal `import()` of it (TS2306).
+		// The runtime import is identical either way.
+		const recorderPagePath = "../recorder/recorder-page";
+		await import(recorderPagePath);
+		const pageOnMessage = captured.message;
+		expect(pageOnMessage).not.toBe(swOnMessage);
+
+		// chrome.runtime.sendMessage BROADCASTS to every extension context — that
+		// is exactly how the SW's sendToOffscreen reaches a stale recorder tab.
+		chrome.runtime.sendMessage = ((
+			message: unknown,
+			cb?: (r: unknown) => void,
+		) => {
+			pageOnMessage?.(message, {}, () => undefined);
+			const swReply = new Promise((resolve) => {
+				swOnMessage?.(message, OFFSCREEN_SENDER, resolve);
+			});
+			if (typeof cb === "function") swReply.then(cb);
+			return swReply;
+		}) as unknown as typeof chrome.runtime.sendMessage;
+
+		await setState({ ...liveMeetingRecording(), videoId: "vid-f4", uploadId: "upload-f4" });
+		let completedParts = 0;
+		stubFinalizeFetch((n) => {
+			completedParts = n;
+		});
+
+		// The popup's STOP for the offscreen path.
+		await new Promise((resolve) => swOnMessage?.({ type: "STOP" }, {}, resolve));
+		await flushAsync();
+
+		// The offscreen document has NOT reported its stop yet — a real
+		// MediaRecorder still has to flush its final chunks asynchronously. The
+		// SW must therefore still be recording. The stale tab answering for it
+		// used to win this race and finalize here.
+		const afterStop = await getState();
+		expect(afterStop.kind).toBe("recording");
+
+		// The real final flush: ~200-400ms of meeting that used to be silently
+		// excluded from the upload on EVERY offscreen-path stop.
+		const LATE = 4096;
+		await new Promise((resolve) =>
+			swOnMessage?.(
+				{
+					type: "RECORDER_CHUNK",
+					chunk: Array.from(new Uint8Array(LATE)),
+					index: 1,
+					mime: "video/webm",
+				},
+				OFFSCREEN_SENDER,
+				resolve,
+			),
+		);
+		const afterLateChunk = await getState();
+		expect(afterLateChunk.kind).toBe("recording");
+		if (afterLateChunk.kind === "recording") {
+			expect(afterLateChunk.totalBytes).toBe(MIN_PART_SIZE + LATE);
+		}
+
+		// Now the offscreen document's genuine stop.
+		await new Promise((resolve) =>
+			swOnMessage?.({ type: "RECORDER_STOPPED" }, OFFSCREEN_SENDER, resolve),
+		);
+		await flushAsync();
+
+		expect((await getState()).kind).toBe("complete");
+		// The flushed tail became its own part — the recording is whole.
+		expect(completedParts).toBe(2);
+	});
+});
+
+// ── Fix 1: the idle recorder tab's STOP_CAPTURE ack must be conditional too,
+// or a dead offscreen document's stop is falsely reported as delivered ──────
+//
+// F4 (above) proves the idle tab must not WIN the race against a still-live
+// offscreen stop. This proves the other half: when the offscreen document is
+// truly DEAD (crashed / never created) and the only OTHER listener on the
+// broadcast is an idle recorder tab, that tab's ack must not manufacture a
+// false "delivered" — otherwise sendControlWithRetry never sees a failure, R8's
+// dead-offscreen fallback never fires, and NOTHING ever finalizes the
+// recording: state stuck "recording" forever, multipart never completed, and
+// the user's natural next move (CANCEL) destroys the recovery data.
+
+describe("Fix 1 — dead offscreen + idle recorder tab: STOP must still finalize via R8", () => {
+	it("does not let a silent idle recorder tab manufacture a false STOP_CAPTURE delivery when the real offscreen document never answers", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		// Capture the SW's OWN listener BEFORE importing recorder-page.ts below —
+		// that import calls chrome.runtime.onMessage.addListener again and
+		// OVERWRITES captured.message with the page's listener (see F4 above).
+		const swOnMessage = captured.message;
+		expect(swOnMessage).toBeDefined();
+
+		await setState({
+			...liveMeetingRecording(),
+			videoId: "vid-fix1",
+			uploadId: "upload-fix1",
+		});
+
+		// A leftover recorder.html tab sitting idle — the same leftover tab from
+		// F1/F4, present for the whole of an offscreen-path meeting recording.
+		vi.stubGlobal("document", { getElementById: () => null });
+		vi.stubGlobal("window", { addEventListener: () => undefined });
+		vi.stubGlobal("location", { search: "" });
+		const recorderPagePath = "../recorder/recorder-page";
+		await import(recorderPagePath);
+		const pageOnMessage = captured.message;
+		expect(pageOnMessage).not.toBe(swOnMessage);
+
+		// chrome.runtime.sendMessage BROADCASTS to every extension context. The
+		// real offscreen document is DEAD here — it has no listener at all in
+		// this fake world — so the idle recorder tab is the ONLY one that could
+		// possibly answer. If it stays silent (the fix), nobody answers at all,
+		// matching real Chrome's "every listener closed unanswered" → lastError.
+		// If it still acks (the bug), the send falsely resolves as delivered.
+		chrome.runtime.sendMessage = ((
+			message: unknown,
+			cb?: (r: unknown) => void,
+		) => {
+			let answered = false;
+			pageOnMessage?.(message, {}, (r: unknown) => {
+				answered = true;
+				cb?.(r);
+			});
+			if (!answered) {
+				chrome.runtime.lastError = {
+					message:
+						"Could not establish connection. Receiving end does not exist.",
+				};
+				cb?.(undefined);
+				chrome.runtime.lastError = undefined;
+			}
+			return Promise.resolve(undefined);
+		}) as unknown as typeof chrome.runtime.sendMessage;
+
+		const getCompleteCalls = stubFinalizeFetch();
+
+		await new Promise((resolve) => swOnMessage?.({ type: "STOP" }, {}, resolve));
+		await flushAsync();
+
+		// The bug: an unconditional ack from the idle tab told sendControlWithRetry
+		// the STOP was delivered, so R8's dead-offscreen fallback never fired —
+		// nothing ever emitted RECORDER_STOPPED and the recording stayed
+		// "recording" forever.
+		const finalState = await getState();
+		expect(finalState.kind).not.toBe("recording");
+		expect(finalState.kind).toBe("complete");
+		expect(getCompleteCalls()).toBe(1);
 	});
 });

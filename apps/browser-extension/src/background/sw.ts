@@ -1037,6 +1037,53 @@ async function handleMessage(
 		case "RECORDER_STARTED": {
 			const mime = getString(msg, "mime") ?? "video/webm";
 			const state = await getState();
+			// (F1) This is the ONE message that WRITES the recording state, yet it
+			// was the only start path with no in-progress guard (START_INSTRUCTION
+			// / START_MEET / both nudge handlers all check isInProgress). A
+			// leftover recorder.html tab parked at the idle view — normal after a
+			// picker cancel/RETRY, and it STAYS idle for the whole of an
+			// offscreen-path meeting recording — could overwrite a LIVE
+			// recording's state with a new video: the meeting's uploaded parts are
+			// orphaned forever (multipart never completed) AND the still-running
+			// meeting recorder's chunks then land in the NEW upload's buffer
+			// (handleChunk only checks kind === "recording", and identity now
+			// matches), interleaving two MediaRecorder streams into one object.
+			// Old meeting lost and new video corrupt, both silently.
+			//
+			// Distinguishing the legitimate sender: a normal start never reaches
+			// here while isInProgress() — the state is "arming" (happy path) or
+			// idle/error/complete (the cancel→retry paths), none of which are
+			// in-progress — so BOTH legitimate senders (offscreen document and
+			// recorder page) pass untouched. Only a re-send from the recording's
+			// OWN recorder context is allowed through once a recording is live:
+			// the recorder page owns it when its sender tab id equals
+			// state.recorderTabId, and the offscreen document (which has no
+			// sender.tab at all) owns it exactly when the live recording carries
+			// no recorderTabId — so both sides compare as `undefined` only for
+			// the true owner. During "uploading"/"finishing" nothing may start:
+			// the recorder is already torn down, so there is no owner to re-send.
+			// STRICT: no re-send is admitted while a recording is in progress.
+			// An earlier version tried to admit "the recording's own recorder tab",
+			// but the ownership test collapsed to `undefined === undefined` for
+			// every sender failing the extension-origin check — on the offscreen
+			// path (where recorderTabId is also undefined) that admitted content
+			// scripts and the popup, i.e. the very hijack this guard exists to
+			// stop. Deleting the allowance closes that hole and costs nothing:
+			// both senders (offscreen/recorder.ts, recorder-page.ts) fire exactly
+			// once, inside their start function, right before recorder.start(), so
+			// no legitimate mid-recording re-send exists. Legitimate STARTS never
+			// reach here either — isInProgress deliberately excludes "arming", and
+			// the cancel->RETRY paths run from "idle"/"error".
+			if (isInProgress(state)) {
+				console.warn(
+					"[sw] RECORDER_STARTED refused: a recording is already in progress",
+				);
+				return {
+					ok: false,
+					error:
+						"A recording is already in progress. Stop it before starting a new one.",
+				};
+			}
 			const mode = state.kind === "arming" ? state.mode : "instruction";
 			const meetingId = state.kind === "arming" ? state.meetingId : undefined;
 			const tabId = state.kind === "arming" ? state.tabId : undefined;
@@ -1475,11 +1522,39 @@ chrome.runtime.onStartup.addListener(async () => {
 		// stillOurs guard accepts error + previousVideoId).
 		// (P1.2 / M5) A legacy persisted state carries no snapshot — nothing to
 		// resume from, so it keeps the original write-off message.
-		const resumed = await resumeInterruptedFinishing(
-			state.videoId,
-			state.uploadId,
-			state.parts,
+		// (F3) Routed through enqueueRecorder — the SAME serialization chain as
+		// the alarm's drain (chrome.alarms.onAlarm above) — because this was the
+		// only capExtRetryQueue writer left running unserialized. A persisted
+		// overdue retry alarm fires at browser startup too, and it exists
+		// precisely when the queue is non-empty, so its drain can be mid
+		// get→await→set while this addToRetryQueue read-modify-writes the same
+		// key: a classic lost update in which the re-queued "complete" is
+		// clobbered by the drain's stale write-back. Every byte would already be
+		// in R2 with the multipart never completed, while the state promises the
+		// user "we're completing it in the background" with nothing behind it.
+		// Do NOT await the chain here. Awaiting held the in-progress lock behind
+		// whatever was already queued — and at startup the overdue retry alarm
+		// (which exists precisely because the queue is non-empty) usually claims
+		// the chain first. Measured: state sat at "finishing", so START_INSTRUCTION
+		// answered "A recording is already in progress" and the extension REFUSED
+		// TO RECORD A MEETING — the owner's #1 requirement, broken by its own fix.
+		// It also never queued the "complete" it exists to queue (queueLen=1 across
+		// three restarts vs 2 before). `resumed` is a pure predicate of these
+		// arguments (see resumeInterruptedFinishing), so compute it here, release
+		// the state immediately, and let the queue WRITE stay serialized — which
+		// was F3's actual point.
+		// Residual, accepted for now: dying between this setState and the queued
+		// write loses the re-queue. The proper fix is a fine-grained mutex on
+		// capExtRetryQueue instead of the coarse recorder chain that also
+		// serializes multi-MiB uploads. Filed, deliberately not done here.
+		const resumed = !!(
+			state.uploadId &&
+			state.parts &&
+			state.parts.length > 0
 		);
+		void enqueueRecorder(() =>
+			resumeInterruptedFinishing(state.videoId, state.uploadId, state.parts),
+		).catch(() => {});
 		const nextState: ExtensionState = {
 			kind: "error",
 			reason: resumed

@@ -768,10 +768,6 @@ export async function finalizeUpload(): Promise<void> {
 	}
 
 	const remaining = drainBuffer();
-	// The buffer's bytes are now either about to be uploaded directly or
-	// handed to the retry queue (itself durable in chrome.storage.local) below
-	// — either way they no longer need the separate pending-buffer copy.
-	await clearPendingBuffer(uploadId);
 	if (remaining.length > 0) {
 		try {
 			const completedPart = await uploadPart(
@@ -803,6 +799,19 @@ export async function finalizeUpload(): Promise<void> {
 			);
 		}
 	}
+	// (F2) Cleared only NOW — after the remainder is either uploaded (and
+	// persisted by recordCompletedPart) or handed to the durable retry queue.
+	// It used to be cleared BEFORE the uploadPart above, and the old comment
+	// claiming the copy was "no longer needed" was false for exactly that
+	// window: with the remainder PUT in flight the pendingBuffer:<id> record is
+	// already gone, so an SW eviction / browser death mid-PUT (i.e. stopping on
+	// bad WiFi) leaves a respawn's finalizeUpload finding state "uploading" with
+	// an EMPTY buffer, passing the viability check on uploadedBytes alone, and
+	// completing the multipart with only the earlier parts — "complete", share
+	// link issued, the meeting's tail silently gone. Unlike R3 (a slice that was
+	// never durable), these bytes WERE on disk and the code deleted them before
+	// the network attempt.
+	await clearPendingBuffer(uploadId);
 
 	const queuedPartsResult = await retryQueuedPartsForUpload(
 		videoId,
