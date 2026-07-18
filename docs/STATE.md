@@ -42,6 +42,29 @@ The Railway → Contabo/Coolify migration was painful. Owner's directive: **buil
 **▶ NEXT (blocking, do not skip under shipping pressure):** step 2 of the road below — **Fable AND Codex re-audit independently against current HEAD**. The SESSION-h audits predate R6-R11 and everything above.
 
 ---
+## 🔴 FABLE HEART AUDIT (2026-07-18, vs HEAD `0327eea`) — VERDICT: **NOT SOUND, do not ship**
+
+Owner asked Fable AND Codex to independently re-audit "a meeting must NEVER fail to record" (step 2 of the road below). Fable's half is done. **Codex's half is NOT done** — the ready-to-paste brief is `docs/CODEX_TASK_meeting-record-audit_2026-07-18.md`; the two must stay independent, convergence is what makes a finding trustworthy.
+
+Fable did not merely reason — it **executed 4 attacks against the real modules** (scratch vitest outside the repo, driving the real `sw.ts`/`upload.ts`/`state.ts`). **4/4 succeeded while the repo's own 33 tests stayed green** — i.e. these are holes the existing suite structurally cannot see.
+
+**BEING FIXED NOW (F1-F4 handed to a subagent, RED-first tests required):**
+- **F1 CRITICAL** — `RECORDER_STARTED` (`sw.ts` ~1037) has NO `isInProgress` guard, though every other start path has one. A leftover `recorder.html` tab shows an inviting idle button during a live recording (because `recorder-page.ts` `handleStateChange` ~756-813 has **no `"recording"` case**). One click overwrites the live meeting's state: parts orphaned, multipart never completed, no error — and the still-running recorder's chunks then land in the NEW upload (`handleChunk` only checks `kind === "recording"`), interleaving two streams. Old meeting lost AND new video corrupt, both silently.
+- **F2 MAJOR** — `finalizeUpload` (`upload.ts` ~770-805) does `clearPendingBuffer()` BEFORE `uploadPart(remaining)`. The tail is un-durabled while its PUT is in flight; an SW eviction there → respawn completes with only earlier parts → "complete" + share link + silently truncated ending. NOT the accepted R3: that slice was never durable, this one was on disk and the code deleted it.
+- **F3 MAJOR** — `resumeInterruptedFinishing` is the only retry-queue writer not serialized through `enqueueRecorder` (`sw.ts:1478`, `onStartup`), racing the alarm drain that fires at the same moment. Lost update on `capExtRetryQueue` → every byte in R2, multipart never completed, state = error promising a background completion that no longer exists.
+- **F4 MAJOR** — `sendToOffscreen` broadcasts to every context; an idle recorder tab answers `STOP_CAPTURE` with an immediate `RECORDER_STOPPED` (`recorder-page.ts` ~736, ~881), beating the offscreen doc's async final flush → late chunks silently dropped on EVERY offscreen-path stop while any idle recorder tab exists. The twin already got this right (`offscreen/recorder.ts:285-287` no-ops); only the page misbehaves.
+
+**⚠️ FOUND, NOT YET FIXED — do not lose these:**
+- **F5 MAJOR (CONTENT)** — **"Record Meet tab only" is a guarantee-free twin.** Offered on every Meet tab (`popup.ts:258-273`) but has NONE of the guaranteed path's machinery: if audio+video `getUserMedia` fails it silently falls back to **video-only** (`offscreen/recorder.ts:117-128`) and reports full success. No liveness gate, no muted/ended watchdog, no mic-only banner, no confirm modal. A Chrome tab-mute mid-recording is warned about on the full-screen path and invisible here. This is the same class of defect the owner hit today, in the other path.
+- **M1** — in "uploading", the popup's only offered action is "Cancel upload" (`popup.ts:716-719`) and `CANCEL` unconditionally sets idle (`sw.ts:791`). During a stuck-offline upload whose bytes are all durable (P1.6 parks state at "uploading" for up to ~2 h), the user's only visible escape destroys the finalize, then burns ~400 attempts and ends in a FALSE "recording is lost" notification. `abortUpload` also never clears that upload's queue items nor aborts the server multipart → parts accumulate in R2.
+- **M2** — every browser restart while stuck "uploading" enqueues another duplicate snapshot-less "complete" (`sw.ts:1460-1467`, no dedupe); each fails for ~28 h and dead-letters with a false "lost" notification.
+- **M3** — `MEET_NUDGE_CAPTURE_READY` / `contentRecorderTabId` is dead code.
+
+**✅ WHERE CONFIDENCE IS REAL — Fable tried and COULD NOT break:** the part list (no gap / duplicate / out-of-order / unequal non-final part can reach `completeMultipart` — `takeFixedSizeParts` + M7 numbering + R4 dead-letter guard + P1.6 deferral + server `isSequentialPartList`); stale-snapshot clobbers in the live pipeline (R2/R7 identity guards hold, every writer except F3 goes through `enqueueRecorder`); crash mid-completeMultipart (R9 + H3 hold, and H3's headObject cannot false-positive since each recording gets a fresh videoId → fresh fileKey); stuck-forever states (R8, tab-closed, Meet-ended, part-exhaustion all resolve); the `0327eea` URL-param meeting guarantee itself; false "too short" (H1). **The engine is strong — the failures are all at the entry/exit seams.**
+
+**📱 NEEDS A REAL DEVICE (no test can prove these):** F4 — leave an idle recorder tab open, record tab-only 30 s, stop, compare video duration to the timer. F5 — Chrome-mute the Meet tab mid-recording, check the file has silent client audio with zero warning. F2 — throttle to ~1 Mbps, stop, kill Chrome during "Finishing", relaunch, check the ending. Plus mp4/h264 200 ms-slice concatenation playability on the team's actual Chrome version.
+
+---
 ## 🚦 AGREED ROAD TO PRODUCTION (owner, 2026-07-18) — follow this order, do not skip a step
 
 1. **Claude finishes the code fixes** (audit findings C1–C4, H1–H16, M1–M12 as scoped).
