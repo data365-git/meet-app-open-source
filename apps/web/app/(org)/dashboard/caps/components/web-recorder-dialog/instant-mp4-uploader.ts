@@ -8,6 +8,12 @@ const STREAM_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const MAX_PART_UPLOAD_ATTEMPTS = 3;
 const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
+// (R11) Hard ceiling on the WHOLE backlog (buffered + in-flight). Hitting
+// MAX_PENDING_UPLOAD_BYTES now applies backpressure instead of killing the
+// recording — a slow uplink or a brief network stall must not destroy a
+// recording that is otherwise fine. Only a backlog this large means the upload
+// genuinely cannot keep up, and failing loudly beats exhausting page memory.
+const MAX_TOTAL_BACKLOG_BYTES = 512 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
@@ -378,6 +384,26 @@ export class InstantRecordingUploader {
 				force && this.bufferedBytes <= STREAM_PART_SIZE_BYTES
 					? this.bufferedBytes
 					: STREAM_PART_SIZE_BYTES;
+
+			// (R11) Backpressure, not data loss: when the in-flight queue is full,
+			// leave these bytes buffered and flush them once uploads drain — the
+			// next chunk retries, and finalize loops until the buffer is empty.
+			// Previously this path threw a fatal "Upload could not keep up",
+			// destroying an otherwise-healthy recording on a slow uplink.
+			if (this.pendingUploadBytes + partSize > MAX_PENDING_UPLOAD_BYTES) {
+				if (
+					this.bufferedBytes + this.pendingUploadBytes >
+					MAX_TOTAL_BACKLOG_BYTES
+				) {
+					const error = this.markFatalError(
+						new Error("Upload could not keep up with recording"),
+					);
+					this.onOverflow?.(error);
+					throw error;
+				}
+				return;
+			}
+
 			const { part, remainingChunks, remainingBytes } =
 				this.takeBufferedPart(partSize);
 
@@ -826,8 +852,14 @@ export class InstantRecordingUploader {
 			this.totalRecordedBytes = options.finalBlob.size;
 		}
 
-		this.flushBuffer(true);
-		await this.waitForPendingUploads();
+		// (R11) flushBuffer can now stop early on backpressure, so keep flushing
+		// and draining until the buffer is fully handed to uploads. Each pass
+		// awaits the in-flight queue, which frees capacity for the next slice;
+		// a genuinely failing part rejects out of waitForPendingUploads.
+		do {
+			this.flushBuffer(true);
+			await this.waitForPendingUploads();
+		} while (this.bufferedBytes > 0);
 
 		if (options.finalBlob && this.parts.length === 0) {
 			await this.uploadFinalBlob(options.finalBlob);

@@ -776,8 +776,54 @@ describe("InstantRecordingUploader", () => {
 		).rejects.toBeInstanceOf(MultipartCompletionUncertainError);
 	});
 
-	it("surfaces upload overflow before multipart completion", async () => {
+	// (R11) Reaching the in-flight cap must NOT destroy the recording. It used
+	// to throw "Upload could not keep up with recording" the moment pending
+	// bytes crossed 128 MiB — a slow uplink or a brief stall killed an
+	// otherwise-healthy recording. Now the excess stays buffered (backpressure)
+	// and only a genuinely unbounded backlog fails loudly.
+	it("applies backpressure instead of losing the recording when uploads fall behind", async () => {
 		const onOverflow = vi.fn();
+		const onFatalError = vi.fn();
+		// Uploads never resolve, so pending bytes stay pinned at the cap.
+		MockXMLHttpRequest.setOutcomes(
+			Array.from({ length: 40 }, () => ({ type: "pending" as const })),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				makeJsonResponse({ presignedUrl: "https://uploads.example/part" }),
+			),
+		);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "video/webm;codecs=vp9,opus",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			onOverflow,
+			onFatalError,
+		});
+
+		const chunk = makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus");
+
+		expect(() => uploader.handleChunk(chunk, chunk.size)).not.toThrow();
+		expect(onOverflow).not.toHaveBeenCalled();
+		expect(onFatalError).not.toHaveBeenCalled();
+	});
+
+	it("still fails loudly when the backlog grows past the hard ceiling", async () => {
+		const onOverflow = vi.fn();
+		MockXMLHttpRequest.setOutcomes(
+			Array.from({ length: 80 }, () => ({ type: "pending" as const })),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				makeJsonResponse({ presignedUrl: "https://uploads.example/part" }),
+			),
+		);
 
 		const uploader = new InstantRecordingUploader({
 			videoId,
@@ -789,18 +835,18 @@ describe("InstantRecordingUploader", () => {
 			onOverflow,
 		});
 
-		const chunk = makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus");
-
-		expect(() => uploader.handleChunk(chunk, chunk.size)).toThrow(
-			"Upload could not keep up with recording",
-		);
-		expect(onOverflow).toHaveBeenCalledTimes(1);
-		await expect(
-			uploader.finalize({
-				durationSeconds: 20,
-				subpath: "raw-upload.webm",
-			}),
-		).rejects.toThrow("Upload could not keep up with recording");
+		// 512 MiB total-backlog ceiling: keep feeding 144 MiB chunks past it.
+		expect(() => {
+			let recorded = 0;
+			for (let i = 0; i < 6; i++) {
+				recorded += OVERFLOW_PART_BYTES;
+				uploader.handleChunk(
+					makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus"),
+					recorded,
+				);
+			}
+		}).toThrow("Upload could not keep up with recording");
+		expect(onOverflow).toHaveBeenCalled();
 	});
 
 	it("uploads large finalized blobs in multiple parts without hitting live overflow limits", async () => {
