@@ -821,6 +821,96 @@ describe("retry horizon for finalization (R6 outage must not lose a saved record
 	});
 });
 
+// ── R7: a part PUT that resolves after the user cancelled and started a NEW
+// recording must not poison the new recording's state ──────────────────────
+
+describe("handleChunk identity guard (R7 cross-recording poisoning)", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("does not write the old upload's part into a NEW recording started during the PUT", async () => {
+		const { handleChunk } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-old",
+			uploadId: "upload-old",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// While the old recording's part is mid-PUT, the user cancels and starts a
+		// NEW meeting (CANCEL / RECORDER_STARTED both write state outside
+		// enqueueRecorder, so this interleaving is real).
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					await setState({
+						kind: "recording",
+						mode: "instruction",
+						videoId: "vid-new",
+						uploadId: "upload-new",
+						startedAt: Date.now(),
+						parts: [],
+						nextPartNumber: 1,
+						totalBytes: 0,
+						uploadedBytes: 0,
+						mime: "video/webm",
+						paused: false,
+					});
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-old"' },
+					});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		const chunk = new Uint8Array(MIN_PART_SIZE);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("recording");
+		if (finalState.kind === "recording") {
+			// The bug: the old upload's part (and a bumped nextPartNumber) landed in
+			// the NEW recording, giving it a foreign, non-sequential part list that
+			// can never complete — the new meeting is lost.
+			expect(finalState.videoId).toBe("vid-new");
+			expect(finalState.parts).toHaveLength(0);
+			expect(finalState.nextPartNumber).toBe(1);
+		}
+	});
+});
+
 // ── M7: nextPartNumber for a persisted "uploading" state must not collide
 // with a gap in already-uploaded part numbers ──────────────────────────────
 

@@ -592,7 +592,20 @@ export async function handleChunk(
 			);
 
 			const freshState = await getState();
-			if (freshState.kind !== "recording") return;
+			// (R7) Identity guard, same as recordCompletedPart's. `kind` alone is
+			// not enough: CANCEL and RECORDER_STARTED write state outside
+			// enqueueRecorder, so a cancel-then-start-a-new-meeting during this
+			// part's PUT would leave a NEW recording in "recording" — and this
+			// continuation would then write the OLD upload's PartNumber/ETag (and
+			// bump nextPartNumber) into it, poisoning the new meeting into a
+			// foreign/non-sequential part list that can never complete.
+			if (
+				freshState.kind !== "recording" ||
+				freshState.videoId !== state.videoId ||
+				freshState.uploadId !== state.uploadId
+			) {
+				return;
+			}
 
 			await setState({
 				...freshState,
@@ -613,7 +626,13 @@ export async function handleChunk(
 			);
 
 			const freshState = await getState();
-			if (freshState.kind === "recording") {
+			// (R7) Same identity guard as the success path above — never bump a
+			// DIFFERENT recording's nextPartNumber/totalBytes.
+			if (
+				freshState.kind === "recording" &&
+				freshState.videoId === state.videoId &&
+				freshState.uploadId === state.uploadId
+			) {
 				await setState({
 					...freshState,
 					nextPartNumber: Math.max(freshState.nextPartNumber, partNumber + 1),
