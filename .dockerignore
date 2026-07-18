@@ -2,3 +2,26 @@ target
 crates
 **/node_modules
 **/.next
+
+# Secrets must never enter the build context. The builder stage does `COPY . .`,
+# so anything not excluded here lands in an image layer and the remote build
+# cache, even though the final runner stage only copies .next/public/migrations.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Git metadata (the Dockerfile never shells out to git)
+.git
+.gitignore
+
+# Deployment/secret worksheets and QA scratch kept locally
+docs/DEPLOY_SECRETS.md
+docs/DEPLOY_WORKSHEET.md
+**/scratchpad
+apps/web/.auth
+QA_*.md
+CODEX_TO_CLAUDE_*.md
+CLAUDE_TO_CODEX_*.md

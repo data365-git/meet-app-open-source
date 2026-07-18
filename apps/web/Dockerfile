@@ -52,9 +52,12 @@ COPY . .
 ENV NEXT_PUBLIC_DOCKER_BUILD=true
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Build-time public env vars (baked into Next.js client bundle)
-ARG WEB_URL=https://web-production-e6fe4.up.railway.app
-ARG NEXT_PUBLIC_WEB_URL=https://web-production-e6fe4.up.railway.app
+# Build-time public env vars (baked into Next.js client bundle).
+# The fallbacks used to point at the retired Railway host, which 404s since
+# 2026-07-18 — a build that lost the arg would silently bake a dead URL into
+# the client bundle. Defaults now match the live Coolify deployment.
+ARG WEB_URL=https://data365.duckdns.org
+ARG NEXT_PUBLIC_WEB_URL=https://data365.duckdns.org
 ENV WEB_URL=$WEB_URL
 ENV NEXT_PUBLIC_WEB_URL=$NEXT_PUBLIC_WEB_URL
 
