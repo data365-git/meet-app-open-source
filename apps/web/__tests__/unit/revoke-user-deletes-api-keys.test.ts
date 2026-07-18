@@ -147,7 +147,7 @@ vi.mock("@cap/web-backend", () => ({
 	hashAuthApiKey: vi.fn((token: string) => Promise.resolve(`hash:${token}`)),
 }));
 
-import { revokeUser } from "@/actions/admin/access";
+import { resetUserPassword, revokeUser } from "@/actions/admin/access";
 import { mintExtensionToken } from "@/actions/extension/mint-token";
 import { withAuth } from "@/app/api/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
@@ -209,5 +209,47 @@ describe("revokeUser deletes the revoked user's API/extension keys", () => {
 			body: "User not authenticated",
 		});
 		expect(postRevokeNext).not.toHaveBeenCalled();
+	});
+
+	// There are TWO admin password-reset paths — this one (userId-based, wired to
+	// the dashboard Access Management UI) and the email-based one in
+	// actions/admin/reset-user-password.ts. Both must revoke, and fixing one while
+	// missing its twin is exactly how this defect survived: bumping
+	// authSessionVersion kills issued JWTs, but the cak_ bearer path checks
+	// neither passwordHash nor authSessionVersion, so a reset used to leave the
+	// user's extension token fully valid — defeating the usual reason to reset,
+	// which is that the account is compromised.
+	it("resetUserPassword also deletes the user's API/extension keys", async () => {
+		vi.mocked(getCurrentUser).mockResolvedValueOnce(TARGET as any);
+		const { token } = await mintExtensionToken();
+		expect(authApiKeysStore).toHaveLength(1);
+
+		const preNext = vi.fn();
+		expect(await withAuth(makeCtx(`Bearer ${token}`), preNext)).toBeUndefined();
+		expect(preNext).toHaveBeenCalledTimes(1);
+
+		const versionBefore = usersStore.find((u) => u.id === TARGET.id)
+			?.authSessionVersion;
+
+		vi.mocked(getCurrentUser).mockResolvedValueOnce(ADMIN as any);
+		const result = await resetUserPassword(TARGET.id, "a-new-password-123");
+		expect(result.success).toBe(true);
+
+		// All three effects, because a PARTIAL revocation is worse than none —
+		// it still reports success.
+		const target = usersStore.find((u) => u.id === TARGET.id);
+		expect(target?.passwordHash).not.toBe(TARGET.passwordHash);
+		expect(target?.authSessionVersion).toBe((versionBefore ?? 0) + 1);
+		expect(authApiKeysStore.filter((k) => k.userId === TARGET.id)).toHaveLength(
+			0,
+		);
+
+		const postNext = vi.fn();
+		expect(await withAuth(makeCtx(`Bearer ${token}`), postNext)).toEqual({
+			__textResponse: true,
+			status: 401,
+			body: "User not authenticated",
+		});
+		expect(postNext).not.toHaveBeenCalled();
 	});
 });

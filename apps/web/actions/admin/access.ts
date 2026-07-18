@@ -305,13 +305,26 @@ export async function resetUserPassword(userId: string, newPassword: string) {
 
 	const passwordHash = await bcrypt.hash(newPassword, 10);
 
-	await db()
-		.update(users)
-		.set({
-			passwordHash,
-			authSessionVersion: sql`${users.authSessionVersion} + 1`,
-		})
-		.where(eq(users.id, userId as User.UserId));
+	// Bumping authSessionVersion kills issued JWTs, but the cak_ bearer path
+	// checks neither passwordHash nor authSessionVersion — so without deleting
+	// the rows, a reset left the user's extension/API token fully valid. That
+	// defeats the usual reason to reset: the account is compromised.
+	// This is the SECOND admin reset path (the email-based one in
+	// reset-user-password.ts is the other); fixing one and missing its twin is
+	// exactly how this defect survived. Atomic — a partial revocation is worse
+	// than none because it still reports success.
+	await db().transaction(async (tx) => {
+		await tx
+			.update(users)
+			.set({
+				passwordHash,
+				authSessionVersion: sql`${users.authSessionVersion} + 1`,
+			})
+			.where(eq(users.id, userId as User.UserId));
+		await tx
+			.delete(authApiKeys)
+			.where(eq(authApiKeys.userId, userId as User.UserId));
+	});
 
 	return { success: true as const };
 }
