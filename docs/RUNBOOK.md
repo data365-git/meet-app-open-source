@@ -119,10 +119,13 @@ These are real and currently open. They are here so nobody discovers them at the
 
 - **`TELEGRAM_ALERT_CHAT_ID` is not set.** So the down-alert cannot send you a Telegram message. You still find out: the GitHub job goes red and GitHub emails you. **Fix:** message `@userinfobot` on Telegram → it replies with your chat id → GitHub → Settings → Secrets → Actions → new secret `TELEGRAM_ALERT_CHAT_ID`.
 - **Recordings have no backup and no versioning** — single copy in R2 (see §5). Deliberate owner decision.
-- **The retired Railway copy of the app is still live and reachable** (`capweb-production-dd85.up.railway.app` answers `200`). An old copy of the app with a working database, publicly reachable, unmonitored. **Needs a decision.**
-- **`recover-cron.yml` on `main` is stale** — it still points at that Railway URL, not at the real site. It reports "success" every 30 minutes while never touching production.
+- **Recording loss on a browser CRASH mid-upload (R3).** While the extension uploads each ~5 MiB slice of a meeting, that slice lives only in the browser's memory for a moment. If the browser process *crashes* (out-of-memory, force-quit, OS freeze) at exactly that instant, that slice is lost — a few-second hole in the middle of the recording. NOT a whole-recording loss, and normal close/stop/network-drop are all handled. Accepted as a rare limitation (owner decision 2026-07-18): the full fix would write every slice to disk before uploading, adding constant disk churn to every recording.
+- **Single-recording length cap ~48 GiB / ~24–50 h (R5).** The S3/R2 multipart protocol allows at most 10,000 parts; at a fixed 5 MiB/part that is ~48 GiB. A single recording longer than that would fail to upload. No meeting reaches this; accepted as a limitation (owner decision 2026-07-18).
 - **The CI `lint` job is permanently red** — a large pre-existing formatting backlog (~1231 findings). It is isolated in its own job, so it does not hide the real checks (`test` and `guards` must be green). Don't let anyone tell you red-is-normal for those two.
+- **The extension package is not type-checked in CI** — it is bundled with esbuild (no type-check), and `tsc` currently reports pre-existing errors in `recorder-page.ts` and `sw.ts` (harmless at runtime, but real debt).
 - **Coolify's admin ports (8000/8080) are not firewalled.**
+
+Resolved since the 2026-07-17 list: the retired Railway copy has been deleted (owner, 2026-07-18 — `capweb-production-dd85.up.railway.app` now `404`), and `recover-cron.yml` on `main` now targets the real site (`data365.duckdns.org`) with a health-check + batch-poll step.
 
 ---
 

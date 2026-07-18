@@ -3,6 +3,35 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 — SESSION g) — FABLE AUDITED "RECORDING NEVER LOST" → BROKEN → 3 SAVE-LOSS BUGS FIXED. READ FIRST.
+
+🎯 **GOAL (unchanged, owner-set):** production-ready for the owner's IT team. The #1 thing "ready" MEANS: **a meeting must NEVER fail to record.** Rank everything against that.
+
+**WHAT HAPPENED:** owner asked Fable to adversarially verify (try to REFUTE) the guarantee "a recording can never fail to save due to length / the R2 equal-size-part rule / similar." **Verdict: BROKEN** — the core `takeFixedSizeParts` math is correct, but 4 other save-loss paths exist. Fixed the 3 that matter; owner accepted the other 2 as documented limits.
+
+**✅ FIXED + COMMITTED on `qa-fixes` (each RED-first tested; extension suite 19→22 green; tsc: my files clean):**
+- **R1 `ac9109a` (CRITICAL):** the finalize-time remainder uploaded to R2 but was never persisted to durable state; when a sibling part was still queued (P1.6 path), the deferred `complete` rebuilt the part list from live `state.parts` — missing the remainder — and completed the multipart **without it → video tail silently truncated behind a ✓**. Fix: `recordCompletedPart` the remainder right after its PUT.
+- **R2 `8d0b836` (CRITICAL):** PAUSE/RESUME (`sw.ts:575-653`) read state → awaited `sendControlWithRetry` (multi-hundred-ms) → wrote back the **stale snapshot**, clobbering a part `handleChunk` recorded during that window (rewound `nextPartNumber` → next part reused the number, **overwriting 5 MiB in R2**). Fix: route only the state write through `enqueueRecorder` + re-read fresh; control message stays outside so pause is still instant. (Confirms the STATE-flagged risk.)
+- **R4 `5ca4281` (MAJOR):** a dead-lettered part left the queue, so the `complete`'s sibling-in-queue guard no longer saw it → completeMultipart ran on the gapped list (**5 MiB hole**) and `stillOurs` flipped error→"complete" with a share link, contradicting the "lost" notification. Fix: before completing, check the dead-letter store for a part of this upload; if found, drop the complete (honest error already set).
+
+**⚖️ OWNER DECISIONS THIS SESSION (do NOT re-litigate):**
+- **R3 (browser CRASH mid-upload loses the ~5 MiB in-flight slice → a few-second mid-recording hole)** → **DOCUMENTED, not fixed.** Rare (needs a process crash at the exact upload instant; normal close/stop/network are handled); full fix = persist every slice to disk before upload = constant churn. In RUNBOOK §7.
+- **R5 (single recording > ~48 GiB / ~24–50 h fails — the 10,000-part S3/R2 cap at 5 MiB/part)** → **DOCUMENTED, not fixed.** No meeting reaches it. In RUNBOOK §7.
+- **Railway retired copy → DELETED** by owner (was live at `capweb-production-dd85...`, now `404`; leaked-credential DB exposure closed).
+
+**✅ ALSO DONE:** `recover-cron.yml` on `main` fixed (`2c8ccef`, pushed) — it pinged the dead Railway URL and never touched real prod; now targets `data365.duckdns.org` with health-check + poll-batch-jobs. RUNBOOK §7 "known gaps" refreshed (Railway/recover-cron now resolved; R3/R5 + extension-not-tsc-gated added).
+
+**🔨 DEPLOY-READY, NOT DEPLOYED:** `dist/` + `apps/web/public/365-extension.zip` rebuilt with R1/R2/R4 (verified `deadLetterHasPartForUpload` in both bundle + zip). **prod is still `f2e64a6`; qa-fixes HEAD = `5ca4281`.**
+
+**⛔ OWNER TODO — THE RELEASE GATE (blocks deploy, needs a LAPTOP + real Meet):** device-test extension v0.3.2 from the LOCAL unpacked build — `chrome://extensions` → Developer mode → Load unpacked → `apps/browser-extension/dist/` → on a real Meet: no-client-audio confirm → records; mute tab → banner + recording continues; close tab → reopen banner + recording continues; one-click whole-screen; **finish a 2-3-min+ recording → it appears in the dashboard and PLAYS** (this proves the R1/R2/R4 fixes on real R2). Nothing deploys to the team until this passes.
+
+**▶ DEPLOY when the gate passes (I can run it):** `git push origin qa-fixes` → `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'CT=$(cat /root/.ct); curl -s -X POST -H "Authorization: Bearer $CT" -H "Content-Type: application/json" http://localhost:8000/api/v1/deploy -d "{\"uuid\":\"pokroz1qrj8wfc82bl63ns2c\"}"'` → poll `docker ps` image tag = sha + `/api/health` {db,storage} ok. Build ~30 min.
+
+**⛔ OTHER OWNER-ONLY floors still open (from SESSION e audit, unchanged):** delete/erasure WHAT-decision (soft vs purge-after-grace vs hard); free-tier Gemini consent notice (extension options notice EXISTS); VPS firewall Coolify ports 8000/8080 + reboot; domain off `*.duckdns.org`. Full scorecard: `docs/plans/2026-07-15-production-readiness-SCORECARD.md`.
+
+**✅ /CLEAR-SAFE once pushed:** R1/R2/R4 committed locally on qa-fixes (`5ca4281`); STATE+RUNBOOK+zip commit next; then `git push origin qa-fixes`. Nothing mid-edit.
+
+---
 ## ▶▶ /CLEAR HANDOFF (2026-07-17 — SESSION f) — FOUND + FIXED A LIVE RECORDING-LOSS BUG. READ FIRST.
 
 🎯 **GOAL (owner re-baselined this session):** production-ready for the IT team — and the #1 thing "ready" MEANS: **a meeting must NEVER fail to record.** Rank everything against that.
