@@ -3,7 +3,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { aiUsageEvents, organizationMembers, organizations, videos } from "@cap/database/schema";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { priceForMicros } from "@cap/utils";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { Organisation, Video } from "@cap/web-domain";
 
 function currentBillingMonth(): string {
@@ -18,6 +19,7 @@ const emptyResult = {
 	breakdown: {} as Record<string, number>,
 	capUsdCents: null as number | null,
 	percentUsed: 0,
+	freeTierSavingsUsdCents: null as number | null,
 };
 
 export async function getMonthlySpend(scope: {
@@ -28,6 +30,10 @@ export async function getMonthlySpend(scope: {
 	breakdown: Record<string, number>;
 	capUsdCents: number | null;
 	percentUsed: number;
+	/** Video scope only (null for user/org): re-priced value of this video's
+	 * $0 free-tier AI usage events, "how much this WOULD have cost at paid
+	 * rates" — the price-honesty complement to totalUsdCents (Wave 2.2). */
+	freeTierSavingsUsdCents: number | null;
 }> {
 	const user = await getCurrentUser();
 	if (!user?.id) return emptyResult;
@@ -84,18 +90,23 @@ export async function getMonthlySpend(scope: {
 
 	const col = colMap[scope.type];
 
+	// A single video's cost panel must show its ALL-TIME spend — a video
+	// recorded near a month boundary must never show "0 so'm" just because
+	// most of its AI work landed in the previous billing month (Wave 2.2
+	// price-honesty). User/org scopes stay month-scoped: those back the
+	// monthly AI-budget cap cards, which are inherently a per-month figure.
+	const monthFilter =
+		scope.type === "video"
+			? []
+			: [eq(aiUsageEvents.billingMonth, billingMonth)];
+
 	const rows = await db()
 		.select({
 			operation: aiUsageEvents.operation,
 			totalMicros: sql<number>`COALESCE(SUM(${aiUsageEvents.costUsdMicros}), 0)`,
 		})
 		.from(aiUsageEvents)
-		.where(
-			and(
-				sql`${col} = ${scope.id}`,
-				eq(aiUsageEvents.billingMonth, billingMonth),
-			),
-		)
+		.where(and(sql`${col} = ${scope.id}`, ...monthFilter))
 		.groupBy(aiUsageEvents.operation);
 
 	let totalMicros = 0;
@@ -117,5 +128,51 @@ export async function getMonthlySpend(scope: {
 			? Math.round((totalUsdCents / capUsdCents) * 100)
 			: 0;
 
-	return { totalUsdCents, breakdown, capUsdCents, percentUsed };
+	// Free-tier savings (video scope only): re-price this video's $0 events
+	// (recorded with `costUsdMicros: 0` when withCostGuard's `free` option was
+	// set — the "cheap" mode ladder) at the model's PAID rate, so the owner
+	// sees what the run would have cost if it hadn't waited for free quota.
+	// Embedding rows are excluded — those price at $0 unconditionally
+	// (gemini-embedding-001 in the pricing table), so a $0 embedding event is
+	// not a "savings", it is just how embeddings are priced.
+	// These events don't record the audio/text token split, so — per the
+	// price-honesty spec — every token is re-priced at the model's TEXT rate,
+	// an intentional under-estimate for transcription (audio costs more per
+	// token than text); the panel labels the figure "taxminan" (approximate)
+	// for exactly this reason.
+	let freeTierSavingsUsdCents: number | null = null;
+	if (scope.type === "video") {
+		const freeRows = await db()
+			.select({
+				model: aiUsageEvents.model,
+				inputTokens: aiUsageEvents.inputTokens,
+				outputTokens: aiUsageEvents.outputTokens,
+			})
+			.from(aiUsageEvents)
+			.where(
+				and(
+					eq(aiUsageEvents.videoId, scope.id as Video.VideoId),
+					eq(aiUsageEvents.costUsdMicros, 0),
+					ne(aiUsageEvents.operation, "embedding"),
+				),
+			);
+
+		let savingsMicros = 0;
+		for (const row of freeRows) {
+			savingsMicros += priceForMicros(row.model, {
+				textInTokens: row.inputTokens,
+				audioInTokens: 0,
+				outputTokens: row.outputTokens,
+			});
+		}
+		freeTierSavingsUsdCents = Math.round(savingsMicros / 10_000);
+	}
+
+	return {
+		totalUsdCents,
+		breakdown,
+		capUsdCents,
+		percentUsed,
+		freeTierSavingsUsdCents,
+	};
 }

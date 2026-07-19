@@ -52,9 +52,21 @@
     "placeholder": "Спросите о встрече...",
     "disclaimer": "Ответы AI могут требовать проверки",
     "chipSummary": "Краткое резюме",
+    "chipSummaryQuery": "Кратко подытожьте встречу",
     "chipTasks": "Список задач",
+    "chipTasksQuery": "Какие основные задачи и кто ответственные?",
     "chipFollowUp": "Follow-up письмо",
-    "chipDecisions": "Ключевые решения"
+    "chipFollowUpQuery": "Подготовьте follow-up письмо по следующим шагам",
+    "chipDecisions": "Ключевые решения",
+    "chipDecisionsQuery": "Какие ключевые решения были приняты?",
+    "tldr": "Кратко",
+    "you": "Вы",
+    "textSize": "Размер текста",
+    "textSmaller": "Уменьшить текст",
+    "textLarger": "Увеличить текст",
+    "close": "Закрыть",
+    "send": "Отправить",
+    "errorGeneric": "Что-то пошло не так. Попробуйте ещё раз."
   },
   "settings": {
     "devMode": "Режим разработчика",
@@ -495,9 +507,10 @@
     "costLoadError": "Не удалось загрузить данные о стоимости.",
     "meetingCost": "Стоимость встречи",
     "costTranscription": "Транскрипция",
-    "costSummary": "Резюме",
+    "costSummary": "Резюме и анализ",
     "costEmbeddings": "Эмбеддинги",
     "costChat": "Чат",
+    "freeTierSavings": "Сэкономлено за счёт бесплатной квоты: ~{amount} (примерно)",
     "leaveAComment": "Оставить комментарий",
     "replyPlaceholder": "Написать ответ...",
     "yourName": "Ваше имя",
@@ -528,6 +541,7 @@
     "aiEta": "~{minutes} мин осталось",
     "aiFineTranscribing": "Отправлено {completed}/{total} аудио в Gemini",
     "aiFineStageProgress": "Обработано {completed}/{total} частей",
+    "aiCardChunkProgress": "Часть {completed}/{total}",
     "aiStatusRow": "Готовятся сводка и задачи…",
     "aiInputDisabledPlaceholder": "Вы сможете задать вопрос после анализа…",
     "aiTranscriptNotReady": "Транскрипт ещё не готов",
@@ -580,6 +594,7 @@
     "aiEtaSoon": "Почти готово",
     "aiStageOfTotal": "Шаг {current} / {total}",
     "aiAnalysisRunning": "AI-анализ выполняется",
+    "aiNowDoing": "Сейчас: {stage}",
     "aiEtaQueue": "Ожидание 2–4 ч",
     "aiOverallProgress": "Общий прогресс",
     "aiEstimatedTime": "Примерно осталось",
@@ -793,7 +808,9 @@
       "afterCut": "После обрезки",
       "save": "экономия",
       "cancel": "Отмена",
-      "tooBigAudio": "Это аудио слишком большое, чтобы обрезать здесь, поэтому загружен весь файл."
+      "tooBigAudio": "Это аудио слишком большое, чтобы обрезать здесь, поэтому загружен весь файл.",
+      "cutUploadServer": "Загрузить — обрезка на сервере",
+      "serverTrimNotice": "Этот файл слишком большой, чтобы обрезать здесь. Он будет загружен сейчас, а обрезка завершится на сервере."
     }
   },
   "pendingAccess": {

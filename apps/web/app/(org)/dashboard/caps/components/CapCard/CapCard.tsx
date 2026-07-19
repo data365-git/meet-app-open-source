@@ -38,6 +38,7 @@ import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useAiStatus } from "hooks/use-ai-status";
 import { refineVideoTimestamps } from "@/actions/video/refine-timestamps";
 import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
@@ -277,6 +278,49 @@ export const CapCard = ({
     cap.id,
     cap.hasActiveUpload || false,
   );
+
+  // Granular AI status (Wave 2.1): a glance-clear "stage + Bo'lak N/M" line
+  // while AI is running, so the owner doesn't have to open the video to see
+  // whether it's stuck. `cap.metadata.aiGenerationStatus` is already known
+  // synchronously from the server-rendered grid data, so polling is enabled
+  // ONLY for cards with an active run — a grid of dozens of caps never opens
+  // more than a handful of pollers at once (one per currently-processing
+  // video), and each polls at a gentler 6s (vs the single-video share page's
+  // 4s) to keep the fan-out cost sensible.
+  const aiRunning =
+    cap.metadata?.aiGenerationStatus === "PROCESSING" ||
+    cap.metadata?.aiGenerationStatus === "QUEUED";
+  const aiStatus = useAiStatus(cap.id, aiRunning, 6000);
+  const aiStep =
+    aiStatus.data?.aiProcessingStep ??
+    cap.metadata?.aiProcessingStep ??
+    "transcribe";
+  const aiStageLabel =
+    aiStep === "transcribe"
+      ? tShare("aiFocalTranscribe")
+      : aiStep === "refined"
+        ? tShare("aiFocalRefined")
+        : aiStep === "done"
+          ? tShare("stepDone")
+          : tShare("aiFocalSummary");
+  const aiChunkCompleted =
+    aiStep === "transcribe"
+      ? (aiStatus.data?.transcriptionChunksCompleted ??
+        cap.metadata?.transcriptionChunksCompleted)
+      : (aiStatus.data?.aiStageChunksCompleted ??
+        cap.metadata?.aiStageChunksCompleted);
+  const aiChunkTotal =
+    aiStep === "transcribe"
+      ? (aiStatus.data?.transcriptionChunksTotal ??
+        cap.metadata?.transcriptionChunksTotal)
+      : (aiStatus.data?.aiStageChunksTotal ?? cap.metadata?.aiStageChunksTotal);
+  const aiLineText =
+    aiChunkTotal && aiChunkTotal > 0
+      ? `${aiStageLabel} · ${tShare("aiCardChunkProgress", {
+          completed: aiChunkCompleted ?? 0,
+          total: aiChunkTotal,
+        })}`
+      : `${aiStageLabel}…`;
   const hasRawFallback =
     uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
   const hasVisibleUploadProgress =
@@ -943,6 +987,18 @@ export const CapCard = ({
             views={analytics}
             setIsSharingDialogOpen={setIsSharingDialogOpen}
           />
+          {aiRunning && (
+            <p
+              className="mt-1 flex items-center gap-1.5 truncate text-[11px] font-medium text-[var(--brand)]"
+              aria-live="polite"
+            >
+              <span
+                aria-hidden
+                className="size-2 shrink-0 rounded-full border-[1.5px] border-[var(--brand)]/40 border-t-[var(--brand)] motion-safe:animate-spin"
+              />
+              <span className="truncate">{aiLineText}</span>
+            </p>
+          )}
           {isFreshlyUploaded && canEditVideo && (
             <button
               type="button"

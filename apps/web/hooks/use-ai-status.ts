@@ -18,9 +18,22 @@ type AiStatusResult = {
 	aiMode: AiSpeedMode | null;
 	aiQuotaWaiting: boolean;
 	hasContent: boolean;
+	/** Fine-grained transcription chunk progress ("Gemini'ga N/M audio yuborildi"). */
+	transcriptionChunksCompleted: number | null;
+	transcriptionChunksTotal: number | null;
+	/** Fine-grained summary/refine chunk progress, reset at each stage transition. */
+	aiStageChunksCompleted: number | null;
+	aiStageChunksTotal: number | null;
 };
 
-export const useAiStatus = (videoId: Video.VideoId, enabled: boolean) => {
+export const useAiStatus = (
+	videoId: Video.VideoId,
+	enabled: boolean,
+	// Dashboard grids can enable this hook for several cards at once (one per
+	// video with an active AI run); a longer default there keeps polling load
+	// sensible without slowing the single-video share page (which keeps 4s).
+	intervalMs = 4000,
+) => {
 	return useQuery({
 		queryKey: ["ai-status", videoId],
 		queryFn: async (): Promise<AiStatusResult> => {
@@ -36,19 +49,24 @@ export const useAiStatus = (videoId: Video.VideoId, enabled: boolean) => {
 				aiMode: body.aiMode ?? null,
 				aiQuotaWaiting: body.aiQuotaWaiting === true,
 				hasContent: !!(body.summary || body.chapters),
+				transcriptionChunksCompleted:
+					body.transcriptionChunksCompleted ?? null,
+				transcriptionChunksTotal: body.transcriptionChunksTotal ?? null,
+				aiStageChunksCompleted: body.aiStageChunksCompleted ?? null,
+				aiStageChunksTotal: body.aiStageChunksTotal ?? null,
 			};
 		},
 		enabled,
 		refetchOnWindowFocus: false,
 		refetchInterval: (query) => {
 			const d = query.state.data;
-			if (!d) return 4000;
+			if (!d) return intervalMs;
 			const terminal =
 				d.hasContent ||
 				d.aiGenerationStatus === "COMPLETE" ||
 				d.aiGenerationStatus === "ERROR" ||
 				d.aiGenerationStatus === "SKIPPED";
-			return terminal ? false : 4000;
+			return terminal ? false : intervalMs;
 		},
 		retry: 2,
 		retryDelay: 1000,

@@ -86,6 +86,20 @@ export async function GET(request: NextRequest) {
 
 		const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
+		// Granular status fields (Wave 2.1): fine per-chunk progress written by
+		// transcribe.ts (transcriptionChunks*) and generate-ai.ts (aiStageChunks*,
+		// reset at each summary/refine stage transition). Included in every branch
+		// below so the poll never has to fall back to a full page refresh just to
+		// see these move — that's what let ShareVideo.tsx retire its 6s
+		// `router.refresh()` workaround.
+		const chunkProgress = {
+			transcriptionChunksCompleted:
+				metadata.transcriptionChunksCompleted ?? null,
+			transcriptionChunksTotal: metadata.transcriptionChunksTotal ?? null,
+			aiStageChunksCompleted: metadata.aiStageChunksCompleted ?? null,
+			aiStageChunksTotal: metadata.aiStageChunksTotal ?? null,
+		};
+
 		if (metadata.summary || metadata.chapters) {
 			console.log(
 				`[AI API] Returning existing AI metadata for video ${videoId}`,
@@ -100,6 +114,7 @@ export async function GET(request: NextRequest) {
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
 					aiMode: metadata.aiMode ?? null,
 					aiQuotaWaiting: metadata.aiQuotaWaiting === true,
+					...chunkProgress,
 				},
 				{ status: 200 },
 			);
@@ -120,6 +135,7 @@ export async function GET(request: NextRequest) {
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
 					aiMode: metadata.aiMode ?? null,
 					aiQuotaWaiting: metadata.aiQuotaWaiting === true,
+					...chunkProgress,
 				},
 				{ status: 200 },
 			);
@@ -138,6 +154,7 @@ export async function GET(request: NextRequest) {
 				aiProcessingStep: metadata.aiProcessingStep ?? null,
 				aiMode: metadata.aiMode ?? null,
 				aiQuotaWaiting: metadata.aiQuotaWaiting === true,
+				...chunkProgress,
 			},
 			{ status: 200 },
 		);

@@ -7,9 +7,25 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
+import clsx from "clsx";
 import { Clock3, MoreVertical, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRef, useState } from "react";
+
+// Weighted stage shares for the overall progress bar (owner design contract:
+// "AI Status.dc.html" + handoff/status/README.md ask for weighted stages —
+// its own weights were a designer's guess for an embedding-centric pipeline
+// that doesn't match ours). Chosen from typical wall-clock share on real
+// videos: transcription re-processes raw AUDIO through Gemini chunk-by-chunk
+// and dominates; summary reads the much smaller resulting transcript text;
+// refined is the fastest (near-verbatim reformatting of already-summarized
+// chapters). Not measured per-video — a reasonable estimate, like the
+// existing cost estimator's factors above it in this pipeline.
+const STAGE_WEIGHTS: Record<"transcribe" | "summary" | "refined", number> = {
+	transcribe: 65,
+	summary: 20,
+	refined: 15,
+};
 
 type TranscriptionStatus =
 	| "PROCESSING"
@@ -362,26 +378,44 @@ export function GenerateAiPanel({
 		const withinFraction =
 			activeStage && activeStage.total > 0
 				? Math.min(1, activeStage.completed / activeStage.total)
-				: 0;
-		// (completedStages + fraction-through-active-stage) / 3. Advances by whole
-		// thirds even when a stage reports no chunk total, so the bar still moves.
+				: // Indeterminate (no chunk total reported yet): assume the active
+					// stage is ~40% through, same convention the design sample uses,
+					// so the bar still visibly advances instead of sitting frozen at
+					// the previous stage's boundary.
+					0.4;
+		// Weighted by STAGE_WEIGHTS instead of even thirds, since transcription
+		// genuinely takes most of the wall-clock time. Capped at 99 until the
+		// pipeline actually reaches "done" (this branch never renders once it
+		// does) so the bar never lies about being finished.
 		const overallPct = Math.min(
-			100,
-			Math.round(((Math.min(currentIdx, 3) + withinFraction) / 3) * 100),
+			99,
+			Math.round(
+				runningStages.reduce((sum, stage, i) => {
+					const weight = STAGE_WEIGHTS[stage.key];
+					if (i < currentIdx) return sum + weight;
+					if (i === currentIdx) return sum + weight * withinFraction;
+					return sum;
+				}, 0),
+			),
 		);
 		const stageNumber = Math.min(currentIdx + 1, runningStages.length);
+		// The active stage's detail line ("16 bo'lakdan 5-si yuborilmoqda"),
+		// shared by the glance header below and that stage's row in the list.
+		const activeDetail =
+			activeStage && activeStage.total > 0
+				? activeStage.key === "transcribe"
+					? tShare("aiFineTranscribing", {
+							completed: activeStage.completed,
+							total: activeStage.total,
+						})
+					: tShare("aiFineStageProgress", {
+							completed: activeStage.completed,
+							total: activeStage.total,
+						})
+				: null;
 
 		return (
 			<div className="flex flex-col gap-4 rounded-2xl border border-gray-5 bg-gray-1 p-4 shadow-[0_18px_50px_-36px_rgba(0,92,177,0.7)] sm:p-5">
-				{/* Indeterminate-slide keyframes, scoped to this card. Defined here
-				    (not tailwind.config) to keep the change local to this component. */}
-				<style>{`
-					@keyframes ustozAiEtaSlide {
-						0% { transform: translateX(-100%); }
-						100% { transform: translateX(430%); }
-					}
-				`}</style>
-
 				<div className="flex items-start justify-between gap-3">
 					<div className="flex min-w-0 items-start gap-3">
 						<div className="relative flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-wash)] text-[var(--brand)]">
@@ -393,8 +427,11 @@ export function GenerateAiPanel({
 								{tShare("aiAnalysisRunning")}
 							</p>
 							<h3 className="mt-0.5 text-base font-semibold leading-tight text-gray-12 sm:text-lg">
-								{currentFocalLabel}
+								{tShare("aiNowDoing", { stage: currentFocalLabel })}
 							</h3>
+							{activeDetail && (
+								<p className="mt-0.5 text-xs text-gray-9">{activeDetail}</p>
+							)}
 						</div>
 					</div>
 					<span className="shrink-0 rounded-full border border-gray-5 bg-gray-2 px-2.5 py-1 text-[11px] font-medium text-gray-10">
@@ -446,111 +483,93 @@ export function GenerateAiPanel({
 					</p>
 				</div>
 
+				{/* Vertical step list per the owner's design contract (AI Status.dc.html):
+				    done = green check circle, active = accent circle + spinner, future =
+				    dimmed — with an n/m or ✓ readout on the right of each row. */}
 				<ol
-					className="grid gap-2 sm:grid-cols-3"
+					className="flex flex-col gap-1"
 					aria-label={tShare("aiAnalysisStage")}
 				>
 					{runningStages.map((stage, i) => {
 						const state =
 							i < currentIdx ? "done" : i === currentIdx ? "active" : "pending";
-
-						if (state === "done") {
-							return (
-								<li
-									key={stage.key}
-									className="flex min-h-24 gap-3 rounded-xl border border-gray-4 bg-gray-2 p-3.5"
-								>
-									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--brand)]">
-										<CheckIcon className="size-3.5 text-[var(--brand-fg)]" />
-									</span>
-									<div className="min-w-0">
-										<p className="text-sm font-semibold text-gray-12">
-											{stage.nounLabel}
-										</p>
-										<p className="mt-1 text-xs leading-relaxed text-gray-9">
-											{tShare("aiStageComplete")}
-										</p>
-									</div>
-								</li>
-							);
-						}
-
-						if (state === "pending") {
-							return (
-								<li
-									key={stage.key}
-									className="flex min-h-24 gap-3 rounded-xl border border-gray-4 bg-gray-1 p-3.5"
-								>
-									<span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-gray-5 bg-gray-2 text-xs font-semibold text-gray-8">
-										{i + 1}
-									</span>
-									<div className="min-w-0">
-										<p className="text-sm font-semibold text-gray-9">
-											{stage.nounLabel}
-										</p>
-										<p className="mt-1 text-xs leading-relaxed text-gray-8">
-											{tShare("aiStageWaiting")}
-										</p>
-									</div>
-								</li>
-							);
-						}
-
-						// active — the focal row: verb label + determinate/indeterminate bar
 						const hasTotal = stage.total > 0;
-						const pct = hasTotal
-							? Math.min(100, Math.round((stage.completed / stage.total) * 100))
-							: 0;
+						const detail =
+							state === "active"
+								? hasTotal
+									? stage.key === "transcribe"
+										? tShare("aiFineTranscribing", {
+												completed: stage.completed,
+												total: stage.total,
+											})
+										: tShare("aiFineStageProgress", {
+												completed: stage.completed,
+												total: stage.total,
+											})
+									: tShare("aiStarting")
+								: null;
+						const meta =
+							state === "done"
+								? "✓"
+								: state === "active" && hasTotal
+									? `${stage.completed}/${stage.total}`
+									: state === "active"
+										? "…"
+										: "";
+
 						return (
 							<li
 								key={stage.key}
-								className="flex min-h-24 flex-col gap-2 rounded-xl border border-[var(--brand)] bg-[var(--brand-wash)] p-3.5"
+								className={clsx(
+									"flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors",
+									state === "active" && "bg-[var(--brand-wash)]",
+								)}
 							>
-								<div className="flex items-center gap-2">
-									<span className="flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-[var(--brand)] bg-gray-1 text-xs font-semibold text-[var(--brand)]">
-										{i + 1}
-									</span>
-									<div className="min-w-0">
-										<p className="text-sm font-semibold text-gray-12">
-											{stage.nounLabel}
+								<span
+									aria-hidden
+									className={clsx(
+										"mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full",
+										state === "done" && "bg-green-9",
+										state === "active" && "bg-[var(--brand)]",
+										state === "pending" &&
+											"border border-gray-5 bg-gray-2",
+									)}
+								>
+									{state === "done" && (
+										<CheckIcon className="size-3 text-white" />
+									)}
+									{state === "active" && (
+										<span className="size-2.5 rounded-full border-2 border-white/40 border-t-white motion-safe:animate-spin" />
+									)}
+								</span>
+								<div className="min-w-0 flex-1">
+									<p
+										className={clsx(
+											"text-sm leading-tight",
+											state === "done" && "text-gray-10",
+											state === "active" &&
+												"font-semibold text-gray-12",
+											state === "pending" && "text-gray-8",
+										)}
+									>
+										{stage.nounLabel}
+									</p>
+									{detail && (
+										<p className="mt-0.5 text-xs leading-relaxed text-gray-9">
+											{detail}
 										</p>
-										<p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--brand)]">
-											{tShare("aiStageActive")}
-										</p>
-									</div>
-								</div>
-								<div className="flex flex-col gap-1">
-									{hasTotal ? (
-										<>
-											<div className="h-1 w-full overflow-hidden rounded-full bg-gray-5">
-												<div
-													className="h-full rounded-full bg-[var(--brand)] motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
-													style={{ width: `${pct}%` }}
-												/>
-											</div>
-											<p className="text-[11px] font-medium tabular-nums text-gray-10">
-												{stage.key === "transcribe"
-													? tShare("aiFineTranscribing", {
-															completed: stage.completed,
-															total: stage.total,
-														})
-													: tShare("aiFineStageProgress", {
-															completed: stage.completed,
-															total: stage.total,
-														})}
-											</p>
-										</>
-									) : (
-										<>
-											<div className="relative h-1 w-full overflow-hidden rounded-full bg-gray-5">
-												<div className="absolute inset-y-0 left-0 w-[30%] rounded-full bg-[var(--brand)] motion-reduce:w-[25%] motion-safe:animate-[ustozAiEtaSlide_1.6s_ease-in-out_infinite]" />
-											</div>
-											<span className="text-[12px] text-gray-10">
-												{tShare("aiStarting")}
-											</span>
-										</>
 									)}
 								</div>
+								<span
+									className={clsx(
+										"shrink-0 font-mono text-[11px]",
+										state === "done" && "text-green-11",
+										state === "active" && "text-[var(--brand)]",
+										state === "pending" && "text-gray-8",
+									)}
+								>
+									{meta}
+								</span>
 							</li>
 						);
 					})}

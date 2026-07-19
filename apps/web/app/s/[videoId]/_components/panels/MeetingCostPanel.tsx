@@ -74,6 +74,23 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 					})}
 				</div>
 			)}
+
+			{/* Price honesty (Wave 2.2): the total above is REAL paid spend only —
+			    this surfaces the free-tier ("cheap" mode) share so the owner sees
+			    both numbers instead of assuming a low total means AI was cheap.
+			    "taxminan" (approximate) because these events don't record the
+			    audio/text token split (see getMonthlySpend). */}
+			{data.freeTierSavingsUsdCents != null &&
+				data.freeTierSavingsUsdCents > 0 && (
+					<p
+						className="text-center text-xs"
+						style={{ color: "var(--gray-10)" }}
+					>
+						{t("freeTierSavings", {
+							amount: formatUzs(data.freeTierSavingsUsdCents),
+						})}
+					</p>
+				)}
 		</div>
 	);
 }

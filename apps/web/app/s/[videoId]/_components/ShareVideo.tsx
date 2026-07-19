@@ -292,17 +292,17 @@ export const ShareVideo = forwardRef<
 			data.transcriptionStatus === "COMPLETE" &&
 			!!(transcript?.content && transcript.content.trim().length > 0);
 
-		// The `/api/video/ai` status poll only returns coarse fields; the fine
-		// per-chunk summary/refine counter (`aiStageChunksCompleted/Total`)
-		// lives in `data.metadata`, which only updates via a server round-trip.
-		// Refresh periodically while that stage is running so GenerateAiPanel's
-		// fine counter + ETA stay live (transcription already gets a live
-		// counter from the `useTranscript` poll above).
-		useEffect(() => {
-			if (!aiProcessing || data.transcriptionStatus !== "COMPLETE") return;
-			const interval = setInterval(() => router.refresh(), 6000);
-			return () => clearInterval(interval);
-		}, [aiProcessing, data.transcriptionStatus, router]);
+		// NOTE (Wave 2.1): a periodic `router.refresh()` used to live here to keep
+		// GenerateAiPanel's fine per-chunk summary/refine counter
+		// (`aiStageChunksCompleted/Total`) live, because that data only lived in
+		// `data.metadata` (server-rendered, stale until a full round-trip). Now
+		// that `/api/video/ai` (the `aiStatusQuery` poll above, already running
+		// every 4s while `aiPollEnabled`) returns those same fields directly, the
+		// panel sources them straight from the poll (see `aiStatusQuery.data?.*`
+		// below) and the periodic refresh was removed — nothing else depended on
+		// it (checked: the other `router.refresh()` calls in this file are each
+		// one-shot, tied to a distinct terminal/complete event, not to this
+		// interval).
 
 		// "chala" (incomplete-looking) analysis: empty-but-complete, or refined
 		// sections fewer than summary chapters (misaligned old-data case).
@@ -906,16 +906,22 @@ export const ShareVideo = forwardRef<
 											duration={data.duration}
 											transcriptionChunksCompleted={
 												transcript?.progress?.completed ??
+												aiStatusQuery.data?.transcriptionChunksCompleted ??
 												data.metadata?.transcriptionChunksCompleted
 											}
 											transcriptionChunksTotal={
 												transcript?.progress?.total ??
+												aiStatusQuery.data?.transcriptionChunksTotal ??
 												data.metadata?.transcriptionChunksTotal
 											}
 											aiStageChunksCompleted={
+												aiStatusQuery.data?.aiStageChunksCompleted ??
 												data.metadata?.aiStageChunksCompleted
 											}
-											aiStageChunksTotal={data.metadata?.aiStageChunksTotal}
+											aiStageChunksTotal={
+												aiStatusQuery.data?.aiStageChunksTotal ??
+												data.metadata?.aiStageChunksTotal
+											}
 											processingStartedAt={data.metadata?.processingStartedAt}
 											aiProcessingStartedAt={
 												data.metadata?.aiProcessingStartedAt

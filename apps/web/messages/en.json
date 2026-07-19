@@ -52,9 +52,21 @@
     "placeholder": "Ask about the meeting...",
     "disclaimer": "AI responses may need verification",
     "chipSummary": "Quick summary",
+    "chipSummaryQuery": "Give me a quick summary of the meeting",
     "chipTasks": "Action items",
+    "chipTasksQuery": "What are the main action items and who owns them?",
     "chipFollowUp": "Follow-up email",
-    "chipDecisions": "Key decisions"
+    "chipFollowUpQuery": "Draft a follow-up email with the next steps",
+    "chipDecisions": "Key decisions",
+    "chipDecisionsQuery": "What key decisions were made?",
+    "tldr": "TL;DR",
+    "you": "You",
+    "textSize": "Text size",
+    "textSmaller": "Smaller text",
+    "textLarger": "Larger text",
+    "close": "Close",
+    "send": "Send",
+    "errorGeneric": "Something went wrong. Please try again."
   },
   "settings": {
     "devMode": "Developer Mode",
@@ -495,9 +507,10 @@
     "costLoadError": "Could not load cost data.",
     "meetingCost": "Meeting cost",
     "costTranscription": "Transcription",
-    "costSummary": "Summary",
+    "costSummary": "Summary & analysis",
     "costEmbeddings": "Embeddings",
     "costChat": "Chat",
+    "freeTierSavings": "Saved via free quota: ~{amount} (approximate)",
     "leaveAComment": "Leave a comment",
     "replyPlaceholder": "Write a reply...",
     "yourName": "Your name",
@@ -528,6 +541,7 @@
     "aiEta": "~{minutes} min left",
     "aiFineTranscribing": "Sent {completed}/{total} audio chunks to Gemini",
     "aiFineStageProgress": "Processed {completed}/{total} parts",
+    "aiCardChunkProgress": "Chunk {completed}/{total}",
     "aiStatusRow": "Preparing summary and tasks…",
     "aiInputDisabledPlaceholder": "You can ask once the analysis is ready…",
     "aiTranscriptNotReady": "Transcript isn't ready yet",
@@ -580,6 +594,7 @@
     "aiEtaSoon": "Almost done",
     "aiStageOfTotal": "Step {current} / {total}",
     "aiAnalysisRunning": "AI analysis in progress",
+    "aiNowDoing": "Now: {stage}",
     "aiEtaQueue": "2–4 hr wait",
     "aiOverallProgress": "Overall progress",
     "aiEstimatedTime": "Estimated time left",
@@ -793,7 +808,9 @@
       "afterCut": "After cut",
       "save": "you save",
       "cancel": "Cancel",
-      "tooBigAudio": "This audio is too big to cut here, so the whole file was uploaded."
+      "tooBigAudio": "This audio is too big to cut here, so the whole file was uploaded.",
+      "cutUploadServer": "Upload — trim on the server",
+      "serverTrimNotice": "This file is too big to cut here. It will upload now and the cut will finish on the server."
     }
   },
   "pendingAccess": {

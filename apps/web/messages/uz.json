@@ -52,9 +52,21 @@
     "placeholder": "Uchrashuv haqida so'rang...",
     "disclaimer": "AI javoblari tekshirilishi kerak bo'lishi mumkin",
     "chipSummary": "Qisqacha xulosa",
+    "chipSummaryQuery": "Uchrashuvni qisqacha xulosalab bering",
     "chipTasks": "Vazifalar ro'yxati",
+    "chipTasksQuery": "Asosiy vazifalar va mas'ullar kimlar?",
     "chipFollowUp": "Follow-up xat",
-    "chipDecisions": "Asosiy qarorlar"
+    "chipFollowUpQuery": "Keyingi qadamlar bo'yicha follow-up xat tayyorlab bering",
+    "chipDecisions": "Asosiy qarorlar",
+    "chipDecisionsQuery": "Qanaqa asosiy qarorlar qabul qilindi?",
+    "tldr": "Qisqacha",
+    "you": "Siz",
+    "textSize": "Matn o'lchami",
+    "textSmaller": "Matnni kichraytirish",
+    "textLarger": "Matnni kattalashtirish",
+    "close": "Yopish",
+    "send": "Yuborish",
+    "errorGeneric": "Nimadir xato ketdi. Qayta urinib ko'ring."
   },
   "settings": {
     "devMode": "Developer Mode",
@@ -495,9 +507,10 @@
     "costLoadError": "Xarajat ma'lumotlarini yuklab bo'lmadi.",
     "meetingCost": "Uchrashuv xarajati",
     "costTranscription": "Matnga o'tkazish",
-    "costSummary": "Xulosa",
+    "costSummary": "Xulosa va tahlil",
     "costEmbeddings": "Vektorlar",
     "costChat": "Chat",
+    "freeTierSavings": "Bepul kvota bilan tejaldi: ~{amount} (taxminan)",
     "leaveAComment": "Izoh qoldirish",
     "replyPlaceholder": "Javob yozish...",
     "yourName": "Ismingiz",
@@ -528,6 +541,7 @@
     "aiEta": "~{minutes} daqiqa qoldi",
     "aiFineTranscribing": "Gemini'ga {completed}/{total} audio yuborildi",
     "aiFineStageProgress": "{completed}/{total} qism qayta ishlandi",
+    "aiCardChunkProgress": "Bo'lak {completed}/{total}",
     "aiStatusRow": "Xulosa va vazifalar tayyorlanmoqda…",
     "aiInputDisabledPlaceholder": "Tahlil tayyor bo'lgach savol bera olasiz…",
     "aiTranscriptNotReady": "Transkript hali tayyor emas",
@@ -580,6 +594,7 @@
     "aiEtaSoon": "Oz qoldi",
     "aiStageOfTotal": "{current}-bosqich / {total}",
     "aiAnalysisRunning": "AI tahlil davom etmoqda",
+    "aiNowDoing": "Hozir: {stage}",
     "aiEtaQueue": "2–4 soat kutish",
     "aiOverallProgress": "Umumiy jarayon",
     "aiEstimatedTime": "Taxminiy qolgan vaqt",
@@ -793,7 +808,9 @@
       "afterCut": "Kesilgandan keyin",
       "save": "tejaysiz",
       "cancel": "Bekor qilish",
-      "tooBigAudio": "Bu audio bu yerda kesish uchun juda katta, shuning uchun to'liq fayl yuklandi."
+      "tooBigAudio": "Bu audio bu yerda kesish uchun juda katta, shuning uchun to'liq fayl yuklandi.",
+      "cutUploadServer": "Yuklash — kesish serverda tugaydi",
+      "serverTrimNotice": "Bu fayl bu yerda kesish uchun juda katta. Hozir yuklanadi, kesish esa serverda tugaydi."
     }
   },
   "pendingAccess": {

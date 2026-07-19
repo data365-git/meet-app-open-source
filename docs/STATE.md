@@ -3,7 +3,39 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ /CLEAR HANDOFF (2026-07-19 morning — SESSION m, **LATEST — READ THIS ONE**)
+## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND IN PROGRESS, **LATEST — READ THIS ONE**
+
+🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
+
+**Owner's real meeting test FAILED (remote voice missing) → root cause found: the site's extension zip was packaged 07-18 13:41, BEFORE the 5 audio-guarantee commits (16:59–00:41). He tested stale code.** Guard now exists: `scripts/check-extension-zip-freshness.mjs` + local pre-commit hook (proven: currently FAILS on the stale zip, as it should).
+
+**📌 EXECUTABLE SPEC (self-contained, ANY fresh session continues from it): `docs/plans/2026-07-19-big-fix-round-SPEC.md`** — includes live progress state, both in-flight subagent specs, design-asset paths, all wave details. Original approved plan (same content, less progress state): `C:\Users\mirko\.claude\plans\plan-qilamiz-bu-to-xtaganni-vast-reef.md` — Waves: 0 (recorder+quick wins→Deploy A) · 1 (ffmpeg finalize/seek/trim/multipart) · 2 (AI status/price/drift Gemini-only) · 2.5 (owner's design: AI chat + panels dark) · 3 (Deploy B+verify+funnel kill). Owner decisions locked: onboarding step-4 pricing = REMOVE; meeting default = full-screen+tab-audio (he presents slides); drift = Gemini-only, NO ElevenLabs in pipeline.
+
+**Design files received (2 zips):** v2 supersedes v1 (identical + adds `status/README.md` = granular AI-status UI contract for Wave 2.1 — take the UI shape, but map REAL stages transcribe/summary/refined, not its guessed embedding-centric ones). Unzipped at `...scratchpad\design-chat-v2\handoff\` — ⚠️ scratchpad is session-scoped; durable source: `C:\Users\mirko\Downloads\ADHD-do'st GitHub AI chat1.zip`. Sample `AI Status.dc.html` received separately: `C:\Users\mirko\Downloads\AI Status.dc.html` (card: "Hozir: <stage>" + detail + weighted % bar + ETA + 5-step list with ✓/spinner/dimmed, CSS-var light/dark theming).
+
+**✅ WAVE 0 SHIPPED + MACHINE-PROVEN, Deploy A building:**
+- Commits pushed: `ce451a9` (web: onboarding uz/ru/en + pricing step REMOVED + 1-step record page) + `6747b80` (extension v0.4.0: meeting filing fix, 2-click flow, **Ctrl+Shift+9 shortcut**, 1.5Mbps, durationInSecs, fresh zip, staleness pre-commit guard). Gate exit 0 · vitest web 1073 + ext 124 · ext tsc debt 53→2.
+- **AUTORESEARCH PROOF GREEN** (`autoresearch/meet-audio-proof-260719-1900/log.md`, harness committed at `apps/browser-extension/e2e-audio-proof/`): full-contract e2e — real OS keypress → commands → tabCapture → recording → multipart → assembled bytes CONTAIN the Meet tab's tone (−29dB ≫ −50) + filing=meeting + duration=11s. VERDICT=PASS ×2. Harness also caught 2 pre-ship bugs (unwired popup auto-fire; error-path null-deref) — both fixed.
+- **Deploy A triggered** (deployment vtse24y6eihdto8fgtk4m4q4, ~30-40 min from ~14:45). Verify per RUNBOOK §3a.4: docker image tag = 6747b80 + /api/health ok/ok. Then: live-verify onboarding (minted session), 404 uz, zip v0.4.0 on live site.
+### ⏭️ EXACT RESUME POINT (session n end, ~15:10)
+**DONE + UNCOMMITTED in the working tree** (gate is RED only because two agents are mid-edit — do not `git checkout` anything):
+- ✅ Wave 2.1/2.2 (agent finished): chunk fields in `/api/video/ai` + `use-ai-status` + GenerateAiPanel restyled to the owner's design (stage weights transcribe 65/summary 20/refined 15) + CapCard "Bo'lak N/M" (poller only for actively-running caps) + billingMonth fix + "bepul kvota bilan tejaldi" line + `costSummary` label → "Xulosa va tahlil". Its `NEXT_PUBLIC_USD_TO_UZS` prod env was deliberately NOT set — **still an open task** (set it at Deploy B; fallback 12900 until then).
+- ✅ Wave 2.5 (agent finished): AIChatPopup + ai-chat.css dropped in (extended with the docked-mini-player FAB offset + safe-area, which the handoff file lacked), `?variant=inline` chat deleted from SharePanel, globals.css unlayered rules removed (found a SECOND one the audit missed), Toolbar + NavigationMenu tokens. Panels drop-in deliberately SKIPPED — repo versions already use the prescribed tokens and have newer logic (verified by diff+grep). Leftover: `docs/plans/2026-07-19-wave25-handoff.md` holds a 3-hunk ShareVideo.tsx patch that still must be applied to finish removing the inline-variant plumbing.
+- ✅ Drift fix (main session) — see the block above.
+- ✅ Wave 1.2/1.3 (agent finished): new shared `utils/multipart-upload.ts` (part splitting, per-part retry+backoff, stall+hard timeouts, progress aggregation, Drive sequential fallback); `instant-mp4-uploader` now delegates to it (no twin); imports **and** buffered-raw recordings ≥50MB go multipart with `durationInSecs` forwarded; single PUT keeps a 10-min timeout + 30s stall detector; web-recorder bitrate 600k/96k → 1.5M/128k (landed together, per the review must-fix); PreUploadTrimmer >100MB copy now tells the truth about server-side trim. 13 new unit tests; vitest 1113 pass / 1 pre-existing fail.
+- 🔄 **STILL RUNNING when the session ended: ONLY the Wave 1.1 agent** (server finalize: process-video/edit-video/video-convert/vtt-edit-remap — it was told prod key names are `raw-upload.mp4`/`source/original.mp4`, NOT `result.mp4`, for webMP4 videos). Its in-flight edits are why `workflows/edit-video.ts` + `save-edits.ts` currently carry errors and 1 failing test. Everything else in the tree is finished work.
+
+**Decided, do NOT re-litigate:** `packages/ui/.../NavigationMenu.tsx` is DEAD CODE (nothing in `apps/web` imports it — verified repo-wide by the side task). Its zinc→gray token fix is in the tree and harmless; its broken `group-hover` (the `group` class sits on `NavigationMenuList`, not the `<a>`) is NOT worth fixing and the component is NOT worth deleting right now — zero user impact either way, and deleting an upstream-Cap component is a separate call. Leave both; revisit only if the component is ever mounted.
+
+**NEXT 5 STEPS, in order:** (1) read the two agents' reports / finish their work; (2) `.claude\gate.cmd` must exit 0; (3) review diffs (CRLF check) + commit per workstream; (4) apply the wave25 handoff patch; (5) Deploy B → then RE-MEASURE drift on `j1q9mjg8kewr2en` (re-transcribe it, re-run `scripts/measure-transcript-drift.mjs` in the prod container; target max ≤15s vs the 113.5s baseline) and live-verify the seek-before-AI fix.
+- Prod server: 4 cores/8GB, load 0.4 → compress viable; ffmpeg-static in prod.
+
+**🔬 DRIFT ROOT CAUSE FOUND + FIXED (main session, unit-proven, NOT yet e2e):** built a measurement rig (`scripts/measure-transcript-drift.mjs` + `drift-fetch.mjs`, runs in the prod container, read-only) and measured the owner's real 42-min video: baseline **max 113s / mean 42s** drift, all negative. Dense sampling inside one chunk showed Gemini's clock runs at a near-constant **0.64× real time**, re-anchoring at each chunk start → the error is LINEAR → removed by a per-chunk linear rescale anchored on the true speech end (`rescaleChunkVtt` + `ChunkSpec.speechEndSec`). 11 unit tests green. ⛔ **Target max ≤15s is UNPROVEN until Deploy B + a re-transcription of `j1q9mjg8kewr2en` + a re-run of the rig.** Full log: `autoresearch/meet-audio-proof-260719-1900/log.md` PART 2.
+
+**OWNER TODO (Deploy A is LIVE now, ~15 min):** open data365.duckdns.org/dashboard/extension → download the NEW zip (v0.4.0 in chrome://extensions proves it) → remove old extension, Load unpacked the new one → run docs/OWNER_QA_SCRIPT.md steps 1 (solo 3-min recording plays fully with audio) and 6 (2-person Meet; remote voice audible; recording appears under **Meetings**). New: bitta tugma bilan boshlash — Meet tabida **Ctrl+Shift+9**.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-19 morning — SESSION m — superseded by session n above)
 
 🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
 

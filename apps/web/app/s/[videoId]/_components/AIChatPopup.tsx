@@ -1,9 +1,24 @@
 "use client";
 
+import Cookies from "js-cookie";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatSeconds, parseTimestampToSeconds } from "./ai-chat-timestamps";
 import "./ai-chat.css";
+
+/* ============================================================
+   Meeting AI popup — calm / flat, ADHD-friendly redesign
+   (owner-delivered design, Wave 2.5).
+   - Follows the app theme automatically (body class "dark"/"light",
+     "theme" cookie, or prefers-color-scheme) -> data-theme on popup.
+   - Adaptive rendering: short answers stay a plain bubble; longer
+     answers get a TL;DR band + labelled sections + bullet lists.
+   - Reading-size control (persisted).
+   - Strings come from next-intl (uz / ru / en), "aiChat" namespace.
+   Extended (beyond the delivered drop-in) to keep existing product
+   behavior: processing/transcriptReady gating, per-video localStorage
+   history, and the auth/quota error copy — the delivered file didn't
+   need these because it wasn't wired to this app's AI pipeline yet.
+   ============================================================ */
 
 interface Message {
 	id: string;
@@ -11,105 +26,256 @@ interface Message {
 	content: string;
 }
 
-// UUIDs never collide, unlike the old counter-based id (which reseeded from
-// saved.length on reload and duplicated ids for non-contiguous history —
-// see SharePanel.tsx for the same fix on the inline chat variant).
-function nextMsgId() {
-	return `msg-${crypto.randomUUID()}`;
-}
-
 interface AIChatPopupProps {
 	videoId: string;
 	onVideoJump: (seconds: number) => void;
 	onClose: () => void;
 	isOpen?: boolean;
-	/** Whole AI pipeline still running — disables the ask box like SharePanel's inline chat. */
+	/** Whole AI pipeline still running — disables the ask box. */
 	processing?: boolean;
 	/** False once transcription is done but the transcript is empty/missing. */
 	transcriptReady?: boolean;
 }
 
-function splitByLineBreak(text: string, keyOffset: number): React.ReactNode[] {
-	const lines = text.split("\n");
-	const result: React.ReactNode[] = [];
-	for (let n = 0; n < lines.length; n++) {
-		if (n > 0) result.push(<br key={`br-${keyOffset}-${String(n)}`} />);
-		result.push(lines[n]);
-	}
-	return result;
+// UUIDs never collide, unlike a counter reseeded from saved.length on reload
+// (which duplicated ids for non-contiguous history and rendered messages on
+// top of each other).
+function nextMsgId() {
+	return `msg-${crypto.randomUUID()}`;
 }
 
-function renderBoldAndBreaks(
+const READING_STEPS = [14, 16, 19, 22];
+const READING_KEY = "aiChatReading";
+
+function parseMmSsToSeconds(mmss: string): number {
+	const parts = mmss.split(":");
+	if (parts.length === 2) {
+		return parseInt(parts[0] ?? "0", 10) * 60 + parseInt(parts[1] ?? "0", 10);
+	}
+	if (parts.length === 3) {
+		return (
+			parseInt(parts[0] ?? "0", 10) * 3600 +
+			parseInt(parts[1] ?? "0", 10) * 60 +
+			parseInt(parts[2] ?? "0", 10)
+		);
+	}
+	return 0;
+}
+
+/* ---- Theme: follow the app ---- */
+type Theme = "light" | "dark";
+function readAppTheme(): Theme {
+	if (typeof document !== "undefined") {
+		if (document.body.classList.contains("dark")) return "dark";
+		if (document.body.classList.contains("light")) return "light";
+	}
+	const cookie = Cookies.get("theme");
+	if (cookie === "dark" || cookie === "light") return cookie;
+	if (
+		typeof window !== "undefined" &&
+		window.matchMedia?.("(prefers-color-scheme: dark)").matches
+	) {
+		return "dark";
+	}
+	return "light";
+}
+function useAppTheme(): Theme {
+	const [theme, setTheme] = useState<Theme>("light");
+	useEffect(() => {
+		const update = () => setTheme(readAppTheme());
+		update();
+		const observer = new MutationObserver(update);
+		observer.observe(document.body, {
+			attributes: true,
+			attributeFilter: ["class"],
+		});
+		const mq = window.matchMedia("(prefers-color-scheme: dark)");
+		mq.addEventListener("change", update);
+		return () => {
+			observer.disconnect();
+			mq.removeEventListener("change", update);
+		};
+	}, []);
+	return theme;
+}
+
+/* ---- Inline: **bold** + [mm:ss] citations ---- */
+function renderInline(
 	text: string,
-	keyOffset: number,
+	onVideoJump: (seconds: number) => void,
+	keyBase: string,
 ): React.ReactNode[] {
-	const boldRegex = /\*\*(.+?)\*\*/g;
-	const segments: React.ReactNode[] = [];
+	const re = /\[(\d{1,3}:\d{2}(?::\d{2})?)\]|\*\*(.+?)\*\*/g;
+	const out: React.ReactNode[] = [];
 	let last = 0;
-	let match: RegExpExecArray | null;
-	let i = keyOffset;
-
-	while (true) {
-		match = boldRegex.exec(text);
-		if (match === null) break;
-		const before = text.slice(last, match.index);
-		if (before) {
-			segments.push(...splitByLineBreak(before, i));
-			i++;
+	let i = 0;
+	let m: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex walk
+	while ((m = re.exec(text)) !== null) {
+		if (m.index > last) out.push(text.slice(last, m.index));
+		if (m[1]) {
+			const secs = parseMmSsToSeconds(m[1]);
+			out.push(
+				<button
+					key={`${keyBase}-c${i}`}
+					type="button"
+					className="ai-citation"
+					onClick={() => onVideoJump(secs)}
+				>
+					[{m[1]}]
+				</button>,
+			);
+		} else if (m[2]) {
+			out.push(<strong key={`${keyBase}-b${i}`}>{m[2]}</strong>);
 		}
-		segments.push(
-			<span key={`b-${i++}`} className="font-semibold">
-				{match[1]}
-			</span>,
-		);
-		last = match.index + match[0].length;
+		last = m.index + m[0].length;
+		i++;
 	}
-
-	const tail = text.slice(last);
-	if (tail) {
-		segments.push(...splitByLineBreak(tail, i));
-	}
-
-	return segments;
+	if (last < text.length) out.push(text.slice(last));
+	return out;
 }
 
-function renderMessageContent(
-	content: string,
-	onVideoJump: (seconds: number) => void,
-): React.ReactNode[] {
-	const citationRegex = /\[(\d{1,3}:\d{2}(?::\d{2})?)\]/g;
-	const parts: React.ReactNode[] = [];
-	let last = 0;
-	let match: RegExpExecArray | null;
+/* ---- Parse an assistant answer into calm blocks ---- */
+type Block =
+	| { kind: "section"; label: string }
+	| { kind: "bullet"; text: string }
+	| { kind: "para"; text: string };
 
-	while (true) {
-		match = citationRegex.exec(content);
-		if (match === null) break;
-		const before = content.slice(last, match.index);
-		if (before) {
-			parts.push(...renderBoldAndBreaks(before, parts.length));
+interface ParsedAnswer {
+	structured: boolean;
+	tldr: string | null;
+	blocks: Block[];
+}
+
+function parseAnswer(content: string): ParsedAnswer {
+	const lines = content.replace(/\r/g, "").split("\n");
+	const blocks: Block[] = [];
+	let structured = false;
+
+	for (const rawLine of lines) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
+		const boldHeading = line.match(/^\*\*(.+?)\*\*:?\s*$/);
+		const bullet = line.match(/^[-*•]\s+(.+)$/);
+		const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+		if (heading) {
+			blocks.push({ kind: "section", label: heading[1] ?? "" });
+			structured = true;
+		} else if (boldHeading) {
+			blocks.push({ kind: "section", label: boldHeading[1] ?? "" });
+			structured = true;
+		} else if (bullet) {
+			blocks.push({ kind: "bullet", text: bullet[1] ?? "" });
+			structured = true;
+		} else if (numbered) {
+			blocks.push({ kind: "bullet", text: numbered[1] ?? "" });
+			structured = true;
+		} else {
+			blocks.push({ kind: "para", text: line });
 		}
-		const timestamp = match[1] ?? "";
-		const seconds = parseTimestampToSeconds(timestamp);
-		parts.push(
-			<button
-				key={`cite-${match.index}`}
-				type="button"
-				className="ai-citation"
-				onClick={() => onVideoJump(seconds)}
-			>
-				{`[${formatSeconds(seconds)}]`}
-			</button>,
+	}
+
+	// If structured and it opens with a short lead paragraph, lift it as TL;DR.
+	let tldr: string | null = null;
+	if (structured && blocks[0]?.kind === "para") {
+		const lead = blocks[0] as { kind: "para"; text: string };
+		if (lead.text.length <= 240) {
+			tldr = lead.text;
+			blocks.shift();
+		}
+	}
+	return { structured, tldr, blocks };
+}
+
+function AnswerBody({
+	content,
+	tldrLabel,
+	onVideoJump,
+}: {
+	content: string;
+	tldrLabel: string;
+	onVideoJump: (seconds: number) => void;
+}) {
+	const { structured, tldr, blocks } = parseAnswer(content);
+
+	// Adaptive: plain answers stay a simple, readable bubble.
+	if (!structured) {
+		// By construction (parseAnswer only sets structured=true when a
+		// heading/bullet is found), every block here is "para" — but the type
+		// is still the Block union, so fall back to the label for the
+		// theoretical "section" case rather than assuming .text exists.
+		return (
+			<div className="ai-answer plain">
+				{blocks.map((b, i) => (
+					<p key={`p-${i}`}>
+						{renderInline(
+							b.kind === "section" ? b.label : b.text,
+							onVideoJump,
+							`p-${i}`,
+						)}
+					</p>
+				))}
+			</div>
 		);
-		last = match.index + match[0].length;
 	}
 
-	const tail = content.slice(last);
-	if (tail) {
-		parts.push(...renderBoldAndBreaks(tail, parts.length + 1000));
-	}
+	// Group consecutive bullets into one list.
+	const rendered: React.ReactNode[] = [];
+	let bulletBuf: Extract<Block, { kind: "bullet" }>[] = [];
+	const flush = (key: string) => {
+		if (bulletBuf.length === 0) return;
+		rendered.push(
+			<div className="ai-bullets" key={`bl-${key}`}>
+				{bulletBuf.map((b, i) => (
+					<div className="ai-bullet" key={`b-${key}-${i}`}>
+						<span className="bdot" />
+						<span className="txt">
+							{renderInline(b.text, onVideoJump, `b-${key}-${i}`)}
+						</span>
+					</div>
+				))}
+			</div>,
+		);
+		bulletBuf = [];
+	};
 
-	return parts;
+	blocks.forEach((b, i) => {
+		if (b.kind === "bullet") {
+			bulletBuf.push(b);
+			return;
+		}
+		flush(`${i}`);
+		if (b.kind === "section") {
+			rendered.push(
+				<div className="ai-section" key={`s-${i}`}>
+					<div className="hd">
+						<span className="dot" />
+						<span className="lbl">{b.label}</span>
+					</div>
+				</div>,
+			);
+		} else {
+			rendered.push(
+				<div className="ai-para" key={`pa-${i}`}>
+					{renderInline(b.text, onVideoJump, `pa-${i}`)}
+				</div>,
+			);
+		}
+	});
+	flush("end");
+
+	return (
+		<div className="ai-answer structured">
+			{tldr && (
+				<div className="ai-tldr">
+					<span className="lbl">{tldrLabel}</span>
+					<span className="txt">{renderInline(tldr, onVideoJump, "tldr")}</span>
+				</div>
+			)}
+			{rendered}
+		</div>
+	);
 }
 
 function OrbIcon() {
@@ -119,8 +285,6 @@ function OrbIcon() {
 			fill="none"
 			stroke="currentColor"
 			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
 			aria-hidden="true"
 		>
 			<path
@@ -133,80 +297,48 @@ function OrbIcon() {
 	);
 }
 
-function ChipSummaryIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M4 6h16M4 11h16M4 16h10" />
-		</svg>
-	);
-}
+type ChipKind = "summary" | "tasks" | "email" | "decisions";
 
-function ChipTasksIcon() {
+function ChipIcon({ kind }: { kind: ChipKind }) {
+	const common = {
+		width: 16,
+		height: 16,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: 1.9,
+		strokeLinecap: "round" as const,
+		strokeLinejoin: "round" as const,
+		"aria-hidden": true,
+	};
+	if (kind === "summary")
+		return (
+			<svg {...common}>
+				<path d="M4 6h16M4 11h16M4 16h10" />
+			</svg>
+		);
+	if (kind === "tasks")
+		return (
+			<svg {...common}>
+				<path d="m3 7 1.6 1.6L8 5" />
+				<path d="m3 17 1.6 1.6L8 15" />
+				<path d="M11 7h10M11 17h10" />
+			</svg>
+		);
+	if (kind === "email")
+		return (
+			<svg {...common}>
+				<rect x="3" y="5" width="18" height="14" rx="2.5" />
+				<path d="m3.5 7 8.5 6 8.5-6" />
+			</svg>
+		);
 	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="m3 7 1.6 1.6L8 5" />
-			<path d="m3 17 1.6 1.6L8 15" />
-			<path d="M11 7h10M11 17h10" />
-		</svg>
-	);
-}
-
-function ChipEmailIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<rect x="3" y="5" width="18" height="14" rx="2.5" />
-			<path d="m3.5 7 8.5 6 8.5-6" />
-		</svg>
-	);
-}
-
-function ChipDecisionsIcon() {
-	return (
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.8"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
+		<svg {...common}>
 			<path d="M12 2.6l2.5 1.85 3.1.05.05 3.1L19.4 10l-1.85 2.5.05 3.1-3.1.05L12 17.4l-2.5-1.85-3.1-.05-.05-3.1L4.6 10l1.85-2.5-.05-3.1 3.1-.05z" />
 			<path d="m9.2 10.2 2 2 3.6-3.6" />
 		</svg>
 	);
 }
-
-const CHIP_ICONS = [
-	<ChipSummaryIcon key="summary" />,
-	<ChipTasksIcon key="tasks" />,
-	<ChipEmailIcon key="email" />,
-	<ChipDecisionsIcon key="decisions" />,
-];
 
 export function AIChatPopup({
 	videoId,
@@ -216,43 +348,51 @@ export function AIChatPopup({
 	processing = false,
 	transcriptReady = true,
 }: AIChatPopupProps) {
-	const t = useTranslations("share");
-	// The chip LABEL is the short i18n string; the QUERY sent to the model must be
-	// a full instruction (a terse "Xulosa" degrades the answer). The transcript is
-	// Uzbek, so the instruction is Uzbek and consistent for all UI languages.
-	const QUICK_ACTIONS = [
-		{
-			label: t("aiQuickSummary"),
-			query: "Bu video haqida qisqacha, aniq xulosa ber.",
-		},
-		{
-			label: t("aiQuickActionItems"),
-			query: "Asosiy vazifalar nima va har biriga kim mas'ul?",
-		},
-		{
-			label: t("aiQuickFollowUpEmail"),
-			query: "Keyingi qadamlar bo'yicha qisqa follow-up xat yozib ber.",
-		},
-		{
-			label: t("aiQuickKeyPoints"),
-			query: "Qanday asosiy qarorlar va muhim fikrlar bo'ldi?",
-		},
-	];
+	const t = useTranslations("aiChat");
+	// Auth/quota error copy stays on the "share" namespace — the delivered
+	// aiChat i18n block only covers the calm UI shell, not backend error cases.
+	const tShare = useTranslations("share");
+	const theme = useAppTheme();
+
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
+	const [readingIdx, setReadingIdx] = useState(1);
+
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const closeButtonRef = useRef<HTMLButtonElement>(null);
 	const popupRef = useRef<HTMLDivElement>(null);
 	const abortRef = useRef<AbortController | null>(null);
-
 	const resizeState = useRef<{
 		startX: number;
 		startY: number;
 		startW: number;
 		startH: number;
 	} | null>(null);
+
+	const QUICK_ACTIONS: { kind: ChipKind; label: string; query: string }[] = [
+		{ kind: "summary", label: t("chipSummary"), query: t("chipSummaryQuery") },
+		{ kind: "tasks", label: t("chipTasks"), query: t("chipTasksQuery") },
+		{ kind: "email", label: t("chipFollowUp"), query: t("chipFollowUpQuery") },
+		{ kind: "decisions", label: t("chipDecisions"), query: t("chipDecisionsQuery") },
+	];
+
+	const inputDisabled = isStreaming || processing || !transcriptReady;
+	const inputPlaceholder = processing
+		? tShare("aiInputDisabledPlaceholder")
+		: !transcriptReady
+			? tShare("aiTranscriptNotReady")
+			: t("placeholder");
+
+	useEffect(() => {
+		const raw = localStorage.getItem(READING_KEY);
+		if (raw === null) return;
+		const stored = Number(raw);
+		if (Number.isInteger(stored) && stored >= 0 && stored < READING_STEPS.length) {
+			setReadingIdx(stored);
+		}
+	}, []);
 
 	useEffect(() => {
 		if (!isOpen) return;
@@ -263,16 +403,15 @@ export function AIChatPopup({
 		return () => window.removeEventListener("keydown", handleKey);
 	}, [isOpen, onClose]);
 
+	// Focus the input on open; return focus to the trigger on close.
 	useEffect(() => {
 		if (!isOpen) return;
 		const previouslyFocused =
-			document.activeElement instanceof HTMLElement
-				? document.activeElement
-				: null;
+			document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		const frame = window.requestAnimationFrame(() => {
-			const input = textareaRef.current;
-			input?.focus();
-			if (document.activeElement !== input) {
+			const el = textareaRef.current;
+			el?.focus();
+			if (document.activeElement !== el) {
 				closeButtonRef.current?.focus();
 			}
 		});
@@ -282,22 +421,20 @@ export function AIChatPopup({
 		};
 	}, [isOpen]);
 
+	// Abort any in-flight stream when the popup unmounts.
 	useEffect(() => {
 		return () => abortRef.current?.abort();
 	}, []);
 
 	const messageCount = messages.length;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional scroll trigger on message count and streaming state changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages / streaming
 	useEffect(() => {
-		const prefersReducedMotion =
-			window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-		messagesEndRef.current?.scrollIntoView({
-			behavior: prefersReducedMotion ? "auto" : "smooth",
-		});
+		const body = messagesEndRef.current;
+		if (body) body.scrollTop = body.scrollHeight;
 	}, [messageCount, isStreaming]);
 
-	// Shares the same per-video localStorage history as the inline chat variant
-	// (SharePanel.tsx) so switching ?variant doesn't lose the conversation.
+	// Per-video chat history (owner: keep history for that video only) so a
+	// refresh doesn't wipe it. UUID ids mean no reseed/collision risk on load.
 	useEffect(() => {
 		try {
 			const raw = window.localStorage.getItem(`data365:aiChat:${videoId}`);
@@ -325,11 +462,19 @@ export function AIChatPopup({
 		}
 	}, [messages, videoId]);
 
+	const setReading = (dir: number) => {
+		setReadingIdx((prev) => {
+			const next = Math.max(0, Math.min(READING_STEPS.length - 1, prev + dir));
+			localStorage.setItem(READING_KEY, String(next));
+			return next;
+		});
+	};
+
 	const adjustTextarea = () => {
 		const el = textareaRef.current;
 		if (!el) return;
 		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, 90)}px`;
+		el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
 	};
 
 	const sendMessage = useCallback(
@@ -369,7 +514,7 @@ export function AIChatPopup({
 				});
 
 				if (!response.ok || !response.body) {
-					let errorText = t("aiError");
+					let errorText = t("errorGeneric");
 					if (response.status === 403) {
 						let body: { error?: string } = {};
 						try {
@@ -379,10 +524,10 @@ export function AIChatPopup({
 						}
 						errorText =
 							body.error === "ai_access_required"
-								? t("aiProRequired")
-								: t("aiAuthRequired");
+								? tShare("aiProRequired")
+								: tShare("aiAuthRequired");
 					} else if (response.status === 401) {
-						errorText = t("aiAuthRequired");
+						errorText = tShare("aiAuthRequired");
 					} else if (response.status === 429) {
 						let body: { error?: string; code?: string } = {};
 						try {
@@ -393,16 +538,12 @@ export function AIChatPopup({
 						}
 						errorText =
 							body.error === "daily_limit" || body.code === "daily_limit"
-								? t("aiChatDailyLimit")
-								: t("aiBusy");
+								? tShare("aiChatDailyLimit")
+								: tShare("aiBusy");
 					}
 					setMessages((prev) => [
 						...prev,
-						{
-							id: nextMsgId(),
-							role: "assistant",
-							content: errorText,
-						},
+						{ id: nextMsgId(), role: "assistant", content: errorText },
 					]);
 					return;
 				}
@@ -419,33 +560,27 @@ export function AIChatPopup({
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-
 					const chunk = decoder.decode(value, { stream: true });
-					const lines = chunk.split("\n");
-
-					for (const line of lines) {
+					for (const line of chunk.split("\n")) {
 						const trimmedLine = line.trim();
 						if (!trimmedLine.startsWith("data:")) continue;
 						const payload = trimmedLine.slice(5).trim();
 						if (payload === "[DONE]") break;
-
 						try {
 							const parsed = JSON.parse(payload) as {
 								token?: string;
 								error?: string;
 							};
 							if (parsed.error) {
-								// Surface the server's error as the assistant reply instead
-								// of leaving a blank/empty message.
-								assistantContent = t("aiAnswerError", {
+								assistantContent = tShare("aiAnswerError", {
 									error: parsed.error,
 								});
 								setMessages((prev) => {
 									const updated = [...prev];
-									const last = updated[updated.length - 1];
-									if (last?.role === "assistant") {
+									const lastMsg = updated[updated.length - 1];
+									if (lastMsg?.role === "assistant") {
 										updated[updated.length - 1] = {
-											...last,
+											...lastMsg,
 											content: assistantContent,
 										};
 									}
@@ -455,10 +590,10 @@ export function AIChatPopup({
 								assistantContent += parsed.token;
 								setMessages((prev) => {
 									const updated = [...prev];
-									const last = updated[updated.length - 1];
-									if (last?.role === "assistant") {
+									const lastMsg = updated[updated.length - 1];
+									if (lastMsg?.role === "assistant") {
 										updated[updated.length - 1] = {
-											...last,
+											...lastMsg,
 											content: assistantContent,
 										};
 									}
@@ -466,7 +601,7 @@ export function AIChatPopup({
 								});
 							}
 						} catch {
-							// non-JSON SSE lines skipped
+							/* non-JSON SSE line */
 						}
 					}
 				}
@@ -474,11 +609,7 @@ export function AIChatPopup({
 				if ((err as Error).name !== "AbortError") {
 					setMessages((prev) => [
 						...prev,
-						{
-							id: nextMsgId(),
-							role: "assistant",
-							content: t("aiError"),
-						},
+						{ id: nextMsgId(), role: "assistant", content: t("errorGeneric") },
 					]);
 				}
 			} finally {
@@ -486,7 +617,7 @@ export function AIChatPopup({
 				abortRef.current = null;
 			}
 		},
-		[videoId, messages, isStreaming, processing, t, transcriptReady],
+		[videoId, messages, isStreaming, processing, transcriptReady, t, tShare],
 	);
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -507,70 +638,79 @@ export function AIChatPopup({
 			startW: rect.width,
 			startH: rect.height,
 		};
-
 		const onMove = (ev: MouseEvent) => {
 			if (!resizeState.current || !popupRef.current) return;
 			const dx = resizeState.current.startX - ev.clientX;
 			const dy = resizeState.current.startY - ev.clientY;
-			const newW = Math.max(300, resizeState.current.startW + dx);
-			const newH = Math.max(360, resizeState.current.startH + dy);
-			popupRef.current.style.width = `${newW}px`;
-			popupRef.current.style.height = `${newH}px`;
+			popupRef.current.style.width = `${Math.max(320, resizeState.current.startW + dx)}px`;
+			popupRef.current.style.height = `${Math.max(380, resizeState.current.startH + dy)}px`;
 		};
-
 		const onUp = () => {
 			resizeState.current = null;
 			window.removeEventListener("mousemove", onMove);
 			window.removeEventListener("mouseup", onUp);
 		};
-
 		window.addEventListener("mousemove", onMove);
 		window.addEventListener("mouseup", onUp);
 	};
 
 	const hasMessages = messages.length > 0;
-	const inputDisabled = isStreaming || processing || !transcriptReady;
-	const inputPlaceholder = processing
-		? t("aiInputDisabledPlaceholder")
-		: !transcriptReady
-			? t("aiTranscriptNotReady")
-			: t("aiPlaceholder");
 
 	return (
 		<div
 			ref={popupRef}
+			data-theme={theme}
 			className={`ai-popup${isOpen ? " open" : ""}`}
 			role="dialog"
-			aria-label={t("aiDialogAriaLabel")}
+			aria-label={t("title")}
 			aria-hidden={!isOpen}
 			inert={!isOpen}
+			style={{ "--ai-reading": `${READING_STEPS[readingIdx]}px` } as React.CSSProperties}
 		>
-			<div className="ai-tint-overlay" />
-			<div className="ai-noise" />
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: resize handle is mouse-only by design */}
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: mouse-only resize handle */}
 			<div className="ai-resize" onMouseDown={onResizeMouseDown} />
 
 			<div className="ai-hd">
-				<div className="orb-sm">
+				<div className="ai-orb">
 					<OrbIcon />
 				</div>
 				<div className="htxt">
-					<div className="t">{t("aiConversationTitle")}</div>
+					<div className="t">{t("title")}</div>
 					<div className="s">
 						{!processing && transcriptReady && <span className="live" />}
 						{processing
-							? t("aiInputDisabledPlaceholder")
+							? tShare("aiInputDisabledPlaceholder")
 							: !transcriptReady
-								? t("aiTranscriptNotReady")
-								: t("aiContextLoaded")}
+								? tShare("aiTranscriptNotReady")
+								: t("subtitle")}
 					</div>
+				</div>
+				<div className="ai-textsize" role="group" aria-label={t("textSize")}>
+					<button
+						type="button"
+						className="sm"
+						onClick={() => setReading(-1)}
+						disabled={readingIdx === 0}
+						aria-label={t("textSmaller")}
+					>
+						A
+					</button>
+					<button
+						type="button"
+						className="lg"
+						onClick={() => setReading(1)}
+						disabled={readingIdx === READING_STEPS.length - 1}
+						aria-label={t("textLarger")}
+					>
+						A
+					</button>
 				</div>
 				<button
 					ref={closeButtonRef}
 					type="button"
 					className="ai-x"
 					onClick={onClose}
-					aria-label={t("aiCloseAriaLabel")}
+					aria-label={t("close")}
 				>
 					<svg
 						width="16"
@@ -586,7 +726,7 @@ export function AIChatPopup({
 				</button>
 			</div>
 
-			<div className="ai-body">
+			<div className="ai-body" ref={messagesEndRef}>
 				{!hasMessages && inputDisabled && (
 					<div className="ai-welcome">
 						<div className="ws">{inputPlaceholder}</div>
@@ -596,51 +736,61 @@ export function AIChatPopup({
 				{!hasMessages && !inputDisabled && (
 					<>
 						<div className="ai-welcome">
-							<div className="wt">
-								{t.rich("aiWelcomeTitle", {
-									emphasis: (chunks) => <span className="grad">{chunks}</span>,
-								})}
-							</div>
-							<div className="ws">{t("aiWelcomeSubtitle")}</div>
+							<div className="wt">{t("welcomeTitle")}</div>
+							<div className="ws">{t("welcomeSubtitle")}</div>
 						</div>
 						<div className="ai-chips">
-							{QUICK_ACTIONS.map((action, idx) => (
+							{QUICK_ACTIONS.map((action) => (
 								<button
 									key={action.query}
 									type="button"
 									className="ai-chip"
 									onClick={() => sendMessage(action.query)}
-									disabled={inputDisabled}
 								>
-									{CHIP_ICONS[idx]}
+									<span className="ic">
+										<ChipIcon kind={action.kind} />
+									</span>
 									{action.label}
+									<span className="arr">›</span>
 								</button>
 							))}
 						</div>
 					</>
 				)}
 
-				{messages.map((msg) => (
-					<div
-						key={msg.id}
-						className={`ai-msg${msg.role === "user" ? " user" : " ai"}`}
-					>
-						{msg.role === "assistant" && (
-							<div className="av">
+				{messages.map((msg) =>
+					msg.role === "user" ? (
+						<div key={msg.id} className="ai-msg user">
+							<div className="ai-avatar me">{t("you")}</div>
+							<div className="bubble">{msg.content}</div>
+						</div>
+					) : (
+						<div key={msg.id} className="ai-msg ai">
+							<div className="ai-avatar ai">
 								<OrbIcon />
 							</div>
-						)}
-						<div className="bubble">
-							{msg.role === "assistant"
-								? renderMessageContent(msg.content, onVideoJump)
-								: msg.content}
+							<div className="content">
+								{msg.content ? (
+									<AnswerBody
+										content={msg.content}
+										tldrLabel={t("tldr")}
+										onVideoJump={onVideoJump}
+									/>
+								) : (
+									<div className="ai-typing">
+										<span />
+										<span />
+										<span />
+									</div>
+								)}
+							</div>
 						</div>
-					</div>
-				))}
+					),
+				)}
 
 				{isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
 					<div className="ai-msg ai">
-						<div className="av">
+						<div className="ai-avatar ai">
 							<OrbIcon />
 						</div>
 						<div className="ai-typing">
@@ -650,8 +800,6 @@ export function AIChatPopup({
 						</div>
 					</div>
 				)}
-
-				<div ref={messagesEndRef} />
 			</div>
 
 			<div className="ai-foot">
@@ -673,7 +821,7 @@ export function AIChatPopup({
 						className="ai-send"
 						onClick={() => sendMessage(input)}
 						disabled={!input.trim() || inputDisabled}
-						aria-label={t("aiSendAriaLabel")}
+						aria-label={t("send")}
 					>
 						<svg
 							viewBox="0 0 24 24"
@@ -689,7 +837,7 @@ export function AIChatPopup({
 						</svg>
 					</button>
 				</div>
-				<div className="ai-disclaimer">{t("aiDisclaimer")}</div>
+				<div className="ai-disclaimer">{t("disclaimer")}</div>
 			</div>
 		</div>
 	);
