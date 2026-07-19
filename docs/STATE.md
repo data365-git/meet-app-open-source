@@ -3,7 +3,38 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ /CLEAR HANDOFF (2026-07-19 ~01:30 — SESSION l, **LATEST — READ THIS ONE**)
+## ▶▶ /CLEAR HANDOFF (2026-07-19 morning — SESSION m, **LATEST — READ THIS ONE**)
+
+🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
+
+### Done this session
+1. **Public-surface live walk on the new build (step 1 from session l) — DONE.** Real prod =
+   `data365.duckdns.org` (⚠️ `data365.taildef23b.ts.net` resolves to a DIFFERENT machine whose health says
+   db=error — do NOT use it to judge prod). Prod healthy: health ok/ok, all public pages 200, security
+   headers present, `/terms` 404 debt GONE. Server clean (disk 14%, mem fine, MySQL 3 conns).
+2. **Findings fixed + committed + pushed as `d5b0f5a`** (owner approved; "keep English if a clear Uzbek
+   translation doesn't exist"): share/embed policy-denied views + their metadata + signup/invite "Home"
+   were hardcoded English → now i18n keys in all 3 locales (`share.policy*`, `share.meta*`, `common.backHome`).
+   Gates: tsc 0 · 1073 passed / 26 skipped · grep 0 leftovers · all 3 locales parse (incl. rich tags) ·
+   /signup live-renders "Bosh sahifa" on local dev.
+3. Local-dev note: dev `.env` DATABASE_URL points at a DEAD Railway MySQL (ETIMEDOUT) — signup renders,
+   but any DB-backed page (incl. private-video denied view) can't be walked locally. Denied-view text is
+   proven via translator-parse + tests; pixel-proof lands with the next deploy.
+
+### ⏭️ NEXT
+1. **Deploy `d5b0f5a`?** — asked the owner (consult-first); on "ha" → RUNBOOK §3a, then live-verify the
+   denied view on the prod private video `/s/2t4a58an7acz3bb` (must show "Bu video maxfiy").
+2. Authenticated screens walk — still blocked machine-side (`docs/qa/SESSION_INJECTION_NOTES.md`); cheapest
+   path remains the owner walking the dashboard with a checklist.
+3. Feature/flow map workflow `wf_e694f75b-cdc` still resumable (see session l block).
+4. Minor unfixed observations: `/nonexistent` → 307 (redirect, not a 404 page); local-dev 404 page text is
+   English ("Oops, we couldn't find this page") — low priority, not stranger-critical on prod.
+5. ⛔ **OWNER TODO (the real blocker, ~15 min):** `docs/OWNER_QA_SCRIPT.md` steps **1** (solo 3-min
+   recording plays to the END with audio) and **6** (two-person Meet, remote voice audible). Until step 6
+   passes, "production ready" for the RECORDER is not a true claim.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-19 ~01:30 — SESSION l) — SUPERSEDED by session m above
 
 🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
 
@@ -709,7 +740,9 @@ Gate I ran myself: **tsc 0 · vitest 886 · 3 i18n JSON valid.** Working-tree on
 
 **STILL PENDING:** recorder T11/T12 (owner device prototype test — `_proto-offscreen-gdm/`, gate for Design B vs A′) · extension rebuild+reinstall (owner) · dock-fix + T4b live-verify (fold into Contabo deploy) · crons repoint.
 
-⚠️ **On resume: the laptop deploy is LIVE — do NOT assume nothing is deployed.** The `data365` server + funnel persist across /clear (OS-level). If migrating to Contabo, keep the laptop live until Contabo is verified (rollback + it's serving the team-facing interim).
+⚠️ ~~**On resume: the laptop deploy is LIVE — do NOT assume nothing is deployed.** The `data365` server + funnel persist across /clear (OS-level). If migrating to Contabo, keep the laptop live until Contabo is verified (rollback + it's serving the team-facing interim).~~
+
+⛔ **SUPERSEDED (2026-07-19): the laptop deploy is DEAD. Do NOT restart it.** Contabo is the only live host — `https://data365.duckdns.org/api/health` → 200 `{db:ok, storage:ok}` (verified this session). The Tailscale funnel hostname `jarvis.taildef23b.ts.net` **no longer resolves at all** (DNS NXDOMAIN), so the laptop was serving nobody. Its Windows autostart entry (`Startup\ustoz-server.vbs` → `deploy/start-ustoz-server.cmd`, which loops-restarts `pnpm --filter @cap/web start` every 5s) was silently re-launching a Next.js server on every boot and overheating the owner's laptop. **Removed 2026-07-19** — the .vbs was moved to `deploy/ustoz-server.vbs.disabled` (restore by copying it back into `shell:startup` if the laptop ever needs to serve again). `deploy/start-ustoz-server.cmd` is untouched for manual use.
 
 ---
 
