@@ -2,8 +2,10 @@ import { isKeepAliveAlarm, startKeepAlive, stopKeepAlive } from "./keepalive";
 import type { ExtensionSettings, ExtensionState } from "./state";
 import { getSettings, getState, setSettings, setState } from "./state";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
+import { getMeetingId } from "../shared/meeting-url";
 import {
 	abortUpload,
+	computeDurationInSecs,
 	discardUpload,
 	finalizeUpload,
 	finishLocalDiscardTraces,
@@ -60,14 +62,18 @@ function getTabMediaStreamId(
 async function openInstructionRecorder(
 	sourceTabId?: number,
 	meeting?: boolean,
+	meetingId?: string,
 ): Promise<number> {
 	const base = chrome.runtime.getURL("recorder.html");
 	// The guarantee travels with the TAB from here on (see state.ts
 	// ArmingState.meetingRequired comment) — only the guaranteed path gets the
-	// params; a plain screen recording opens with none.
+	// params; a plain screen recording opens with none. meetingId rides along
+	// too (when known) so RECORDER_STARTED can recover it even if the SW's
+	// "arming" record was wiped by an INSTRUCTION_CANCEL/RETRY in between (same
+	// reasoning as source/meeting — see the RECORDER_STARTED handler below).
 	const url =
 		meeting === true && sourceTabId !== undefined
-			? `${base}?source=${sourceTabId}&meeting=1`
+			? `${base}?source=${sourceTabId}&meeting=1${meetingId ? `&meetingId=${encodeURIComponent(meetingId)}` : ""}`
 			: base;
 	// Reuse an existing recorder tab if one is already open. Match with a
 	// wildcard so a tab left over from a PREVIOUS start (possibly carrying
@@ -462,6 +468,16 @@ async function finalizeRecording(): Promise<void> {
 	const parts = state.parts;
 	const totalBytes = state.totalBytes;
 	const uploadedBytes = state.uploadedBytes;
+	// Computed HERE, before the state transition below drops startedAt/
+	// pausedAccumMs (neither "uploading" nor "finishing" carries them) —
+	// finalizeUpload has no other way to see them once this function's own
+	// setState below has run.
+	const durationInSecs = computeDurationInSecs(
+		state.startedAt,
+		state.pausedAccumMs,
+		state.paused,
+		state.pausedAt,
+	);
 
 	const nextState: ExtensionState = {
 		kind: "uploading",
@@ -475,7 +491,7 @@ async function finalizeRecording(): Promise<void> {
 	stopKeepAlive();
 	updateBadge(nextState);
 	await closeOffscreenDocument().catch(() => {});
-	await finalizeUpload();
+	await finalizeUpload(durationInSecs);
 }
 
 async function handleMessage(
@@ -511,17 +527,26 @@ async function handleMessage(
 			// Guaranteed-client-audio mode ("Record full-screen meeting"): set only
 			// when the popup explicitly requested it while on a Meet tab.
 			const meetingRequired = _getBoolean(msg, "meeting") === true;
+			// The Meet meetingId (e.g. "abc-defg-hij"), sent by the popup for the
+			// same guaranteed path. Stored on the ArmingState (kind stays
+			// "arming"/mode stays "instruction" — this only carries an identifier
+			// through, it is NOT the meeting/instruction control-flow discriminator)
+			// so RECORDER_STARTED can file the upload as a meeting instead of a
+			// plain instruction recording.
+			const meetingId = getString(msg, "meetingId");
 			await setState({
 				kind: "arming",
 				mode: "instruction",
 				sourceTabId,
 				meetingRequired,
+				meetingId,
 			});
 			let recorderTabId: number;
 			try {
 				recorderTabId = await openInstructionRecorder(
 					sourceTabId,
 					meetingRequired,
+					meetingId,
 				);
 			} catch (err) {
 				await setState({ kind: "idle" });
@@ -537,6 +562,7 @@ async function handleMessage(
 				recorderTabId,
 				sourceTabId,
 				meetingRequired,
+				meetingId,
 			});
 			return { ok: true };
 		}
@@ -1172,7 +1198,6 @@ async function handleMessage(
 				};
 			}
 			const mode = state.kind === "arming" ? state.mode : "instruction";
-			const meetingId = state.kind === "arming" ? state.meetingId : undefined;
 			const tabId = state.kind === "arming" ? state.tabId : undefined;
 			const senderIsOwnRecorderPage = isOwnExtensionSender(_sender.url);
 			// The sender IS the recorder tab, so use it when arming is gone. Without
@@ -1207,6 +1232,13 @@ async function handleMessage(
 			const messageMeetingRequired = senderIsOwnRecorderPage
 				? _getBoolean(msg, "meeting")
 				: undefined;
+			// Same fallback for the meeting identifier itself (populated on the
+			// message by recorder-page.ts from its own ?meetingId= URL param — see
+			// openInstructionRecorder above), so it survives a cleared arming record
+			// exactly like sourceTabId/meetingRequired do.
+			const messageMeetingId = senderIsOwnRecorderPage
+				? getString(msg, "meetingId")
+				: undefined;
 			const sourceTabId =
 				messageSourceTabId !== undefined
 					? messageSourceTabId
@@ -1219,11 +1251,25 @@ async function handleMessage(
 					: state.kind === "arming"
 					  ? state.meetingRequired
 					  : undefined;
+			const meetingId =
+				messageMeetingId !== undefined
+					? messageMeetingId
+					: state.kind === "arming"
+					  ? state.meetingId
+					  : undefined;
 
 			let videoId: string;
 			let uploadId: string;
 			try {
-				const result = await initializeUpload(mode, meetingId);
+				// Upload identity only — state.mode (the STOP/PAUSE/RESUME/CANCEL and
+				// tabs.onRemoved control-flow discriminator) is deliberately left
+				// untouched below; this only decides how the upload is TITLED/FILED.
+				// The guaranteed full-screen meeting flow keeps mode "instruction"
+				// throughout but must still file as a meeting.
+				const result = await initializeUpload(
+					meetingRequired ? "meeting" : mode,
+					meetingId,
+				);
 				videoId = result.videoId;
 				uploadId = result.uploadId;
 			} catch (err) {
@@ -1550,6 +1596,31 @@ chrome.runtime.onMessage.addListener(
 	},
 );
 
+// ── Keyboard command: one-key meeting recording ───────────────────────────
+// Ctrl+Shift+9 (manifest `commands`) on a Meet tab = the same guaranteed
+// full-screen meeting flow the popup auto-fire starts. Commands are an official
+// activeTab-granting invocation surface, so tabCapture works exactly as it does
+// after a toolbar-icon click — one keypress instead of icon+popup. (Also the
+// invocation surface the e2e audio-proof harness drives.)
+chrome.commands.onCommand.addListener((command) => {
+	if (command !== "start-meeting-recording") return;
+	void (async () => {
+		const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+		const meetingId = getMeetingId(tab?.url);
+		if (tab?.id === undefined || meetingId === null) return; // not a Meet tab
+		// Same message the popup sends; sender unused by this case.
+		await handleMessage(
+			{
+				type: "START_INSTRUCTION",
+				sourceTabId: tab.id,
+				meeting: true,
+				meetingId,
+			},
+			{} as chrome.runtime.MessageSender,
+		).catch(() => {});
+	})();
+});
+
 // ── Alarms ────────────────────────────────────────────────────────────────
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1617,12 +1688,26 @@ chrome.runtime.onStartup.addListener(async () => {
 
 	if (state.kind === "recording" || state.kind === "uploading") {
 		startKeepAlive();
+		// state was read once above and never reassigned, so when it was
+		// originally "recording" this narrowing still holds here — compute the
+		// duration from it before it's lost (same reasoning as finalizeRecording;
+		// a state that was already "uploading" at startup never carried timing
+		// fields, so there is nothing to compute).
+		const durationInSecs =
+			state.kind === "recording"
+				? computeDurationInSecs(
+						state.startedAt,
+						state.pausedAccumMs,
+						state.paused,
+						state.pausedAt,
+					)
+				: undefined;
 		// (P1.2 / M5) Widened past the "recording" branch: a persisted
 		// "uploading" state (crash mid-finalize) needs this exactly as much —
 		// finalizeUpload already accepts it. Without this, state parked at
 		// "uploading" forever and isInProgress() refused every future
 		// recording until the user found CANCEL.
-		await enqueueRecorder(() => finalizeUpload());
+		await enqueueRecorder(() => finalizeUpload(durationInSecs));
 	} else if (state.kind === "finishing") {
 		// (R9) A crash during completeMultipart. Every byte is already in R2, so
 		// re-queue the finalize durably instead of writing the recording off —
@@ -1664,7 +1749,12 @@ chrome.runtime.onStartup.addListener(async () => {
 			state.parts.length > 0
 		);
 		void enqueueRecorder(() =>
-			resumeInterruptedFinishing(state.videoId, state.uploadId, state.parts),
+			resumeInterruptedFinishing(
+				state.videoId,
+				state.uploadId,
+				state.parts,
+				state.durationInSecs,
+			),
 		).catch(() => {});
 		const nextState: ExtensionState = {
 			kind: "error",

@@ -19,10 +19,19 @@ if (!existsSync(distDir)) {
 try {
 	const manifestVersion = JSON.parse(readFileSync(manifestFile, "utf8")).version;
 
-	execFileSync("zip", ["-r", outputFile, "."], {
-		cwd: distDir,
-		stdio: "inherit",
-	});
+	try {
+		execFileSync("zip", ["-r", outputFile, "."], {
+			cwd: distDir,
+			stdio: "inherit",
+		});
+	} catch (err) {
+		if (err.code !== "ENOENT") throw err;
+		// Windows has no `zip` binary; bsdtar ships with Windows 10+ and writes
+		// real zip archives when the output name ends in .zip (-a).
+		execFileSync("tar", ["-a", "-c", "-f", outputFile, "-C", distDir, "."], {
+			stdio: "inherit",
+		});
+	}
 	console.log(`Package created: ${outputFile}`);
 	console.log(`Manifest version: ${manifestVersion}`);
 

@@ -18,6 +18,11 @@
 
 import { sendCaptureCommand } from "../shared/capture-command";
 import { isTabAudioLive } from "../shared/client-audio";
+import { populateDeviceSelect } from "../shared/device-picker";
+import {
+	AUDIO_BITS_PER_SECOND,
+	VIDEO_BITS_PER_SECOND,
+} from "../shared/recording-quality";
 
 interface RecorderSettings {
 	micEnabled: boolean;
@@ -37,6 +42,12 @@ const _recorderUrlParams = new URLSearchParams(location.search);
 const sourceTabIdParam = _recorderUrlParams.get("source");
 const sourceTabId = sourceTabIdParam ? Number(sourceTabIdParam) : undefined;
 const meetingRequiredParam = _recorderUrlParams.get("meeting") === "1";
+// The Meet meetingId (e.g. "abc-defg-hij"), set by sw.ts openInstructionRecorder
+// alongside source/meeting. Sent back on RECORDER_STARTED (same trust/fallback
+// pattern as sourceTabId/meeting — see sw.ts) so the recording files as a
+// meeting even if the SW's "arming" record was cleared in between, and reused
+// by the "Faqat Meet tabini yozish" secondary action below.
+const meetingIdParam = _recorderUrlParams.get("meetingId") ?? undefined;
 
 interface RecordingState {
 	recorder: MediaRecorder;
@@ -312,7 +323,13 @@ function pickMimeType(): string {
 	return "video/webm";
 }
 
-function cleanup(s: RecordingState): void {
+function cleanup(s: RecordingState | null): void {
+	// Null-tolerant: on the upload-init failure path the caller sets state=null,
+	// and a late async callback (track.onended / recorder handlers) can still
+	// race in with the already-cleared state. Measured by the e2e audio-proof
+	// harness (it-5): "Cannot read properties of null (reading 'displayStream')"
+	// masked the real upload-init error message.
+	if (!s) return;
 	for (const t of s.displayStream.getTracks()) t.stop();
 	if (s.micStream) for (const t of s.micStream.getTracks()) t.stop();
 	if (s.tabAudioStream) for (const t of s.tabAudioStream.getTracks()) t.stop();
@@ -327,6 +344,45 @@ async function getSettings(): Promise<RecorderSettings> {
 		micEnabled: resp?.micEnabled !== false,
 		micDeviceId: typeof resp?.micDeviceId === "string" ? resp.micDeviceId : "",
 	};
+}
+
+// ── Mic control (meeting variant only) ──────────────────────────────────────
+//
+// The one-click auto-start (popup.ts maybeAutoStartMeeting) skips the popup
+// entirely, so its mic enable-toggle + device dropdown have to live somewhere
+// reachable before the picker runs — here, on the idle view of the recorder
+// tab itself. Persists into the SAME chrome.storage settings startRecording()
+// already reads (getSettings() above), so no other wiring is needed: change
+// the toggle/select, then click Boshlash, and the next getUserMedia() call
+// picks it up. Off the meeting path the popup remains the only mic surface
+// (unchanged), so this stays hidden there.
+async function setupMicControl(): Promise<void> {
+	if (!meetingRequiredParam) return;
+	const row = $("mic-control-row");
+	const toggle = $("mic-toggle") as HTMLInputElement | null;
+	const select = $("mic-select") as HTMLSelectElement | null;
+	if (!row || !toggle || !select) return;
+	row.classList.remove("hidden");
+
+	const settings = await getSettings();
+	toggle.checked = settings.micEnabled;
+	select.disabled = !settings.micEnabled;
+
+	populateDeviceSelect(select, "audioinput", settings.micDeviceId, {
+		audio: true,
+	})
+		.then((result) => {
+			if (result === "blocked") select.disabled = true;
+		})
+		.catch(() => {});
+
+	toggle.addEventListener("change", () => {
+		select.disabled = !toggle.checked;
+		sendMsg({ type: "SAVE_SETTINGS", settings: { micEnabled: toggle.checked } });
+	});
+	select.addEventListener("change", () => {
+		sendMsg({ type: "SAVE_SETTINGS", settings: { micDeviceId: select.value } });
+	});
 }
 
 // ── Fail-closed start (guaranteed client audio) ─────────────────────────────
@@ -657,8 +713,8 @@ async function startRecording(): Promise<void> {
 		const mime = pickMimeType();
 		const recorder = new MediaRecorder(recordStream, {
 			mimeType: mime,
-			videoBitsPerSecond: 600_000,
-			audioBitsPerSecond: 96_000,
+			videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+			audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
 		});
 
 		let chunkIndex = 0;
@@ -766,6 +822,7 @@ async function startRecording(): Promise<void> {
 			hasAudio: dest.stream.getAudioTracks().length > 0,
 			sourceTabId,
 			meeting: meetingRequiredParam,
+			meetingId: meetingIdParam,
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
@@ -940,6 +997,22 @@ function wire(): void {
 		window.close();
 	});
 
+	// Meeting variant only: a quiet way out of the full-screen guarantee back to
+	// the narrower "Record Meet tab only" path (offscreen/tabCapture — same
+	// message the popup's own "Record Meet tab only" button sends). Cancels
+	// THIS tab's arming first so the SW's lock is free for START_MEET, mirroring
+	// the existing close-then-cancel idiom used by btn-close/btn-close-err below
+	// (fire the messages, then close — this tab's own beforeunload handler
+	// covers the case where state was never armed to begin with).
+	$("btn-meet-tab-only")?.addEventListener("click", () => {
+		sendMsg({ type: "INSTRUCTION_CANCEL" });
+		const msg: Record<string, unknown> = { type: "START_MEET" };
+		if (sourceTabId !== undefined) msg.tabId = sourceTabId;
+		if (meetingIdParam) msg.meetingId = meetingIdParam;
+		sendMsg(msg);
+		window.close();
+	});
+
 	// Pause/Resume. The command goes through the SERVICE WORKER even though the
 	// MediaRecorder is right here: the SW owns the persisted paused flag and the
 	// popup's view, and it broadcasts PAUSE_CAPTURE back into this page's own
@@ -1101,9 +1174,16 @@ function applyMeetingCopy(): void {
 			'Click below, then choose "Entire Screen" so everything you show is recorded. The other participants\' voices are captured from your Meet tab automatically — leave that tab open, and keep this one open too.';
 	}
 	const start = $("btn-start");
-	if (start) start.textContent = "Choose screen & start meeting recording";
+	// Single click still chains picker → checks → start (unchanged below) —
+	// only the label is shorter now that this page opens straight off the
+	// toolbar-icon auto-start (popup.ts maybeAutoStartMeeting) instead of a
+	// second explicit "Record full-screen meeting" pick in the popup.
+	if (start) start.textContent = "Boshlash";
+	const meetTabOnlyBtn = $("btn-meet-tab-only");
+	if (meetTabOnlyBtn) meetTabOnlyBtn.classList.remove("hidden");
 }
 
 showView("view-idle");
 applyMeetingCopy();
 wire();
+void setupMicControl();

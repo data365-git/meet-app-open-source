@@ -676,7 +676,7 @@ function renderCountdownNudge(): void {
 			if (activeCard) {
 				showStartNote(
 					activeCard,
-					"Yozish uchun data365 belgisini bosing (mijoz ovozi kafolatli).",
+					"Yozish uchun data365 belgisini bosing — ochilgan oynada bitta Boshlash tugmasi (mijoz ovozi kafolatli).",
 					false,
 				);
 			}

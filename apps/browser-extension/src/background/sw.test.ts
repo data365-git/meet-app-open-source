@@ -132,6 +132,12 @@ function createFakeChrome() {
 			setBadgeBackgroundColor: () => undefined,
 			openPopup: async () => undefined,
 		},
+		// Keyboard command (manifest `commands`) registered at sw.ts module scope
+		// — needed only so importing the module doesn't throw; no test here
+		// drives it.
+		commands: {
+			onCommand: { addListener: () => undefined },
+		},
 	};
 
 	return { chrome, captured, storage, notifications };
@@ -1206,6 +1212,175 @@ describe("Guaranteed client audio survives a cleared arming record", () => {
 
 		expect(resp.required).toBe(true);
 		expect(resp.streamId).not.toBeNull();
+	});
+});
+
+// ── Wave 0: meeting filing must not leak into state.mode ────────────────────
+//
+// The bug: a full-screen guaranteed meeting recording (started via
+// START_INSTRUCTION with meeting:true + meetingId, mode stays "instruction")
+// used to reach initializeUpload as ("instruction", undefined) — mis-filed as
+// a plain instruction recording (wrong extensionContext, wrong title, no
+// meetingId) even though the CONTROL-FLOW discriminator (state.mode, which
+// STOP/PAUSE/RESUME/CANCEL/tabs.onRemoved all branch on) correctly stayed
+// "instruction" throughout. The fix derives the upload's filing from
+// meetingRequired instead of mode, without changing mode itself.
+
+describe("Wave 0 — meeting filing: initializeUpload gets meetingRequired, not state.mode", () => {
+	it('full-screen guaranteed meeting (meetingRequired + meetingId) files as "meeting" while state.mode stays "instruction"', async () => {
+		const { captured } = await freshSw();
+
+		let createVideoUrl: URL | null = null;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/desktop/video/create")) {
+					createVideoUrl = new URL(url);
+					return jsonResponse({ id: "vid-meeting-filing" });
+				}
+				if (url.includes("/api/upload/multipart/initiate")) {
+					return jsonResponse({ uploadId: "upload-meeting-filing" });
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		await sendMessage(captured, {
+			type: "START_INSTRUCTION",
+			sourceTabId: 42,
+			meeting: true,
+			meetingId: "abc-defg-hij",
+		});
+
+		const resp = (await sendMessage(
+			captured,
+			{
+				type: "RECORDER_STARTED",
+				mime: "video/webm",
+				hasVideo: true,
+				hasAudio: true,
+				sourceTabId: 42,
+				meeting: true,
+				meetingId: "abc-defg-hij",
+			},
+			{
+				tab: { id: 1 },
+				url: "chrome-extension://fake/recorder.html?source=42&meeting=1&meetingId=abc-defg-hij",
+			},
+		)) as { ok: boolean };
+		expect(resp.ok).toBe(true);
+
+		// initializeUpload("meeting", "abc-defg-hij") — asserted via the actual
+		// createVideo request it produces (the real seam; initializeUpload
+		// itself isn't separately mockable from here).
+		expect(createVideoUrl).not.toBeNull();
+		expect(createVideoUrl!.searchParams.get("extensionContext")).toBe("meeting");
+		expect(createVideoUrl!.searchParams.get("meetingId")).toBe("abc-defg-hij");
+
+		const { getState } = await import("./state");
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			// THE regression guard: filing is "meeting", but the control-flow
+			// discriminator never changed.
+			expect(state.mode).toBe("instruction");
+			expect(state.meetingRequired).toBe(true);
+			expect(state.meetingId).toBe("abc-defg-hij");
+		}
+	});
+
+	it('plain non-Meet instruction recording files as "instruction" with no meetingId', async () => {
+		const { captured } = await freshSw();
+
+		let createVideoUrl: URL | null = null;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request) => {
+				const url = input.toString();
+				if (url.includes("/api/desktop/video/create")) {
+					createVideoUrl = new URL(url);
+					return jsonResponse({ id: "vid-plain-instruction" });
+				}
+				if (url.includes("/api/upload/multipart/initiate")) {
+					return jsonResponse({ uploadId: "upload-plain-instruction" });
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		// The popup's "Record screen" button on a non-Meet tab sends bare
+		// START_INSTRUCTION — no sourceTabId/meeting/meetingId at all.
+		await sendMessage(captured, { type: "START_INSTRUCTION" });
+
+		const resp = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm", hasVideo: true, hasAudio: true },
+			{ tab: { id: 1 }, url: "chrome-extension://fake/recorder.html" },
+		)) as { ok: boolean };
+		expect(resp.ok).toBe(true);
+
+		// initializeUpload("instruction", undefined).
+		expect(createVideoUrl).not.toBeNull();
+		expect(createVideoUrl!.searchParams.get("extensionContext")).toBe("instruction");
+		expect(createVideoUrl!.searchParams.has("meetingId")).toBe(false);
+
+		const { getState } = await import("./state");
+		const state = await getState();
+		expect(state.kind).toBe("recording");
+		if (state.kind === "recording") {
+			expect(state.mode).toBe("instruction");
+			expect(state.meetingRequired).toBeFalsy();
+		}
+	});
+
+	it("STOP still routes to the recorder tab (never the offscreen broadcast) for an active guaranteed-meeting recording — the meeting flag must not leak into control-flow routing", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState } = await import("./state");
+
+		const RECORDER_TAB_ID = 77;
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			meetingRequired: true,
+			meetingId: "abc-defg-hij",
+			sourceTabId: 42,
+			recorderTabId: RECORDER_TAB_ID,
+			videoId: "vid-routing",
+			uploadId: "upload-routing",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		const tabsSendMessageCalls: Array<{ tabId: number; message: unknown }> = [];
+		chrome.tabs.sendMessage = (async (tabId: number, message: unknown) => {
+			tabsSendMessageCalls.push({ tabId, message });
+			return undefined;
+		}) as typeof chrome.tabs.sendMessage;
+
+		let offscreenStopBroadcasts = 0;
+		chrome.runtime.sendMessage = ((message: unknown, callback?: unknown) => {
+			const msg = message as { type?: string } | undefined;
+			if (msg?.type === "STOP_CAPTURE") offscreenStopBroadcasts += 1;
+			if (typeof callback === "function") {
+				(callback as (r: unknown) => void)(undefined);
+				return undefined;
+			}
+			return Promise.resolve(undefined);
+		}) as typeof chrome.runtime.sendMessage;
+
+		await sendMessage(captured, { type: "STOP" });
+		await flushAsync();
+
+		expect(tabsSendMessageCalls).toHaveLength(1);
+		expect(tabsSendMessageCalls[0].tabId).toBe(RECORDER_TAB_ID);
+		expect(tabsSendMessageCalls[0].message).toEqual({ type: "STOP_CAPTURE" });
+		expect(offscreenStopBroadcasts).toBe(0);
 	});
 });
 

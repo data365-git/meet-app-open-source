@@ -47,6 +47,10 @@ export interface CapApi {
 		parts: Array<{ partNumber: number; etag: string; size: number }>;
 		videoId: string;
 		subpath?: string;
+		/** Elapsed recording seconds (rounded, > 0). Powers the seek bar before
+		 * the AI processing pipeline derives it from the actual media. Omitted
+		 * when no real elapsed time was available. */
+		durationInSecs?: number;
 	}): Promise<CompleteMultipartResponse>;
 	recordingComplete(params: { videoId: string }): Promise<void>;
 	/** Abort the server-side multipart so R2 stops holding the uploaded parts.
@@ -119,9 +123,10 @@ export function createCapApi(baseUrl: string, apiKey: string): CapApi {
 			return handleResponse<PresignPartResponse>(res, "presignPart");
 		},
 
-		async completeMultipart({ uploadId, parts, videoId, subpath }) {
+		async completeMultipart({ uploadId, parts, videoId, subpath, durationInSecs }) {
 			const body: Record<string, unknown> = { uploadId, parts, videoId };
 			if (subpath) body.subpath = subpath;
+			if (durationInSecs !== undefined) body.durationInSecs = durationInSecs;
 
 			const res = await fetch(`${baseUrl}/api/upload/multipart/complete`, {
 				method: "POST",

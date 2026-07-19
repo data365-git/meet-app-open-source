@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	MIN_PART_SIZE,
 	PART_MAX_ATTEMPTS,
+	computeDurationInSecs,
 	takeFixedSizeParts,
 } from "./upload";
 
@@ -120,6 +121,72 @@ describe("takeFixedSizeParts (pure part-slicing logic)", () => {
 
 		expect(reconstructed.length).toBe(original.length);
 		expect(bytesEqual(reconstructed, original)).toBe(true);
+	});
+});
+
+// ── Wave 0: computeDurationInSecs (pure fn) ─────────────────────────────────
+//
+// Elapsed recording time in whole seconds, excluding paused spans — feeds
+// durationInSecs on the complete request (pre-AI seek bar). Pure and
+// side-effect-free apart from reading Date.now(), so these tests pin the
+// clock with fake timers rather than touching chrome/fetch at all.
+
+describe("computeDurationInSecs (pure fn)", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("running with no pause returns the whole elapsed span", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 5000;
+		expect(computeDurationInSecs(startedAt, 0, false, undefined)).toBe(5);
+	});
+
+	it("subtracts accumulated paused time from prior pause/resume cycles", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 10_000;
+		// 10s wall-clock span, 3s of which was spent paused (already resumed) —
+		// the recorded media only covers the remaining 7s.
+		expect(computeDurationInSecs(startedAt, 3000, false, undefined)).toBe(7);
+	});
+
+	it("also excludes the currently-open pause span when still paused at stop", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 10_000;
+		const pausedAt = now - 1000; // this pause began 1s ago and never resumed
+		// 10s span, 2s from earlier resumed pauses + 1s from the still-open one.
+		expect(computeDurationInSecs(startedAt, 2000, true, pausedAt)).toBe(7);
+	});
+
+	it("never returns a negative number when pausedAccumMs exceeds the elapsed span", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 1000;
+		// Bogus/adversarial input: more "paused" time recorded than actually
+		// elapsed. A negative or zero result must never reach the server.
+		expect(computeDurationInSecs(startedAt, 5000, false, undefined)).toBeUndefined();
+	});
+
+	it("never returns NaN (or any value) on a garbage/missing startedAt", () => {
+		const result = computeDurationInSecs(
+			undefined as unknown as number,
+			undefined,
+			undefined,
+			undefined,
+		);
+		expect(result).toBeUndefined();
+		expect(Number.isNaN(result)).toBe(false);
 	});
 });
 
@@ -386,6 +453,238 @@ describe("finalizeUpload -> retryPendingUploads (P1.6 durable complete-after-dra
 		if (finalState.kind === "complete") {
 			expect(finalState.shareUrl).toContain("vid-p16");
 		}
+	});
+});
+
+// ── Wave 0: durationInSecs threading (finalizeUpload → completeMultipart /
+// the durable retry-queue "complete" payload) ──────────────────────────────
+//
+// The extension's complete request used to omit durationInSecs entirely, so
+// the seek bar had no duration until the AI pipeline eventually backfilled
+// it. finalizeUpload now accepts an explicit duration (the caller — sw.ts
+// finalizeRecording — computes it from the "recording" state before that
+// state is gone) and falls back to computing it itself when still called
+// while state.kind is "recording" (e.g. the RECORDER_ERROR path).
+
+describe("Wave 0 — durationInSecs threading", () => {
+	beforeEach(() => {
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: { query: async () => [], sendMessage: async () => undefined },
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("finalizeUpload(durationInSecs) includes it in the completeMultipart request body", async () => {
+		const { handleChunk, finalizeUpload } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-duration",
+			uploadId: "upload-duration",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		// Below MIN_PART_SIZE, above MIN_VIABLE_BYTES: handleChunk records no
+		// part, so the entire buffer flushes as the finalize-time remainder and
+		// completeMultipart runs immediately (no retry-queue detour).
+		const chunk = new Uint8Array(20_000);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		let completeBody: Record<string, unknown> | null = null;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-1"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeBody = JSON.parse(init?.body as string);
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await finalizeUpload(42);
+
+		expect(completeBody).not.toBeNull();
+		expect(completeBody!.durationInSecs).toBe(42);
+	});
+
+	it("omits durationInSecs from the request when no positive elapsed value is available", async () => {
+		const { handleChunk, finalizeUpload } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-duration-none",
+			uploadId: "upload-duration-none",
+			// In the future: guarantees a non-positive elapsed span regardless of
+			// how much real wall-clock time this test itself takes to run, so the
+			// internal fallback in finalizeUpload (no explicit arg passed below)
+			// computes undefined deterministically rather than racing the clock.
+			startedAt: Date.now() + 60_000,
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		const chunk = new Uint8Array(20_000);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		let completeBody: Record<string, unknown> | null = null;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-1"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					completeBody = JSON.parse(init?.body as string);
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		// No explicit duration passed — same call shape as the RECORDER_ERROR
+		// caller in sw.ts.
+		await finalizeUpload();
+
+		expect(completeBody).not.toBeNull();
+		expect(completeBody).not.toHaveProperty("durationInSecs");
+	});
+
+	it("persists durationInSecs into the durable retry-queue 'complete' payload when parts are still queued (crash-durability path)", async () => {
+		const { handleChunk, finalizeUpload } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-duration-durable",
+			uploadId: "upload-duration-durable",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		const chunk = new Uint8Array(20_000);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		let putAttempts = 0;
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					putAttempts += 1;
+					// Same forcing technique as the P1.6 test above: fail long enough
+					// that the part is still genuinely queued when finalizeUpload
+					// returns, so it takes the deferred-"complete" durable path
+					// instead of completing inline.
+					if (putAttempts <= 2) {
+						return new Response("boom", { status: 500 });
+					}
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-final"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					return jsonResponse({
+						location: undefined,
+						success: true,
+						fileKey: "file",
+					});
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await finalizeUpload(99);
+
+		const stored = await chrome.storage.local.get(RETRY_QUEUE_KEY);
+		const queue = stored[RETRY_QUEUE_KEY] as
+			| Array<{ kind: string; payload: Record<string, unknown> }>
+			| undefined;
+		const completeItem = queue?.find((item) => item.kind === "complete");
+
+		expect(completeItem).toBeDefined();
+		expect(completeItem!.payload.durationInSecs).toBe(99);
 	});
 });
 

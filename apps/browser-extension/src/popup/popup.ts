@@ -1,6 +1,8 @@
 import type { ExtensionSettings, ExtensionState } from "../background/state";
 import { sendCaptureCommand } from "../shared/capture-command";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
+import { populateDeviceSelect } from "../shared/device-picker";
+import { getMeetingId } from "../shared/meeting-url";
 import { attachFlash, type FlashState, NO_FLASH, reconcileFlash } from "./flash-message";
 
 interface PopupData {
@@ -180,61 +182,6 @@ function buildMicMeter(): { meterEl: HTMLElement; bars: HTMLElement[] } {
 	return { meterEl, bars };
 }
 
-async function checkPermission(name: PermissionName): Promise<PermissionState> {
-	try {
-		const status = await navigator.permissions.query({ name });
-		return status.state;
-	} catch {
-		return "prompt";
-	}
-}
-
-async function populateDeviceSelect(
-	select: HTMLSelectElement,
-	kind: "audioinput" | "videoinput",
-	currentDeviceId: string,
-	permissionConstraint: MediaStreamConstraints,
-): Promise<"granted" | "blocked"> {
-	const permName = (
-		kind === "audioinput" ? "microphone" : "camera"
-	) as PermissionName;
-	let permState = await checkPermission(permName);
-
-	if (permState !== "granted") {
-		try {
-			const testStream =
-				await navigator.mediaDevices.getUserMedia(permissionConstraint);
-			for (const t of testStream.getTracks()) t.stop();
-			permState = "granted";
-		} catch {
-			return "blocked";
-		}
-	}
-
-	const devices = await navigator.mediaDevices.enumerateDevices();
-	const filtered = devices.filter((d) => d.kind === kind);
-
-	const defaultOpt = document.createElement("option");
-	defaultOpt.value = "";
-	defaultOpt.textContent =
-		kind === "audioinput" ? "Default microphone" : "Default camera";
-	select.appendChild(defaultOpt);
-
-	for (const device of filtered) {
-		const label =
-			device.label ||
-			`${kind === "audioinput" ? "Mic" : "Camera"} ${device.deviceId.slice(0, 6)}`;
-		const opt = document.createElement("option");
-		opt.value = device.deviceId;
-		opt.textContent = label;
-		if (device.deviceId === currentDeviceId) opt.selected = true;
-		select.appendChild(opt);
-	}
-
-	if (!currentDeviceId) select.value = "";
-	return "granted";
-}
-
 function renderIdlePanel(
 	root: HTMLElement,
 	settings: ExtensionSettings,
@@ -295,6 +242,10 @@ function renderIdlePanel(
 		if (isMeetTab && activeTabId !== undefined) {
 			msg.sourceTabId = activeTabId;
 			msg.meeting = true;
+			// So the recording files as a meeting (title "data365 Meeting — <id>",
+			// extensionContext "meeting") instead of a plain instruction recording —
+			// see sw.ts START_INSTRUCTION/RECORDER_STARTED.
+			if (meetingId) msg.meetingId = meetingId;
 		}
 		sendMsg(msg);
 		window.close();
@@ -661,10 +612,15 @@ function renderRecording(
 		formatElapsed(recordingElapsedMs(state)),
 	);
 
+	// state.mode stays "instruction" for the guaranteed full-screen meeting flow
+	// (it is the STOP/PAUSE/RESUME/CANCEL control-flow discriminator and must
+	// not change) — branch on meetingRequired too so that flow still LABELS as
+	// "Meeting" instead of misleadingly showing "Instruction".
+	const isMeeting = state.mode === "meeting" || state.meetingRequired === true;
 	const modeEl = el(
 		"p",
 		{ className: "mode-label" },
-		state.mode === "meeting" ? "Meeting" : "Instruction",
+		isMeeting ? "Meeting" : "Instruction",
 	);
 
 	const pauseLabel = state.paused ? "Resume" : "Pause";
@@ -974,17 +930,6 @@ function render(data: PopupData): void {
 	});
 }
 
-function getMeetingId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.endsWith("meet.google.com")) return null;
-		const match = /^\/([a-z]+-[a-z]+-[a-z]+)$/i.exec(parsed.pathname);
-		return match ? match[1] : null;
-	} catch {
-		return null;
-	}
-}
-
 async function maybeStartPendingMeet(data: PopupData): Promise<boolean> {
 	const result = await chrome.storage.local.get(PENDING_MEET_START_KEY);
 	const pending = result[PENDING_MEET_START_KEY] as PendingMeetStart | undefined;
@@ -1008,6 +953,44 @@ async function maybeStartPendingMeet(data: PopupData): Promise<boolean> {
 		window.close();
 		return true;
 	}
+	return false;
+}
+
+// ── Meeting flow: 4 clicks → 2 ───────────────────────────────────────────
+//
+// Toolbar icon click → recorder tab opens → one "Boshlash" click → picker →
+// recording starts. Previously the popup itself was a required click (pick
+// "Record full-screen meeting" from the panel) before the recorder tab even
+// opened. When the popup opens directly onto an idle, signed-in Meet tab,
+// skip straight to the same START_INSTRUCTION the "Record full-screen
+// meeting" button sends and close — the recorder tab's own mic control /
+// "Faqat Meet tabini yozish" affordance (recorder-page.ts) now covers what
+// the skipped popup screen used to offer.
+//
+// Only called once, from init() below (a popup document is fresh every time
+// it opens, so there is no separate re-entrancy flag to maintain) — and only
+// when `data.state.kind === "idle"`, which also rules out firing over an
+// arming/recording/uploading/... state.
+async function maybeAutoStartMeeting(data: PopupData): Promise<boolean> {
+	if (data.state.kind !== "idle") return false;
+	if (data.settings.apiKey.length === 0) return false;
+	if (!data.isMeetTab || !data.meetingId || data.activeTabId === undefined) {
+		return false;
+	}
+
+	const resp = await sendMsgAwait({
+		type: "START_INSTRUCTION",
+		sourceTabId: data.activeTabId,
+		meeting: true,
+		meetingId: data.meetingId,
+	});
+	if (resp.ok === true) {
+		window.close();
+		return true;
+	}
+	// Failed (race: a recording started elsewhere between GET_STATE and here,
+	// or the recorder tab couldn't open) — fall through to the ordinary panel
+	// instead of leaving the popup blank.
 	return false;
 }
 
@@ -1121,7 +1104,13 @@ async function init(): Promise<void> {
 	if (await maybeStartPendingMeet(data)) return;
 
 	const firstRunResult = await chrome.storage.local.get("capExtFirstRun");
-	if (firstRunResult.capExtFirstRun !== false) {
+	const firstRunDone = firstRunResult.capExtFirstRun === false;
+	// One-click meeting flow: fires only past first-run (a brand-new user still
+	// sees onboarding first) — see maybeAutoStartMeeting for the idle/signed-in/
+	// Meet-tab gates. On success the popup has already closed itself.
+	if (firstRunDone && (await maybeAutoStartMeeting(data))) return;
+
+	if (!firstRunDone) {
 		renderOnboarding(root, () => {
 			while (root.firstChild) root.removeChild(root.firstChild);
 			// currentData, not `data`: a STATE_CHANGED may have arrived while the

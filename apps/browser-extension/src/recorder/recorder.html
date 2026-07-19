@@ -132,6 +132,61 @@
 				gap: 10px;
 			}
 			.btn-row .btn { flex: 1; }
+			/* Mic control (meeting variant only — see applyMeetingCopy in
+			   recorder-page.ts). The popup's mic toggle/dropdown is skipped by the
+			   one-click auto-start, so this row is that same affordance moved here. */
+			.device-row {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				margin-bottom: 14px;
+				text-align: left;
+			}
+			.device-row-label {
+				font-size: 13px;
+				color: var(--text);
+				flex-shrink: 0;
+			}
+			.device-select {
+				flex: 1;
+				min-width: 0;
+				font-size: 12px;
+				font-family: inherit;
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 5px 6px;
+				color: var(--text);
+				background: var(--card);
+			}
+			.device-select:disabled { opacity: 0.45; cursor: not-allowed; }
+			.toggle {
+				display: inline-flex;
+				align-items: center;
+				cursor: pointer;
+				flex-shrink: 0;
+			}
+			.toggle input { display: none; }
+			.toggle__track {
+				position: relative;
+				width: 30px;
+				height: 17px;
+				background: var(--border);
+				border-radius: 999px;
+				transition: background 0.15s;
+			}
+			.toggle input:checked + .toggle__track { background: var(--primary); }
+			.toggle__knob {
+				position: absolute;
+				top: 2px;
+				left: 2px;
+				width: 13px;
+				height: 13px;
+				border-radius: 50%;
+				background: #fff;
+				transition: transform 0.15s;
+				box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+			}
+			.toggle input:checked ~ .toggle__track .toggle__knob { transform: translateX(13px); }
 		</style>
 	</head>
 	<body>
@@ -149,7 +204,22 @@
 					Click below, then choose the screen, window, or tab you want to
 					record. Keep this tab open while recording.
 				</p>
+				<!-- Meeting variant only: revealed by setupMicControl() in
+				     recorder-page.ts (the popup's own mic toggle/dropdown is skipped by
+				     the one-click auto-start, so this replaces it here). -->
+				<div id="mic-control-row" class="device-row hidden">
+					<span class="device-row-label">Mikrofon</span>
+					<label class="toggle" for="mic-toggle">
+						<input type="checkbox" id="mic-toggle" checked />
+						<span class="toggle__track"><span class="toggle__knob"></span></span>
+					</label>
+					<select id="mic-select" class="device-select"></select>
+				</div>
 				<button id="btn-start" class="btn btn-primary">Choose screen &amp; start</button>
+				<!-- Meeting variant only: revealed by applyMeetingCopy() in
+				     recorder-page.ts. Quiet, secondary escape hatch back to the
+				     narrower "Record Meet tab only" (tabCapture-only) path. -->
+				<button id="btn-meet-tab-only" class="btn btn-secondary hidden">Faqat Meet tabini yozish</button>
 				<button id="btn-cancel" class="btn btn-secondary">Cancel</button>
 				<p id="idle-msg" class="msg"></p>
 			</div>

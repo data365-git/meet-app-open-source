@@ -101,6 +101,11 @@ interface FinishingState {
 	// complete. Optional so older persisted states still parse.
 	uploadId?: string;
 	parts?: CompletedPart[];
+	// Elapsed recording seconds, computed once from the RecordingState's
+	// startedAt/pausedAccumMs before that timing data goes away (neither this
+	// state nor "uploading" carries it). Persisted here so a crash/restart that
+	// resumes the finalize via resumeInterruptedFinishing can still send it.
+	durationInSecs?: number;
 }
 
 interface CompleteState {

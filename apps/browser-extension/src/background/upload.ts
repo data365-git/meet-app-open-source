@@ -559,6 +559,26 @@ async function retryQueuedPartsForUpload(
 	return { parts: nextParts, failed, remainingPartsQueued };
 }
 
+/**
+ * Elapsed recording time in whole seconds, excluding paused spans — mirrors
+ * the on-screen timer math in popup.ts/recorder-page.ts. Returns undefined
+ * for a non-positive result (clock skew, or called too early) rather than 0:
+ * callers must OMIT durationInSecs from the complete request rather than
+ * send a bogus value.
+ */
+export function computeDurationInSecs(
+	startedAt: number,
+	pausedAccumMs: number | undefined,
+	paused: boolean | undefined,
+	pausedAt: number | undefined,
+): number | undefined {
+	const now = Date.now();
+	const openPauseMs = paused && pausedAt !== undefined ? now - pausedAt : 0;
+	const elapsedMs = now - startedAt - (pausedAccumMs ?? 0) - openPauseMs;
+	const secs = Math.round(elapsedMs / 1000);
+	return secs > 0 ? secs : undefined;
+}
+
 export async function initializeUpload(
 	mode: "instruction" | "meeting",
 	meetingId?: string,
@@ -928,12 +948,31 @@ export async function handleChunk(
 	}
 }
 
-export async function finalizeUpload(): Promise<void> {
+export async function finalizeUpload(
+	explicitDurationInSecs?: number,
+): Promise<void> {
 	const state = await getState();
 	if (state.kind !== "recording" && state.kind !== "uploading") return;
 
 	const settings = await requireSettings();
 	const api = createCapApi(settings.apiBaseUrl, settings.apiKey);
+
+	// The caller (sw.ts finalizeRecording / the onStartup crash-resume path)
+	// reads the "recording" state and computes this BEFORE transitioning to
+	// "uploading", which drops startedAt/pausedAccumMs — pass it down rather
+	// than lose it. Falls back to computing it here for a caller still holding
+	// "recording" at this point (RECORDER_ERROR, which calls this before any
+	// state transition of its own).
+	const durationInSecs =
+		explicitDurationInSecs ??
+		(state.kind === "recording"
+			? computeDurationInSecs(
+					state.startedAt,
+					state.pausedAccumMs,
+					state.paused,
+					state.pausedAt,
+				)
+			: undefined);
 
 	let parts = [...state.parts];
 	let nextPartNumber =
@@ -1067,7 +1106,11 @@ export async function finalizeUpload(): Promise<void> {
 			// successful part retry because state stays "uploading".
 			await addToRetryQueue({
 				kind: "complete",
-				payload: { uploadId, videoId },
+				payload: {
+					uploadId,
+					videoId,
+					...(durationInSecs !== undefined ? { durationInSecs } : {}),
+				},
 			});
 			return;
 		}
@@ -1103,8 +1146,15 @@ export async function finalizeUpload(): Promise<void> {
 
 	// (R9) Carry the uploadId + parts into "finishing" so a crash/restart during
 	// completeMultipart can RESUME the finalize instead of writing off a
-	// recording whose bytes are already fully in R2.
-	await setState({ kind: "finishing", videoId, uploadId, parts });
+	// recording whose bytes are already fully in R2. durationInSecs rides along
+	// so that resume can still report it (see resumeInterruptedFinishing).
+	await setState({
+		kind: "finishing",
+		videoId,
+		uploadId,
+		parts,
+		...(durationInSecs !== undefined ? { durationInSecs } : {}),
+	});
 
 	try {
 		const apiParts = parts.map((p) => ({
@@ -1117,6 +1167,7 @@ export async function finalizeUpload(): Promise<void> {
 			parts: apiParts,
 			videoId,
 			subpath: "result.mp4",
+			...(durationInSecs !== undefined ? { durationInSecs } : {}),
 		});
 	} catch (err) {
 		console.error("[upload] completeMultipart failed:", err);
@@ -1130,6 +1181,7 @@ export async function finalizeUpload(): Promise<void> {
 					etag: p.ETag,
 					size: 0,
 				})),
+				...(durationInSecs !== undefined ? { durationInSecs } : {}),
 			},
 		});
 		await setState({
@@ -1166,6 +1218,7 @@ export async function resumeInterruptedFinishing(
 	videoId: string,
 	uploadId: string | undefined,
 	parts: CompletedPart[] | undefined,
+	durationInSecs?: number,
 ): Promise<boolean> {
 	if (!uploadId || !parts || parts.length === 0) return false;
 
@@ -1179,6 +1232,7 @@ export async function resumeInterruptedFinishing(
 				etag: p.ETag,
 				size: 0,
 			})),
+			...(durationInSecs !== undefined ? { durationInSecs } : {}),
 		},
 	});
 	return true;
@@ -1279,10 +1333,12 @@ export async function retryPendingUploads(): Promise<void> {
 					uploadId,
 					videoId,
 					parts: snapshotParts,
+					durationInSecs,
 				} = item.payload as {
 					uploadId: string;
 					videoId: string;
 					parts?: Array<{ partNumber: number; etag: string; size: number }>;
+					durationInSecs?: number;
 				};
 
 				// The P1.6 durable-completion record carries no parts snapshot (it
@@ -1312,6 +1368,7 @@ export async function retryPendingUploads(): Promise<void> {
 					parts,
 					videoId,
 					subpath: "result.mp4",
+					...(durationInSecs !== undefined ? { durationInSecs } : {}),
 				});
 
 				try {

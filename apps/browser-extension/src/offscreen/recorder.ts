@@ -21,6 +21,10 @@ import {
 	isTabAudioLive,
 	tabAudioStatus,
 } from "../shared/client-audio";
+import {
+	AUDIO_BITS_PER_SECOND,
+	VIDEO_BITS_PER_SECOND,
+} from "../shared/recording-quality";
 
 interface StartCaptureMsg {
 	type: "START_CAPTURE";
@@ -200,8 +204,8 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		const mime = pickMimeType();
 		const recorder = new MediaRecorder(recordStream, {
 			mimeType: mime,
-			videoBitsPerSecond: 600_000,
-			audioBitsPerSecond: 96_000,
+			videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+			audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
 		});
 
 		let chunkIndex = 0;
