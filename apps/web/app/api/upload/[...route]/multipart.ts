@@ -672,40 +672,66 @@ app.post(
 					}
 
 					yield* db.use((db) =>
-						db.transaction(() =>
-							Promise.all([
-								db
-									.update(Db.videos)
-									.set({
-										duration: updateIfDefined(
-											body.durationInSecs,
-											Db.videos.duration,
-										),
-										width: updateIfDefined(body.width, Db.videos.width),
-										height: updateIfDefined(body.height, Db.videos.height),
-										fps: updateIfDefined(body.fps, Db.videos.fps),
-									})
-									.where(
-										and(
-											eq(Db.videos.id, Video.VideoId.make(videoId)),
-											eq(Db.videos.ownerId, user.id),
-										),
-									),
-								db
-									.delete(Db.videoUploads)
-									.where(
-										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
-									),
-							]),
-						),
+						db
+							.update(Db.videos)
+							.set({
+								duration: updateIfDefined(
+									body.durationInSecs,
+									Db.videos.duration,
+								),
+								width: updateIfDefined(body.width, Db.videos.width),
+								height: updateIfDefined(body.height, Db.videos.height),
+								fps: updateIfDefined(body.fps, Db.videos.fps),
+							})
+							.where(
+								and(
+									eq(Db.videos.id, Video.VideoId.make(videoId)),
+									eq(Db.videos.ownerId, user.id),
+								),
+							),
 					);
 
-					// P6.3: Faststart remux via media server removed — browsers produce seekable MP4 with H.264 codec
+					// This is the extension (subpath "result.mp4") and import finalize
+					// path — the raw file just landed directly at the "result.mp4" key
+					// with no server-side optimization yet. Route it through the same
+					// processing workflow as the raw-recorder branch above (instead of
+					// deleting the videoUploads row directly) so:
+					//  1) processVideoWorkflow actually remuxes/re-encodes it (fixes
+					//     iPhone/VP9 playback, sets a real duration) before the row is
+					//     cleared, and
+					//  2) mode:"multipart" makes the videoUploads row's "processing"
+					//     phase block a manual AI-analysis click for the whole remux
+					//     window, regardless of whether the upload that got us here was
+					//     truly multipart — see lib/transcribe.ts's isUploadInProgress,
+					//     which otherwise treats a byte-complete "singlepart" row as NOT
+					//     in progress even while phase="processing" (the escape a manual
+					//     "AI tahlil" click could race through mid-overwrite).
+					const processingStarted = yield* Effect.tryPromise(() =>
+						startVideoProcessingWorkflow({
+							videoId: Video.VideoId.make(videoId),
+							userId: user.id,
+							rawFileKey: fileKey,
+							bucketId: Option.getOrNull(video.bucketId),
+							processingMessage: "Starting video processing...",
+							startFailureMessage:
+								"Video uploaded, but processing could not start.",
+							mode: "multipart",
+						}),
+					).pipe(
+						Effect.map(() => true),
+						Effect.catchAll((error) =>
+							Effect.logError(
+								"Failed to start video processing workflow after multipart completion",
+								error,
+							).pipe(Effect.map(() => false)),
+						),
+					);
 
 					return c.json({
 						location: result.Location,
 						success: true,
 						fileKey,
+						processingStarted,
 					});
 				}).pipe(
 					Effect.catchAllCause((completeError) => {

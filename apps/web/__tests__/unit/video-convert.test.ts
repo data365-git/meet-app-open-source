@@ -30,6 +30,10 @@ vi.mock("node:fs", async (importOriginal) => {
 
 class MockChildProcess extends EventEmitter {
 	stderr = new EventEmitter();
+	killed = false;
+	kill(_signal?: string) {
+		this.killed = true;
+	}
 }
 
 let spawnedProcesses: MockChildProcess[] = [];
@@ -221,5 +225,62 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
 				bitrateBps: 1200000,
 			}),
 		).toBe("copy");
+	});
+
+	it("applies a custom timeoutMs override to the copy encode step and its compress fallback", async () => {
+		const { optimizeRemoteVideoToMp4 } = await import("@/lib/video-convert");
+
+		const metadataStderr = `
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
+  Duration: 00:01:00.00, start: 0.000000, bitrate: 1000 kb/s
+  Stream #0:0: Video: h264 (High), yuv420p, 640x360, 30 fps
+  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo
+`;
+
+		const resultPromise = optimizeRemoteVideoToMp4(
+			"https://example.com/video.mp4",
+			{ timeoutMs: 20 },
+		);
+
+		// Probe step (process[0]) resolves immediately with metadata that selects
+		// "copy" (h264/aac, small, low bitrate).
+		setTimeout(() => {
+			spawnedProcesses[0]?.stderr.emit("data", Buffer.from(metadataStderr));
+			spawnedProcesses[0]?.emit("close", 0);
+		}, 5);
+
+		await expect(resultPromise).rejects.toThrow("Video conversion timed out");
+
+		// process[1] = copy attempt, process[2] = its compress fallback — both hang
+		// and get killed by the 20ms override instead of the multi-minute default.
+		expect(spawnedProcesses).toHaveLength(3);
+		expect(spawnedProcesses[1]?.killed).toBe(true);
+		expect(spawnedProcesses[2]?.killed).toBe(true);
+	});
+
+	it("applies a custom timeoutMs override to the compress encode step", async () => {
+		const { optimizeRemoteVideoToMp4 } = await import("@/lib/video-convert");
+
+		const metadataStderr = `
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
+  Duration: 00:01:00.00, start: 0.000000, bitrate: 5000 kb/s
+  Stream #0:0: Video: h264 (High), yuv420p, 1920x1080, 30 fps
+  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo
+`;
+
+		const resultPromise = optimizeRemoteVideoToMp4(
+			"https://example.com/video.mp4",
+			{ timeoutMs: 20 },
+		);
+
+		// High bitrate selects "compress" — a single encode attempt, no fallback.
+		setTimeout(() => {
+			spawnedProcesses[0]?.stderr.emit("data", Buffer.from(metadataStderr));
+			spawnedProcesses[0]?.emit("close", 0);
+		}, 5);
+
+		await expect(resultPromise).rejects.toThrow("Video conversion timed out");
+		expect(spawnedProcesses).toHaveLength(2);
+		expect(spawnedProcesses[1]?.killed).toBe(true);
 	});
 });

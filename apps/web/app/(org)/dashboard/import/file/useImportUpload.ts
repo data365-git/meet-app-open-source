@@ -17,6 +17,11 @@ import {
 	type UploadStatus,
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
+import {
+	MULTIPART_UPLOAD_THRESHOLD_BYTES,
+	MultipartCompletionUncertainError,
+	uploadBlobMultipart,
+} from "@/utils/multipart-upload";
 import { uploadWithTarget } from "@/utils/upload-target";
 
 export const IMPORT_FILE_ACCEPT =
@@ -140,54 +145,120 @@ async function uploadVideoForServerProcessing(
 
 		const progressTracker = createProgressTracker();
 
-		try {
-			await uploadWithTarget({
-				target: videoData.uploadTarget,
-				body: file,
-				fileName: file.name,
-				onProgress: ({ loaded, total }) => {
-					const percent = (loaded / total) * 100;
-					setUploadStatus({
-						status: "uploadingVideo",
-						capId: uploadId,
-						progress: percent,
-						thumbnailUrl: undefined,
-					});
+		// Large files route through multipart (16MB parts, parallel, per-part
+		// retry + stall timeout — utils/multipart-upload.ts, shared with the web
+		// recorder) instead of one un-chunked PUT: a dropped connection mid-upload
+		// then only costs a 16MB part retry, not the whole file. The multipart
+		// key uses the "raw-upload." naming convention so the server's /complete
+		// route auto-starts processing (same contract the extension/web-recorder
+		// raw uploads already use) — triggerVideoProcessing is only needed for
+		// the single-PUT path below, which never touches that route.
+		const useMultipart = file.size >= MULTIPART_UPLOAD_THRESHOLD_BYTES;
 
-					progressTracker.scheduleProgressUpdate(loaded, total);
-				},
-			});
-		} catch (uploadError) {
-			if (!progressTracker.didFinishSending()) {
+		if (useMultipart) {
+			let processingStarted = true;
+			try {
+				const completion = await uploadBlobMultipart({
+					videoId: uploadId,
+					blob: file,
+					contentType:
+						file.type || (isAudioFile(file) ? "audio/mpeg" : "video/mp4"),
+					subpath: "raw-upload.mp4",
+					durationInSecs: duration,
+					onProgress: (loaded, total) => {
+						const percent = total > 0 ? (loaded / total) * 100 : 0;
+						setUploadStatus({
+							status: "uploadingVideo",
+							capId: uploadId,
+							progress: percent,
+							thumbnailUrl: undefined,
+						});
+
+						progressTracker.scheduleProgressUpdate(loaded, total);
+					},
+				});
+				processingStarted = completion.processingStarted;
+			} catch (uploadError) {
 				progressTracker.cleanup();
-				throw uploadError;
+				// (H3) The complete request can succeed on the server while its
+				// response is lost in transit. The bytes are safely stored either
+				// way, so this is not a hard failure — tell the user to check
+				// rather than silently marking the upload failed and re-uploading.
+				if (uploadError instanceof MultipartCompletionUncertainError) {
+					console.warn(
+						"Multipart completion uncertain; the file may already be safely stored",
+						uploadError,
+					);
+					toast.warning(
+						"Upload confirmation was interrupted. Check the video before assuming it failed.",
+					);
+				} else {
+					throw uploadError;
+				}
 			}
+			progressTracker.cleanup();
+			await sendProgressUpdate(uploadId, file.size, file.size);
 
-			console.warn(
-				"Upload request failed after all bytes were sent; verifying object before processing:",
-				uploadError,
-			);
-		}
-		progressTracker.cleanup();
-		const total = progressTracker.getTotal() || file.size || 1;
-		await sendProgressUpdate(uploadId, total, total);
-
-		setUploadStatus({
-			status: "serverProcessing",
-			capId: uploadId,
-		});
-
-		try {
-			await triggerVideoProcessing({
-				videoId: uploadId,
-				rawFileKey: videoData.rawFileKey,
-				bucketId: videoData.bucketId,
+			setUploadStatus({
+				status: "serverProcessing",
+				capId: uploadId,
 			});
-		} catch (triggerError) {
-			console.error("Failed to trigger processing:", triggerError);
-			toast.error("Failed to start video processing. Please try again.");
-			setUploadStatus(undefined);
-			return null;
+
+			if (!processingStarted) {
+				toast.warning(
+					"Video uploaded. Processing did not start yet, but the original file is available.",
+				);
+			}
+		} else {
+			try {
+				await uploadWithTarget({
+					target: videoData.uploadTarget,
+					body: file,
+					fileName: file.name,
+					onProgress: ({ loaded, total }) => {
+						const percent = (loaded / total) * 100;
+						setUploadStatus({
+							status: "uploadingVideo",
+							capId: uploadId,
+							progress: percent,
+							thumbnailUrl: undefined,
+						});
+
+						progressTracker.scheduleProgressUpdate(loaded, total);
+					},
+				});
+			} catch (uploadError) {
+				if (!progressTracker.didFinishSending()) {
+					progressTracker.cleanup();
+					throw uploadError;
+				}
+
+				console.warn(
+					"Upload request failed after all bytes were sent; verifying object before processing:",
+					uploadError,
+				);
+			}
+			progressTracker.cleanup();
+			const total = progressTracker.getTotal() || file.size || 1;
+			await sendProgressUpdate(uploadId, total, total);
+
+			setUploadStatus({
+				status: "serverProcessing",
+				capId: uploadId,
+			});
+
+			try {
+				await triggerVideoProcessing({
+					videoId: uploadId,
+					rawFileKey: videoData.rawFileKey,
+					bucketId: videoData.bucketId,
+				});
+			} catch (triggerError) {
+				console.error("Failed to trigger processing:", triggerError);
+				toast.error("Failed to start video processing. Please try again.");
+				setUploadStatus(undefined);
+				return null;
+			}
 		}
 
 		setUploadStatus(undefined);

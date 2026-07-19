@@ -12,11 +12,29 @@ export interface VideoConversionResult {
 	metadata?: VideoProbeMetadata;
 }
 
-const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
+// Probing only reads headers (ffmpeg -i with no output), so it stays short
+// regardless of file size.
+const PROBE_TIMEOUT_MS = 5 * 60 * 1000;
+// "copy" is a remux (no re-encode) — fast even for a large file, but a slow
+// R2 fetch of a multi-hundred-MB recording still needs more than 5 min.
+const DEFAULT_COPY_TIMEOUT_MS = 10 * 60 * 1000;
+// "compress" re-encodes the whole file frame-by-frame on a shared 4-core VPS;
+// a 40+ min recording can take a large fraction of its own runtime to encode.
+const DEFAULT_COMPRESS_TIMEOUT_MS = 45 * 60 * 1000;
 const HIGH_BITRATE_BPS = 2_500_000;
 const HIGH_RESOLUTION_MAX_EDGE = 1280;
 const MP4_SAFE_VIDEO_CODECS = new Set(["avc1", "h264"]);
 const MP4_SAFE_AUDIO_CODECS = new Set(["aac"]);
+
+export interface VideoConversionOptions {
+	/**
+	 * Overrides the ffmpeg timeout (ms) applied to the encode step. When
+	 * absent, a strategy-appropriate default is used (copy is a fast remux;
+	 * compress re-encodes the whole file and needs much longer) — see
+	 * DEFAULT_COPY_TIMEOUT_MS / DEFAULT_COMPRESS_TIMEOUT_MS above.
+	 */
+	timeoutMs?: number;
+}
 
 export interface VideoProbeMetadata {
 	durationSec: number | null;
@@ -29,7 +47,10 @@ export interface VideoProbeMetadata {
 
 export type VideoOptimizationStrategy = "copy" | "compress";
 
-function runFfmpeg(args: string[]): Promise<void> {
+function runFfmpeg(
+	args: string[],
+	timeoutMs: number = DEFAULT_COMPRESS_TIMEOUT_MS,
+): Promise<void> {
 	const ffmpeg = getFfmpegPath();
 
 	return new Promise((resolve, reject) => {
@@ -42,7 +63,7 @@ function runFfmpeg(args: string[]): Promise<void> {
 			settled = true;
 			proc.kill("SIGKILL");
 			reject(new Error("Video conversion timed out"));
-		}, FFMPEG_TIMEOUT_MS);
+		}, timeoutMs);
 
 		const finish = (callback: () => void) => {
 			if (settled) return;
@@ -89,7 +110,7 @@ function runFfmpegForStderr(args: string[]): Promise<string> {
 			settled = true;
 			proc.kill("SIGKILL");
 			reject(new Error("Video probe timed out"));
-		}, FFMPEG_TIMEOUT_MS);
+		}, PROBE_TIMEOUT_MS);
 
 		proc.stderr?.on("data", (data: Buffer) => {
 			stderr += data.toString();
@@ -190,7 +211,15 @@ export function chooseVideoOptimizationStrategy(
 	return "copy";
 }
 
-async function probeRemoteVideo(videoUrl: string): Promise<VideoProbeMetadata> {
+/**
+ * Reads container/codec/duration metadata without transcoding — used both to
+ * pick the copy-vs-compress strategy and, on a failed conversion, as a
+ * best-effort fallback so a video's known duration is never lost even when
+ * the encode itself fails (see processVideoWorkflow).
+ */
+export async function probeRemoteVideo(
+	videoUrl: string,
+): Promise<VideoProbeMetadata> {
 	const stderr = await runFfmpegForStderr(["-hide_banner", "-i", videoUrl]);
 	return parseVideoProbeMetadata(stderr);
 }
@@ -362,20 +391,53 @@ async function materializeStreamingInput(
 async function convertRemoteVideoToMp4FileInternal(
 	videoUrl: string,
 	outputPath: string,
+	options: VideoConversionOptions = {},
 ): Promise<void> {
 	try {
-		await runFfmpeg([
-			"-y",
-			"-i",
-			videoUrl,
-			"-c",
-			"copy",
-			"-movflags",
-			"+faststart",
-			outputPath,
-		]);
+		await runFfmpeg(
+			["-y", "-i", videoUrl, "-c", "copy", "-movflags", "+faststart", outputPath],
+			options.timeoutMs ?? DEFAULT_COPY_TIMEOUT_MS,
+		);
 	} catch {
-		await runFfmpeg([
+		await runFfmpeg(
+			[
+				"-y",
+				"-i",
+				videoUrl,
+				"-c:v",
+				"libx264",
+				"-preset",
+				"veryfast",
+				"-crf",
+				"26",
+				"-pix_fmt",
+				"yuv420p",
+				"-c:a",
+				"aac",
+				"-b:a",
+				"128k",
+				"-movflags",
+				"+faststart",
+				outputPath,
+			],
+			options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+		);
+	}
+}
+
+async function optimizeRemoteVideoToMp4FileInternal(
+	videoUrl: string,
+	outputPath: string,
+	strategy: VideoOptimizationStrategy,
+	options: VideoConversionOptions = {},
+): Promise<void> {
+	if (strategy === "copy") {
+		await convertRemoteVideoToMp4FileInternal(videoUrl, outputPath, options);
+		return;
+	}
+
+	await runFfmpeg(
+		[
 			"-y",
 			"-i",
 			videoUrl,
@@ -384,63 +446,33 @@ async function convertRemoteVideoToMp4FileInternal(
 			"-preset",
 			"veryfast",
 			"-crf",
-			"26",
+			"28",
+			"-vf",
+			"scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'",
 			"-pix_fmt",
 			"yuv420p",
 			"-c:a",
 			"aac",
 			"-b:a",
-			"128k",
+			"96k",
 			"-movflags",
 			"+faststart",
 			outputPath,
-		]);
-	}
-}
-
-async function optimizeRemoteVideoToMp4FileInternal(
-	videoUrl: string,
-	outputPath: string,
-	strategy: VideoOptimizationStrategy,
-): Promise<void> {
-	if (strategy === "copy") {
-		await convertRemoteVideoToMp4FileInternal(videoUrl, outputPath);
-		return;
-	}
-
-	await runFfmpeg([
-		"-y",
-		"-i",
-		videoUrl,
-		"-c:v",
-		"libx264",
-		"-preset",
-		"veryfast",
-		"-crf",
-		"28",
-		"-vf",
-		"scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'",
-		"-pix_fmt",
-		"yuv420p",
-		"-c:a",
-		"aac",
-		"-b:a",
-		"96k",
-		"-movflags",
-		"+faststart",
-		outputPath,
-	]);
+		],
+		options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+	);
 }
 
 export async function convertRemoteVideoToMp4(
 	videoUrl: string,
+	options: VideoConversionOptions = {},
 ): Promise<VideoConversionResult> {
 	const dirPath = await fs.mkdtemp(join(tmpdir(), "cap-video-"));
 	const filePath = join(dirPath, `video-${randomUUID()}.mp4`);
 
 	try {
 		const inputPath = await materializeStreamingInput(videoUrl, dirPath);
-		await convertRemoteVideoToMp4FileInternal(inputPath, filePath);
+		await convertRemoteVideoToMp4FileInternal(inputPath, filePath, options);
 
 		return {
 			filePath,
@@ -459,6 +491,7 @@ export async function convertRemoteVideoToMp4(
 
 export async function optimizeRemoteVideoToMp4(
 	videoUrl: string,
+	options: VideoConversionOptions = {},
 ): Promise<VideoConversionResult> {
 	const dirPath = await fs.mkdtemp(join(tmpdir(), "cap-video-"));
 	const filePath = join(dirPath, `video-${randomUUID()}.mp4`);
@@ -467,7 +500,92 @@ export async function optimizeRemoteVideoToMp4(
 		const inputPath = await materializeStreamingInput(videoUrl, dirPath);
 		const metadata = await probeRemoteVideo(inputPath);
 		const strategy = chooseVideoOptimizationStrategy(metadata);
-		await optimizeRemoteVideoToMp4FileInternal(inputPath, filePath, strategy);
+		await optimizeRemoteVideoToMp4FileInternal(
+			inputPath,
+			filePath,
+			strategy,
+			options,
+		);
+
+		return {
+			filePath,
+			mimeType: "video/mp4",
+			metadata,
+			cleanup: async () => {
+				try {
+					await fs.rm(dirPath, { force: true, recursive: true });
+				} catch {}
+			},
+		};
+	} catch (error) {
+		await fs.rm(dirPath, { force: true, recursive: true }).catch(() => {});
+		throw error;
+	}
+}
+
+export interface VideoTrimRange {
+	startSec: number;
+	endSec: number;
+}
+
+async function trimRemoteVideoToMp4FileInternal(
+	videoUrl: string,
+	outputPath: string,
+	range: VideoTrimRange,
+	options: VideoConversionOptions = {},
+): Promise<void> {
+	const duration = Math.max(0, range.endSec - range.startSec);
+
+	await runFfmpeg(
+		[
+			"-y",
+			"-ss",
+			String(range.startSec),
+			"-i",
+			videoUrl,
+			"-t",
+			String(duration),
+			"-c:v",
+			"libx264",
+			"-preset",
+			"veryfast",
+			"-crf",
+			"23",
+			"-pix_fmt",
+			"yuv420p",
+			"-c:a",
+			"aac",
+			"-b:a",
+			"128k",
+			"-movflags",
+			"+faststart",
+			outputPath,
+		],
+		options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+	);
+}
+
+/**
+ * Re-encodes a single [startSec,endSec) range of a remote video into a new
+ * faststart MP4 — the server-side implementation of "Apply pending trim"
+ * (workflows/edit-video.ts). `-ss` before `-i` combined with `-t` gives an
+ * accurate, re-encoded cut regardless of keyframe placement (a `-c copy` trim
+ * would snap to the nearest keyframe, which is not what the user selected).
+ */
+export async function trimRemoteVideoToMp4(
+	videoUrl: string,
+	range: VideoTrimRange,
+	options: VideoConversionOptions = {},
+): Promise<VideoConversionResult> {
+	const dirPath = await fs.mkdtemp(join(tmpdir(), "cap-video-"));
+	const filePath = join(dirPath, `video-${randomUUID()}.mp4`);
+
+	try {
+		const inputPath = await materializeStreamingInput(videoUrl, dirPath);
+		await trimRemoteVideoToMp4FileInternal(inputPath, filePath, range, options);
+		// Probe the ACTUAL output (not the math) so a slightly-off ffmpeg cut
+		// never leaves videos.duration wrong.
+		const metadata = await probeRemoteVideo(filePath);
 
 		return {
 			filePath,
@@ -487,8 +605,9 @@ export async function optimizeRemoteVideoToMp4(
 
 export async function convertRemoteVideoToMp4Buffer(
 	videoUrl: string,
+	options: VideoConversionOptions = {},
 ): Promise<Buffer> {
-	const result = await convertRemoteVideoToMp4(videoUrl);
+	const result = await convertRemoteVideoToMp4(videoUrl, options);
 
 	try {
 		return await fs.readFile(result.filePath);

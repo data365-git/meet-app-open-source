@@ -142,6 +142,13 @@ export interface VideoMetadata {
 	autoRecoverAttempts?: number;
 	/** Set when the nightly storage reconciliation cron could not find this video's S3 object (D3b). */
 	storageMissing?: boolean;
+	/**
+	 * True when a trim cut removed the exact source point a chapter marker (or
+	 * a translated language's chapter set) pointed to and no clean remap was
+	 * possible. The stale chapters were DROPPED rather than shown at a wrong
+	 * time — re-run AI generation to regenerate them against the new timeline.
+	 */
+	chaptersStaleAfterTrim?: boolean;
 }
 
 export type VideoEditRange = {

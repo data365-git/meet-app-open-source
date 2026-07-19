@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Timeline } from "./Timeline";
 import { isAudioSource, shouldUploadOriginal } from "./trim-utils";
 import { type TrimMode, useFFmpeg } from "./useFFmpeg";
@@ -88,6 +89,12 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 		fileName: file.name,
 	});
 	const isAudio = isAudioSource(file.type, file.name);
+	// Above MAX_CLIENT_TRIM_BYTES, handleConfirm below skips the local ffmpeg
+	// pass and uploads the file as-is, queuing the cut to run on the server
+	// after upload instead. The button/label must say that plainly — otherwise
+	// "cut and upload" reads as an immediate, finished cut.
+	const serverTrimPending =
+		!isAudio && !uploadingOriginal && file.size > MAX_CLIENT_TRIM_BYTES;
 
 	const handleConfirm = useCallback(async () => {
 		setError(null);
@@ -123,6 +130,10 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			return;
 		}
 		if (file.size > MAX_CLIENT_TRIM_BYTES) {
+			// The file is uploaded as-is now; the trim itself runs on the server
+			// afterward (ffmpeg-wasm would OOM this file locally). Say so up front
+			// so "cut and upload" doesn't read as an immediate, finished cut.
+			toast.info(t("serverTrimNotice"));
 			onConfirm(file, { inSec, outSec, duration });
 			return;
 		}
@@ -265,7 +276,9 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 							? t("working")
 							: uploadingOriginal
 								? t("upload")
-								: t("cutUpload")}
+								: serverTrimPending
+									? t("cutUploadServer")
+									: t("cutUpload")}
 					</Button>
 				</div>
 			</div>

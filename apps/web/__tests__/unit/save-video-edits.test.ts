@@ -195,9 +195,33 @@ describe("saveVideoEdits", () => {
 		expect(result).toMatchObject({ ok: true });
 	});
 
-	it("requires Cap Pro before saving edits", async () => {
-		// updated: saveVideoEdits now returns { ok: false, error } instead of throwing
+	it("no longer requires Cap Pro (self-hosted trim is a free tool — Wave 1)", async () => {
+		// The Pro gate was removed from saveVideoEdits (server-side trim is a
+		// self-hosted feature, not a paid one). A non-Pro user must reach the
+		// same real checks a Pro user would — proven here by using the exact
+		// happy-path mock chain as "rejects completed edit rows" above, just
+		// with isPro: false, and asserting it still succeeds instead of
+		// short-circuiting on Pro status.
 		getCurrentUserMock.mockResolvedValueOnce({ id: "user-1", isPro: false });
+		whereMock
+			.mockImplementationOnce(() =>
+				makeQueryResult([
+					{
+						id: "video-1",
+						ownerId: "user-1",
+						duration: 10,
+						source: { type: "webMP4" },
+						isScreenshot: false,
+						metadata: null,
+					},
+				]),
+			)
+			// activeUpload query: no active phase → DB returns []
+			.mockImplementationOnce(() => ({
+				limit: vi.fn().mockResolvedValueOnce([]),
+			}))
+			// videoEdits query
+			.mockImplementationOnce(() => makeQueryResult([]));
 		const { saveVideoEdits } = await import("@/actions/videos/save-edits");
 
 		const result = await saveVideoEdits("video-1" as never, {
@@ -206,7 +230,7 @@ describe("saveVideoEdits", () => {
 			keepRanges: [{ start: 0, end: 10 }],
 		});
 
-		expect(result).toMatchObject({ ok: false });
-		expect(selectMock).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ ok: true });
+		expect(selectMock).toHaveBeenCalled();
 	});
 });

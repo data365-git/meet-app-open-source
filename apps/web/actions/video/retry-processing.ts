@@ -111,6 +111,11 @@ export async function retryVideoProcessing({
 		processingMessage: "Retrying video processing...",
 		startFailureMessage: "Video processing could not restart.",
 		forceRestart: shouldForceRetryProcessing(upload),
+		// Same guard-leak fix as the initial trigger paths: force the "trust the
+		// phase, not the byte count" signal for the guard in lib/transcribe.ts
+		// while processVideoWorkflow re-runs, regardless of whichever mode the
+		// original (possibly stale) row had.
+		mode: "multipart",
 	});
 
 	return { success: true, status };

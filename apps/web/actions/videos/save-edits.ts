@@ -4,7 +4,6 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import type { VideoEditSpec } from "@cap/database/types";
-import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
@@ -140,12 +139,6 @@ export async function saveVideoEdits(
 	const user = await getCurrentUser();
 	if (!user)
 		return { ok: false, error: "You're signed out. Please log in again." };
-	if (!userIsPro(user)) {
-		return {
-			ok: false,
-			error: "data365 Pro is required to edit videos.",
-		};
-	}
 
 	const [video] = await db()
 		.select()

@@ -56,6 +56,14 @@ export async function triggerVideoProcessing({
 		bucketId,
 		processingMessage: "Starting video processing...",
 		startFailureMessage: "Video processing could not start.",
+		// The import upload already finished (bytes are fully in storage by the
+		// time this runs — verifyRawFileUploaded just confirmed it), so
+		// videoUploads.uploaded >= total is already true. Without mode set to
+		// "multipart" here, lib/transcribe.ts's isUploadInProgress would treat
+		// that byte-complete row as NOT in progress despite phase="processing",
+		// letting a manual "AI tahlil" click race in mid-remux. See the matching
+		// comment in app/api/upload/[...route]/multipart.ts's finalize branch.
+		mode: "multipart",
 	});
 
 	return { success: true };

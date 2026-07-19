@@ -11,6 +11,10 @@ import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-insta
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import {
+	MULTIPART_UPLOAD_THRESHOLD_BYTES,
+	uploadBlobMultipart,
+} from "@/utils/multipart-upload";
 import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
@@ -1088,8 +1092,13 @@ export const useWebRecorder = ({
 
 			const recorder = new MediaRecorder(mixedStream, {
 				mimeType: pipeline.mimeType,
-				videoBitsPerSecond: 600_000,
-				audioBitsPerSecond: 96_000,
+				// 1.5Mbps video / 128kbps audio: transparent enough for 720p slides
+				// while the buffered-raw path now uploads via multipart above ~50MB
+				// (see MULTIPART_UPLOAD_THRESHOLD_BYTES) instead of one un-chunked
+				// PUT, so the higher bitrate no longer risks an OOM/whole-file-retry
+				// on a large single Blob.
+				videoBitsPerSecond: 1_500_000,
+				audioBitsPerSecond: 128_000,
 			});
 			recorder.ondataavailable = handleRecorderDataAvailable;
 			recorder.onstop = onRecorderStop;
@@ -1360,23 +1369,59 @@ export const useWebRecorder = ({
 						thumbnailUrl: thumbnailPreviewUrl,
 					});
 
-					await uploadRecording(
-						processedRecordingBlob,
-						creationResult.upload,
-						creationResult.id,
-						thumbnailPreviewUrl,
-						setUploadStatus,
-					);
-
-					try {
-						await triggerInstantRecordingProcessing({
+					// Large buffered-raw recordings (Safari/Firefox, or anywhere the
+					// streaming-webm pipeline isn't available) route through multipart
+					// instead of one un-chunked PUT of the whole Blob — a 500MB+
+					// recording on a single XHR risked OOM/whole-file retries. The
+					// "raw-upload." key mirrors the streaming pipeline's convention so
+					// the server auto-starts processing on complete; below the
+					// threshold, keep the existing single-PUT + explicit trigger path.
+					if (processedRecordingBlob.size >= MULTIPART_UPLOAD_THRESHOLD_BYTES) {
+						const completion = await uploadBlobMultipart({
 							videoId: creationResult.id,
+							blob: processedRecordingBlob,
+							contentType: "video/mp4",
+							subpath: "raw-upload.mp4",
+							durationInSecs: durationSeconds,
+							width,
+							height,
+							fps,
+							onProgress: (loaded, total) => {
+								const percent = total > 0 ? (loaded / total) * 100 : 0;
+								setUploadStatus({
+									status: "uploadingVideo",
+									capId: creationResult.id,
+									progress: percent,
+									thumbnailUrl: thumbnailPreviewUrl,
+								});
+								void sendProgressUpdate(creationResult.id, loaded, total);
+							},
 						});
-					} catch (processingError) {
-						console.error("Failed to start video processing", processingError);
-						toast.warning(
-							"Recording uploaded. Processing did not start yet, but the original recording is available.",
+
+						if (!completion.processingStarted) {
+							toast.warning(
+								"Recording uploaded. Processing did not start yet, but the original recording is available.",
+							);
+						}
+					} else {
+						await uploadRecording(
+							processedRecordingBlob,
+							creationResult.upload,
+							creationResult.id,
+							thumbnailPreviewUrl,
+							setUploadStatus,
 						);
+
+						try {
+							await triggerInstantRecordingProcessing({
+								videoId: creationResult.id,
+							});
+						} catch (processingError) {
+							console.error("Failed to start video processing", processingError);
+							toast.warning(
+								"Recording uploaded. Processing did not start yet, but the original recording is available.",
+							);
+						}
 					}
 
 					if (thumbnailBlob) {
