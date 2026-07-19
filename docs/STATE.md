@@ -3,7 +3,54 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ /CLEAR HANDOFF (2026-07-18 late night — SESSION k, LATEST) — PRODUCTION PUSH IN FLIGHT, READ FIRST
+## ▶▶ /CLEAR HANDOFF (2026-07-19 ~01:30 — SESSION l, **LATEST — READ THIS ONE**)
+
+🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
+
+### 🚀 DEPLOY HAPPENED — the new build is LIVE
+Owner approved explicitly ("bu uchun deploy shart bo'lsa deploy qil"). Coolify deployment
+`dcv3k8qki4333cvupd8ymcun` → **finished**. Live image tag = **`c941a78…`** (was `f2e64a6` for 3 days).
+Verified with real curl output right after (full evidence: `docs/qa/PRODUCTION_READINESS_2026-07-19.md`):
+- `/api/health` → `{"status":"ok","checks":{"db":"ok","storage":"ok"}}`
+- **Security headers now present** on `/login` (HSTS, nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options) — they were absent before; closes the QA-run-8 Medium.
+- `/api/video/delete-permanent` unauth → **401** · `/api/cron/purge-trashed-videos` unauth → **401** (new cron route deployed + gated).
+
+`git status`: **HEAD == origin/qa-fixes == `c941a78`, zero tracked uncommitted files.** The ~98 untracked
+entries are long-standing scratch (CODEX_TO_CLAUDE_*.md, `_proto-*` dirs, `_login-loop-test.mjs`, old QA
+docs) — pre-existing, deliberately not committed. Nothing from this session is left uncommitted.
+
+### ⏭️ NEXT SESSION STARTS HERE
+1. **Public-surface live walk on the NEW build** — machine-doable, no login: login, signup, `/s/[videoId]`,
+   `/c/[id]`, `/embed`, `/terms` (known pre-existing 404 debt — recheck), `/privacy`, 404 page. Per surface:
+   does it work + UX/UI at 375px mobile + dark mode + Uzbek copy consistency + console/network errors.
+2. **Authenticated screens** — the owner asked for a full "every function + UX/UI" pass. Approach researched
+   and partially BLOCKED; read `docs/qa/SESSION_INJECTION_NOTES.md` FIRST (it records that `next-auth/jwt`
+   is NOT requireable in the standalone container — do not retry that path) plus `docs/qa/mint-jwe.js`.
+   Cheaper alternative: the owner is already logged in and can walk the dashboard himself with a checklist.
+3. **The feature/flow map was NOT finished** — workflow `wf_e694f75b-cdc` was stopped mid-run. Resume with
+   `Workflow({scriptPath: "…/workflows/scripts/ustoz-feature-flow-map-wf_e694f75b-cdc.js", resumeFromRunId: "wf_e694f75b-cdc"})`
+   (completed agents replay from cache) — it produces the exhaustive surface + UX/UI checklist for step 1/2.
+4. ⛔ **OWNER TODO (the real blocker, ~15 min):** `docs/OWNER_QA_SCRIPT.md` steps **1** (solo 3-min recording
+   plays to the END with audio) and **6** (two-person Meet, remote voice audible). Until step 6 passes,
+   "production ready" for the RECORDER is not a true claim — no machine work can substitute for it.
+
+### 🧪 Production-DB note (do not lose)
+Live `capdb` has 4 users; one is a **pre-existing QA leftover**: `qa0pool0loop000` /
+`qa.pool.loop@data365-test.uz`, isAdmin 0. NOT created this session. Either reuse it as the "requester"
+test subject (check it has no `organizationMembers` row → live-proves the C2 fix) or delete it; a stale
+test account should not outlive its purpose. **No QA data was created on production this session.**
+
+### ✅ What the machine half proved (sessions k+l)
+- Recorder: 3 blockers + 5 review-caught criticals fixed → `78c8aee`, `ba6cff6`. **113 extension tests.**
+- Data/deletion twins → `16f9ac5`. **Web tsc 0 · 1073 passed / 26 skipped.** Webpack prod build: exit 0.
+- **Two INDEPENDENT audits converge**: Fable **SOUND** (30 executed attacks, zero broke) and a firewalled
+  Opus auditor (Codex was rate-limited until Jul 25) which found ONE proved critical — byte-carrying part
+  retries expired at ~1.8h vs 28h for metadata, stranding a fully-captured meeting after a 2h outage.
+  Fixed (`ba6cff6`, PART_MAX_ATTEMPTS 30→400 + RED-first test) and **re-verified VERIFIED-FIXED** by that
+  same auditor against the main checkout. 36 executed attacks total.
+
+---
+## ▶▶ /CLEAR HANDOFF (2026-07-18 late night — SESSION k) — SUPERSEDED by session l above
 
 🎯 **GOAL (unchanged):** production-ready for the IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.** Owner directive tonight: *"hammasi bajarilmaguncha to'xtama"* — work continues until the machine-side list is done; the human device gate (OWNER_QA_SCRIPT) is the only remaining owner half.
 
