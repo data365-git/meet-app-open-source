@@ -53,6 +53,24 @@ decision): auto video-name templates are English ("data365 Recording/Meeting/Upl
 retitling → English becomes permanent), and on the sacred recorder path. See `qa-evidence/video-name-finding.md`.
 Minor logged, unfixed: dashboard `<title>` "Settings — data365" English; unknown routes 307→login (no
 honest 404 for logged-out); HSTS max-age=1d (hardening → /qa-harden, not a bug).
+
+**Independent skeptic subagent ran (Step 5) and CAUGHT 3 real gaps — all now closed with on-disk evidence:**
+(1) restricted-video access-control 401 was seen live but not persisted + request was malformed in the first
+probe → re-ran well-formed, saved `restricted-access-control.txt` (restricted&videoType=mp4 → 401 + full
+headers; public control → 302 signed R2). (2) onboarding wizard + shared-caps captures were orphaned →
+verified live + logged as findings (below). (3) sec-headers only proven on /login, enumeration only 1 case →
+`headers-all-paths.txt` (all 7 paths carry HSTS+CSP+X-Frame+nosniff+Referrer+Permissions) + two-case
+enumeration identical 401 (`login-enumeration.txt`). coverage.ps1 now 17/17 evidenced, 0 fail, 1 unsafe.
+
+**2 NEW findings SURFACED (owner decision, not auto-fixed):**
+- **Onboarding wizard i18n gap** — live `/onboarding/welcome` mixes English ("Welcome to data365", "Invite
+  your team", "Skip to dashboard", "Organization", "Continue") with Uzbek. The IT-team's first-run screen.
+  Fix = feature-sized (5-page wizard × 3 locales) → consult-first, evidence `qa-evidence/onboarding-live.html`.
+- **`/dashboard/shared-caps` dead route** — 404; `Top.tsx:44` title-map entry with NO link to it anywhere.
+  Dead code, not user-reachable. Optional 1-line cleanup. Evidence `qa-evidence/shared-caps-finding.md`.
+
+**Not-found fix `cd1bd6e` committed, NOT yet deployed** — too small to deploy alone (~40 min build); batch
+with the next real change (e.g. if owner greenlights onboarding i18n).
 2. Authenticated screens walk — still blocked machine-side (`docs/qa/SESSION_INJECTION_NOTES.md`); cheapest
    path remains the owner walking the dashboard with a checklist.
 3. Feature/flow map workflow `wf_e694f75b-cdc` still resumable (see session l block).
