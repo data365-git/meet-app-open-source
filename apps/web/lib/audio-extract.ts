@@ -60,6 +60,8 @@ export interface AudioChunkExtractionResult {
 	chunks: Array<{
 		filePath: string;
 		startSec: number;
+		/** See ChunkSpec.speechEndSec — absolute, undefined on fallback cuts. */
+		speechEndSec?: number;
 		durationSec: number | null;
 	}>;
 	mimeType: string;
@@ -135,6 +137,15 @@ export interface SilenceInterval {
 export interface ChunkSpec {
 	startSec: number;
 	durationSec: number;
+	/**
+	 * Absolute time where the LAST speech in this chunk ends — i.e. the start of
+	 * the silence that the next chunk's boundary was anchored to. Undefined when
+	 * the boundary was a plain fallback cut (no usable silence) or for the final
+	 * chunk. Used by the cue rescale in `gemini-transcribe.ts` as the truthful
+	 * "where the words actually stop" anchor: rescaling to `durationSec` instead
+	 * would push cues late whenever a chunk ends with silence.
+	 */
+	speechEndSec?: number;
 }
 
 function round3(value: number): number {
@@ -168,6 +179,9 @@ export function computeSilenceAnchoredCuts(
 	const firstOnset = first && first.start <= 1.0 ? first.end : 0;
 
 	const boundaries: number[] = [firstOnset];
+	// Speech-end for the chunk that ENDS at boundaries[i+1] — the start of the
+	// silence the cut was anchored to (undefined for a fallback cut).
+	const speechEnds: Array<number | undefined> = [];
 	let pos = firstOnset;
 
 	while (totalDurationSec - pos > targetChunkSec + WINDOW) {
@@ -185,18 +199,29 @@ export function computeSilenceAnchoredCuts(
 		}
 
 		let cutAt = candidate ? candidate.end : target;
+		let speechEnd = candidate ? candidate.start : undefined;
 		if (cutAt - pos < MIN_CHUNK) {
 			cutAt = pos + targetChunkSec;
+			speechEnd = undefined; // fallback cut: no verified speech boundary
 		}
 
 		boundaries.push(cutAt);
+		speechEnds.push(speechEnd);
 		pos = cutAt;
 	}
 
 	return boundaries.map((start, i) => {
 		const next = boundaries[i + 1];
 		const end = next !== undefined ? next : totalDurationSec;
-		return { startSec: round3(start), durationSec: round3(end - start) };
+		const speechEndSec = speechEnds[i];
+		return {
+			startSec: round3(start),
+			durationSec: round3(end - start),
+			// Only meaningful when it sits inside the chunk.
+			...(speechEndSec !== undefined && speechEndSec > start && speechEndSec <= end
+				? { speechEndSec: round3(speechEndSec) }
+				: {}),
+		};
 	});
 }
 
@@ -453,6 +478,7 @@ export async function extractAudioChunksFromUrl(
 			chunks.push({
 				filePath,
 				startSec: spec.startSec,
+				speechEndSec: spec.speechEndSec,
 				durationSec: spec.durationSec,
 			});
 		}

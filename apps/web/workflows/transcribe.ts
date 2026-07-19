@@ -41,6 +41,7 @@ import { submitChunkBatch } from "@/lib/gemini-batch-transcribe";
 import {
 	extractSpeakerLabels,
 	mergeChunkedWebVtt,
+	rescaleChunkVtt,
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
 import { patchVideoMetadata } from "@/lib/video-metadata";
@@ -77,6 +78,9 @@ export interface ExtractedAudioChunk {
 	key: string;
 	url: string;
 	startSec: number;
+	/** Absolute time where this chunk's last speech ends (silence-anchored cuts
+	 * only). The cue-rescale anchor — see rescaleChunkVtt. */
+	speechEndSec?: number;
 	durationSec: number | null;
 }
 
@@ -601,6 +605,7 @@ async function extractAudio(
 					key: audioKey,
 					url: audioSignedUrl,
 					startSec: chunk.startSec,
+					speechEndSec: chunk.speechEndSec,
 					durationSec: chunk.durationSec,
 				});
 			}
@@ -1010,7 +1015,26 @@ export async function transcribeAudioChunks(
 				context,
 				knownSpeakers,
 			});
-			result = { vtt, offsetSec: chunk.startSec };
+			// DRIFT FIX (measured 2026-07-19 on a real 42-min recording): Gemini's
+			// within-chunk clock runs at a near-constant fraction of real time
+			// (~0.64 there) and re-anchors only at the next chunk, so cues run
+			// further and further AHEAD of the audio — up to 120s inside a single
+			// 6-min chunk. The error is linear, so one linear stretch removes it
+			// (see rescaleChunkVtt for the measurement table). Anchor on where
+			// speech actually ends: boundaries sit on speech ONSETS, so a chunk
+			// normally ends in silence and stretching to the nominal duration would
+			// push cues late; fall back to the duration only on a fallback cut.
+			const speechSpanSec =
+				chunk.speechEndSec != null
+					? chunk.speechEndSec - chunk.startSec
+					: (chunk.durationSec ?? 0);
+			const rescaled = rescaleChunkVtt(vtt, speechSpanSec);
+			if (rescaled.applied) {
+				console.log(
+					`[transcribe] chunk@${chunk.startSec}s cue-rescale x${rescaled.factor.toFixed(3)} (speech span ${speechSpanSec.toFixed(0)}s)`,
+				);
+			}
+			result = { vtt: rescaled.vtt, offsetSec: chunk.startSec };
 		} catch (error) {
 			// Cheap-mode quota is NOT a missing chunk (spec §5 C2, bug #1): submit
 			// this ONE chunk to the durable paid Batch, then rethrow so the whole

@@ -329,6 +329,110 @@ export function collapseRepeatedVttCues(vtt: string): string {
 	return out;
 }
 
+// ── Within-chunk clock rescale ──────────────────────────────────────────────
+//
+// MEASURED on production (2026-07-19, `scripts/measure-transcript-drift.mjs`
+// against a real 42-min recording, 13 dense samples inside one chunk):
+//
+//   true 1800s -> cue 1808s   (+8s, chunk boundary: no drift)
+//   true 1900s -> cue 1866s   (-34s)
+//   true 2000s -> cue 1921s   (-79s)
+//   true 2100s -> cue 1986s   (-114s)
+//   true 2150s -> cue 2030s   (-120s)
+//   true 2200s -> cue 2194s   (-6s, NEXT chunk: drift reset to ~0)
+//
+// So Gemini's within-chunk clock runs at a roughly CONSTANT fraction of real
+// time (~0.64 here) and re-anchors at every chunk start. That makes the error
+// almost perfectly linear inside a chunk — and therefore removable by a linear
+// rescale, without any second STT service (the owner ruled ElevenLabs out of the
+// pipeline). Shrinking the chunk size only caps the error; this removes it.
+//
+// The anchor MUST be where speech actually stops, not the chunk's nominal end:
+// chunk boundaries are anchored to speech ONSETS, so a chunk usually ends with a
+// silence, and stretching cues to the nominal end would push them late.
+// `speechEndSec` (from computeSilenceAnchoredCuts) carries that truth.
+const RESCALE_MIN_CUES = 3;
+// Below this the correction is noise; above it the chunk is mostly silence or
+// the model gave up early, and stretching would amplify garbage.
+const RESCALE_MIN_FACTOR = 1.05;
+const RESCALE_MAX_FACTOR = 2.5;
+
+export interface ChunkRescaleResult {
+	vtt: string;
+	factor: number;
+	applied: boolean;
+	reason?: string;
+}
+
+/**
+ * Linearly stretch one chunk's cue times so the last cue ends where the speech
+ * in that chunk actually ends. Times are chunk-RELATIVE on both sides (the
+ * absolute offset is applied later by mergeChunkedWebVtt).
+ *
+ * Pure. `speechSpanSec` = (speechEndSec - chunk.startSec) when a silence-anchored
+ * boundary is known, else the chunk duration.
+ */
+export function rescaleChunkVtt(
+	vtt: string,
+	speechSpanSec: number,
+): ChunkRescaleResult {
+	if (!(speechSpanSec > 0)) {
+		return { vtt, factor: 1, applied: false, reason: "no-span" };
+	}
+
+	const timingLine = new RegExp(`(${TS})\\s*-->\\s*(${TS})`);
+	const blocks = vtt.split(/\r?\n\r?\n/);
+
+	let lastEnd = 0;
+	let cueCount = 0;
+	for (const block of blocks) {
+		const line = block.split(/\r?\n/).find((l) => l.includes("-->"));
+		const m = line?.match(timingLine);
+		if (!m) continue;
+		const end = parseTimestampToSeconds(m[2] ?? "");
+		if (end == null) continue;
+		cueCount++;
+		if (end > lastEnd) lastEnd = end;
+	}
+
+	if (cueCount < RESCALE_MIN_CUES) {
+		return { vtt, factor: 1, applied: false, reason: "too-few-cues" };
+	}
+	if (lastEnd <= 0) {
+		return { vtt, factor: 1, applied: false, reason: "no-end" };
+	}
+
+	const factor = speechSpanSec / lastEnd;
+	if (factor < RESCALE_MIN_FACTOR || factor > RESCALE_MAX_FACTOR) {
+		return { vtt, factor, applied: false, reason: "factor-out-of-range" };
+	}
+
+	const rescaled = blocks
+		.map((block) =>
+			block
+				.split(/\r?\n/)
+				.map((line) => {
+					const m = line.match(timingLine);
+					if (!m) return line;
+					const start = parseTimestampToSeconds(m[1] ?? "");
+					const end = parseTimestampToSeconds(m[2] ?? "");
+					if (start == null || end == null) return line;
+					// Clamp to the span so a stretched end can never run past the
+					// chunk's own audio.
+					const ns = Math.min(start * factor, speechSpanSec);
+					const ne = Math.min(end * factor, speechSpanSec);
+					return line.replace(
+						m[0],
+						`${formatVttTimestamp(ns)} --> ${formatVttTimestamp(Math.max(ne, ns))}`,
+					);
+				})
+				.join("\n"),
+		)
+		.join("\n\n");
+
+	return { vtt: rescaled, factor, applied: true };
+}
+
 // A cue may never span longer than this. Gemini sometimes emits a runaway END
 // timestamp (e.g. a cue at 15:59 ending at 75:00) — left as-is that cue stays
 // "active" for the whole span, freezing the on-screen caption on one line and
