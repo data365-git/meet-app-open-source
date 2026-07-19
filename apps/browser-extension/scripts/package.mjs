@@ -26,11 +26,21 @@ try {
 		});
 	} catch (err) {
 		if (err.code !== "ENOENT") throw err;
-		// Windows has no `zip` binary; bsdtar ships with Windows 10+ and writes
-		// real zip archives when the output name ends in .zip (-a).
-		execFileSync("tar", ["-a", "-c", "-f", outputFile, "-C", distDir, "."], {
-			stdio: "inherit",
-		});
+		// Windows has no `zip` binary. bsdtar (`tar -a -c -f x.zip -C dist .`)
+		// DOES produce a valid zip, but every entry is named "./foo" — and
+		// Windows Explorer renders such an archive as EMPTY, so the owner
+		// downloads it, sees nothing, and can't install the extension.
+		// (Shipped exactly that bug on 2026-07-19.) Compress-Archive with a
+		// `dist\*` glob writes plain top-level entries that Explorer reads.
+		execFileSync(
+			"powershell.exe",
+			[
+				"-NoProfile",
+				"-Command",
+				`Compress-Archive -Path '${join(distDir, "*")}' -DestinationPath '${outputFile}' -Force`,
+			],
+			{ stdio: "inherit" },
+		);
 	}
 	console.log(`Package created: ${outputFile}`);
 	console.log(`Manifest version: ${manifestVersion}`);
