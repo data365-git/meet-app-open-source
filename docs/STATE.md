@@ -21,9 +21,22 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
    but any DB-backed page (incl. private-video denied view) can't be walked locally. Denied-view text is
    proven via translator-parse + tests; pixel-proof lands with the next deploy.
 
+### 🚀 DEPLOYED + LIVE-VERIFIED (owner said "ha", same morning)
+Coolify deployment `ui9f03rug85esk11kpnm08y7` → **finished** (~40 min build). Live proof, all green:
+health ok/ok · `/s/2t4a58an7acz3bb` renders **"Bu video maxfiy"** + "tizimga kiring" link (a11y tree at
+375px, zero console errors) · tab title "data365: Kirishi cheklangan video" · signup "Bosh sahifa" ·
+security headers still present. The i18n work is fully closed.
+
+### Stale-twin hazard found + recorded (memory updated)
+`data365.taildef23b.ts.net` (Tailscale Funnel) = the owner's OWN Windows PC serving an old `next start`
+copy (PID on port 3000, dead Railway DB) — it looks like prod but isn't. Nearly caused a false outage
+report. OWNER decision pending: kill the stale server + funnel (machine work is mine once he approves).
+
 ### ⏭️ NEXT
-1. **Deploy `d5b0f5a`?** — asked the owner (consult-first); on "ha" → RUNBOOK §3a, then live-verify the
-   denied view on the prod private video `/s/2t4a58an7acz3bb` (must show "Bu video maxfiy").
+1. **Cron-to-main (asked, one-word "ha" pending):** `purge-trash-cron.yml` exists only on qa-fixes →
+   GitHub never runs it (schedules fire on the default branch only). CRON_SECRET repo secret EXISTS.
+   Plan: copy that ONE file from `16f9ac5` to main, push main — no code, reversible. Until then the
+   7-day trash purge never fires.
 2. Authenticated screens walk — still blocked machine-side (`docs/qa/SESSION_INJECTION_NOTES.md`); cheapest
    path remains the owner walking the dashboard with a checklist.
 3. Feature/flow map workflow `wf_e694f75b-cdc` still resumable (see session l block).
