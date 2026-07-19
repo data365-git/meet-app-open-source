@@ -7,6 +7,37 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
 
+## ⛔ START HERE — ONE OWNER WORD UNBLOCKS THE QUEUED WORK
+
+The owner said **"hammasini qil"** (do everything). Everything below is prepared; it is blocked on
+ONE unanswered question, asked but never answered before the clear:
+
+> **Onboarding step 4, "Invite your team", is really a Pro/Stripe PRICING page** ($8.16/user/yr,
+> $12/mo, Stripe checkout). ustoz is a self-hosted internal tool for his IT team — charging his own
+> staff is probably wrong. **Which?**
+> - `tarjima` → translate it too (Uzbek labels, payment buttons stay)
+> - `tegma` → leave that one page English, translate the other 4 steps
+> - `yashir` → remove the step from the wizard entirely (likely correct for self-hosted)
+>
+> Steps 1,2,3,5 + Base/Bottom/Stepper get translated **regardless** of the answer.
+
+### 📋 QUEUED WORK (in order) — all approved under "hammasini qil"
+1. **Onboarding i18n** — the full uz/en/ru catalog (~48 keys) + literal→key wiring map for all 8
+   files is ALREADY WRITTEN: **`docs/plans/2026-07-19-onboarding-i18n.md`**. Do not re-derive it.
+   ⚠️ Trap recorded there: `Stepper.tsx` compares `currentStep === step.name` by string — once both
+   come from `t()` they must use the SAME calls or the active-step highlight silently breaks.
+2. **Remove dead line** `app/(org)/dashboard/_components/Navbar/Top.tsx:44` (`shared-caps` title-map
+   entry; route does not exist, nothing links to it). Evidence: `qa-evidence/shared-caps-finding.md`.
+3. **Deploy** — batches the already-committed 404 fix `cd1bd6e` (committed, **NOT yet deployed**).
+   RUNBOOK §3a; ~40 min build. Then live-verify onboarding + `/nonexistent` 404 copy.
+4. **Kill the stale Tailscale funnel** on the owner's own PC — `data365.taildef23b.ts.net` serves an
+   OLD `next start` build (PID on port 3000, dead Railway DB) and looks like prod. Approved under
+   "hammasini", still undone. Reversible (he can restart it).
+
+### 📁 On disk but UNTRACKED by design (survive /clear, absent from git)
+`QA_LOG.md` + `qa-evidence/` (27 files) — this session's QA record, per the repo norm of not
+committing QA docs. The ~73 other untracked entries are long-standing pre-existing scratch.
+
 ### Done this session
 1. **Public-surface live walk on the new build (step 1 from session l) — DONE.** Real prod =
    `data365.duckdns.org` (⚠️ `data365.taildef23b.ts.net` resolves to a DIFFERENT machine whose health says
