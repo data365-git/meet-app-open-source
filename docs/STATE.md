@@ -33,10 +33,26 @@ copy (PID on port 3000, dead Railway DB) — it looks like prod but isn't. Nearl
 report. OWNER decision pending: kill the stale server + funnel (machine work is mine once he approves).
 
 ### ⏭️ NEXT
-1. **Cron-to-main (asked, one-word "ha" pending):** `purge-trash-cron.yml` exists only on qa-fixes →
-   GitHub never runs it (schedules fire on the default branch only). CRON_SECRET repo secret EXISTS.
-   Plan: copy that ONE file from `16f9ac5` to main, push main — no code, reversible. Until then the
-   7-day trash purge never fires.
+1. ✅ **Cron-to-main DONE (owner "ha").** `purge-trash-cron.yml` copied to main via worktree, pushed
+   (`e2459aa` on main). GitHub workflow "Purge trashed videos" = **active**, first run tonight 21:30 UTC
+   (02:30 Tashkent). Blast-radius checked: endpoint live+401-gated, APP_URL=data365.duckdns.org (NOT the
+   retired Railway URL that bit recover-cron), CRON_SECRET secret present, main not Coolify-deployed so no
+   app redeploy. NOT manually dispatched (would be a real prod deletion) — schedule only.
+
+### 🧪 FULL QA + POLISH (session m) — machine half
+Ran /qa-6-step on live prod. **coverage.ps1 (computed, not self-asserted): 13/13 flows evidenced (100%),
+0 open fails, 1 unsafe-to-test-live (real recording playback = owner device gate).** Evidence on disk in
+`qa-evidence/` + `QA_LOG.md` (untracked, per repo norm of not committing QA docs). Covered: public HTTP
+surface (12 paths), locale 3×3, OG/crawler metadata, share video delivery + player UI (100% Uzbek),
+restricted-video access control (stream → 401), login wrong-creds path (401, no enum), authenticated
+dashboard via minted session (renders, account settings Uzbek), sessionVersion invalidation.
+**Polish fixed + committed** (ship next deploy): 404 page English → Uzbek (`cd1bd6e`, live-verified on
+local dev); earlier i18n commit `d5b0f5a` already live. **1 finding SURFACED not auto-fixed** (owner
+decision): auto video-name templates are English ("data365 Recording/Meeting/Upload —") — coupled to
+`generate-ai.ts:189 GENERATED_TITLE_PATTERN` (translate the generator without the regex = AI stops
+retitling → English becomes permanent), and on the sacred recorder path. See `qa-evidence/video-name-finding.md`.
+Minor logged, unfixed: dashboard `<title>` "Settings — data365" English; unknown routes 307→login (no
+honest 404 for logged-out); HSTS max-age=1d (hardening → /qa-harden, not a bug).
 2. Authenticated screens walk — still blocked machine-side (`docs/qa/SESSION_INJECTION_NOTES.md`); cheapest
    path remains the owner walking the dashboard with a checklist.
 3. Feature/flow map workflow `wf_e694f75b-cdc` still resumable (see session l block).
