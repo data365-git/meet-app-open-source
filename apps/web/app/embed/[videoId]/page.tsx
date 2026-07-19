@@ -24,6 +24,7 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import * as EffectRuntime from "@/lib/server";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -34,13 +35,15 @@ export async function generateMetadata(
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
+	const t = await getTranslations("share");
+
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
 					title: `${video.name} | data365`,
-					description: "Watch this video on data365",
+					description: t("metaWatchDesc"),
 					openGraph: {
 						images: [
 							{
@@ -67,7 +70,7 @@ export async function generateMetadata(
 					twitter: {
 						card: "player",
 						title: `${video.name} | data365`,
-						description: "Watch this video on data365",
+						description: t("metaWatchDesc"),
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -94,14 +97,14 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "data365: This video is private",
-					description: "This video is private and cannot be shared.",
+					title: t("metaPrivateTitle"),
+					description: t("metaPrivateDesc"),
 					robots: "noindex, nofollow",
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "data365: Password Protected Video",
-					description: "This video is password protected.",
+					title: t("metaPasswordTitle"),
+					description: t("metaPasswordDesc"),
 					robots: "noindex, nofollow",
 				}),
 		}),
@@ -110,26 +113,30 @@ export async function generateMetadata(
 	);
 }
 
-const renderEmbedPolicyDenied = () =>
-	Effect.succeed(
+async function EmbedPolicyDeniedView() {
+	const t = await getTranslations("share");
+	return (
 		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black px-6">
 			<div className="flex items-center justify-center w-14 h-14 rounded-full bg-white/10 mb-5">
 				<svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
 					<path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75A4.5 4.5 0 0 0 7.5 6.75v3.75m-.75 0h10.5A1.5 1.5 0 0 1 18.75 12v6a1.5 1.5 0 0 1-1.5 1.5H6.75a1.5 1.5 0 0 1-1.5-1.5v-6a1.5 1.5 0 0 1 1.5-1.5Z" />
 				</svg>
 			</div>
-			<h1 className="mb-2 text-xl font-bold">This video is private</h1>
+			<h1 className="mb-2 text-xl font-bold">{t("policyPrivateTitle")}</h1>
 			<p className="text-gray-400 mb-6 max-w-xs text-sm leading-relaxed">
-				If you own this video, sign in to manage sharing settings.
+				{t.rich("policyPrivateDesc", { signIn: (chunks) => chunks })}
 			</p>
 			<Link
 				href="/login"
 				className="inline-flex items-center justify-center px-5 py-2.5 rounded-full bg-white text-black text-sm font-semibold hover:bg-white/90 transition-colors"
 			>
-				Sign in
+				{t("policySignIn")}
 			</Link>
-		</div>,
+		</div>
 	);
+}
+
+const renderEmbedPolicyDenied = () => Effect.succeed(<EmbedPolicyDeniedView />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 

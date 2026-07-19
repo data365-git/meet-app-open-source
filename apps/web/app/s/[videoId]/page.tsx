@@ -38,6 +38,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
@@ -152,28 +153,21 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-function PolicyDeniedView({ reason }: { reason?: string }) {
-	let title = "This video is private";
-	let description: React.ReactNode = (
-		<>
-			If you own this video, please <Link href="/login">sign in</Link> to manage
-			sharing.
-		</>
+async function PolicyDeniedView({ reason }: { reason?: string }) {
+	const t = await getTranslations("share");
+	const signIn = (chunks: React.ReactNode) => (
+		<Link href="/login">{chunks}</Link>
 	);
 
+	let title = t("policyPrivateTitle");
+	let description: React.ReactNode = t.rich("policyPrivateDesc", { signIn });
+
 	if (reason === "email_restriction_login_required") {
-		title = "This video requires sign-in";
-		description = (
-			<>
-				The owner of this video has restricted access. Please{" "}
-				<Link href="/login">sign in</Link> with an authorized email address to
-				view.
-			</>
-		);
+		title = t("policyRequiresSignInTitle");
+		description = t.rich("policyRequiresSignInDesc", { signIn });
 	} else if (reason === "email_restriction_denied") {
-		title = "Access restricted";
-		description =
-			"Your email address does not meet the requirements set by the video owner.";
+		title = t("policyRestrictedTitle");
+		description = t("policyRestrictedDesc");
 	}
 
 	return (
@@ -221,14 +215,16 @@ export async function generateMetadata(
 	const canRenderSocialPreview =
 		isAllowedReferrer || isSocialCrawlerUserAgent(requestUserAgent);
 
+	const t = await getTranslations("share");
+
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () =>
 					awaitRecording
 						? {
-								title: "data365: Preparing Video",
-								description: "This recording is being made available.",
+								title: t("metaPreparingTitle"),
+								description: t("metaPreparingDesc"),
 								robots: "noindex, nofollow",
 							}
 						: notFound(),
@@ -248,7 +244,7 @@ export async function generateMetadata(
 
 					return {
 						title: `${video.name} | data365`,
-						description: "Watch this video on data365.",
+						description: t("metaWatchDesc"),
 						openGraph: {
 							images: [
 								{
@@ -275,7 +271,7 @@ export async function generateMetadata(
 						twitter: {
 							card: "player",
 							title: `${video.name} | data365`,
-							description: "Watch this video on data365.",
+							description: t("metaWatchDesc"),
 							images: [
 								{
 									url: previewImageUrl,
@@ -309,8 +305,8 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "data365: This video is restricted",
-					description: "This video has restricted access.",
+					title: t("metaRestrictedTitle"),
+					description: t("metaRestrictedDesc"),
 					openGraph: {
 						images: [
 							{
@@ -338,8 +334,8 @@ export async function generateMetadata(
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "data365: Password Protected Video",
-					description: "This video is password protected.",
+					title: t("metaPasswordTitle"),
+					description: t("metaPasswordDesc"),
 					openGraph: {
 						images: [
 							{
@@ -354,8 +350,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "summary_large_image",
-						title: "data365: Password Protected Video",
-						description: "This video is password protected.",
+						title: t("metaPasswordTitle"),
+						description: t("metaPasswordDesc"),
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,

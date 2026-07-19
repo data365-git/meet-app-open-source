@@ -3,6 +3,7 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { SignupForm } from "./form";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export default async function SignupPage() {
 	if (session) {
 		redirect("/dashboard");
 	}
+	const t = await getTranslations("common");
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-gray-2 px-4 py-4 sm:relative sm:items-center sm:justify-center sm:px-6 sm:py-10">
 			<Link
@@ -22,7 +24,7 @@ export default async function SignupPage() {
 					className="opacity-75 size-3 text-gray-12"
 					icon={faArrowLeft}
 				/>
-				<span>Home</span>
+				<span>{t("backHome")}</span>
 			</Link>
 			<SignupForm />
 		</div>
