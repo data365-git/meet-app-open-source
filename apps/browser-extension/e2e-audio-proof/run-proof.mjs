@@ -229,11 +229,38 @@ async function main() {
 		log("recording started");
 
 		// 9. Sustain: rec-audio-warn must stay hidden the whole window.
+		//    BACKGROUND MODE (PROOF_BACKGROUND=1): the owner presents slides from
+		//    ANOTHER desktop app during the call, so Chrome sits in the background
+		//    for minutes. Recall.ai documents that tab audio can freeze when that
+		//    happens. Here we actually do it: 6s foreground, ~8s with Chrome behind
+		//    another window, 6s foreground — then the analyzer checks the tone is
+		//    present in EVERY third, not merely somewhere in the file.
+		const backgroundTest = process.env.PROOF_BACKGROUND === "1";
+		const recordMs = backgroundTest ? 20_000 : RECORD_MS;
 		const start = Date.now();
-		while (Date.now() - start < RECORD_MS) {
+		let backgrounded = false;
+		while (Date.now() - start < recordMs) {
 			if (await recorderPage.locator("#rec-audio-warn").isVisible()) {
 				const warn = await recorderPage.locator("#rec-audio-warn").textContent();
 				return verdict("FAIL", `reason=audio-warning-during-recording warn="${warn}"`);
+			}
+			if (backgroundTest && !backgrounded && Date.now() - start > 6_000) {
+				backgrounded = true;
+				log("backgrounding Chrome (simulating 'presenting from another app')");
+				await new Promise((resolve) => {
+					const p = spawn("powershell.exe", [
+						"-NoProfile",
+						"-Command",
+						// Bring an unrelated window to the front for 8s, then restore
+						// focus to the Chromium window by title.
+						"$sh = New-Object -ComObject WScript.Shell; " +
+							"Start-Process notepad; Start-Sleep -Seconds 8; " +
+							"Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+							"$sh.AppActivate('Fake Meet') | Out-Null; 'done'",
+					]);
+					p.on("close", resolve);
+				});
+				log("Chrome back in the foreground");
 			}
 			await recorderPage.waitForTimeout(500);
 		}

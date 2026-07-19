@@ -23,6 +23,7 @@ import {
 } from "../shared/client-audio";
 import {
 	AUDIO_BITS_PER_SECOND,
+	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
 } from "../shared/recording-quality";
 
@@ -186,7 +187,13 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 
 		if (displayStream.getAudioTracks().length > 0) {
 			const displaySrc = audioCtx.createMediaStreamSource(displayStream);
-			displaySrc.connect(dest);
+			// Same remote-voices-are-quieter lift as the full-screen path, on the
+			// RECORDED copy only (see TAB_AUDIO_GAIN) — the monitor path below
+			// stays at unity so the live call sounds unchanged. Kept in sync with
+			// recorder-page.ts on purpose: these two are the twin capture paths.
+			const tabGain = audioCtx.createGain();
+			tabGain.gain.value = TAB_AUDIO_GAIN;
+			displaySrc.connect(tabGain).connect(dest);
 			// Tab capture mutes the tab for the user by default; route the captured
 			// tab audio back to the speakers so the meeting is still audible.
 			displaySrc.connect(audioCtx.destination);

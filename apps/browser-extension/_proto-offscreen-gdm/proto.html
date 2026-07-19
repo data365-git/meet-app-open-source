@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Offscreen getDisplayMedia — spike</title>
+		<style>
+			:root { color-scheme: light dark; }
+			body {
+				font: 15px/1.55 system-ui, -apple-system, Segoe UI, sans-serif;
+				max-width: 780px; margin: 0 auto; padding: 28px 20px 64px;
+				color: #1a1a1a; background: #fafafa;
+			}
+			@media (prefers-color-scheme: dark) {
+				body { color: #e8e8e8; background: #161616; }
+			}
+			h1 { font-size: 20px; margin: 0 0 4px; }
+			.sub { color: #888; margin: 0 0 20px; }
+			ol.how { background: #fff2; border: 1px solid #8883; border-radius: 10px; padding: 14px 14px 14px 34px; margin: 0 0 20px; }
+			@media (prefers-color-scheme: dark) { ol.how { background: #ffffff08; } }
+			ol.how li { margin: 3px 0; }
+			button {
+				font: inherit; font-weight: 600; cursor: pointer;
+				background: #2563eb; color: #fff; border: 0; border-radius: 9px;
+				padding: 11px 20px; transition: background .15s;
+			}
+			button:hover { background: #1d4ed8; }
+			button:disabled { opacity: .5; cursor: default; }
+			#log { list-style: none; padding: 0; margin: 22px 0 0; }
+			#log li {
+				display: flex; gap: 10px; align-items: baseline;
+				padding: 9px 12px; border-radius: 8px; margin: 6px 0;
+				background: #fff; border: 1px solid #8882;
+			}
+			@media (prefers-color-scheme: dark) { #log li { background: #ffffff0a; } }
+			#log .badge { flex: none; font-weight: 700; }
+			#log .ok .badge { color: #16a34a; }
+			#log .fail .badge { color: #dc2626; }
+			#log .step { flex: none; font-weight: 600; min-width: 210px; }
+			#log .detail { color: #999; }
+			#result { margin-top: 26px; }
+			video { width: 100%; border-radius: 10px; background: #000; margin-top: 8px; }
+			a.dl { display: inline-block; margin-top: 10px; color: #2563eb; font-weight: 600; }
+			.verdict { margin-top: 24px; padding: 14px; border-radius: 10px; font-weight: 600; display: none; }
+			.verdict.pass { display: block; background: #16a34a1a; border: 1px solid #16a34a; }
+			.verdict.fail { display: block; background: #dc26261a; border: 1px solid #dc2626; }
+		</style>
+	</head>
+	<body>
+		<h1>Offscreen <code>getDisplayMedia</code> spike</h1>
+		<p class="sub">Proves whether Design B (record everything in one offscreen doc) is viable on this machine.</p>
+
+		<ol class="how">
+			<li>Open a <b>Google Meet with a 2nd participant</b> (or any tab playing audio, e.g. a YouTube video) in another tab — so there is remote audio to capture.</li>
+			<li>Come back here, click <b>Run capture test</b>.</li>
+			<li>A screen-picker will appear — <b>pick a window/screen that is NOT this tab</b> (ideally your presented window).</li>
+			<li>Talk into your mic for ~6s. It records, then plays back below.</li>
+			<li>Confirm: you <b>see</b> the picked screen, <b>hear</b> the remote participant, <b>hear</b> your mic, and there is <b>NO echo</b>.</li>
+		</ol>
+
+		<button id="run">▶ Run capture test</button>
+
+		<ul id="log"></ul>
+		<div id="verdict" class="verdict"></div>
+		<div id="result"></div>
+
+		<script src="proto.js"></script>
+	</body>
+</html>

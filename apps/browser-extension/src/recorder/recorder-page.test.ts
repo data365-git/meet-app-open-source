@@ -107,7 +107,14 @@ class FakeAudioContext {
 		return { stream: this.destStream };
 	}
 	createMediaStreamSource() {
-		return { connect: () => undefined };
+		// connect() returns its argument so `src.connect(gain).connect(dest)`
+		// chains like the real Web Audio API.
+		return { connect: (node?: unknown) => node };
+	}
+	/** Tab audio is recorded through a GainNode (TAB_AUDIO_GAIN): the remote
+	 * voices arrive quieter than the local mic. */
+	createGain() {
+		return { gain: { value: 1 }, connect: (node?: unknown) => node };
 	}
 	async close(): Promise<void> {}
 	async resume(): Promise<void> {}

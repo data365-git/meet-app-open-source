@@ -21,6 +21,10 @@ import { isTabAudioLive } from "../shared/client-audio";
 import { populateDeviceSelect } from "../shared/device-picker";
 import {
 	AUDIO_BITS_PER_SECOND,
+	CAPTURE_MAX_FRAME_RATE,
+	CAPTURE_MAX_HEIGHT,
+	CAPTURE_MAX_WIDTH,
+	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
 } from "../shared/recording-quality";
 
@@ -508,9 +512,9 @@ async function startRecording(): Promise<void> {
 		displayStream = await navigator.mediaDevices.getDisplayMedia({
 			video: {
 				displaySurface: "monitor",
-				width: { max: 1280 },
-				height: { max: 720 },
-				frameRate: { max: 24 },
+				width: { max: CAPTURE_MAX_WIDTH },
+				height: { max: CAPTURE_MAX_HEIGHT },
+				frameRate: { max: CAPTURE_MAX_FRAME_RATE },
 			},
 			audio: true,
 			selfBrowserSurface: "exclude",
@@ -669,7 +673,17 @@ async function startRecording(): Promise<void> {
 		}
 		if (haveTabAudio && tabAudioStream) {
 			const tabSrc = audioCtx.createMediaStreamSource(tabAudioStream);
-			tabSrc.connect(dest);
+			// The remote voices arrive attenuated relative to the local mic (the
+			// mic is inches from the speaker's mouth; the meeting audio has already
+			// been through the far end's encoder and Meet's own leveling). Owner
+			// on the first successful real recording, 2026-07-19: "mijoz ovozi
+			// yozildi lekin ovozi biroz pastroq". Lift the CAPTURED copy only —
+			// the monitor path below stays at unity so what he hears in the call
+			// is unchanged. Kept modest so a loud speaker cannot clip the mix;
+			// the limiter downstream is the backstop.
+			const tabGain = audioCtx.createGain();
+			tabGain.gain.value = TAB_AUDIO_GAIN;
+			tabSrc.connect(tabGain).connect(dest);
 			// Also route the tab audio back to the speakers — tabCapture otherwise
 			// mutes the source tab, so the meeting would go silent for the user.
 			tabSrc.connect(audioCtx.destination);

@@ -108,7 +108,10 @@ class FakeAudioContext {
 		return { stream: this.destStream };
 	}
 	createMediaStreamSource() {
-		return { connect: () => undefined };
+		return { connect: (node?: unknown) => node };
+	}
+	createGain() {
+		return { gain: { value: 1 }, connect: (node?: unknown) => node };
 	}
 	async close(): Promise<void> {}
 	async resume(): Promise<void> {}

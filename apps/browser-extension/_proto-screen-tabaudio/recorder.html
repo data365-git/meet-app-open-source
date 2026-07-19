@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<style>
+			body { font: 14px system-ui; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+			#status { font-weight: 600; margin: 16px 0; min-height: 22px; }
+			button { padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+			video { width: 100%; margin-top: 16px; background: #000; border-radius: 8px; }
+			.err { color: #c00; }
+			ol { line-height: 1.6; color: #444; }
+		</style>
+	</head>
+	<body>
+		<h2>Screen + tab-audio mix test</h2>
+		<ol>
+			<li>When the picker appears, choose <b>Entire Screen</b> and Share.</li>
+			<li>It records ~12s. Make sure the source tab is PLAYING AUDIO (talk in Meet / play a video).</li>
+			<li>Then press play on the result and check: <b>do you HEAR the tab audio?</b></li>
+		</ol>
+		<div id="status">Starting…</div>
+		<button id="stop">Stop now</button>
+		<video id="playback" controls></video>
+		<script src="recorder.js"></script>
+	</body>
+</html>
