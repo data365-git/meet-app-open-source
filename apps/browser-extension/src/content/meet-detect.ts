@@ -570,6 +570,88 @@ function formatElapsed(ms: number): string {
 
 // ── Nudge rendering ───────────────────────────────────────────────────────────
 
+/**
+ * PROBE — can the remote participants' audio be read straight off Meet's own
+ * media elements, with no chrome.tabCapture and therefore no activeTab grant?
+ *
+ * If YES, the in-page "Record now" click (a real user gesture) can open the
+ * screen picker directly AND still record the client's voice — the owner's
+ * two-step flow, without the desktopCapture API he banned and without a desktop
+ * app. If NO, those remain the only two options.
+ *
+ * Reports in plain Uzbek, inside the nudge card, so the owner can read it off
+ * a live call without opening devtools. Read-only: every captured track is
+ * stopped immediately.
+ */
+async function probeMeetAudio(
+	report: (text: string) => void,
+): Promise<string> {
+	try {
+		const media = Array.from(
+			document.querySelectorAll<HTMLMediaElement>("audio, video"),
+		);
+		if (media.length === 0) return "O'LCHOV: sahifada audio/video element YO'Q";
+
+		const streams: MediaStream[] = [];
+		let blocked = 0;
+		for (const el of media) {
+			const capturable = el as HTMLMediaElement & {
+				captureStream?: () => MediaStream;
+				mozCaptureStream?: () => MediaStream;
+			};
+			const grab = capturable.captureStream ?? capturable.mozCaptureStream;
+			if (typeof grab !== "function") continue;
+			try {
+				const s = grab.call(capturable);
+				if (s.getAudioTracks().length > 0) streams.push(s);
+			} catch {
+				blocked++;
+			}
+		}
+		if (streams.length === 0) {
+			return `O'LCHOV: ${media.length} element · ovozli oqim YO'Q · bloklangan ${blocked} → MUMKIN EMAS ❌`;
+		}
+
+		// The `muted` flag was not a usable signal: on a SILENT call the tracks
+		// report muted even though the pipe is fine (measured with the owner
+		// 2026-07-19 — "jim edi", so a 0 there refuted nothing). Measure real
+		// ENERGY instead: whoever speaks during the window moves the meter.
+		const ctx = new AudioContext();
+		const analyser = ctx.createAnalyser();
+		analyser.fftSize = 2048;
+		for (const s of streams) ctx.createMediaStreamSource(s).connect(analyser);
+		const buf = new Float32Array(analyser.fftSize);
+
+		const WINDOW_MS = 6000;
+		let peak = 0;
+		const started = Date.now();
+		report(
+			`O'LCHOV: ${streams.length} ovozli oqim topildi. ENDI 6 SONIYA GAPIRING (yoki suhbatdosh gapirsin)…`,
+		);
+		while (Date.now() - started < WINDOW_MS) {
+			analyser.getFloatTimeDomainData(buf);
+			for (const v of buf) {
+				const a = Math.abs(v);
+				if (a > peak) peak = a;
+			}
+			const left = Math.ceil((WINDOW_MS - (Date.now() - started)) / 1000);
+			report(
+				`O'LCHOV: gapiring… ${left}s · hozirgi eng baland: ${(peak * 100).toFixed(1)}%`,
+			);
+			await new Promise((r) => setTimeout(r, 250));
+		}
+		await ctx.close().catch(() => undefined);
+		for (const s of streams) for (const t of s.getTracks()) t.stop();
+
+		const pct = peak * 100;
+		const verdict =
+			pct > 1 ? "MUMKIN ✅ (ovoz oqmoqda)" : "MUMKIN EMAS ❌ (jimlik)";
+		return `O'LCHOV: ${media.length} element · ovozli oqim ${streams.length} · bloklangan ${blocked} · eng baland ${pct.toFixed(1)}% → ${verdict}`;
+	} catch (err) {
+		return `O'LCHOV xatosi: ${err instanceof Error ? err.message : String(err)}`;
+	}
+}
+
 function renderDefaultNudge(): void {
 	const root = ensureShadowRoot();
 	const container = root.getElementById("cap-nudge-container");
@@ -602,11 +684,30 @@ function renderDefaultNudge(): void {
 	// a convenience only, never as the guarantee).
 	btnRecord.addEventListener("click", (event) => {
 		event.stopImmediatePropagation();
-		sendToBackground({ type: "MEET_NUDGE_RECORD_NOW", meetingId: meetingId ?? "" });
-		showStartNote(
-			card,
-			"Yozish uchun data365 belgisini bosing (mijoz ovozi kafolatli).",
-			false,
+		// PROBE (2026-07-19). The owner wants "Record now -> screen picker", two
+		// steps. An in-page click IS a real user gesture, so getDisplayMedia()
+		// could legally run right here — the ONLY blocker is that an in-page
+		// gesture cannot grant activeTab, so chrome.tabCapture (today's source of
+		// the remote voices) is unavailable on this path. The open question:
+		// can Meet's remote audio be tapped straight off the page's own media
+		// elements via HTMLMediaElement.captureStream(), which needs no
+		// permission at all? This probe answers it with facts from a real call,
+		// printed into the card so no devtools are needed. It captures nothing,
+		// starts nothing, and is removed once the answer is known.
+		// Deliberately NOT sending MEET_NUDGE_RECORD_NOW while the probe is in
+		// place: that message flips the nudge state and tears the card down, so
+		// the reading vanished before the owner could read it. The result is also
+		// copied to the clipboard (allowed here — we are inside a real click) so
+		// he can paste it instead of transcribing it from a disappearing card.
+		void probeMeetAudio((text) => showStartNote(card, text, false)).then(
+			(reading) => {
+				showStartNote(
+					card,
+					`${reading}\n\n(nusxalandi — Ctrl+V bilan yuboring)`,
+					false,
+				);
+				void navigator.clipboard?.writeText(reading).catch(() => undefined);
+			},
 		);
 	});
 
