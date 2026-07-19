@@ -1,13 +1,12 @@
 "use client";
 
 import { Folder } from "@cap/web-domain";
-import { ChevronDown } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useId, useState } from "react";
-import { FREE_PLAN_MAX_RECORDING_MS } from "../components/web-recorder-dialog/web-recorder-constants";
+import { useRouter } from "next/navigation";
 import { WebRecorderDialog } from "../components/web-recorder-dialog/web-recorder-dialog";
 
 export const RecordVideoPage = ({ folderId }: { folderId?: string }) => {
+	const router = useRouter();
+
 	return (
 		<div
 			className="flex flex-col flex-1 justify-center items-center w-full h-full"
@@ -24,109 +23,13 @@ export const RecordVideoPage = ({ folderId }: { folderId?: string }) => {
 						<div className="flex flex-wrap gap-3 justify-center items-center mt-4">
 							<WebRecorderDialog
 								folderId={folderId ? Folder.FolderId.make(folderId) : undefined}
+								defaultOpen
+								onClose={() => router.push("/dashboard/caps")}
 							/>
 						</div>
-						<FaqAccordion />
 					</div>
 				</div>
 			</div>
-		</div>
-	);
-};
-
-const FaqAccordion = () => {
-	const freeMinutes = Math.floor(FREE_PLAN_MAX_RECORDING_MS / 60000);
-	const items = [
-		{
-			id: "what-is-cap",
-			q: "What is a recording?",
-			a: "A recording is a quick video of your screen, camera, or both. On supported browsers, data365 uploads chunks while you record so the share link is ready faster after you stop.",
-		},
-		{
-			id: "how-it-works",
-			q: "How does it work?",
-			a: "On compatible browsers, your capture uploads in the background while you record. Otherwise it records first and uploads after you stop. AI analysis is manual: open the video and press Start AI analysis.",
-		},
-		{
-			id: "browsers",
-			q: "Which browsers are recommended?",
-			a: "We recommend Google Chrome or other Chromium‑based browsers for the most reliable recording and upload behavior. Most modern browsers are supported, but capabilities can vary.",
-		},
-		{
-			id: "pip",
-			q: "How do I keep my webcam visible?",
-			a: "On compatible browsers, selecting a camera opens a picture‑in‑picture window that’s captured when you record fullscreen. We recommend recording fullscreen to keep it on top. If PiP capture isn’t supported, your camera stays within the recorder tab.",
-		},
-		{
-			id: "what-can-i-record",
-			q: "What can I record?",
-			a: "You can record your entire screen, a specific window, a browser tab, or just your camera.",
-		},
-		{
-			id: "system-audio",
-			q: "Can I record system audio?",
-			a: "Browsers can capture tab and system audio depending on what you share and your browser's support. Pick the audio sources you want before you start recording.",
-		},
-		{
-			id: "install",
-			q: "Do I need to install the app?",
-			a: `No. You record right in your browser — nothing to install. The Free plan supports up to ${freeMinutes} minutes per recording.`,
-		},
-	];
-
-	return (
-		<div className="mt-8 text-left">
-			<div className="w-full min-w-0 divide-y divide-gray-4 rounded-lg border border-gray-4 bg-gray-2">
-				{items.map((it) => (
-					<AccordionItem key={it.id} title={it.q} content={it.a} />
-				))}
-			</div>
-		</div>
-	);
-};
-
-const AccordionItem = ({
-	title,
-	content,
-}: {
-	title: string;
-	content: string;
-}) => {
-	const [open, setOpen] = useState(false);
-	const contentId = useId();
-	const headerId = useId();
-
-	return (
-		<div className="p-3 w-full">
-			<button
-				id={headerId}
-				aria-controls={contentId}
-				aria-expanded={open}
-				onClick={() => setOpen((v) => !v)}
-				type="button"
-				className="flex w-full items-center justify-between gap-3 text-left"
-			>
-				<span className="text-sm font-medium text-gray-12">{title}</span>
-				<ChevronDown
-					className="size-4 shrink-0 text-gray-10 transition-transform duration-200"
-					style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
-				/>
-			</button>
-			<AnimatePresence initial={false}>
-				{open && (
-					<motion.section
-						id={contentId}
-						aria-labelledby={headerId}
-						initial={{ opacity: 0, height: 0 }}
-						animate={{ opacity: 1, height: "auto" }}
-						exit={{ opacity: 0, height: 0 }}
-						transition={{ duration: 0.18 }}
-						className="overflow-hidden w-full"
-					>
-						<div className="pt-2 text-sm text-gray-10">{content}</div>
-					</motion.section>
-				)}
-			</AnimatePresence>
 		</div>
 	);
 };

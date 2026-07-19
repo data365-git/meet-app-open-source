@@ -21,7 +21,6 @@ export default async function OnboardingStepLayout({
 		"welcome",
 		"organization-setup",
 		"custom-domain",
-		"invite-team",
 		"download",
 	] as const;
 	const isComplete = (s: (typeof ordered)[number]) =>
@@ -31,9 +30,7 @@ export default async function OnboardingStepLayout({
 				? Boolean(steps.organizationSetup)
 				: s === "custom-domain"
 					? Boolean(steps.customDomain)
-					: s === "invite-team"
-						? Boolean(steps.inviteTeam)
-						: Boolean(steps.download);
+					: Boolean(steps.download);
 
 	const firstIncomplete = ordered.find((s) => !isComplete(s)) ?? "download";
 

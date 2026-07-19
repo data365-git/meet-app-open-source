@@ -4,6 +4,7 @@ import { Button, Input } from "@cap/ui";
 import { faImage } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
+import { useTranslations } from "next-intl";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
@@ -16,8 +17,9 @@ export function OrganizationSetupPage({
 }: {
 	firstName: string | null | undefined;
 }) {
+	const t = useTranslations("onboarding");
 	const [organizationName, setOrganizationName] = useState(
-		firstName ? `${firstName}'s organization` : "",
+		firstName ? t("orgDefaultName", { name: firstName }) : "",
 	);
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -68,7 +70,7 @@ export function OrganizationSetupPage({
 		},
 		onError: (error) => {
 			console.error(error);
-			toast.error("An error occurred, please try again");
+			toast.error(t("errorGeneric"));
 		},
 	});
 
@@ -81,10 +83,7 @@ export function OrganizationSetupPage({
 	};
 
 	return (
-		<Base
-			title="Organization Setup"
-			description="Let's get your dashboard setup with your organization"
-		>
+		<Base title={t("orgTitle")} description={t("orgDescription")}>
 			<form onSubmit={handleSubmit} className="space-y-7">
 				<div className="space-y-3">
 					<Input
@@ -92,13 +91,13 @@ export function OrganizationSetupPage({
 						disabled={orgSetupMutation.isPending}
 						value={organizationName}
 						onChange={(e) => setOrganizationName(e.target.value)}
-						placeholder="Organization Name"
+						placeholder={t("orgNamePlaceholder")}
 						name="organizationName"
 						required
 					/>
 					<div className="rounded-xl border bg-gray-1 h-fit border-gray-4">
 						<h3 className="px-3 py-3 text-sm font-medium border-b border-gray-4 text-gray-12">
-							Organization Logo
+							{t("orgLogo")}
 						</h3>
 						<div className="flex gap-5 p-5">
 							<div className="flex justify-center items-center rounded-full border border-dashed size-14 bg-gray-3 border-gray-6">
@@ -132,10 +131,10 @@ export function OrganizationSetupPage({
 									size="xs"
 									onClick={() => fileInputRef.current?.click()}
 								>
-									Upload Image
+									{t("uploadImage")}
 								</Button>
 								<p className="text-xs text-gray-10">
-									Recommended size: 120x120
+									{t("recommendedSize")}
 								</p>
 							</div>
 						</div>
@@ -149,7 +148,7 @@ export function OrganizationSetupPage({
 					spinner={orgSetupMutation.isPending}
 					disabled={orgSetupMutation.isPending}
 				>
-					Create Organization
+					{t("createOrganization")}
 				</Button>
 			</form>
 		</Base>

@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { startTransition } from "react";
@@ -8,6 +9,7 @@ import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 export const Bottom = () => {
+	const t = useTranslations("onboarding");
 	const router = useRouter();
 
 	const rpc = useRpcClient();
@@ -25,7 +27,7 @@ export const Bottom = () => {
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error(t("errorGeneric"));
 		},
 	});
 
@@ -37,7 +39,7 @@ export const Bottom = () => {
 				size="sm"
 				onClick={() => signOut()}
 			>
-				Sign out
+				{t("signOut")}
 			</Button>
 			<Button
 				className="px-0 w-fit"
@@ -49,7 +51,7 @@ export const Bottom = () => {
 				size="sm"
 				onClick={() => skipToDashboard.mutate()}
 			>
-				{skipToDashboard.isPending ? "Skipping..." : "Skip to dashboard"}
+				{skipToDashboard.isPending ? t("skipping") : t("skipToDashboard")}
 			</Button>
 		</div>
 	);

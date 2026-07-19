@@ -47,10 +47,16 @@ const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 export const WebRecorderDialog = ({
 	folderId,
+	defaultOpen = false,
+	onClose,
 }: {
 	folderId?: Folder.FolderId | null;
+	/** Auto-open the dialog on mount, e.g. for a dedicated "new recording" route. */
+	defaultOpen?: boolean;
+	/** Fired on a genuine close (idle/completed/error) — not on minimize-while-recording. */
+	onClose?: () => void;
 } = {}) => {
-	const [open, setOpen] = useState(false);
+	const [open, setOpen] = useState(defaultOpen);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 	const [recordingMode, setRecordingMode] =
@@ -317,6 +323,7 @@ export const WebRecorderDialog = ({
 			setRecordingMode("fullscreen");
 			setSettingsOpen(false);
 			setHowItWorksOpen(false);
+			onClose?.();
 		}
 		setOpen(next);
 	};

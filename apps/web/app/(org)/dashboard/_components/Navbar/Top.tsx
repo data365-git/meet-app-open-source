@@ -41,7 +41,6 @@ const Top = () => {
 	const titles: Record<string, string> = {
 		"/dashboard/caps": t("instructions"),
 		"/dashboard/folder": t("instructions"),
-		"/dashboard/shared-caps": t("sharedRecordings"),
 		"/dashboard/caps/record": t("newRecording"),
 		"/dashboard/settings/organization": t("orgSettings"),
 		"/dashboard/settings/organization/preferences": t("orgSettings"),

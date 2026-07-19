@@ -3,8 +3,9 @@
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
-import { Fragment, useMemo } from "react";
+import { Fragment } from "react";
 
 export default function Stepper({
 	completedSteps,
@@ -13,53 +14,54 @@ export default function Stepper({
 		welcome?: boolean;
 		organizationSetup?: boolean;
 		customDomain?: boolean;
-		inviteTeam?: boolean;
 		download?: boolean;
 	};
 }) {
+	const t = useTranslations("onboarding");
 	const currentPath = usePathname();
-	const currentStep = useMemo(() => {
-		if (currentPath === "/onboarding/welcome") return "Welcome";
-		if (currentPath === "/onboarding/organization-setup")
-			return "Organization Setup";
-		if (currentPath === "/onboarding/custom-domain") return "Custom Domain";
-		if (currentPath === "/onboarding/invite-team") return "Invite your team";
-		if (currentPath === "/onboarding/download") return "Download";
-	}, [currentPath]);
 
+	// NOTE: the highlight/active-step lookup below compares by `path` (a stable,
+	// untranslated route string), never by the translated `name`. currentPath and
+	// step.path are both derived independently of t(), so there is no risk of the
+	// active-step highlight silently breaking if the translated label changes.
 	const steps = [
 		{
 			id: "1",
-			name: "Welcome",
+			path: "/onboarding/welcome",
+			name: t("stepWelcome"),
 			completed: completedSteps.welcome || false,
 		},
 		{
 			id: "2",
-			name: "Organization Setup",
+			path: "/onboarding/organization-setup",
+			name: t("stepOrganization"),
 			completed: completedSteps.organizationSetup || false,
 		},
 		{
 			id: "3",
-			name: "Custom Domain",
+			path: "/onboarding/custom-domain",
+			name: t("stepCustomDomain"),
 			completed: completedSteps.customDomain || false,
 		},
 		{
 			id: "4",
-			name: "Invite your team",
-			completed: completedSteps.inviteTeam || false,
-		},
-		{
-			id: "5",
-			name: "Download",
+			path: "/onboarding/download",
+			name: t("stepDownload"),
 			completed: completedSteps.download || false,
 		},
 	];
+
+	const activeStep = steps.find((step) => step.path === currentPath);
 
 	return (
 		<>
 			{/* Mobile Stepper - shows on devices up to 1024px */}
 			<div className="justify-center mx-auto mb-10 max-w-fit lg:hidden">
-				<MobileStepper currentStep={currentStep} steps={steps} />
+				<MobileStepper
+					activeStep={activeStep}
+					totalSteps={steps.length}
+					stepLabel={t("stepLabel")}
+				/>
 			</div>
 
 			{/* Desktop Stepper - shows on devices 1024px and up */}
@@ -75,7 +77,7 @@ export default function Stepper({
 									<div
 										className={clsx(
 											"flex justify-center items-center text-xs text-white rounded-full size-5 min-size-5",
-											currentStep === step.name && !step.completed
+											step.path === currentPath && !step.completed
 												? "bg-blue-500"
 												: step.completed
 													? "bg-green-500"
@@ -94,7 +96,7 @@ export default function Stepper({
 									<p
 										className={clsx(
 											"text-[13px] text-nowrap",
-											step.completed || currentStep === step.name
+											step.completed || step.path === currentPath
 												? "text-gray-12"
 												: "text-gray-9",
 										)}
@@ -112,18 +114,20 @@ export default function Stepper({
 }
 
 const MobileStepper = ({
-	currentStep,
-	steps,
+	activeStep,
+	totalSteps,
+	stepLabel,
 }: {
-	currentStep: string | undefined;
-	steps: Array<{
-		id: string;
-		name: string;
-		completed: boolean;
-	}>;
+	activeStep:
+		| {
+				id: string;
+				name: string;
+				completed: boolean;
+		  }
+		| undefined;
+	totalSteps: number;
+	stepLabel: string;
 }) => {
-	const activeStep = steps.find((step) => step.name === currentStep);
-
 	if (!activeStep) return null;
 
 	return (
@@ -141,7 +145,10 @@ const MobileStepper = ({
 			</div>
 			<div>
 				<p className="text-[13px] text-gray-10">
-					Step <span className="text-gray-11">{activeStep.id}/5</span>
+					{stepLabel}{" "}
+					<span className="text-gray-11">
+						{activeStep.id}/{totalSteps}
+					</span>
 				</p>
 			</div>
 		</div>
