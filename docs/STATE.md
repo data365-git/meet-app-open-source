@@ -5,11 +5,13 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 ---
 ## 🚨 PRODUCTION IS DEGRADED RIGHT NOW — GEMINI CREDITS ARE DEPLETED (2026-07-20 ~14:20)
 
-**Every AI feature on prod is down: transcription, summaries, chapters, tasks, chat.** Not a rate limit — the API answers with `429: "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing."` The free key is separately exhausted (its own 429), so there is no working path at all. A meeting recorded today will upload and play fine, and then fail to transcribe.
+**Every AI feature on prod is down: transcription, summaries, chapters, tasks, chat.** Not a rate limit — the API answers with `429: "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing."` A meeting recorded today will upload and play fine, and then fail to transcribe. The free key cannot cover for it: it has its own **daily cap of ~20 calls**, already spent that day — see the correction below, which proves the free tier genuinely works within that cap. **Do not read this block as "free is dead" and delete the free path.**
 
 **OWNER ACTION (only he can): top up the Gemini project's billing at https://ai.studio/projects.** He confirmed on 2026-07-20 evening: *"GEMINI KREDIT YO'Q ERTAGA OLAMIZ"* — **credit is being bought the next day (2026-07-21)**. Until then, do not chase transcription bugs: everything fails for this one reason, and a session could easily burn hours on it.
 
-**▶ THE MOMENT CREDIT IS BACK, run this measurement ladder — one re-transcription per step, in this order, keeping whichever step actually helps:**
+**▶ OWNER'S INSTRUCTION (2026-07-20 evening): do NOT start automatically — he will say when. Tomorrow's first act is to CHECK whether credit has arrived, then wait for his word before spending any of it.**
+
+**▶ WHEN HE SAYS GO, run this measurement ladder — one re-transcription per step, in this order, keeping whichever step actually helps:**
 1. **Baseline** — re-transcribe `fm3pz7yref328m7` (53 min) as-is and run `node /tmp/measure-transcript-drift.mjs fm3pz7yref328m7 12 20`. This also verifies the already-deployed anchor fix (`13dfa48`), which has never been measured. Last known: max 28.6s, mean 10.2s.
 2. **3-minute chunks** — apply `docs/plans/2026-07-20-shorter-chunks-ready-to-apply.md` (two constants), re-measure. Expected mean 5-7s. ⚠️ Also time the run: chunks are processed 3-at-a-time (`AI_CHUNK_CONCURRENCY = 3`), so 18 chunks means 6 waves instead of 3 — whether that is slower depends on per-call latency, which has NEVER been measured. If it is 2x slower for no accuracy gain, revert.
 3. **Retime port** — port `warp4.mjs` to `apps/web/lib/vtt-retime.ts` per its own spec (both in `docs/plans/recovered-retime-prototype/`), re-measure. This is the only step that attacks the CURVATURE the linear rescale leaves behind.
