@@ -139,12 +139,15 @@ async function main() {
 		//      so the `commands` surface grants activeTab like a genuine gesture.
 		await meetPage.bringToFront();
 		await meetPage.waitForTimeout(500);
+		// Win32 keystroke (SetForegroundWindow + keybd_event). WScript.SendKeys
+		// reported success while the chord went to whatever window actually held
+		// the foreground, which read as "the recorder never opened" - a product
+		// failure that had not happened. See send-shortcut.ps1.
 		const sk = spawn("powershell.exe", [
 			"-NoProfile",
-			"-Command",
-			// Activate the fake-meet Chromium window by title, then send Ctrl+Shift+9.
-			"$sh = New-Object -ComObject WScript.Shell; " +
-				"if ($sh.AppActivate('Fake Meet')) { Start-Sleep -Milliseconds 300; $sh.SendKeys('^+9'); 'sent' } else { 'no-window' }",
+			"-ExecutionPolicy", "Bypass",
+			"-File", join(here, "send-shortcut.ps1"),
+			"-TitlePart", "Fake Meet",
 		]);
 		const skOut = await new Promise((resolve) => {
 			let out = "";
@@ -173,6 +176,15 @@ async function main() {
 		// 7. ONE Boshlash click â€” the genuine gesture for getDisplayMedia; the
 		//    flag auto-picks "Entire screen".
 		await recorderPage.locator("#btn-start").click();
+		// Did the click actually reach startRecording? The button disables itself
+		// as its first act, so this separates "the click never landed" from "the
+		// click landed and something after it is hanging" - two causes that look
+		// identical from the outside (idle view, no message).
+		await recorderPage.waitForTimeout(1500);
+		const clickLanded = await recorderPage
+			.evaluate(() => (document.getElementById("btn-start") || {}).disabled)
+			.catch(() => "unknown");
+		log(`btn-start disabled after click: ${clickLanded}`);
 
 		// 8. Outcome: recording view vs confirm modal (= audio guarantee FAILED)
 		//    vs error view.
