@@ -1024,7 +1024,15 @@ describe("retryPendingUploads dead-letter guard (R4 holed-complete)", () => {
 		expect(completeMultipartCalls).toBe(0);
 		const finalState = await getState();
 		expect(finalState.kind).toBe("error");
-	});
+		// This one walks a part all the way to dead-letter through the REAL
+		// backoff waits, so it is by far the slowest in the file: measured 17.5s on
+		// an idle machine against the suite's 20s ceiling. That margin is not a
+		// margin — it timed out twice on 2026-07-20 while other work shared the
+		// CPU, once in isolation, and a red suite blocks every commit through the
+		// gate. Raising the ceiling for THIS test only keeps the global 20s signal
+		// tight for everything else, and weakens no assertion: a genuinely hung
+		// retry loop still fails, just at 60s.
+	}, 60_000);
 });
 
 // ── R6: a temporary outage must NOT permanently lose a fully-uploaded

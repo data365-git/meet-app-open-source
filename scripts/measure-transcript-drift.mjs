@@ -187,8 +187,17 @@ for (const off of offsets) {
 		continue;
 	}
 	const m = bestMatch(vtt, words);
-	if (m.score < 0.25 || m.start == null) {
-		console.log(`[drift] ${off}s: no confident match (score ${m.score.toFixed(2)}) — skipped`);
+	// STRONG matches only, by default. A 0.33-score match can sit one or two cues
+	// off, which is ~10s of pure instrument error on a single sample — and a
+	// single bad sample sets the reported MAX, the number people quote. Measured
+	// 2026-07-20: samples ranged 0.33-0.98 and the worst-looking outlier of one
+	// run turned out to be the weakest match in it. Override with
+	// DRIFT_MIN_SCORE=0.25 to reproduce an old reading.
+	const MIN_SCORE = Number(process.env.DRIFT_MIN_SCORE ?? 0.5);
+	if (m.score < MIN_SCORE || m.start == null) {
+		console.log(
+			`[drift] ${off}s: no confident match (score ${m.score.toFixed(2)} < ${MIN_SCORE}) — skipped`,
+		);
 		continue;
 	}
 	const drift = m.start - off;
@@ -220,8 +229,28 @@ const out = {
 	maxAbsDriftSec: Number(max.toFixed(2)),
 	rows,
 };
+// Report the UNCERTAINTY next to the numbers, not in a doc nobody opens. Two
+// sources dominate: (1) cue-start quantization — a match resolves to the START of
+// a cue, so with ~4.5s median cue length every sample carries a few seconds of
+// error even against a perfect transcript; (2) sampling — with this much scatter,
+// a 12-sample mean has a standard error of a couple of seconds. Without these on
+// screen it is far too easy to report "10.2s vs 7.8s" as an improvement when the
+// instrument cannot tell them apart.
+const sd =
+	rows.length > 1
+		? Math.sqrt(
+				abs.reduce((a, b) => a + (b - meanAbs) ** 2, 0) / (rows.length - 1),
+			)
+		: 0;
+const stderr = rows.length > 0 ? sd / Math.sqrt(rows.length) : 0;
+const worstScore = Math.min(...rows.map((r) => r.score));
+out.meanAbsStdErrSec = Number(stderr.toFixed(2));
+out.weakestMatchScore = Number(worstScore.toFixed(2));
 writeFileSync(join(work, "drift.json"), JSON.stringify(out, null, 2));
 console.log(
-	`RESULT max_abs=${out.maxAbsDriftSec}s mean_abs=${out.meanAbsDriftSec}s mean_signed=${out.meanSignedDriftSec}s samples=${out.samples}`,
+	`RESULT max_abs=${out.maxAbsDriftSec}s mean_abs=${out.meanAbsDriftSec}s (±${out.meanAbsStdErrSec}s stderr) mean_signed=${out.meanSignedDriftSec}s samples=${out.samples} weakest_match=${out.weakestMatchScore}`,
+);
+console.log(
+	`note: differences smaller than ~${(2 * stderr).toFixed(1)}s are NOT distinguishable by this instrument.`,
 );
 console.log(`json: ${join(work, "drift.json")}`);
