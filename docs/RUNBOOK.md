@@ -133,6 +133,35 @@ If the deploy produced something broken, go to §4.
 
 ---
 
+## 3b. Look inside the production database (read-only, no client needed)
+
+Two separate sessions lost time to this on 2026-07-20, both concluding "there is
+no mysql client here". There is — it lives in the MySQL container, and the
+password is already in that container's environment, so it never has to be typed
+or stored anywhere:
+
+```bash
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255  'docker exec fot1zbunh8jld7l4k67h2zp4 sh -c "mysql -umysql -p\$MYSQL_PASSWORD capdb -e \"SELECT id,transcriptionStatus FROM videos LIMIT 5;\" 2>/dev/null"'
+```
+
+`fot1zbunh8jld7l4k67h2zp4` is the MySQL container (fixed name); the app container
+name CHANGES on every deploy, so always resolve it as
+`docker ps --format '{{.Names}}' | grep '^pokroz' | head -1`.
+
+**Schema migrations DO run automatically on prod** — at container startup, and
+the log says so:
+
+```
+🔍 DB migrations triggered → 💿 Running DB migrations...
+⚠️  Migration error is benign (ER_DUP_FIELDNAME). Schema is already at desired state. Continuing.
+```
+
+So a new column shipped in code is applied by the deploy itself; it does **not**
+need a hand-run DDL, and a plan that assumes otherwise is working from a wrong
+premise (measured 2026-07-20, after a review flagged it as a release blocker).
+Verify per deploy with `docker logs <app> | grep -i migration` rather than
+trusting either assumption.
+
 ## 4. Roll back a bad deploy
 
 **When:** a deploy went out and the site is broken or badly wrong. Rolling back is the *fast* fix — diagnose afterwards, not during.
