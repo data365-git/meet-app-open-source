@@ -20,16 +20,17 @@ yozilganini ayting.
 
 ---
 
-## 0-qadam — Extension'ni yangilash (1 daqiqa)
+## 0-qadam — Extension'ni yangilash (2 daqiqa)
 
-1. Chrome'da manzil qatoriga yozing: `chrome://extensions`
-2. O'ng yuqorida **Developer mode** tugmasi yoqilgan bo'lsin.
-3. **Load unpacked** bosing → shu papkani tanlang:
-   `D:\vibecoding\ustoz-github\apps\browser-extension\dist`
-4. Agar u allaqachon turgan bo'lsa — uning ustidagi **🔄 (Reload)** belgisini bosing.
+1. `https://data365.duckdns.org/dashboard/extension` ni oching → **zip'ni yuklab
+   oling** va uni papkaga chiqaring (unzip).
+2. Chrome'da manzil qatoriga yozing: `chrome://extensions`
+3. O'ng yuqorida **Developer mode** yoqiq bo'lsin.
+4. Eski "data365 Recorder" ni **Remove** qiling (eskisi qolsa, ikkitasi urishadi).
+5. **Load unpacked** bosing → yangi chiqargan papkani tanlang.
 
-✅ **Ko'rishingiz kerak:** ro'yxatda extension turibdi, versiyasi yozilgan, qizil
-xato yozuvi yo'q.
+✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.0** turibdi, qizil xato
+yo'q. Versiya 0.5.0 bo'lishi SHART — 0.4.x bo'lsa eski kodni sinayapsiz.
 ❌ **Xato bo'lsa:** qizil "Errors" tugmasi chiqadi. Bosing, matnini menga yuboring.
 
 ---
@@ -38,16 +39,21 @@ xato yozuvi yo'q.
 
 Bu eng muhimi. Faqat shu o'tsa, qolganlari mayda-chuyda.
 
+**YANGI (0.5.0): endi ikki harakat.** Meet sahifasining o'zida tugma chiqadi —
+extension belgisini bosish shart emas.
+
 1. `meet.google.com` ga kiring → **New meeting** → **Start an instant meeting**.
    (Hech kim kerak emas, o'zingiz yolg'iz.)
-2. Chrome'ning o'ng yuqorisidagi extension belgisini bosing.
-3. **Record** tugmasini bosing.
-4. Chrome oyna ochadi — **Entire Screen** bo'limini tanlang, ekranni bosing,
-   va **pastdagi "Also share system audio" katagini albatta belgilang**.
-   Keyin **Share** bosing.
-5. Bir necha jumla gapiring. **3 daqiqa** kuting.
-6. Extension'ni ochib **Stop** bosing.
-7. Yuklanishini kuting → `https://data365.duckdns.org` dashboard'ni oching.
+2. Ekran yuqorisida **"Record this meeting?"** kartasi chiqadi → **Record now**
+   bosing. *(Karta chiqmasa: sahifani yangilang — yoki eski yo'l bilan
+   **Ctrl+Shift+9** bosing, u ham ishlaydi.)*
+3. Chrome darrov tanlash oynasini ochadi — **Entire Screen** bo'limini tanlang,
+   ekranni bosing, **Share** bosing.
+   *(«Also share system audio» katagini belgilashingiz shart emas — suhbatdosh
+   ovozi endi Meet sahifasining o'zidan olinadi. Belgilasangiz ham zarari yo'q.)*
+4. Bir necha jumla gapiring. **3 daqiqa** kuting.
+5. Ekran yuqorisidagi qizil taymerdagi **Stop** ni bosing.
+6. Yuklanishini kuting → `https://data365.duckdns.org` dashboard'ni oching.
 
 ✅ **Ko'rishingiz kerak:** yozuv ro'yxatda paydo bo'ladi → uni ochasiz →
 **oxirigacha o'ynaydi** va **o'z ovozingiz eshitiladi**. Davomiyligi ~3 daqiqa.
@@ -66,7 +72,7 @@ ovoz umuman yo'q bo'lsa.
 Bu men bugun tuzatgan asosiy xato. Ilgari siz **tab** tanlasangiz ham yozuv
 boshlanaverar edi — va suhbatdosh ovozi yozilmasdi.
 
-1. Yana Meet oching → extension → **Record**.
+1. Yana Meet oching → **Record now** bosing.
 2. Chrome oynasida ataylab **noto'g'ri** tanlang: **Chrome Tab** bo'limidan bitta
    tab tanlab **Share** bosing.
 
@@ -132,7 +138,8 @@ bajarolmaydi — ikkinchi odam kerak (telefon ham bo'ladi).
 
 1. Meet oching → havolani ikkinchi odamga (yoki o'z telefoningizga) yuboring.
 2. U kirsin. **Uning mikrofoni yoqiq** bo'lsin, sizniki ham.
-3. Yozuvni boshlang (Entire Screen + system audio kataklari belgilangan).
+3. **Record now** → **Entire Screen** → Share. (Suhbatdosh ovozi Meet sahifasidan
+   olinadi; system audio katagi shart emas.)
 4. **Unga aytiliring:** o'ziga xos bitta jumla aytsin — masalan
    **"olma daraxti to'qqiz"**. Shunday so'z tanlangki, tasodifan chiqmasin.
 5. Siz ham bir nima ayting. 2 daqiqa yozing → **Stop**.
