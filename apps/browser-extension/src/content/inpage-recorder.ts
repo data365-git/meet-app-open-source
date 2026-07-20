@@ -49,7 +49,7 @@ export interface InPageRecorderHost {
 	onFailed(): void;
 }
 
-interface PageAudioTap {
+export interface PageAudioTap {
 	stream: MediaStream;
 	source: MediaStreamAudioSourceNode;
 	/** id of the audio track the source node was BUILT from. A
@@ -60,7 +60,7 @@ interface PageAudioTap {
 	trackId: string;
 }
 
-interface InPageState {
+export interface InPageState {
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
 	dest: MediaStreamAudioDestinationNode;
@@ -157,7 +157,7 @@ function captureFrom(el: HTMLMediaElement): MediaStream | null {
  * Meet creates and destroys these elements as people join and leave, so this
  * runs once before the start AND on every DOM mutation while recording — a
  * participant who joins after the start would otherwise be silent in the file. */
-function attachPageAudio(s: InPageState): number {
+export function attachPageAudio(s: InPageState): number {
 	let added = 0;
 	const media = document.querySelectorAll<HTMLMediaElement>("audio, video");
 	for (const el of media) {
@@ -213,7 +213,7 @@ function attachPageAudio(s: InPageState): number {
 /** Forget taps whose ELEMENT is gone from the page (a participant left). Taps
  * whose track merely changed are repaired in place by attachPageAudio; this only
  * stops the map growing for the whole call. Returns how many were dropped. */
-function pruneDeadTaps(s: InPageState): number {
+export function pruneDeadTaps(s: InPageState): number {
 	let pruned = 0;
 	for (const [el, tap] of s.taps) {
 		if (el.isConnected) continue;
