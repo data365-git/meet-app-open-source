@@ -61,13 +61,38 @@ function startToneElement() {
 		.catch((e) => {
 			status.textContent = "tone: MEDIA FAILED " + e;
 		});
+	return el;
+}
+
+// &swap=<ms> — REUSE the same element with a new source part-way through, which
+// is what Google Meet actually does when the active speaker changes: the element
+// stays in the DOM, its stream is replaced. An audio tap bound to the old track
+// goes permanently silent, so this is the scenario that proves the recorder
+// prunes dead taps and re-taps instead of recording silence for the rest of the
+// call. (Reviewed 2026-07-20; the original harness only ever had one static
+// element and could not see this.)
+function scheduleSourceSwap(el) {
+	const swapAt = Number(new URLSearchParams(location.search).get("swap"));
+	if (!Number.isFinite(swapAt) || swapAt <= 0) return;
+	setTimeout(() => {
+		el.pause();
+		el.removeAttribute("src");
+		el.load(); // kills the current track — the tap dies here
+		el.src = `/tone.webm?again=${Date.now()}`;
+		el.loop = true;
+		el.play().catch(() => {});
+		const note = document.createElement("p");
+		note.id = "swapped";
+		note.textContent = "source swapped";
+		document.body.appendChild(note);
+	}, swapAt);
 }
 
 // Auto-play ONLY when the harness asks (?tone=1 | ?tone=media). A human opening
 // this file (e.g. an accidental Browser-pane preview) gets silence + a button.
 const toneMode = new URLSearchParams(location.search).get("tone");
 if (toneMode === "media") {
-	startToneElement();
+	scheduleSourceSwap(startToneElement());
 } else if (toneMode === "1") {
 	startTone();
 } else {

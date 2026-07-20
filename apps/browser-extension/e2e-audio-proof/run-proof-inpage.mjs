@@ -32,9 +32,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const distDir = join(here, "..", "dist");
 const require = createRequire(join(here, "..", "..", "web", "package.json"));
 
-const RECORD_MS = 10_000;
+// PROOF_SWAP=1 runs the harder scenario reviewed into existence on 2026-07-20:
+// mid-recording, the fake Meet REUSES its <audio> element with a new source,
+// exactly as Meet does when the active speaker changes. A tap bound to the old
+// track dies there, so the tone must still be present in EVERY segment of the
+// file — that is what proves the recorder prunes dead taps and re-taps, rather
+// than silently recording nothing for the rest of the call.
+const SWAP_TEST = process.env.PROOF_SWAP === "1";
+const RECORD_MS = SWAP_TEST ? 18_000 : 10_000;
 const SERVE_PORT = 8443;
-const FAKE_MEET_URL = "https://meet.google.com/abc-defg-hij?tone=media";
+const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=media${SWAP_TEST ? "&swap=8000" : ""}`;
 
 const log = (m) => console.log(`[proof-inpage] ${m}`);
 
@@ -259,6 +266,20 @@ async function main() {
 		const analyzeLine = (analyze.stdout ?? "").trim();
 		log(`analyzer: ${analyzeLine}`);
 		claims.push(`tone=${analyze.status === 0 ? "OK" : "MISSING"}`);
+
+		// Presence somewhere is not enough once the source is swapped mid-call:
+		// require the tone in every segment, so a tap that died at the swap and
+		// never recovered cannot pass.
+		if (SWAP_TEST) {
+			const seg = spawnSync(
+				process.execPath,
+				[join(here, "analyze-segments.mjs"), manifest.assembledFile, "4"],
+				{ encoding: "utf8" },
+			);
+			const segLine = (seg.stdout ?? "").trim();
+			log(`segments: ${segLine}`);
+			claims.push(`allsegments=${seg.status === 0 ? "OK" : "GAP"}`);
+		}
 
 		const allOk = claims.every((c) => c.includes("OK"));
 		return verdict(

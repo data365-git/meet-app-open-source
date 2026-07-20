@@ -21,3 +21,24 @@ export const AUDIO_BITS_PER_SECOND = 128_000;
 // RECORDED copy of the tab audio only — never to the monitor path, so what the
 // user hears during the call is unchanged.
 export const TAB_AUDIO_GAIN = 1.8;
+
+/**
+ * The container/codec the MediaRecorder should use, most preferred first.
+ *
+ * ONE home for what used to be three verbatim copies (recorder page, offscreen
+ * document, in-page recorder). Their lists were identical only by luck; the
+ * repo's twin rule says the next edit is where they drift.
+ */
+export function pickMimeType(): string {
+	const candidates = [
+		"video/mp4;codecs=h264",
+		"video/mp4",
+		"video/webm;codecs=vp9,opus",
+		"video/webm;codecs=vp8,opus",
+		"video/webm",
+	];
+	for (const mime of candidates) {
+		if (MediaRecorder.isTypeSupported(mime)) return mime;
+	}
+	return "video/webm";
+}

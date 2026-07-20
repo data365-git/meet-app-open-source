@@ -362,6 +362,20 @@ const NUDGE_CSS = `
 
 .cap-nudge-no-auto:hover { color: #6b7280; }
 
+.cap-nudge-live-note {
+	margin-top: 8px;
+	max-width: 320px;
+	background: #111827;
+	color: #f9fafb;
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-size: 12px;
+	line-height: 1.35;
+	box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.cap-nudge-live-note-error { color: #fca5a5; }
+
 .cap-nudge-confirm {
 	margin-top: 12px;
 	padding-top: 12px;
@@ -659,7 +673,7 @@ function renderDefaultNudge(): void {
 		btnRecord.disabled = true;
 		btnRecord.textContent = "Boshlanmoqda…";
 		void startInPageRecording(meetingId, {
-			note: (text, isError) => showStartNote(card, text, isError),
+			note: (text, isError) => showLiveNote(text, isError),
 			confirmWithoutClientAudio: () => confirmWithoutClientAudioInCard(card),
 			onRecordingStarted: () => {
 				recordingStartTime = Date.now();
@@ -739,7 +753,7 @@ function renderCountdownNudge(): void {
 			if (activeCard) {
 				showStartNote(
 					activeCard,
-					"Yozish uchun data365 belgisini bosing — ochilgan oynada bitta Boshlash tugmasi (mijoz ovozi kafolatli).",
+					"Yozishni boshlash uchun \"Record now\" ni bosing — ekran tanlash oynasi darrov ochiladi.",
 					false,
 				);
 			}
@@ -912,6 +926,31 @@ function sendToBackground(msg: OutboundMessage): void {
 	chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
+/** A note that survives the card being replaced by the recording pill.
+ *
+ * The in-page recorder's warnings (silence watchdog, waived client audio) used
+ * to be written into the CARD element captured when the button was clicked —
+ * but starting a recording removes that card, so every mid-recording warning
+ * landed in detached DOM and the owner never saw it. The watchdog is this
+ * path's only ongoing remote-audio guarantee; a warning nobody can see is not
+ * one. Writes into the live container instead, so it renders under whatever is
+ * currently shown. Empty text clears it. */
+function showLiveNote(text: string, isError: boolean): void {
+	const container = getNudgeContainer();
+	if (!container) return;
+	const existing = container.querySelector(
+		".cap-nudge-live-note",
+	) as HTMLElement | null;
+	if (!text) {
+		existing?.remove();
+		return;
+	}
+	const note = existing ?? makeEl("div", "cap-nudge-live-note");
+	note.classList.toggle("cap-nudge-live-note-error", isError);
+	note.textContent = text;
+	if (!existing) container.appendChild(note);
+}
+
 function showStartNote(card: HTMLElement, text: string, isError: boolean): void {
 	const existing = card.querySelector(
 		".cap-nudge-send-err",
@@ -1042,9 +1081,18 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 			sendResponse({ ok: true });
 		}
 	} else if (message.type === "PAUSE_CAPTURE") {
-		if (pauseInPageRecording()) sendResponse({ ok: true });
+		// Ack whenever THIS tab owns the capture, even if the recorder is already
+		// paused: pause is idempotent, and staying silent on a no-op made the SW
+		// burn four delivery retries and report {ok:false} to the popup.
+		if (isInPageRecording()) {
+			pauseInPageRecording();
+			sendResponse({ ok: true });
+		}
 	} else if (message.type === "RESUME_CAPTURE") {
-		if (resumeInPageRecording()) sendResponse({ ok: true });
+		if (isInPageRecording()) {
+			resumeInPageRecording();
+			sendResponse({ ok: true });
+		}
 	}
 });
 

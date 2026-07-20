@@ -25,6 +25,7 @@ import {
 	AUDIO_BITS_PER_SECOND,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	pickMimeType,
 } from "../shared/recording-quality";
 
 interface StartCaptureMsg {
@@ -77,19 +78,6 @@ function noClientAudioError(problem: string): Error {
 	);
 }
 
-function pickMimeType(): string {
-	const candidates = [
-		"video/mp4;codecs=h264",
-		"video/mp4",
-		"video/webm;codecs=vp9,opus",
-		"video/webm;codecs=vp8,opus",
-		"video/webm",
-	];
-	for (const mime of candidates) {
-		if (MediaRecorder.isTypeSupported(mime)) return mime;
-	}
-	return "video/webm";
-}
 
 function sendMsg(msg: Record<string, unknown>): void {
 	chrome.runtime.sendMessage(msg).catch(() => {});

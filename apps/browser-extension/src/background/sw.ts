@@ -783,6 +783,31 @@ async function handleMessage(
 			return { ok: true };
 		}
 
+		// ── In-page recorder: the nudge's capture was aborted before it began ──
+		//
+		// The in-page path arms with mode "meeting" (MEET_NUDGE_CAPTURE_READY), so
+		// INSTRUCTION_CANCEL above — which only releases an "instruction" arming —
+		// could never clear it. A user who declined the "record without client
+		// audio?" confirm left the SW armed, and a leftover recorder.html tab's
+		// later RECORDER_STARTED would then inherit that stale arming: it recorded
+		// with contentRecorderTabId pointing at the MEET tab, so a popup STOP was
+		// routed to a tab that owned no capture, forcing a truncated finalize while
+		// the real recorder carried on into a dropped-chunk void.
+		// SENDER-SCOPED: only the very tab that armed it may release it, so this
+		// can never be used to wipe another path's arming.
+		case "MEET_NUDGE_CANCEL": {
+			const state = await getState();
+			if (
+				state.kind === "arming" &&
+				state.contentRecorderTabId !== undefined &&
+				state.contentRecorderTabId === _sender.tab?.id
+			) {
+				await setState({ kind: "idle" });
+				updateBadge({ kind: "idle" });
+			}
+			return { ok: true };
+		}
+
 		// ── Popup: cancel ─────────────────────────────────────────────────
 		case "CANCEL": {
 			// Deliberate disarm — see the STOP case for why this guards the
@@ -1825,6 +1850,39 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 	if (changeInfo.url === undefined || isMeetUrl(changeInfo.url)) return;
 	handleSourceTabLost(tabId).catch(() => {});
+});
+
+// ── In-page recorder: the Meet tab RELOADED mid-recording ──────────────────
+//
+// The in-page path's MediaRecorder lives in the Meet page itself, so a reload
+// (F5 — common when Meet glitches) destroys it. Nothing else catches this:
+// `beforeunload` calls recorder.stop() but a dying document never runs the
+// resulting ondataavailable/onstop, so RECORDER_STOPPED is never sent;
+// tabs.onRemoved does not fire for a reload; and the onUpdated watcher above
+// only reacts to a URL CHANGE, which a reload is not. The state used to sit at
+// "recording" forever: badge REC, keepalive running, the reloaded page showing
+// a fresh "Record this meeting?" nudge whose click is refused with "a recording
+// is already in progress", and everything after the reload unrecorded.
+// Finalize instead — the first half is uploaded and the owner can start again.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.status !== "loading") return;
+	void (async () => {
+		const state = await getState();
+		if (
+			state.kind === "recording" &&
+			state.contentRecorderTabId === tabId
+		) {
+			intentionalStop = true;
+			await enqueueRecorder(() => finalizeRecording()).catch(() => {});
+			chrome.notifications.create("meet-tab-reloaded", {
+				type: "basic",
+				iconUrl: "icons/icon-128.png",
+				title: "Yozuv saqlandi",
+				message:
+					"Meet sahifasi yangilandi — shu paytgacha yozilgani saqlandi. Davom ettirish uchun qaytadan boshlang.",
+			});
+		}
+	})();
 });
 
 // Meeting-ended prompt: button 0 = stop & save, button 1 = keep recording.

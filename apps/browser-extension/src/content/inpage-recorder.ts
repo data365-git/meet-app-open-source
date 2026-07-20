@@ -32,6 +32,7 @@ import {
 	CAPTURE_MAX_WIDTH,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	pickMimeType,
 } from "../shared/recording-quality";
 
 /** Everything this module needs from the nudge UI, so the recorder itself owns
@@ -51,6 +52,12 @@ export interface InPageRecorderHost {
 interface PageAudioTap {
 	stream: MediaStream;
 	source: MediaStreamAudioSourceNode;
+	/** id of the audio track the source node was BUILT from. A
+	 * MediaStreamAudioSourceNode is bound to that one track forever, so when Meet
+	 * swaps the element's source the node keeps reading a dead track — the tap is
+	 * silent while everything still LOOKS connected. Comparing this id against the
+	 * stream's current live track is the only way to notice. */
+	trackId: string;
 }
 
 interface InPageState {
@@ -60,6 +67,10 @@ interface InPageState {
 	displayStream: MediaStream;
 	micStream: MediaStream | null;
 	pageGain: GainNode;
+	/** Present only when the recording started with NO page audio and the picker
+	 * gave us system audio as a stand-in. Muted the moment a real page tap
+	 * attaches — see attachPageAudio. */
+	systemGain: GainNode | null;
 	analyser: AnalyserNode | null;
 	taps: Map<HTMLMediaElement, PageAudioTap>;
 	rescan: MutationObserver | null;
@@ -110,19 +121,6 @@ function sendMsgAwait(msg: Record<string, unknown>): Promise<unknown> {
 	});
 }
 
-function pickMimeType(): string {
-	const candidates = [
-		"video/mp4;codecs=h264",
-		"video/mp4",
-		"video/webm;codecs=vp9,opus",
-		"video/webm;codecs=vp8,opus",
-		"video/webm",
-	];
-	for (const mime of candidates) {
-		if (MediaRecorder.isTypeSupported(mime)) return mime;
-	}
-	return "video/webm";
-}
 
 function friendlyStartError(error: unknown): string {
 	const raw = typeof error === "string" ? error.toLowerCase() : "";
@@ -163,14 +161,31 @@ function attachPageAudio(s: InPageState): number {
 	let added = 0;
 	const media = document.querySelectorAll<HTMLMediaElement>("audio, video");
 	for (const el of media) {
-		if (s.taps.has(el)) continue;
+		if (!el.isConnected) continue;
 		const stream = captureFrom(el);
 		if (!stream) continue;
+		const track = stream
+			.getAudioTracks()
+			.find((t) => t.readyState === "live");
+		if (!track) continue;
+		const existing = s.taps.get(el);
+		// Already tapped AND still reading the track that is actually live → done.
+		if (existing && existing.trackId === track.id) continue;
+		if (existing) {
+			// Same element, DIFFERENT track: Meet swapped the source. Rebuild the
+			// node, because a MediaStreamAudioSourceNode never follows that swap.
+			try {
+				existing.source.disconnect();
+			} catch {}
+		}
 		let source: MediaStreamAudioSourceNode;
 		try {
-			source = s.audioCtx.createMediaStreamSource(stream);
+			// Bind to a stream holding exactly the CURRENT live track. Passing the
+			// element's own capture stream is what caused the drift: Chrome keeps
+			// handing back the same MediaStream object across source changes, so the
+			// node silently stayed on the retired track.
+			source = s.audioCtx.createMediaStreamSource(new MediaStream([track]));
 		} catch {
-			for (const t of stream.getTracks()) t.stop();
 			continue;
 		}
 		// Into the gain node (recorded copy only). There is NO monitor path here:
@@ -179,10 +194,36 @@ function attachPageAudio(s: InPageState): number {
 		// audioCtx.destination as the recorder page does would double it.
 		source.connect(s.pageGain);
 		if (s.analyser) source.connect(s.analyser);
-		s.taps.set(el, { stream, source });
+		s.taps.set(el, { stream, source, trackId: track.id });
 		added++;
 	}
+	// The picker's system audio was only ever a STAND-IN for a call that had no
+	// page audio yet (the owner starts recording alone, before anyone joins). The
+	// moment real page audio arrives, the same voices would be in the mix twice —
+	// once tapped, once through the system loopback, offset by pipeline latency:
+	// echo for the rest of the call. Mute the stand-in instead of stopping it, so
+	// the graph stays simple and a later re-check can never resurrect it.
+	if (added > 0 && s.systemGain) {
+		s.systemGain.gain.value = 0;
+		s.systemGain = null;
+	}
 	return added;
+}
+
+/** Forget taps whose ELEMENT is gone from the page (a participant left). Taps
+ * whose track merely changed are repaired in place by attachPageAudio; this only
+ * stops the map growing for the whole call. Returns how many were dropped. */
+function pruneDeadTaps(s: InPageState): number {
+	let pruned = 0;
+	for (const [el, tap] of s.taps) {
+		if (el.isConnected) continue;
+		try {
+			tap.source.disconnect();
+		} catch {}
+		s.taps.delete(el);
+		pruned++;
+	}
+	return pruned;
 }
 
 function detachAllPageAudio(s: InPageState): void {
@@ -257,10 +298,31 @@ export function resumeInPageRecording(): boolean {
 // record screen + the other participants without it.
 const MIC_ACQUIRE_TIMEOUT_MS = 8000;
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+function withTimeout(
+	p: Promise<MediaStream>,
+	ms: number,
+): Promise<MediaStream | null> {
+	let settled = false;
+	const guarded = p
+		.then((stream) => {
+			// The user clicked "Allow" AFTER we gave up. Nobody owns this stream, so
+			// without stopping it the mic-in-use indicator stays lit for the rest of
+			// the session — a recorder that looks like it is eavesdropping.
+			if (settled) {
+				for (const t of stream.getTracks()) t.stop();
+				return null;
+			}
+			return stream;
+		})
+		.catch(() => null);
 	return Promise.race([
-		p.catch(() => null),
-		new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+		guarded,
+		new Promise<null>((resolve) =>
+			setTimeout(() => {
+				settled = true;
+				resolve(null);
+			}, ms),
+		),
 	]);
 }
 
@@ -345,6 +407,18 @@ export async function startInPageRecording(
 		return;
 	}
 
+	// WIRE THE NATIVE "Stop sharing" BAR NOW, not after the awaits below. The
+	// start path can sit for seconds (SW round-trip, up to 8s of mic acquisition,
+	// an unbounded confirm modal); a user who hits Chrome's Stop-sharing bar
+	// during that window ends the video track BEFORE any handler exists, and the
+	// recording used to start anyway — audio-only, never auto-stopping, while the
+	// user believed they had stopped it. The recorder page wires its equivalent
+	// before its modal for the same reason.
+	const videoTrack = displayStream.getVideoTracks()[0];
+	videoTrack.onended = () => {
+		if (state) stopInPageRecording();
+	};
+
 	let pending: InPageState | null = null;
 	try {
 		// Arm the SW: this is what makes the upload file under MEETINGS (mode
@@ -386,6 +460,7 @@ export async function startInPageRecording(
 			displayStream,
 			micStream,
 			pageGain,
+			systemGain: null,
 			analyser,
 			taps: new Map(),
 			rescan: null,
@@ -403,11 +478,10 @@ export async function startInPageRecording(
 		// gate's.
 		if (tapped === 0) {
 			const proceed = await host.confirmWithoutClientAudio();
-			const videoTrack = displayStream.getVideoTracks()[0];
-			if (!proceed || !videoTrack || videoTrack.readyState !== "live") {
+			if (!proceed) {
 				cleanup(pending);
 				pending = null;
-				sendMsg({ type: "INSTRUCTION_CANCEL" });
+				sendMsg({ type: "MEET_NUDGE_CANCEL" });
 				host.note(NO_CLIENT_AUDIO_MSG, true);
 				host.onFailed();
 				return;
@@ -419,13 +493,30 @@ export async function startInPageRecording(
 			audioCtx.createMediaStreamSource(micStream).connect(dest);
 		}
 		// System audio from the picker is the SAME meeting sound as the page audio
-		// when both exist — mixing both doubles it into echo. Page audio is the
-		// reliable source here, so system audio is only used when we have none.
+		// when both exist — mixing both doubles it into echo. So it is only a
+		// STAND-IN for a call with no page audio yet, and it goes through its own
+		// gain node that attachPageAudio() mutes the instant real page audio shows
+		// up (the owner starts recording alone; the client joins a minute later).
 		if (tapped === 0 && displayStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(displayStream).connect(dest);
+			const systemGain = audioCtx.createGain();
+			systemGain.connect(dest);
+			audioCtx.createMediaStreamSource(displayStream).connect(systemGain);
+			pending.systemGain = systemGain;
 		}
 
 		await audioCtx.resume();
+
+		// The share may have been stopped while the confirm modal or the mic
+		// prompt was up (its onended fired into a still-null `state`). Recording a
+		// dead track produces an audio-only file that never stops on its own.
+		if (videoTrack.readyState !== "live") {
+			cleanup(pending);
+			pending = null;
+			sendMsg({ type: "MEET_NUDGE_CANCEL" });
+			host.note("Ekran ulashish to'xtatildi. Qaytadan bosing.", true);
+			host.onFailed();
+			return;
+		}
 
 		const recordStream = new MediaStream([
 			...displayStream.getVideoTracks(),
@@ -481,12 +572,6 @@ export async function startInPageRecording(
 			if (pendingChunks === 0) finishStop();
 		};
 
-		// Chrome's native "Stop sharing" bar ends the video track — finalize the
-		// upload instead of recording a dead stream.
-		displayStream.getVideoTracks()[0].onended = () => {
-			stopInPageRecording();
-		};
-
 		// Initialize the upload BEFORE any media data exists: the SW creates the
 		// video + multipart session in its RECORDER_STARTED handler and only then
 		// accepts chunks. Starting earlier drops the first chunks → totalBytes=0.
@@ -520,16 +605,27 @@ export async function startInPageRecording(
 		rescan.observe(document.body, { childList: true, subtree: true });
 		state.rescan = rescan;
 
-		// SILENCE WATCHDOG: warn (never stop) when no remote sound has reached the
-		// mix for SILENCE_WARN_MS. Also re-scans, so a tab that lost every element
-		// recovers on its own.
+		// SILENCE WATCHDOG + TAP REPAIR. Warns (never stops) when no remote sound
+		// has reached the mix for SILENCE_WARN_MS, and — more importantly — repairs
+		// the taps every tick: Meet reuses its media elements and swaps their
+		// srcObject, which kills a tap while leaving the element in place. Pruning
+		// the dead ones and re-scanning UNCONDITIONALLY is what makes the recovery
+		// real; gating the re-scan on "no taps left" never fired, because dead taps
+		// were still counted.
 		const buf = new Float32Array(analyser.fftSize);
 		let lastEnergyAt = Date.now();
 		let warned = false;
 		state.watchdog = setInterval(() => {
 			const s = state;
 			if (!s || intentionalStop || s.recorder.state === "inactive") return;
-			if (s.taps.size === 0) attachPageAudio(s);
+			pruneDeadTaps(s);
+			const attached = attachPageAudio(s);
+			// Client audio arrived after a waived start — re-arm the guarantee so
+			// the watchdog stops treating silence as expected.
+			if (attached > 0 && clientAudioWaived) {
+				clientAudioWaived = false;
+				lastEnergyAt = Date.now();
+			}
 			const peak = pageAudioPeak(s, buf);
 			if (peak > ENERGY_FLOOR) {
 				lastEnergyAt = Date.now();
