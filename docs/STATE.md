@@ -3,6 +3,15 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## 🚨 PRODUCTION IS DEGRADED RIGHT NOW — GEMINI CREDITS ARE DEPLETED (2026-07-20 ~14:20)
+
+**Every AI feature on prod is down: transcription, summaries, chapters, tasks, chat.** Not a rate limit — the API answers with `429: "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing."` The free key is separately exhausted (its own 429), so there is no working path at all. A meeting recorded today will upload and play fine, and then fail to transcribe.
+
+**OWNER ACTION (only he can): top up the Gemini project's billing at https://ai.studio/projects.** Until then, do not chase transcription bugs — everything will fail for this one reason, and a session could easily burn hours on it.
+
+How it was found: the run that would have verified the drift anchor fix failed with `All 9 transcription chunks failed … HTTP 429`. The honest part: **four re-transcriptions of a 53-minute video in one afternoon (mine, verifying the drift fix) contributed to draining it** — this month's AI spend moved 59 760 → 68 400 so'm during the session. A verification loop that re-runs a paid pipeline needs a budget check before the first run, not after the fourth. See also the free-tier finding below: with the free tier broken on both paths, every one of those runs billed the paid account.
+
+---
 ## ⏩ NEXT SESSION — START HERE (written 2026-07-20, session o)
 
 🎯 **GOAL unchanged:** production-ready for the owner's IT team. #1 = a meeting must never fail to record, and the recording must contain the OTHER participants' voices.
