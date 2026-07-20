@@ -50,7 +50,10 @@ function createFakeChrome() {
 		startup?: () => Promise<void> | void;
 		installed?: () => Promise<void> | void;
 		alarm?: (alarm: { name: string }) => void;
-	} = {};
+		tabUpdated: Array<
+			(tabId: number, changeInfo: Record<string, unknown>) => void
+		>;
+	} = { tabUpdated: [] };
 
 	const notifications: Array<{
 		id?: string;
@@ -91,7 +94,13 @@ function createFakeChrome() {
 			get: async () => ({ id: 1 }),
 			sendMessage: async () => undefined,
 			onRemoved: { addListener: () => undefined },
-			onUpdated: { addListener: () => undefined },
+			onUpdated: {
+				addListener: (fn: Listener) => {
+					captured.tabUpdated.push(
+						fn as (t: number, c: Record<string, unknown>) => void,
+					);
+				},
+			},
 		},
 		windows: { update: async () => undefined },
 		offscreen: {
@@ -2718,5 +2727,113 @@ describe("MEDIUM — pause/resume state follows the recorder, not the intent", (
 		const after = await getState();
 		expect(after.kind === "recording" && after.paused).toBe(true);
 		expect(res.ok).toBe(true);
+	});
+});
+
+// ── In-page recorder: the Meet tab is the recorder, so its lifecycle IS the
+// recording's lifecycle (defects found by an independent review, 2026-07-20) ──
+
+describe("In-page path — a reloaded Meet tab must not strand the recording", () => {
+	it("finalizes when the recording's own content tab starts loading again", async () => {
+		const { captured, notifications } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		// Live in-page recording: the MediaRecorder lives in tab 42 (the Meet page).
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 42,
+			contentRecorderTabId: 42,
+			videoId: "vid-reload",
+			uploadId: "upload-reload",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		let completeCalls = 0;
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/upload/multipart/complete")) {
+				completeCalls += 1;
+				return jsonResponse({ success: true, fileKey: "file" });
+			}
+			if (url.includes("/api/upload/recording-complete")) {
+				return jsonResponse({});
+			}
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		// F5 on the Meet tab. Chrome reports this as a status change with NO url
+		// change — which is precisely why the pre-existing url-based watcher and
+		// tabs.onRemoved both stayed silent, leaving the SW "recording" forever
+		// with everything after the reload unrecorded.
+		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
+		await flushAsync(10);
+
+		const finalState = await getState();
+		expect(finalState.kind).not.toBe("recording");
+		expect(completeCalls).toBe(1);
+		// And the owner is told, rather than silently losing the second half.
+		expect(notifications.some((n) => n.id === "meet-tab-reloaded")).toBe(true);
+	});
+
+	it("ignores an unrelated tab reloading", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 42,
+			contentRecorderTabId: 42,
+			videoId: "vid-keep",
+			uploadId: "upload-keep",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		for (const fn of captured.tabUpdated) fn(99, { status: "loading" });
+		await flushAsync();
+
+		expect((await getState()).kind).toBe("recording");
+	});
+});
+
+describe("In-page path — declining the client-audio confirm releases the lock", () => {
+	it("clears a mode-'meeting' arming for the tab that armed it, and only that tab", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		const arming = {
+			kind: "arming",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 7,
+			contentRecorderTabId: 7,
+		} as const;
+
+		// A different tab must NOT be able to release it (that would let a stale
+		// recorder.html tab wipe someone else's arming).
+		await setState({ ...arming });
+		await sendMessage(captured, { type: "MEET_NUDGE_CANCEL" }, { tab: { id: 8 } });
+		expect((await getState()).kind).toBe("arming");
+
+		// The tab that armed it can. Before this existed the content script sent
+		// INSTRUCTION_CANCEL, which only ever released mode "instruction" — so a
+		// declined confirm left the extension armed and a later RECORDER_STARTED
+		// inherited that stale record.
+		await sendMessage(captured, { type: "MEET_NUDGE_CANCEL" }, { tab: { id: 7 } });
+		expect((await getState()).kind).toBe("idle");
 	});
 });
