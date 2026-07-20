@@ -35,3 +35,25 @@ PASS line: `VERDICT=PASS metric=full-contract filing=OK duration=OK(...) tone=OK
 - Runs Playwright resolved from the `apps/web` workspace; ffmpeg from PATH or ffmpeg-static.
 - `serve.mjs` binds 443 (host-resolver maps meet.google.com there); mock API binds 3001
   (must be inside the extension's host_permissions — 8787 fails CORS preflight, measured).
+
+## Two harnesses, two paths
+
+| script | proves | needs |
+|---|---|---|
+| `run-proof.mjs` | the SHORTCUT path: real OS keypress -> `commands` -> activeTab -> `chrome.tabCapture` | an **idle, focused** Windows desktop |
+| `run-proof-inpage.mjs` | the TWO-STEP IN-PAGE path: a real click on the nudge -> `getDisplayMedia` -> `HTMLMediaElement.captureStream()` for the remote voices | a headed session (no keypress) |
+
+`PROOF_SWAP=1 node run-proof-inpage.mjs` runs the harder variant: the fake Meet
+REUSES its `<audio>` element with a new source mid-recording, exactly as Meet does
+when the active speaker changes, and the tone must then be present in EVERY
+segment. That scenario is what caught a wrong fix on 2026-07-20 (segments 3-4 at
+-90 dB while a plain run stayed green).
+
+### Reading a `run-proof.mjs` FAIL honestly
+`reason=recorder-tab-never-opened` usually means the OS keystroke never reached
+Chromium, not that the product broke: `WScript.SendKeys` needs the desktop free
+and the Chromium window genuinely foreground, so it fails while anything else
+holds focus. Before blaming the code, check the two facts that separate the
+causes: the command IS registered in a fresh profile (`chrome.commands.getAll()`
+returns `start-meeting-recording: Ctrl+Shift+9`), and the same FAIL reproduces on
+a stashed, unmodified tree. Both were confirmed on 2026-07-20.
