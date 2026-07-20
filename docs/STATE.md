@@ -27,6 +27,8 @@ Also fixed: stale `arming` after declining the confirm (new sender-scoped `MEET_
 
 **Still to prove after this deploy** (not yet done at the time of writing): transcript drift re-measure on `j1q9mjg8kewr2en` (baseline max 113.5s → target ≤15s, `scripts/measure-transcript-drift.mjs` inside the prod container), and the owner's own 2-person Meet run of `docs/OWNER_QA_SCRIPT.md` (now rewritten for the 2-step flow).
 
+**⛔ OWNER TODO (~10 min, the only thing no machine can do):** data365.duckdns.org/dashboard/extension → download the zip → `chrome://extensions` → **remove the old data365 Recorder** → Load unpacked the new folder → it must read **0.5.0**. Then open a Meet with one other person, press **Record now** in the card at the top of the page, pick **Entire Screen**, talk for 2 minutes, Stop → the recording must appear under **Meetings** and their voice must be audible. If the card does not appear, `Ctrl+Shift+9` still works — say which one you used.
+
 ---
 ## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND IN PROGRESS, **LATEST — READ THIS ONE**
 
@@ -84,7 +86,7 @@ Deploy B checklist when it happens: RUNBOOK §3a · set `NEXT_PUBLIC_USD_TO_UZS`
 
 **🔬 DRIFT ROOT CAUSE FOUND + FIXED (main session, unit-proven, NOT yet e2e):** built a measurement rig (`scripts/measure-transcript-drift.mjs` + `drift-fetch.mjs`, runs in the prod container, read-only) and measured the owner's real 42-min video: baseline **max 113s / mean 42s** drift, all negative. Dense sampling inside one chunk showed Gemini's clock runs at a near-constant **0.64× real time**, re-anchoring at each chunk start → the error is LINEAR → removed by a per-chunk linear rescale anchored on the true speech end (`rescaleChunkVtt` + `ChunkSpec.speechEndSec`). 11 unit tests green. ⛔ **Target max ≤15s is UNPROVEN until Deploy B + a re-transcription of `j1q9mjg8kewr2en` + a re-run of the rig.** Full log: `autoresearch/meet-audio-proof-260719-1900/log.md` PART 2.
 
-**OWNER TODO (Deploy A is LIVE now, ~15 min):** open data365.duckdns.org/dashboard/extension → download the NEW zip (v0.4.0 in chrome://extensions proves it) → remove old extension, Load unpacked the new one → run docs/OWNER_QA_SCRIPT.md steps 1 (solo 3-min recording plays fully with audio) and 6 (2-person Meet; remote voice audible; recording appears under **Meetings**). New: bitta tugma bilan boshlash — Meet tabida **Ctrl+Shift+9**.
+**(superseded 2026-07-20 — the current owner duty is the v0.5.0 one in the NEXT SESSION block at the top of this file; this line described the v0.4.0 install and is kept only so the history reads straight.)**
 
 ---
 ## ▶▶ /CLEAR HANDOFF (2026-07-19 morning — SESSION m — superseded by session n above)
