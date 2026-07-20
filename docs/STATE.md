@@ -26,7 +26,14 @@ The owner asked two things at the end of the session; here is what was establish
 
 **But it cannot be used right now: `ELEVENLABS_API_KEY` is NOT set on the prod container** (verified by `printenv` — empty). The button therefore answers "Scribe hali serverga ulanmagan". **To enable: owner supplies an ElevenLabs API key → set it in Coolify → redeploy.**
 
-**The decision:** (a) accept ~10s free, (b) supply the Scribe key and refine per-video at ~$0.22/hour, or (c) spend more engineering on the free path first — a Fable review of exactly that question ("is this the free ceiling?") was commissioned at the end of the session; **if its verdict is not in the file `docs/plans/2026-07-20-free-timing-ceiling-review.md`, it did not finish and should be re-run.**
+**✅ THE REVIEW CAME BACK — full text saved at `docs/plans/2026-07-20-free-timing-ceiling-review.md`. Read it before touching timing again; it is ~90k tokens of work and it changes the plan.** Verdict: **not the free ceiling, but the free headroom is ~2×, not ~10×.** Its three load-bearing points:
+1. **Do 3-minute chunks first** (`LONG_AUDIO_CHUNK_DURATION_SEC` 360→180 in `workflows/transcribe.ts:113`). One linear stretch cannot remove a *curved* clock, only its average slope; halving the span caps the leftover curvature. Plausibly **mean 10→5-7s, max 28→12-15s — i.e. the ≤15s target, for ~$0.40 and 1-2 hours.**
+2. **⚠️ The measuring rig is now a limiting factor.** Cue-start quantization alone is ±2-5s, weak matches (score 0.33, threshold 0.25) can be off by ~10s, and the standard error of a 12-sample mean is ~2.3s. **So "10s vs 7s" is not a distinguishable difference today, and the max=28.6s rests on the least trustworthy sample in the run.** Calibrate first (~30 min): run the rig against the bbzt Scribe VTT whose true error is ~1-2s — whatever it reports there IS the instrument's noise floor.
+3. **A free path to ~3-5s exists and was never built:** grid-probe piecewise warp (turn the measuring rig into a correcting one, ~$0.05-0.10/hour, ~1 day, reuses the July `grid-localize.mjs`/`transfer.mjs`). Scribe stays the proven 1-2s answer at $0.22/hour.
+
+**The decision for the owner:** (a) accept ~10s free, (b) supply an ElevenLabs key and refine per-video at ~$0.22/hour, or (c) spend ~2 more hours on 3-minute chunks first — which may reach the target for pennies and does not close off (b).
+
+**Honest caveat to carry into that decision:** for the fast multi-speaker CARD ui, the 07-08 analysis showed even **3s** of drift lands on the wrong 4s card **38%** of the time. If the requirement is "the highlighted card is always right", no free transcript-side method gets there — only the grid-probe warp or Scribe.
 
 **State of the tree at the clear (2026-07-20 ~15:00):** everything this session produced is committed and pushed to `qa-fixes` (31 commits, HEAD `acc6c5c`+). `git status` shows **100 untracked files and 1 modified** — none of them are this session's work: they are long-standing leftovers (old `CODEX_TO_CLAUDE_*.md` handoffs, `docs/qa/**` reports, scratchpad dirs) that predate it. Do not "tidy" them blindly; each is someone's old evidence.
 
