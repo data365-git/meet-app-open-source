@@ -9,6 +9,10 @@
 <div>
   <h1>FAKE MEET (e2e audio proof)</h1>
   <p id="status">tone: starting…</p>
+  <!-- The content script only shows its nudge when it believes we are IN a call
+       (isInMeeting() looks for Meet's Leave-call control). Harmless for the
+       shortcut-path proof, required for the in-page one. -->
+  <button aria-label="Leave call">Leave call</button>
 </div>
 <script>
 // Plays a steady 440 Hz tone — stands in for the remote participant's voice.
@@ -36,9 +40,35 @@ function startTone() {
 		status.textContent = "tone: FAILED " + e;
 	}
 }
-// Auto-play ONLY when the harness asks (?tone=1). A human opening this file
-// (e.g. an accidental Browser-pane preview) gets silence + a manual button.
-if (new URLSearchParams(location.search).get("tone") === "1") {
+// ?tone=media — the tone comes out of a real <audio> ELEMENT instead of a bare
+// oscillator. The in-page (two-step) recording path taps
+// HTMLMediaElement.captureStream(), so an oscillator would give it nothing to
+// capture: this is what stands in for a remote participant there.
+function startToneElement() {
+	const el = document.createElement("audio");
+	el.src = "/tone.webm";
+	el.loop = true;
+	el.autoplay = true;
+	el.id = "remote-participant";
+	document.body.appendChild(el);
+	el.play()
+		.then(() => {
+			status.textContent = "tone: playing (media element)";
+			setInterval(() => {
+				status.textContent = `tone: media t=${el.currentTime.toFixed(1)} paused=${el.paused}`;
+			}, 1000);
+		})
+		.catch((e) => {
+			status.textContent = "tone: MEDIA FAILED " + e;
+		});
+}
+
+// Auto-play ONLY when the harness asks (?tone=1 | ?tone=media). A human opening
+// this file (e.g. an accidental Browser-pane preview) gets silence + a button.
+const toneMode = new URLSearchParams(location.search).get("tone");
+if (toneMode === "media") {
+	startToneElement();
+} else if (toneMode === "1") {
 	startTone();
 } else {
 	status.textContent = "tone: idle (harness passes ?tone=1)";

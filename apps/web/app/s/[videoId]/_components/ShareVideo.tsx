@@ -117,10 +117,11 @@ export const ShareVideo = forwardRef<
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
 		const searchParams = useSearchParams();
-		// Chat UI: the blue-FAB → dialog chat is the DEFAULT (owner choice
-		// 2026-07-13). `?variant=inline` still opts into the in-panel inline chat.
-		const chatVariant: "modal" | "inline" =
-			searchParams.get("variant") === "inline" ? "inline" : "modal";
+		// Wave 2.5: the inline chat variant was deleted (SharePanel.tsx). The
+		// modal (AIFab + AIChatPopup) is now the only chat surface — no more
+		// `?variant=` branching. Without this, `?variant=inline` was a live URL
+		// that rendered NO chat at all: SharePanel had dropped its inline chat
+		// and this file still hid the modal one for that variant.
 
 		const safeChapters = useMemo(
 			() =>
@@ -882,7 +883,6 @@ export const ShareVideo = forwardRef<
 								processing={aiProcessing}
 								transcriptReady={transcriptReady}
 								aiContentReady={aiContentReady}
-								chatVariant={chatVariant}
 								summary={
 									<>
 										<GenerateAiPanel
@@ -1018,25 +1018,22 @@ export const ShareVideo = forwardRef<
 						{commentsPanel}
 					</div>
 				</div>
-				{/* T9 prototype: ?variant=modal — restored blue-FAB → dialog chat,
-			    hidden by default in favor of the current inline chat above. */}
-				{chatVariant === "modal" && (
-					<>
-						<div className={`ai-aura${aiChatOpen ? " show" : ""}`} />
-						<AIChatPopup
-							videoId={data.id}
-							onVideoJump={handleSeekAndPlay}
-							onClose={() => setAiChatOpen(false)}
-							isOpen={aiChatOpen}
-							processing={aiProcessing}
-							transcriptReady={transcriptReady}
-						/>
-						<AIFab
-							onClick={() => setAiChatOpen((v) => !v)}
-							isOpen={aiChatOpen}
-						/>
-					</>
-				)}
+				{/* Wave 2.5: the modal (AIFab + AIChatPopup) is the only chat surface
+			    now. The old `.ai-aura` glow is gone with it — the owner's redesign
+			    drops it deliberately for a calmer surface, and ai-chat.css no
+			    longer styles it. */}
+				<AIChatPopup
+					videoId={data.id}
+					onVideoJump={handleSeekAndPlay}
+					onClose={() => setAiChatOpen(false)}
+					isOpen={aiChatOpen}
+					processing={aiProcessing}
+					transcriptReady={transcriptReady}
+				/>
+				<AIFab
+					onClick={() => setAiChatOpen((v) => !v)}
+					isOpen={aiChatOpen}
+				/>
 			</>
 		);
 	},

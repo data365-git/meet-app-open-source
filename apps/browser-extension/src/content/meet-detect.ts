@@ -1,3 +1,12 @@
+import { getMeetingId } from "../shared/meeting-url";
+import {
+	isInPageRecording,
+	pauseInPageRecording,
+	resumeInPageRecording,
+	startInPageRecording,
+	stopInPageRecording,
+} from "./inpage-recorder";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type NudgeState =
@@ -85,9 +94,17 @@ function isInMeeting(): boolean {
 	);
 }
 
+// ONE parser, shared with the popup and the SW command handler. This used to be
+// a local regex that kept the LEADING SLASH ("/abc-defg-hij") while every other
+// caller produced "abc-defg-hij" — a copy-pasted twin that had drifted. Two
+// consequences, both measured 2026-07-20 by the in-page audio proof:
+//   • MEET_CALL_ENDED compares its id against the recording's own meetingId, so
+//     for shortcut-path recordings (id from the popup, no slash) it NEVER
+//     matched — the meeting-ended prompt silently never fired.
+//   • The in-page path files the upload under the id it sends, so meetings
+//     would have been filed as "/abc-defg-hij".
 function currentMeetingId(): string | null {
-	const m = location.pathname.match(/^(\/[a-z]+-[a-z]+-[a-z]+)/);
-	return m ? m[1] : null;
+	return getMeetingId(location.href);
 }
 
 function cancelMeetEnded(): void {
@@ -345,6 +362,12 @@ const NUDGE_CSS = `
 
 .cap-nudge-no-auto:hover { color: #6b7280; }
 
+.cap-nudge-confirm {
+	margin-top: 12px;
+	padding-top: 12px;
+	border-top: 1px solid #e5e7eb;
+}
+
 .cap-nudge-pill {
 	background: #111827;
 	border-radius: 999px;
@@ -570,89 +593,34 @@ function formatElapsed(ms: number): string {
 
 // ── Nudge rendering ───────────────────────────────────────────────────────────
 
-/**
- * PROBE — can the remote participants' audio be read straight off Meet's own
- * media elements, with no chrome.tabCapture and therefore no activeTab grant?
- *
- * If YES, the in-page "Record now" click (a real user gesture) can open the
- * screen picker directly AND still record the client's voice — the owner's
- * two-step flow, without the desktopCapture API he banned and without a desktop
- * app. If NO, those remain the only two options.
- *
- * Reports in plain Uzbek, inside the nudge card, so the owner can read it off
- * a live call without opening devtools. Read-only: every captured track is
- * stopped immediately.
- */
-async function probeMeetAudio(
-	report: (text: string) => void,
-): Promise<string> {
-	try {
-		const media = Array.from(
-			document.querySelectorAll<HTMLMediaElement>("audio, video"),
+/** In-card yes/no for the one question that must never be answered silently:
+ * start a meeting recording that will NOT contain the other participants'
+ * voices? Replaces the recorder page's #view-confirm on this path. */
+function confirmWithoutClientAudioInCard(card: HTMLElement): Promise<boolean> {
+	return new Promise((resolve) => {
+		const existing = card.querySelector(".cap-nudge-confirm");
+		if (existing) existing.remove();
+
+		const box = makeEl("div", "cap-nudge-confirm");
+		const msg = makeEl(
+			"div",
+			"cap-nudge-subtitle",
+			"Mijoz ovozi olinmadi. Baribir boshlaymizmi? (faqat ekran va mikrofon yoziladi)",
 		);
-		if (media.length === 0) return "O'LCHOV: sahifada audio/video element YO'Q";
+		const buttons = makeEl("div", "cap-nudge-buttons");
+		const yes = makeBtn("cap-nudge-btn-primary", "Baribir boshla");
+		const no = makeBtn("cap-nudge-btn-secondary", "Bekor");
+		buttons.append(yes, no);
+		box.append(msg, buttons);
+		card.appendChild(box);
 
-		const streams: MediaStream[] = [];
-		let blocked = 0;
-		for (const el of media) {
-			const capturable = el as HTMLMediaElement & {
-				captureStream?: () => MediaStream;
-				mozCaptureStream?: () => MediaStream;
-			};
-			const grab = capturable.captureStream ?? capturable.mozCaptureStream;
-			if (typeof grab !== "function") continue;
-			try {
-				const s = grab.call(capturable);
-				if (s.getAudioTracks().length > 0) streams.push(s);
-			} catch {
-				blocked++;
-			}
-		}
-		if (streams.length === 0) {
-			return `O'LCHOV: ${media.length} element · ovozli oqim YO'Q · bloklangan ${blocked} → MUMKIN EMAS ❌`;
-		}
-
-		// The `muted` flag was not a usable signal: on a SILENT call the tracks
-		// report muted even though the pipe is fine (measured with the owner
-		// 2026-07-19 — "jim edi", so a 0 there refuted nothing). Measure real
-		// ENERGY instead: whoever speaks during the window moves the meter.
-		const ctx = new AudioContext();
-		const analyser = ctx.createAnalyser();
-		analyser.fftSize = 2048;
-		for (const s of streams) ctx.createMediaStreamSource(s).connect(analyser);
-		const buf = new Float32Array(analyser.fftSize);
-
-		// 60s, not 6s: the owner needs time to join from a phone and speak, and a
-		// window too short produces a 0% reading that looks like a hard NO but is
-		// really "nobody spoke yet" — a false dead end (nearly called it one).
-		const WINDOW_MS = 60_000;
-		let peak = 0;
-		const started = Date.now();
-		report(
-			`O'LCHOV: ${streams.length} ovozli oqim topildi. 60 SONIYA — telefondan kirib gapiring…`,
-		);
-		while (Date.now() - started < WINDOW_MS) {
-			analyser.getFloatTimeDomainData(buf);
-			for (const v of buf) {
-				const a = Math.abs(v);
-				if (a > peak) peak = a;
-			}
-			const left = Math.ceil((WINDOW_MS - (Date.now() - started)) / 1000);
-			report(
-				`O'LCHOV: gapiring… ${left}s · hozirgi eng baland: ${(peak * 100).toFixed(1)}%`,
-			);
-			await new Promise((r) => setTimeout(r, 250));
-		}
-		await ctx.close().catch(() => undefined);
-		for (const s of streams) for (const t of s.getTracks()) t.stop();
-
-		const pct = peak * 100;
-		const verdict =
-			pct > 1 ? "MUMKIN ✅ (ovoz oqmoqda)" : "MUMKIN EMAS ❌ (jimlik)";
-		return `O'LCHOV: ${media.length} element · ovozli oqim ${streams.length} · bloklangan ${blocked} · eng baland ${pct.toFixed(1)}% → ${verdict}`;
-	} catch (err) {
-		return `O'LCHOV xatosi: ${err instanceof Error ? err.message : String(err)}`;
-	}
+		const finish = (proceed: boolean) => {
+			box.remove();
+			resolve(proceed);
+		};
+		yes.addEventListener("click", () => finish(true), { once: true });
+		no.addEventListener("click", () => finish(false), { once: true });
+	});
 }
 
 function renderDefaultNudge(): void {
@@ -680,38 +648,29 @@ function renderDefaultNudge(): void {
 	container.appendChild(card);
 	nudgeState = "default";
 
-	// FIX A (Codex v4): this button no longer captures directly — an in-page
-	// gesture can't grant activeTab/tabCapture, so a direct getDisplayMedia()
-	// here had NO client-audio guarantee. Only a real click on the extension
-	// icon does, so this just points the user there (openPopup is attempted as
-	// a convenience only, never as the guarantee).
+	// TWO-STEP FLOW (2026-07-20): this click IS the user activation
+	// getDisplayMedia() needs, so the picker opens straight from here — click,
+	// pick, done. The remote participants' voices come from Meet's own media
+	// elements via captureStream() (measured on a real call 2026-07-19), which
+	// needs no activeTab grant, so the old "click the extension icon instead"
+	// detour is gone. The Ctrl+Shift+9 path stays available and unchanged.
 	btnRecord.addEventListener("click", (event) => {
 		event.stopImmediatePropagation();
-		// PROBE (2026-07-19). The owner wants "Record now -> screen picker", two
-		// steps. An in-page click IS a real user gesture, so getDisplayMedia()
-		// could legally run right here — the ONLY blocker is that an in-page
-		// gesture cannot grant activeTab, so chrome.tabCapture (today's source of
-		// the remote voices) is unavailable on this path. The open question:
-		// can Meet's remote audio be tapped straight off the page's own media
-		// elements via HTMLMediaElement.captureStream(), which needs no
-		// permission at all? This probe answers it with facts from a real call,
-		// printed into the card so no devtools are needed. It captures nothing,
-		// starts nothing, and is removed once the answer is known.
-		// Deliberately NOT sending MEET_NUDGE_RECORD_NOW while the probe is in
-		// place: that message flips the nudge state and tears the card down, so
-		// the reading vanished before the owner could read it. The result is also
-		// copied to the clipboard (allowed here — we are inside a real click) so
-		// he can paste it instead of transcribing it from a disappearing card.
-		void probeMeetAudio((text) => showStartNote(card, text, false)).then(
-			(reading) => {
-				showStartNote(
-					card,
-					`${reading}\n\n(nusxalandi — Ctrl+V bilan yuboring)`,
-					false,
-				);
-				void navigator.clipboard?.writeText(reading).catch(() => undefined);
+		btnRecord.disabled = true;
+		btnRecord.textContent = "Boshlanmoqda…";
+		void startInPageRecording(meetingId, {
+			note: (text, isError) => showStartNote(card, text, isError),
+			confirmWithoutClientAudio: () => confirmWithoutClientAudioInCard(card),
+			onRecordingStarted: () => {
+				recordingStartTime = Date.now();
+				pillPausedAccumMs = 0;
+				clearNudge(() => renderRecordingPill(false));
 			},
-		);
+			onFailed: () => {
+				btnRecord.disabled = false;
+				btnRecord.textContent = "Record now";
+			},
+		});
 	});
 
 
@@ -1064,12 +1023,35 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 	}
 }
 
-chrome.runtime.onMessage.addListener((msg: unknown) => {
+chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 	if (!msg || typeof msg !== "object") return;
 	const message = msg as Record<string, unknown>;
 	if (message.type === "STATE_CHANGED" && message.state) {
 		handleStateChange(message.state as StateChangedMessage["state"]);
+		return;
 	}
+	// Capture controls for the IN-PAGE path. The SW routes these to this tab via
+	// the arming record's contentRecorderTabId. Ack CONDITIONALLY — answering
+	// when this tab owns no capture would tell sendControlWithRetry the command
+	// was delivered while nothing acted on it, which is exactly how a recording
+	// gets stuck in "recording" with its uploaded parts orphaned (the same trap
+	// the recorder page documents on its STOP_CAPTURE handler).
+	if (message.type === "STOP_CAPTURE") {
+		if (isInPageRecording()) {
+			stopInPageRecording();
+			sendResponse({ ok: true });
+		}
+	} else if (message.type === "PAUSE_CAPTURE") {
+		if (pauseInPageRecording()) sendResponse({ ok: true });
+	} else if (message.type === "RESUME_CAPTURE") {
+		if (resumeInPageRecording()) sendResponse({ ok: true });
+	}
+});
+
+// Closing/reloading the Meet tab mid-recording: stop cleanly so the SW can
+// finalize whatever was captured instead of stranding the multipart upload.
+window.addEventListener("beforeunload", () => {
+	if (isInPageRecording()) stopInPageRecording();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {

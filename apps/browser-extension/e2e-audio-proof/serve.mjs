@@ -18,6 +18,18 @@ const server = createServer(
 		cert: readFileSync(join(here, "certs", "cert.pem")),
 	},
 	(req, res) => {
+		// The in-page (two-step) proof needs the tone to come out of a real MEDIA
+		// ELEMENT, because that path taps HTMLMediaElement.captureStream() rather
+		// than tabCapture. An oscillator alone would give it nothing to capture.
+		if ((req.url ?? "").startsWith("/tone.webm")) {
+			const body = readFileSync(join(here, "tone.webm"));
+			res.writeHead(200, {
+				"content-type": "audio/webm",
+				"content-length": String(body.length),
+			});
+			res.end(body);
+			return;
+		}
 		// Any path (e.g. /abc-defg-hij like a real meeting URL) serves the tone page.
 		res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		res.end(readFileSync(join(here, "fake-meet", "index.html")));
