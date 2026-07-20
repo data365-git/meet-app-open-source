@@ -3,6 +3,21 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ⏩ NEXT SESSION — START HERE (written 2026-07-19 ~17:40, before a /clear)
+
+🎯 **GOAL unchanged:** production-ready for the owner's IT team. #1 = a meeting must never fail to record, and the recording must contain the OTHER participants' voices.
+
+**✅ #1 IS MET.** He recorded a real Google Meet today and confirmed: *"mijoz ovozi yozildi"*. It files under **Meetings**. Machine proof also green (`autoresearch/meet-audio-proof-260719-1900/log.md`).
+
+**⚠️ THE ONE OPERATING RULE HE MUST KEEP:** start recording with the **keyboard shortcut** (Ctrl+Shift+9), NOT the extension icon. On his Chrome the icon/popup path does not grant `activeTab` for `tabCapture` → no client audio. Measured twice.
+
+**▶ FIRST TASK NEXT SESSION (his instruction):** build the 2-step in-page flow and deploy; if it fails on his machine, move to the Electron desktop app. Ready-to-execute spec: **`docs/plans/2026-07-20-two-step-inpage-recording-SPEC.md`** (it already contains the measurement that unblocks it — do not re-measure).
+
+**Then:** Deploy B (waves 1–2.5 are committed but NOT deployed — see the Deploy-B checklist below, incl. setting `NEXT_PUBLIC_USD_TO_UZS` on prod and re-measuring transcript drift on `j1q9mjg8kewr2en`, baseline max 113.5s → target ≤15s).
+
+**State of the tree:** everything is committed and pushed to `qa-fixes` (`87f1875`). Extension in his Chrome = **v0.4.5** (a probe build); last product build = 0.4.1. The temporary `probeMeetAudio()` in `content/meet-detect.ts` must be removed once the real path ships.
+
+---
 ## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND IN PROGRESS, **LATEST — READ THIS ONE**
 
 🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
