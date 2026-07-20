@@ -93,7 +93,7 @@ The systematic backward drift is GONE (−49.5s → −2.7s): that was the linea
 **⛔ OWNER TODO (~10 min, the only thing no machine can do):** data365.duckdns.org/dashboard/extension → download the zip → `chrome://extensions` → **remove the old data365 Recorder** → Load unpacked the new folder → it must read **0.5.0**. Then open a Meet with one other person, press **Record now** in the card at the top of the page, pick **Entire Screen**, talk for 2 minutes, Stop → the recording must appear under **Meetings** and their voice must be audible. If the card does not appear, `Ctrl+Shift+9` still works — say which one you used.
 
 ---
-## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND IN PROGRESS, **LATEST — READ THIS ONE**
+## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND (superseded by session o above; kept for its detail, NOT the current picture)
 
 🎯 **GOAL:** production-ready for the owner's IT team. #1 = **a meeting must NEVER fail to record, and the recording must contain the OTHER participants' voices.**
 
