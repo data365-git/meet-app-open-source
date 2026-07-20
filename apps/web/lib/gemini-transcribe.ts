@@ -93,6 +93,25 @@ function parseTimestampToSeconds(raw: string): number | null {
 		return h * 3600 + min * 60 + s + ms / 1000;
 	}
 
+	// DOT-SEPARATED form `HH:MM.SS.mmm` — Gemini emits this occasionally, e.g.
+	// `00:00.000 --> 00:00.07.500` followed by `00:00.14.500`. Read as a
+	// sequence it is unambiguous: 7.5s then 14.5s, i.e. hours:minutes.seconds.ms
+	// with dots where the last two colons belong. It matters more than it looks:
+	// without this branch the TS pattern matched only the `00:00.07` prefix, so
+	// every cue in the chunk collapsed to ~0s. That made the chunk look
+	// "under-covered", which triggered a full RETRY of a paid transcription
+	// (twice, measured on prod 2026-07-20), and it left the chunk with too few
+	// parsable cues for the drift rescale — so those minutes kept the old
+	// cue drift while every other chunk was corrected.
+	const dotted = trimmed.match(/^(\d{1,2}):(\d{1,2})\.(\d{1,2})\.(\d{1,3})$/);
+	if (dotted) {
+		const h = parseInt(dotted[1] ?? "0", 10);
+		const min = parseInt(dotted[2] ?? "0", 10);
+		const s = parseInt(dotted[3] ?? "0", 10);
+		const ms = parseInt((dotted[4] ?? "0").padEnd(3, "0"), 10);
+		return h * 3600 + min * 60 + s + ms / 1000;
+	}
+
 	// Standard form: optional HH: then MM:SS with optional dot/comma ms
 	const m = trimmed.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$/);
 	if (!m) return null;
@@ -129,8 +148,12 @@ function stripCueSettings(text: string): string {
 // seconds group; otherwise the 2-digit-seconds group greedily eats the first
 // two digits of a 3-digit ms group (e.g. `00:07:540` -> matches only `00:07:54`,
 // leaving a stray `0` that breaks the `--> ` detection and drops the cue text).
+// The dot-separated `HH:MM.SS.mmm` alternative must come FIRST for the same
+// greedy reason as the colon-ms one: otherwise `\\d{1,2}:\\d{1,2}` plus the
+// `[.,]\\d{1,3}` tail matches only `00:00.07` of `00:00.07.500` and the cue is
+// mis-timed to 0.07s instead of 7.5s.
 const TS =
-	"\\d{1,2}:\\d{1,2}(?::\\d{3}\\b|:\\d{1,2})?(?:[.,]\\d{1,3})?";
+	"\\d{1,2}:\\d{1,2}\\.\\d{1,2}\\.\\d{1,3}\\b|\\d{1,2}:\\d{1,2}(?::\\d{3}\\b|:\\d{1,2})?(?:[.,]\\d{1,3})?";
 
 // Tolerance (seconds) for cue starts that legitimately sit at/just past the
 // reported audio duration. Cues starting beyond duration + this are treated as

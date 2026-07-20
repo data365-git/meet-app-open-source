@@ -1033,6 +1033,16 @@ export async function transcribeAudioChunks(
 				console.log(
 					`[transcribe] chunk@${chunk.startSec}s cue-rescale x${rescaled.factor.toFixed(3)} (speech span ${speechSpanSec.toFixed(0)}s)`,
 				);
+			} else {
+				// Log the SKIP too. Silence here cost a real investigation on
+				// 2026-07-20: a drift re-measure showed two bad samples, and the only
+				// way to find out that their chunk had been skipped was to count the
+				// "applied" lines (7) against the extracted chunks (9) and infer the
+				// gap. A skipped chunk keeps the full drift, so it is exactly the
+				// thing worth seeing.
+				console.log(
+					`[transcribe] chunk@${chunk.startSec}s cue-rescale SKIPPED reason=${rescaled.reason} factor=${rescaled.factor.toFixed(3)} (speech span ${speechSpanSec.toFixed(0)}s)`,
+				);
 			}
 			result = { vtt: rescaled.vtt, offsetSec: chunk.startSec };
 		} catch (error) {

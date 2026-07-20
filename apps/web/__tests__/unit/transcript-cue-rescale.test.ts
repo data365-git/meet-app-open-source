@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rescaleChunkVtt } from "@/lib/gemini-transcribe";
+import { normalizeToWebVtt, rescaleChunkVtt } from "@/lib/gemini-transcribe";
 import { computeSilenceAnchoredCuts } from "@/lib/audio-extract";
 
 // Regression cover for the within-chunk transcript drift measured on production
@@ -182,5 +182,69 @@ describe("computeSilenceAnchoredCuts speechEndSec", () => {
 			360,
 		);
 		expect(specs[specs.length - 1]?.speechEndSec).toBeUndefined();
+	});
+});
+
+// ── Gemini's dot-separated timestamps (measured on prod 2026-07-20) ──────────
+//
+// One chunk of a 53-minute meeting came back as
+//   00:00.000 --> 00:00.07.500
+//   00:00.07.500 --> 00:00.14.500
+// Read as a sequence that is plainly 0s, 7.5s, 14.5s — but the old pattern
+// matched only the `00:00.07` prefix, so every cue collapsed to ~0.07s. The
+// damage was not cosmetic: the chunk then looked "under-covered", which RETRIED
+// a paid transcription twice, and it left too few parsable cues for the drift
+// rescale, so those minutes kept the very drift the rescale exists to remove
+// (the two worst residual samples, -18.7s and -66.7s, sat in exactly that
+// chunk).
+describe("normalizeToWebVtt — Gemini dot-separated timestamps", () => {
+	it("reads HH:MM.SS.mmm as real seconds instead of collapsing the chunk to ~0s", () => {
+		const raw = [
+			"WEBVTT",
+			"",
+			"00:00.000 --> 00:00.07.500",
+			"<v Nazirjon>Birinchi gap.</v>",
+			"",
+			"00:00.07.500 --> 00:00.14.500",
+			"<v Nazirjon>Ikkinchi gap.</v>",
+			"",
+			"00:00.14.500 --> 00:00.21.000",
+			"<v Nazirjon>Uchinchi gap.</v>",
+			"",
+		].join("\n");
+
+		const out = normalizeToWebVtt(raw, 300);
+		const starts = startsOf(out);
+
+		expect(starts).toEqual([
+			"00:00:00.000",
+			"00:00:07.500",
+			"00:00:14.500",
+		]);
+		// And the chunk now spans real time, so the coverage check cannot mistake
+		// it for an under-covered chunk and pay for a retry.
+		expect(out).toContain("00:00:21.000");
+	});
+
+	it("still rescales a chunk written in that shape", () => {
+		const raw = [
+			"WEBVTT",
+			"",
+			"00:00.000 --> 00:01.00.000",
+			"bir",
+			"",
+			"00:01.00.000 --> 00:02.00.000",
+			"ikki",
+			"",
+			"00:02.00.000 --> 00:04.00.000",
+			"uch",
+			"",
+		].join("\n");
+
+		const normalized = normalizeToWebVtt(raw, 360);
+		const result = rescaleChunkVtt(normalized, 360);
+
+		expect(result.applied).toBe(true);
+		expect(result.factor).toBeCloseTo(1.5, 1);
 	});
 });
