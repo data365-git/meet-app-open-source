@@ -42,6 +42,7 @@ import {
 	extractSpeakerLabels,
 	mergeChunkedWebVtt,
 	rescaleChunkVtt,
+	setRescaleAnchorProbe,
 	transcribeWithGemini,
 } from "@/lib/gemini-transcribe";
 import { patchVideoMetadata } from "@/lib/video-metadata";
@@ -1028,7 +1029,16 @@ export async function transcribeAudioChunks(
 				chunk.speechEndSec != null
 					? chunk.speechEndSec - chunk.startSec
 					: (chunk.durationSec ?? 0);
+			// Diagnostic: record what a distribution-based anchor would have seen
+			// for THIS chunk (see the probe comment in rescaleChunkVtt). Scoped to
+			// the call so concurrent chunks cannot mix their numbers up.
+			setRescaleAnchorProbe((stats) => {
+				console.log(
+					`[transcribe] chunk@${chunk.startSec}s anchor-probe cues=${stats.cueCount} last=${stats.lastEnd.toFixed(1)} 2nd=${stats.secondLast.toFixed(1)} p90=${stats.p90.toFixed(1)} span=${stats.speechSpanSec.toFixed(1)} gapBeforeLast=${stats.gapBeforeLast.toFixed(1)}`,
+				);
+			});
 			const rescaled = rescaleChunkVtt(vtt, speechSpanSec);
+			setRescaleAnchorProbe(undefined);
 			if (rescaled.applied) {
 				console.log(
 					`[transcribe] chunk@${chunk.startSec}s cue-rescale x${rescaled.factor.toFixed(3)} (speech span ${speechSpanSec.toFixed(0)}s)`,

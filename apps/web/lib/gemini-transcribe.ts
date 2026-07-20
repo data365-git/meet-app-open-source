@@ -377,6 +377,23 @@ export function collapseRepeatedVttCues(vtt: string): string {
 const RESCALE_MIN_CUES = 3;
 // Below this the correction is noise; above it the chunk is mostly silence or
 // the model gave up early, and stretching would amplify garbage.
+/** Set by the transcribe workflow so the anchor's inputs reach the server log
+ * without this module importing a logger. Diagnostic only — see the call site. */
+export type RescaleAnchorProbe = (stats: {
+	cueCount: number;
+	lastEnd: number;
+	secondLast: number;
+	p90: number;
+	speechSpanSec: number;
+	gapBeforeLast: number;
+}) => void;
+
+let rescaleAnchorProbe: RescaleAnchorProbe | undefined;
+
+export function setRescaleAnchorProbe(probe: RescaleAnchorProbe | undefined) {
+	rescaleAnchorProbe = probe;
+}
+
 const RESCALE_MIN_FACTOR = 1.05;
 const RESCALE_MAX_FACTOR = 2.5;
 
@@ -406,17 +423,17 @@ export function rescaleChunkVtt(
 	const timingLine = new RegExp(`(${TS})\\s*-->\\s*(${TS})`);
 	const blocks = vtt.split(/\r?\n\r?\n/);
 
-	let lastEnd = 0;
-	let cueCount = 0;
+	const ends: number[] = [];
 	for (const block of blocks) {
 		const line = block.split(/\r?\n/).find((l) => l.includes("-->"));
 		const m = line?.match(timingLine);
 		if (!m) continue;
 		const end = parseTimestampToSeconds(m[2] ?? "");
 		if (end == null) continue;
-		cueCount++;
-		if (end > lastEnd) lastEnd = end;
+		ends.push(end);
 	}
+	const cueCount = ends.length;
+	const lastEnd = ends.length > 0 ? Math.max(...ends) : 0;
 
 	if (cueCount < RESCALE_MIN_CUES) {
 		return { vtt, factor: 1, applied: false, reason: "too-few-cues" };
@@ -424,6 +441,27 @@ export function rescaleChunkVtt(
 	if (lastEnd <= 0) {
 		return { vtt, factor: 1, applied: false, reason: "no-end" };
 	}
+
+	// DIAGNOSTIC ONLY — this anchors on max(end), and on 2026-07-20 that let ONE
+	// stray trailing cue report "already the right length" for a chunk whose real
+	// cues stopped 51s short, so the rescale skipped the worst-drifting chunk in a
+	// 53-minute recording (see docs/STATE.md). The obvious repair — ignore a lone
+	// final cue after a long gap — turned 5 existing tests red, because sparse but
+	// GENUINE speech looks identical. So the behaviour is deliberately unchanged
+	// until there is data from more than one chunk: this records what a
+	// distribution-based anchor would have seen, so the next transcription of any
+	// real meeting produces that evidence for free.
+	const sortedEnds = [...ends].sort((a, b) => a - b);
+	const p90 = sortedEnds[Math.max(0, Math.ceil(sortedEnds.length * 0.9) - 1)] ?? 0;
+	const secondLast = sortedEnds[sortedEnds.length - 2] ?? 0;
+	rescaleAnchorProbe?.({
+		cueCount,
+		lastEnd,
+		secondLast,
+		p90,
+		speechSpanSec,
+		gapBeforeLast: lastEnd - secondLast,
+	});
 
 	const factor = speechSpanSec / lastEnd;
 	if (factor < RESCALE_MIN_FACTOR || factor > RESCALE_MAX_FACTOR) {
