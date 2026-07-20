@@ -272,6 +272,13 @@ export const ShareVideo = forwardRef<
 		const effectiveAiQuotaWaiting =
 			aiStatusQuery.data?.aiQuotaWaiting ??
 			data.metadata?.aiQuotaWaiting === true;
+		// Read from the server prop. ERROR is terminal, so this is correct on any
+		// load; a failure that lands while the page is already open shows the
+		// generic message until the next navigation (the /api/video/ai poll has
+		// three response shapes and is 401 for public viewers — not worth
+		// threading the code through for that window).
+		const effectiveTranscriptionErrorCode =
+			data.metadata?.transcriptionError?.code ?? null;
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
@@ -902,6 +909,7 @@ export const ShareVideo = forwardRef<
 											aiProcessingStep={effectiveAiProcessingStep}
 											aiMode={effectiveAiMode}
 											aiQuotaWaiting={effectiveAiQuotaWaiting}
+											transcriptionErrorCode={effectiveTranscriptionErrorCode}
 											aiIncomplete={aiIncomplete}
 											duration={data.duration}
 											transcriptionChunksCompleted={

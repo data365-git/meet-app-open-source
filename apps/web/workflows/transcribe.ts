@@ -23,6 +23,8 @@ import {
 	AiQuotaWaitError,
 	isAiQuotaWaitError,
 	isQuotaLikeAiError,
+	isTranscriptionQuotaFailureError,
+	TranscriptionQuotaFailureError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withDeadline } from "@/lib/deadline";
@@ -186,7 +188,14 @@ export async function transcribeVideoWorkflow(
 		if (isAiQuotaWaitError(error) && videoData.aiSpeedMode === "cheap") {
 			await markQuotaWaiting(videoId);
 		} else {
-			await markError(videoId);
+			// QUOTA only when the failure was TAGGED as such at its source. No
+			// loose message sniffing here: this catch also sees fs/storage errors
+			// (e.g. "EDQUOT: disk quota exceeded") that would match a text regex
+			// and get auto-retried forever.
+			await markError(videoId, {
+				code: isTranscriptionQuotaFailureError(error) ? "QUOTA" : "FAILED",
+				message: error instanceof Error ? error.message : String(error),
+			});
 		}
 		await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
 		throw error;
@@ -483,6 +492,10 @@ async function validateVideo(
 				aiMode: aiSpeedMode,
 				aiJobStartedAt: metadata.aiJobStartedAt ?? new Date().toISOString(),
 				aiQuotaWaiting: false,
+				// A new attempt owns its own outcome: carrying the previous run's
+				// QUOTA reason would let the recovery cron re-kick a video that has
+				// since died for a different, permanent reason.
+				transcriptionError: undefined,
 				processingStartedAt: new Date().toISOString(),
 				aiProcessingStep: "transcribe",
 			} as VideoMetadata,
@@ -517,8 +530,23 @@ async function markNoAudio(videoId: string): Promise<void> {
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function markError(videoId: string): Promise<void> {
+async function markError(
+	videoId: string,
+	reason: { code: "QUOTA" | "FAILED"; message: string },
+): Promise<void> {
 	"use step";
+
+	// patchVideoMetadata locks the row (SELECT ... FOR UPDATE): poll-batch-jobs
+	// patches the same metadata concurrently in cheap mode, and an unlocked
+	// read-modify-write here would clobber it.
+	await patchVideoMetadata(videoId, (current) => ({
+		...current,
+		transcriptionError: {
+			code: reason.code,
+			message: reason.message.slice(0, 500),
+			at: new Date().toISOString(),
+		},
+	}));
 
 	await db()
 		.update(videos)
@@ -946,12 +974,24 @@ export async function transcribeAudioChunks(
 			// rethrow so the workflow parks in PROCESSING + aiQuotaWaiting.
 			if (context.aiSpeedMode === "cheap" && isAiQuotaWaitError(error)) {
 				await submitCheapChunkBatch(chunk, context.videoId, []);
+				throw error;
+			}
+			// Fast mode, single chunk: this path never reaches the per-chunk catch
+			// or the all-failed throw below, so it must tag the quota case itself —
+			// otherwise short videos (the common case) lose their reason.
+			if (isQuotaLikeAiError(error)) {
+				throw new TranscriptionQuotaFailureError(
+					`Transcription quota/credits exhausted for ${context.videoId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 			throw error;
 		}
 	}
 
 	let failedChunkCount = 0;
+	// Subset of failedChunkCount whose cause was quota/credits. When it equals
+	// failedChunkCount on a total failure, the job died for money, not content.
+	let quotaFailedChunkCount = 0;
 	let completedCount = 0;
 	let reusedChunkCount = 0;
 	const completedResults = new Array<{ vtt: string; offsetSec: number } | undefined>(
@@ -1070,6 +1110,7 @@ export async function transcribeAudioChunks(
 			// the ENTIRE video ERROR and dropped every successful chunk (root cause of
 			// long-video AI failures). Now: log, keep a gap at this offset, and continue.
 			failedChunkCount++;
+			if (isQuotaLikeAiError(error)) quotaFailedChunkCount++;
 			console.error(
 				`[transcribe] Chunk at ${chunk.startSec}s FAILED for ${context.videoId} after retries; continuing with a gap:`,
 				error,
@@ -1129,6 +1170,14 @@ export async function transcribeAudioChunks(
 	// Only fail the whole job if EVERY chunk failed (nothing usable to save).
 	// Reused chunks count as usable, so a partial seed alone keeps the job alive.
 	if (failedChunkCount === audio.chunks.length) {
+		// Every chunk died for quota/credits => the account is out of money, not
+		// the video broken. Tag it so markError records a QUOTA reason and the
+		// recovery cron can re-run this video once credits return.
+		if (quotaFailedChunkCount === failedChunkCount) {
+			throw new TranscriptionQuotaFailureError(
+				`All ${failedChunkCount} transcription chunks failed for ${context.videoId}: AI quota/credits exhausted`,
+			);
+		}
 		throw new Error(
 			`All ${failedChunkCount} transcription chunks failed for ${context.videoId}`,
 		);
@@ -1737,6 +1786,11 @@ async function saveTranscription(
 	delete (md as any).transcriptionChunksCompleted;
 	delete (md as any).transcriptionChunksTotal;
 	delete md.aiQuotaWaiting;
+	// Success ends the quota episode: drop the reason AND the retry budget, so a
+	// future outage starts from a full budget instead of an exhausted counter.
+	delete md.transcriptionError;
+	delete md.quotaRetryAttempts;
+	delete md.quotaRetryNextAt;
 	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
 	// analysis does not inherit this completed job's timestamp and immediately
 	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.

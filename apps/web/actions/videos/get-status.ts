@@ -39,6 +39,9 @@ export interface VideoStatusResult {
 	chapters: { title: string; start: number }[] | null;
 	aiSummary: AiSummary | null;
 	error?: string;
+	/** Why transcription failed, so the UI can tell "the account is out of
+	 * credits" apart from "this recording could not be transcribed". */
+	transcriptionErrorCode?: "QUOTA" | "FAILED";
 }
 
 const getAiStatusData = (metadata: VideoMetadata) => {
@@ -132,6 +135,7 @@ export async function getVideoStatus(
 			name: video.name,
 			...aiStatusData,
 			error: "Transcription failed",
+			transcriptionErrorCode: metadata.transcriptionError?.code,
 		};
 	}
 

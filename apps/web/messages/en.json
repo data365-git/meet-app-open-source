@@ -550,6 +550,8 @@
     "aiNoticeMedium": "Longer video: AI analysis may take extra time and budget. It only starts after you click.",
     "aiAnalysisFailed": "AI analysis failed.",
     "aiTranscriptionFailed": "Transcription failed.",
+    "aiTranscriptionQuotaFailed": "Your recording is safe — nothing was lost. The transcript could not be made because the AI account is out of credits. We retry automatically once it is topped up.",
+    "aiTranscriptionQuotaFailedPublic": "The recording is safe. The transcript could not be made for a technical reason — we retry automatically.",
     "aiGenerationError": "AI generation error.",
     "aiStarting": "Starting…",
     "aiRetry": "Retry",

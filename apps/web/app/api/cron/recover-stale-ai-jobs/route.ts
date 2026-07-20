@@ -15,7 +15,9 @@ import {
 	hasPendingBatchJobs,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
+	shouldRetryQuotaBlocked,
 	withIncrementedAutoRecoverAttempts,
+	withQuotaRetryScheduled,
 } from "./stale-job-helpers";
 
 export const dynamic = "force-dynamic";
@@ -95,6 +97,29 @@ export async function GET(request: Request) {
 			),
 		);
 
+	// Videos that died because the AI account ran out of credits. Deliberately a
+	// SEPARATE query from the PROCESSING one above: these are terminal-ERROR rows
+	// with no stale timestamp, so the 4h paid flip, the Batch-collector skip and
+	// the "dead after 2 auto-retries" ops alert must NOT apply to them.
+	// LIMIT 3 because transcribeVideo detaches via after() — an unbounded tick
+	// would launch every blocked video's ffmpeg/S3 work concurrently in one box.
+	const quotaBlockedCandidates: StaleTranscriptionCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
+		.from(videos)
+		.where(
+			and(
+				eq(videos.transcriptionStatus, "ERROR"),
+				isNull(videos.deletedAt),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.transcriptionError.code')) = 'QUOTA'`,
+			),
+		)
+		.limit(3);
+
 	const aiGenerationCandidates: StaleAiCandidate[] = await db()
 		.select({
 			id: videos.id,
@@ -137,6 +162,7 @@ export async function GET(request: Request) {
 	let gaveUp = 0;
 	let flippedToPaid = 0;
 	let skippedForBatch = 0;
+	let quotaRetried = 0;
 	let refinementReset = 0;
 
 	for (const candidate of transcriptionCandidates) {
@@ -171,7 +197,20 @@ export async function GET(request: Request) {
 			} else {
 				await db()
 					.update(videos)
-					.set({ transcriptionStatus: "ERROR" })
+					.set({
+						transcriptionStatus: "ERROR",
+						// Stamp the reason explicitly. A bare status write would leave a
+						// stale QUOTA code in place, and the quota query above would then
+						// resurrect the very video we just declared dead.
+						metadata: {
+							...metadata,
+							transcriptionError: {
+								code: "FAILED",
+								message: "Dead after 2 auto-retries",
+								at: new Date().toISOString(),
+							},
+						} as VideoMetadata,
+					})
 					.where(eq(videos.id, candidate.id));
 				await sendOpsAlert(
 					`AI job dead after 2 auto-retries: ${candidate.id} (${candidate.name})`,
@@ -181,6 +220,31 @@ export async function GET(request: Request) {
 		} catch (error) {
 			console.error(
 				`[recover-stale-ai-jobs] Failed to recover transcription for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
+
+	// Credits-depleted videos: re-run them once the backoff deadline passes. This
+	// is what removes the operator's manual `UPDATE videos SET
+	// transcriptionStatus = NULL` from the 2026-07-20 incident.
+	for (const candidate of quotaBlockedCandidates) {
+		const metadata = candidate.metadata ?? {};
+		if (!shouldRetryQuotaBlocked(metadata, now)) continue;
+		try {
+			const nextMetadata: VideoMetadata = {
+				...withQuotaRetryScheduled(metadata, now),
+				transcriptionError: undefined,
+			};
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: null, metadata: nextMetadata })
+				.where(eq(videos.id, candidate.id));
+			await transcribeVideo(candidate.id, candidate.ownerId, true);
+			quotaRetried++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to retry quota-blocked video ${candidate.id}:`,
 				error,
 			);
 		}
@@ -283,6 +347,7 @@ export async function GET(request: Request) {
 		gaveUp,
 		flippedToPaid,
 		skippedForBatch,
+		quotaRetried,
 		refinementReset,
 	});
 }

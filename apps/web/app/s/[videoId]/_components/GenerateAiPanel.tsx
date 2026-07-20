@@ -10,6 +10,7 @@ import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Clock3, MoreVertical, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { transcriptionErrorMessageKey } from "./transcription-error-message";
 import { useRef, useState } from "react";
 
 // Weighted stage shares for the overall progress bar (owner design contract:
@@ -52,6 +53,9 @@ interface GenerateAiPanelProps {
 	aiProcessingStep?: AiProcessingStep | null;
 	aiMode?: AiSpeedMode | null;
 	aiQuotaWaiting?: boolean;
+	/** Why transcription failed. QUOTA = the AI account ran out of credits —
+	 * the recording is safe and the recovery cron will re-run it. */
+	transcriptionErrorCode?: "QUOTA" | "FAILED" | null;
 	duration?: number | null;
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
@@ -113,6 +117,7 @@ export function GenerateAiPanel({
 	aiProcessingStep,
 	aiMode,
 	aiQuotaWaiting = false,
+	transcriptionErrorCode = null,
 	duration,
 	aiIncomplete = false,
 	transcriptionChunksCompleted,
@@ -600,28 +605,46 @@ export function GenerateAiPanel({
 	}
 
 	// ── Error state ───────────────────────────────────────────────────────────
-	if (hasError && canGenerate) {
+	// The MESSAGE is for everyone: before this, a viewer saw the spinner simply
+	// vanish with no explanation. The RETRY BUTTON stays owner-only — it spends
+	// real Gemini money.
+	if (hasError) {
+		const messageKey = transcriptionErrorMessageKey({
+			transcriptionStatus,
+			transcriptionErrorCode,
+			canGenerate,
+		});
+		const quotaBlocked = messageKey.startsWith("aiTranscriptionQuotaFailed");
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-red-6 bg-red-3 px-4 py-4">
 				<p className="text-sm text-red-11">
-					{tShare("aiAnalysisFailed")}{" "}
-					{transcriptionStatus === "ERROR"
-						? tShare("aiTranscriptionFailed")
-						: tShare("aiGenerationError")}
+					{/* A credits failure is not an "analysis failed" event — the
+					    recording is intact, so it gets its own calmer sentence
+					    instead of being prefixed with the generic alarm. */}
+					{quotaBlocked ? (
+						tShare(messageKey)
+					) : (
+						<>
+							{tShare("aiAnalysisFailed")} {tShare(messageKey)}
+						</>
+					)}
 				</p>
-				{error && <p className="text-xs text-red-10">{error}</p>}
-				{confirm ? (
-					modeConfirm
-				) : (
-					<button
-						type="button"
-						disabled={loading}
-						onClick={() => setConfirm({ reprocess: false })}
-						className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-					>
-						{loading ? tShare("aiStarting") : tShare("aiRetry")}
-					</button>
+				{canGenerate && error && (
+					<p className="text-xs text-red-10">{error}</p>
 				)}
+				{canGenerate &&
+					(confirm ? (
+						modeConfirm
+					) : (
+						<button
+							type="button"
+							disabled={loading}
+							onClick={() => setConfirm({ reprocess: false })}
+							className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+						>
+							{loading ? tShare("aiStarting") : tShare("aiRetry")}
+						</button>
+					))}
 			</div>
 		);
 	}

@@ -66,6 +66,23 @@ export interface VideoMetadata {
 	aiGenerationRequestedAt?: string;
 	aiGenerationRequestedBy?: string;
 	aiGenerationError?: string;
+	/**
+	 * Why the last transcription attempt died. `QUOTA` = the AI account is out of
+	 * credits / rate-limited — transient, auto-retried by recover-stale-ai-jobs.
+	 * `FAILED` = a genuine transcription failure — terminal, manual retry only.
+	 * Cleared on entry (validateVideo) and on success (saveTranscription).
+	 */
+	transcriptionError?: {
+		code: "QUOTA" | "FAILED";
+		message: string;
+		at: string;
+	};
+	/** Bounded counter for QUOTA re-kicks. Distinct from autoRecoverAttempts,
+	 * which counts stale-PROCESSING recoveries. Reset on success. */
+	quotaRetryAttempts?: number;
+	/** ISO time before which the quota re-kick must not run again (backoff).
+	 * Without it a flat attempt cap burns out hours before credits return. */
+	quotaRetryNextAt?: string;
 	/** ISO timestamp set when transcription starts; used by recover-stale-ai-jobs to detect staleness. */
 	processingStartedAt?: string;
 	/** ISO timestamp set when AI generation starts; used by recover-stale-ai-jobs to detect staleness. */
