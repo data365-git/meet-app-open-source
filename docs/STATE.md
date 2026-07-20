@@ -16,6 +16,21 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 How it was found: the run that would have verified the drift anchor fix failed with `All 9 transcription chunks failed … HTTP 429`. The honest part: **four re-transcriptions of a 53-minute video in one afternoon (mine, verifying the drift fix) contributed to draining it** — this month's AI spend moved 59 760 → 68 400 so'm during the session. A verification loop that re-runs a paid pipeline needs a budget check before the first run, not after the fourth. See also the free-tier finding below: with the free tier broken on both paths, every one of those runs billed the paid account.
 
 ---
+## ❓ OPEN DECISION — TRANSCRIPT TIMING: pay for Scribe, or live with ~10s? (asked 2026-07-20, NOT yet answered)
+
+The owner asked two things at the end of the session; here is what was established, so the question can be re-asked in one line instead of re-researched.
+
+**Where free (Gemini-only) timing stands today, measured:** 52-minute meeting → **mean ~10s, max 28.6s**, systematic bias gone (−4.3s). For scale, the 2026-07-08 investigation on a 2-hour video reached **~11s mean** by a completely different free method (pause-reinsertion retime) and concluded transcript-only methods bottom out there, because Gemini's output carries almost no timing structure. ⚠️ The two numbers come from **different videos and different measuring rigs** — treat it as "same order of magnitude", not a like-for-like comparison.
+
+**The paid alternative already EXISTS in the product and is wired end-to-end:** the "Timestampni aniqlashtirish" button (`apps/web/actions/video/refine-timestamps.ts`, `lib/eleven-scribe.ts`, strings at `messages/uz.json:183-190`). It keeps Gemini's TEXT and replaces only the TIMINGS via ElevenLabs Scribe v2 — measured at **~3s** on the 2h video in July. Per-video and opt-in, so it costs only for recordings whose timing actually matters: **~$0.22 per audio hour** (a 52-min meeting ≈ $0.19).
+
+**But it cannot be used right now: `ELEVENLABS_API_KEY` is NOT set on the prod container** (verified by `printenv` — empty). The button therefore answers "Scribe hali serverga ulanmagan". **To enable: owner supplies an ElevenLabs API key → set it in Coolify → redeploy.**
+
+**The decision:** (a) accept ~10s free, (b) supply the Scribe key and refine per-video at ~$0.22/hour, or (c) spend more engineering on the free path first — a Fable review of exactly that question ("is this the free ceiling?") was commissioned at the end of the session; **if its verdict is not in the file `docs/plans/2026-07-20-free-timing-ceiling-review.md`, it did not finish and should be re-run.**
+
+**State of the tree at the clear (2026-07-20 ~15:00):** everything this session produced is committed and pushed to `qa-fixes` (31 commits, HEAD `acc6c5c`+). `git status` shows **100 untracked files and 1 modified** — none of them are this session's work: they are long-standing leftovers (old `CODEX_TO_CLAUDE_*.md` handoffs, `docs/qa/**` reports, scratchpad dirs) that predate it. Do not "tidy" them blindly; each is someone's old evidence.
+
+---
 ## ⏩ NEXT SESSION — START HERE (written 2026-07-20, session o)
 
 🎯 **GOAL unchanged:** production-ready for the owner's IT team. #1 = a meeting must never fail to record, and the recording must contain the OTHER participants' voices.
