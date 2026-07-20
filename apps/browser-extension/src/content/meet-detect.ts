@@ -622,11 +622,14 @@ async function probeMeetAudio(
 		for (const s of streams) ctx.createMediaStreamSource(s).connect(analyser);
 		const buf = new Float32Array(analyser.fftSize);
 
-		const WINDOW_MS = 6000;
+		// 60s, not 6s: the owner needs time to join from a phone and speak, and a
+		// window too short produces a 0% reading that looks like a hard NO but is
+		// really "nobody spoke yet" — a false dead end (nearly called it one).
+		const WINDOW_MS = 60_000;
 		let peak = 0;
 		const started = Date.now();
 		report(
-			`O'LCHOV: ${streams.length} ovozli oqim topildi. ENDI 6 SONIYA GAPIRING (yoki suhbatdosh gapirsin)…`,
+			`O'LCHOV: ${streams.length} ovozli oqim topildi. 60 SONIYA — telefondan kirib gapiring…`,
 		);
 		while (Date.now() - started < WINDOW_MS) {
 			analyser.getFloatTimeDomainData(buf);
