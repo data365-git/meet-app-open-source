@@ -248,3 +248,55 @@ describe("normalizeToWebVtt — Gemini dot-separated timestamps", () => {
 		expect(result.factor).toBeCloseTo(1.5, 1);
 	});
 });
+
+// ── A stray trailing cue must not disable the rescale (prod, 2026-07-20) ─────
+//
+// max(end) is the anchor, so ONE late cue can report "already the right length"
+// for a chunk that is actually compressed. Measured twice on the same 53-minute
+// recording: once it skipped the chunk outright (-65.9s residual drift), once it
+// merely inflated the anchor (-28.6s). The discriminator has to be RELATIVE to
+// the chunk's own cue density — an absolute gap threshold cannot tell a stray
+// from genuinely sparse speech, and an earlier attempt at one turned five of the
+// tests above red. Calibrated against nine real chunks: final gaps of 2.5-6.0s
+// against ~6s spacing, versus 16.5s on the chunk that misled the anchor.
+describe("rescaleChunkVtt — stray trailing cue", () => {
+	const dense = (): Array<[string, string, string]> => {
+		const rows: Array<[string, string, string]> = [];
+		for (let i = 0; i < 40; i++) {
+			const s = i * 7;
+			rows.push([
+				`00:0${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}.000`,
+				`00:0${Math.floor((s + 5) / 60)}:${String((s + 5) % 60).padStart(2, "0")}.000`,
+				`cue ${i}`,
+			]);
+		}
+		return rows;
+	};
+
+	it("anchors on the body when one cue sits far past the rest", () => {
+		// Body ends at 278s; a lone cue then claims 338s of a 360s span. Anchored
+		// on the stray, factor is 1.06 and the chunk stays compressed; anchored on
+		// the body it is ~1.29 — the difference measured as -28.6s of drift.
+		const withStray = vtt([
+			...dense(),
+			["00:05:36.000", "00:05:38.000", "stray"],
+		]);
+
+		const result = rescaleChunkVtt(withStray, 360);
+
+		expect(result.applied).toBe(true);
+		expect(result.factor).toBeGreaterThan(1.25);
+	});
+
+	it("keeps the last cue when speech simply runs to the end", () => {
+		const continuous = vtt([
+			...dense(),
+			["00:04:45.000", "00:04:50.000", "davomi"],
+		]);
+
+		const result = rescaleChunkVtt(continuous, 360);
+
+		expect(result.applied).toBe(true);
+		expect(result.factor).toBeCloseTo(360 / 290, 2);
+	});
+});

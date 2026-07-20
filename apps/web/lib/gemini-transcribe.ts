@@ -394,6 +394,12 @@ export function setRescaleAnchorProbe(probe: RescaleAnchorProbe | undefined) {
 	rescaleAnchorProbe = probe;
 }
 
+// How far past the chunk's OWN typical cue spacing a final gap must sit before
+// the last cue is treated as a stray rather than as speech. Calibrated on nine
+// real chunks (2.5-6.0s gaps against ~6s spacing) versus the one that misled the
+// anchor (16.5s). Relative on purpose: an absolute threshold cannot tell a stray
+// from genuinely sparse speech.
+const STRAY_CUE_GAP_RATIO = 3;
 const RESCALE_MIN_FACTOR = 1.05;
 const RESCALE_MAX_FACTOR = 2.5;
 
@@ -442,15 +448,6 @@ export function rescaleChunkVtt(
 		return { vtt, factor: 1, applied: false, reason: "no-end" };
 	}
 
-	// DIAGNOSTIC ONLY — this anchors on max(end), and on 2026-07-20 that let ONE
-	// stray trailing cue report "already the right length" for a chunk whose real
-	// cues stopped 51s short, so the rescale skipped the worst-drifting chunk in a
-	// 53-minute recording (see docs/STATE.md). The obvious repair — ignore a lone
-	// final cue after a long gap — turned 5 existing tests red, because sparse but
-	// GENUINE speech looks identical. So the behaviour is deliberately unchanged
-	// until there is data from more than one chunk: this records what a
-	// distribution-based anchor would have seen, so the next transcription of any
-	// real meeting produces that evidence for free.
 	const sortedEnds = [...ends].sort((a, b) => a - b);
 	const p90 = sortedEnds[Math.max(0, Math.ceil(sortedEnds.length * 0.9) - 1)] ?? 0;
 	const secondLast = sortedEnds[sortedEnds.length - 2] ?? 0;
@@ -463,7 +460,53 @@ export function rescaleChunkVtt(
 		gapBeforeLast: lastEnd - secondLast,
 	});
 
-	const factor = speechSpanSec / lastEnd;
+	// ANCHOR ON THE BODY, NOT ON A STRAY LAST CUE — measured, not guessed.
+	//
+	// The anchor is max(end), so a single trailing cue can report "already the
+	// right length" for a badly compressed chunk and make the rescale decline to
+	// run. That is not theory: it produced the two worst residual errors of a
+	// 53-minute recording (-65.9s once the chunk was skipped outright, -28.6s in a
+	// milder case where the anchor was merely inflated).
+	//
+	// The first attempt at this used an ABSOLUTE gap threshold and turned five
+	// existing tests red, because their fixtures are legitimately sparse — every
+	// cue is far from the next, so the last one always looked "isolated". The
+	// discriminator has to be RELATIVE to how densely that chunk actually speaks.
+	// Nine real chunks, logged by the probe above: gapBeforeLast was 2.5, 4.0,
+	// 5.0, 5.0, 5.0, 5.0, 5.5, 6.0 — and 16.5 for the one chunk that kept its
+	// drift. Against a typical spacing of ~6s that outlier stands out by 3x,
+	// while in an evenly-sparse fixture the ratio is ~1 and nothing fires.
+	if (ends.length >= 4) {
+		const gaps: number[] = [];
+		for (let i = 1; i < sortedEnds.length; i++) {
+			gaps.push((sortedEnds[i] ?? 0) - (sortedEnds[i - 1] ?? 0));
+		}
+		const body = gaps.slice(0, -1).sort((a, b) => a - b);
+		const medianGap = body[Math.floor(body.length / 2)] ?? 0;
+		const finalGap = gaps[gaps.length - 1] ?? 0;
+		if (
+			medianGap > 0 &&
+			finalGap > medianGap * STRAY_CUE_GAP_RATIO &&
+			secondLast > 0
+		) {
+			return rescaleWithAnchor(vtt, blocks, timingLine, speechSpanSec, secondLast);
+		}
+	}
+
+	return rescaleWithAnchor(vtt, blocks, timingLine, speechSpanSec, lastEnd);
+}
+
+/** Stretch every cue so `anchorEnd` lands on `speechSpanSec`. Split out so the
+ * stray-cue path above can supply a different anchor without duplicating the
+ * arithmetic (the repo's twin rule). */
+function rescaleWithAnchor(
+	vtt: string,
+	blocks: string[],
+	timingLine: RegExp,
+	speechSpanSec: number,
+	anchorEnd: number,
+): ChunkRescaleResult {
+	const factor = speechSpanSec / anchorEnd;
 	if (factor < RESCALE_MIN_FACTOR || factor > RESCALE_MAX_FACTOR) {
 		return { vtt, factor, applied: false, reason: "factor-out-of-range" };
 	}
