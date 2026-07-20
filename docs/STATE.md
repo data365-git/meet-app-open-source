@@ -3,19 +3,29 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ⏩ NEXT SESSION — START HERE (written 2026-07-19 ~17:40, before a /clear)
+## ⏩ NEXT SESSION — START HERE (written 2026-07-20, session o)
 
 🎯 **GOAL unchanged:** production-ready for the owner's IT team. #1 = a meeting must never fail to record, and the recording must contain the OTHER participants' voices.
 
-**✅ #1 IS MET.** He recorded a real Google Meet today and confirmed: *"mijoz ovozi yozildi"*. It files under **Meetings**. Machine proof also green (`autoresearch/meet-audio-proof-260719-1900/log.md`).
+**✅ #1 IS MET** (owner, real Meet, 2026-07-19: *"mijoz ovozi yozildi"*, filed under Meetings).
 
-**⚠️ THE ONE OPERATING RULE HE MUST KEEP:** start recording with the **keyboard shortcut** (Ctrl+Shift+9), NOT the extension icon. On his Chrome the icon/popup path does not grant `activeTab` for `tabCapture` → no client audio. Measured twice.
+**✅ THE TWO-STEP IN-PAGE FLOW IS BUILT AND MACHINE-PROVEN (2026-07-20).** Meet sahifasidagi **"Record now"** → screen picker → done. Two actions, and the remote voices no longer depend on `activeTab`/`tabCapture` at all: they are tapped from Meet's own media elements with `HTMLMediaElement.captureStream()`.
+- Code: `apps/browser-extension/src/content/inpage-recorder.ts` (new) + `content/meet-detect.ts` (wiring). Extension **v0.5.0**. The `Ctrl+Shift+9` path is untouched and still works as the fallback.
+- Proof: `e2e-audio-proof/run-proof-inpage.mjs` — VERDICT=PASS ×2, tone −16.2 dB (threshold −50), filing=meeting, duration=11s. Sibling `run-proof.mjs` (shortcut path) currently FAILS **environmentally** — its real-OS keypress needs the desktop's focus; verified by re-running it on a stashed, unmodified tree, which failed identically.
+- Two real bugs it caught, both fixed: the content script's copy-pasted meeting-id regex kept a LEADING SLASH (so `MEET_CALL_ENDED` never matched a shortcut-path recording → the meeting-ended prompt silently never fired); and `getUserMedia` hanging on Chrome's mic prompt froze the start on "Boshlanmoqda…" (mic is now best-effort, 8s deadline).
 
-**▶ FIRST TASK NEXT SESSION (his instruction):** build the 2-step in-page flow and deploy; if it fails on his machine, move to the Electron desktop app. Ready-to-execute spec: **`docs/plans/2026-07-20-two-step-inpage-recording-SPEC.md`** (it already contains the measurement that unblocks it — do not re-measure).
+**✅ INDEPENDENT REVIEW ROUND DONE (Fable, non-author) — 7 defects found, all fixed in `4cc00ca`.** Three were BLOCKERs and none were hypothetical:
+1. **Meet tab RELOAD** mid-recording left the SW stuck in "recording" forever (beforeunload's `recorder.stop()` never runs its handlers in a dying document; `tabs.onRemoved` does not fire on reload; the URL watcher only reacts to URL *changes*). Everything after the reload went unrecorded while the badge said REC and a restart was refused. → SW now finalizes on `status==="loading"` for the recording's own content tab.
+2. **Doubled/echoing audio**: start alone → picker system audio is mixed as a stand-in; the client joins → their voice is tapped AND still coming through the loopback. → system audio now has its own gain node, muted the instant a real tap attaches.
+3. **The subtle one — Meet REUSES its media elements and swaps the source.** A `MediaStreamAudioSourceNode` is bound to the track it was built from, so taps went silent while still looking connected. My first fix (prune streams with no live track) was WRONG and the harness proved it: segments 3–4 at **−90 dB, digital silence**. Real fix = compare the bound TRACK ID to the element's current live track and rebuild on drift. Re-measured: all 4 segments at a steady **−16.6 dB**. Run it with `PROOF_SWAP=1 node run-proof-inpage.mjs`.
+Also fixed: stale `arming` after declining the confirm (new sender-scoped `MEET_NUDGE_CANCEL`), watchdog warnings written into a DOM-detached card (invisible), a leaked mic stream after the 8s timeout, "Stop sharing" missed during the start window, `pickMimeType` hoisted out of THREE copies, idempotent PAUSE/RESUME acks.
+**Known debt, deliberately unpaid:** the chunk-streaming machinery is still duplicated across the three recorder paths (recorder page / offscreen / in-page). Next time one of them changes, hoist it.
 
-**Then:** Deploy B (waves 1–2.5 are committed but NOT deployed — see the Deploy-B checklist below, incl. setting `NEXT_PUBLIC_USD_TO_UZS` on prod and re-measuring transcript drift on `j1q9mjg8kewr2en`, baseline max 113.5s → target ≤15s).
+**Deployed 2026-07-20:** commit `4cc00ca` (extension v0.5.0 + all of Deploy B: waves 1–2.5) — Coolify deployment `ojy2hnhrpsp9noaxyvr2k2ow` (an earlier one, `efjlpfih2r7j5fmfofkbn0xr`, carried the pre-review code and was superseded). `NEXT_PUBLIC_USD_TO_UZS=12000` is now set on prod as a BUILD-TIME var (owner's number, 2026-07-20; it was unset and falling back to 12900).
 
-**State of the tree:** everything is committed and pushed to `qa-fixes` (`87f1875`). Extension in his Chrome = **v0.4.5** (a probe build); last product build = 0.4.1. The temporary `probeMeetAudio()` in `content/meet-detect.ts` must be removed once the real path ships.
+**Local QA of authed pages is NOT possible from the dev machine** — the prod MySQL is not reachable from outside the VPS (`connect ETIMEDOUT` on every query, measured 2026-07-20). Live QA on data365.duckdns.org is the only option; don't waste a session rediscovering this.
+
+**Still to prove after this deploy** (not yet done at the time of writing): transcript drift re-measure on `j1q9mjg8kewr2en` (baseline max 113.5s → target ≤15s, `scripts/measure-transcript-drift.mjs` inside the prod container), and the owner's own 2-person Meet run of `docs/OWNER_QA_SCRIPT.md` (now rewritten for the 2-step flow).
 
 ---
 ## ▶▶ SESSION n (2026-07-19 afternoon) — BIG FIX ROUND IN PROGRESS, **LATEST — READ THIS ONE**
