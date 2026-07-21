@@ -129,6 +129,11 @@ Read the full 416 KB archive + cross-checked each candidate against current code
 - `2463c0b` **H5** — extension `result.mp4` uploads declared `size:0`, so real bytes never reached quota accounting. `/complete` now persists the S3-verified `storedBytes` into `videoUploads` in the same txn as the raw-recorder branch. Failing-test-first, 30/30 multipart tests pass.
 - `2678cad` **SDK `/complete` guard** — developer SDK multipart complete had no part-list validation (web + extension paths both do). Added the same `isSequentialPartList` 1..N guard BEFORE the credit debit, non-empty etag, split schema. 16 new tests.
 - `51f5d2e` **HELD: free-probe quota-skip** — built but NOT shipped: mutates a shared object inside a `"use step"` (durable), unprovable across the step boundary + unverifiable during the outage. Patch + step-safe redesign in `docs/plans/2026-07-21-free-probe-skip-HELD.md`. Finish when credit returns.
+- `d15aebf` **Extension discard terminal-state fix** — when a discard raced a terminal state (`complete` share link / `error` "re-record") for the SAME already-deleted video, the popup showed a dead link / a re-record lie. Now shows a non-recoverable "discarded" state; recording-B (different videoId) left untouched. 2 fail→pass tests, recording-B adversarial test still green.
+- `ebf514b` + `f5534e5` **Extension full Uzbek pass** — recorder/meet/options + popup/sw/upload strings translated (consistent glossary), coupled test assertions updated. Blast-radius honored: START_INSTRUCTION source strings kept English because `friendlyStartError()` `.includes()`-matches them. Extension suite **134/134 green**, LF, no new typecheck errors.
+- `6936b83` **Extension v0.5.0 → 0.5.1 + repackaged zip** (both `apps/365-extension.zip` and `apps/web/public/365-extension.zip`).
+
+**⚠️ DEPLOY DECISION PENDING (owner):** all of the above is committed to `qa-fixes` (HEAD `6936b83`) but **NOT deployed** — prod still serves `4cc00ca` / extension **v0.5.0**. So downloading the zip from prod today still gives 0.5.0; the new extension work (discard-fix + Uzbek + v0.5.1) is only visible AFTER a deploy. The web security fixes (H5, SDK) likewise ship only on deploy. Deploy is owner-gated (STATE rule + outage caution). When approved: deploy web + extension together, then the owner install/QA todo below expects **v0.5.1**.
 
 **Deliberately NOT done, with reasons (do not re-chase without deciding):**
 - **HSTS max-age bump** — `next.config.mjs:132` has an explicit reasoned decision to keep it short (cert-lapse lock risk on self-hosted duckdns). Left as-is. Owner call: only ramp once cert-renewal has proven itself over several cycles.
@@ -136,12 +141,13 @@ Read the full 416 KB archive + cross-checked each candidate against current code
 - **server-env Zod leak** — grepped the compiled client bundle: NO secret/`serverEnv` leak reaches the client today. Only a structural "safe-by-convention" risk; real fix (add `import "server-only"` + split `@cap/env` exports) has blast-radius on ~15 client importers of the barrel — a deliberate task, not a quick edit.
 - **XFF/IP spoof, nonce-CSP, Biome 676-file lint** — all need either live Coolify-proxy testing (lockout risk) or huge CRLF churn; low value / high risk. Skip.
 
-**STILL OPEN & credit-free, NOT started (owner to steer):**
-- **Chunk-streaming refactor** (hoist duplicated `sendMsg`/`ondataavailable→RECORDER_CHUNK` across the 3 recorder files) — verifiable via extension tsc + 124 vitest + e2e-audio-proof (no Gemini). But it's a NO-benefit refactor that risks the #1 feature (recording); the debt was explicitly deferred "until one of them changes." Recommend NOT now.
-- **Extension terminal-state stale message** (shows "Recording saved!" for a discarded upload) — small, unit-testable UX bug.
-- **Extension i18n** (popup/recorder English while web app is uz/ru/en) + **recorder a11y gaps** — real, credit-free, medium size.
+**STILL OPEN & credit-free (owner to steer):**
+- **Recorder a11y gaps** (focus mgmt, live regions, semantic modal, reduced-motion) — real, credit-free, medium; LOW priority for an internal-team desktop tool. Recommend defer.
+- **Chunk-streaming refactor** (hoist duplicated `sendMsg`/`ondataavailable→RECORDER_CHUNK` across the 3 recorder files) — verifiable via extension tsc + 134 vitest + e2e-audio-proof (no Gemini). But it's a NO-benefit refactor that risks the #1 feature (recording); the debt was explicitly deferred "until one of them changes." Recommend NOT now.
 - **Requester "we'll contact you" screen + owner pending-requests dashboard** (three-kinds-of-person model) — needs owner product/design direction.
 - **Auto video-name templates → i18n** — owner decision; couples to `generate-ai.ts` `GENERATED_TITLE_PATTERN` (translate the generator AND the regex together or AI stops retitling).
+
+**DONE this session (were in the above list):** extension terminal-state stale message (`d15aebf`); extension i18n / Uzbek consistency across recorder+meet+options+popup+sw+upload (`ebf514b`,`f5534e5`).
 
 ---
 ---
