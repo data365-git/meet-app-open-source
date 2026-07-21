@@ -65,11 +65,31 @@ Build rule: each fix on its own file-set (mostly disjoint), each with a test tha
 - **C6 — set `TELEGRAM_ALERT_CHAT_ID`** (30s: message @userinfobot) so backup/ops failures actually alert; + disable the dead `db-backup.yml` (I'll attempt the workflow edit if the push token allows).
 - Deferred nice-to-haves: dashboard `<title>` i18n app-wide pass, recorder a11y, orphaned-creds cleanup, stale DEPLOY_SECRETS/.env housekeeping.
 
+## FABLE PLAN-REVIEW (DONE) — VERDICT: OK TO BUILD; corrections folded (all spec-level, no owner input)
+- **B1:** custom-domain fear is a NON-issue (share-page fetches are relative → same-origin; CORS never applies). `getHeaders` (helpers.ts) has 2 callers (thumbnail, comment/delete), no cross-origin caller → strict allowlist safe, and DROP `credentials:true` for the wildcard case is fine. `utils/cors.ts getCorsHeaders/getOptionsHeaders` are DEAD (delete them), but its `allowedOrigins` array is LIVE via `lib/server.ts:162 HttpApiBuilder.middlewareCors({ allowedOrigins, credentials:true })` — drop cap.so/cap.link THERE (that's the real prod change; curl-verify an Effect-API route). Hono `app/api/utils.ts:138` allows any `chrome-extension://` with credentials — accepted-risk for dev installs, WRITE IT DOWN in a comment, don't skip.
+- **C1:** complete — `ai_usage_events_org_fk` is the ONLY organizations FK (schema+migrations checked). Delete by-orgId inside the txn before the org row.
+- **A2:** 3 files — add optional `modelUsed` to `GeminiTranscribeResult` (`gemini-transcribe.ts`), and `ai-cost-guard.ts` must prefer `result.modelUsed ?? options.model` at BOTH `:300` (priceForMicros) and `:316` (recorded row).
+- **A1:** retry-transcription has ZERO callers (dead upstream route) — add the guard cheaply, don't hunt for UI.
+- **C4:** domain-info route is DEAD (zero callers) — DELETE it (simpler than wiring canView). guest-checkout priceId allowlist stays (5-line hardening).
+- **B4+C3 collision:** both edit `messages/{en,ru,uz}.json` → ONE stream. B4: render `error.stack` only when NOT production (keep `digest`). C3 surface = share-page player area.
+- **B2:** bump extension **0.5.1 → 0.5.2** so the owner's morning Meet test provably tests the rebuilt zip. (offscreen `:117` is the display stream = no prompt; the mic calls are the real hang — wrapping both is harmless.)
+- **A3:** make concrete — per-VIDEO daily total guest cap (key by videoId alone in existing `ai_chat_usage`, spoof-proof, no IP trust); chat already has org budget caps so it's cost-bounded regardless. If not clean → morning.
+
+## BUILD STREAMS (file-disjoint → parallel; each: implement + failing→passing test + targeted vitest ONLY, no `tsc -b`, no commit; I run the central gate + review + commit)
+- S1 CORS(B1): helpers.ts, cors.ts, lib/server.ts, proxy.ts, api/utils.ts(comment)
+- S2 delete-account(C1): actions/account/delete-account.ts
+- S3 mic-timeout(B2): extension recorder-page.ts, offscreen/recorder.ts
+- S4 transcription-cost(A1+A2): retry-transcription route, gemini-transcribe.ts, ai-cost-guard.ts, workflows/transcribe.ts
+- S5 guest-chat(A3): lib/ai-chat-limit.ts
+- S6 UX-i18n(B3+B4+C3): meetings/loading.tsx(new), 3 error.tsx, share player, messages/{en,ru,uz}.json
+- S7 authz+cleanup(C4+C5): delete domain-info route, guest-checkout allowlist, delete 6 orphan .sql, fix db:check-integrity ref
+
 ## PIPELINE STATUS
 - [x] Grill decisions captured
 - [x] Audit complete (both agents) → plan filled + synthesized
-- [ ] Fable plan-review  ← NEXT
-- [ ] Build (the 11 BUILD-TONIGHT items)
-- [ ] My review → Fable review-of-review
-- [ ] Deploy + live-verify (curl CORS, /api/health, extension zip)
+- [x] Fable plan-review → OK TO BUILD, corrections folded
+- [ ] Build (7 disjoint streams)  ← NEXT
+- [ ] Central gate (root typecheck + extension typecheck + all vitest) + my review
+- [ ] Fable review-of-review
+- [ ] Deploy + live-verify (curl CORS evil-origin rejected, /api/health, extension zip 0.5.2)
 - [ ] Morning report + STATE
