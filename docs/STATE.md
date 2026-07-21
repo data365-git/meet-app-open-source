@@ -3,13 +3,11 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## 🚨 PRODUCTION IS DEGRADED RIGHT NOW — GEMINI CREDITS ARE DEPLETED (2026-07-20 ~14:20)
+## ✅ GEMINI CREDIT RESTORED (2026-07-21) — the outage is OVER, AI features work again.
+The 2026-07-20 credit depletion is RESOLVED (owner topped up billing 2026-07-21). The technical findings further down (free-tier ~20/day cap, model behavior, the free-probe/quota parking) are kept as REFERENCE, not as a live incident. Do not re-raise the outage.
 
-**Every AI feature on prod is down: transcription, summaries, chapters, tasks, chat.** Not a rate limit — the API answers with `429: "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing."` A meeting recorded today will upload and play fine, and then fail to transcribe. The free key cannot cover for it: it has its own **daily cap of ~20 calls**, already spent that day — see the correction below, which proves the free tier genuinely works within that cap. **Do not read this block as "free is dead" and delete the free path.**
-
-**OWNER ACTION (only he can): top up the Gemini project's billing at https://ai.studio/projects.** He confirmed on 2026-07-20 evening: *"GEMINI KREDIT YO'Q ERTAGA OLAMIZ"* — **credit is being bought the next day (2026-07-21)**. Until then, do not chase transcription bugs: everything fails for this one reason, and a session could easily burn hours on it.
-
-**▶ OWNER'S INSTRUCTION (2026-07-20 evening): do NOT start automatically — he will say when. Tomorrow's first act is to CHECK whether credit has arrived, then wait for his word before spending any of it.**
+## 🌙 OVERNIGHT AUTONOMOUS RUN IN PROGRESS (2026-07-21 night → morning) — make it production-ready for the INTERNAL IT team
+Owner grilled the key decisions, then went to sleep authorizing an overnight build. **Live plan + all decisions: `docs/plans/2026-07-21-production-ready-internal-plan.md` — a fresh session should read THAT and resume at its PIPELINE STATUS checklist.** Pipeline (owner-specified): audit → PLAN → Fable plan-review → BUILD (3 decided small fixes + only the SAFE audit items) → my review → Fable review-of-review → DEPLOY → morning report. Deploy is authorized ONLY after the full review chain passes; anything risky or unverifiable is HELD and reported, never shipped blind. Scope = internal IT team only (requester flow SKIP, domain/email out of scope). The final "production ready" stamp still needs the owner's real 2-person Meet QA on a device — no machine can finish that, so this run will NOT claim "done".
 
 **▶ WHEN HE SAYS GO, run this measurement ladder — one re-transcription per step, in this order, keeping whichever step actually helps:**
 1. **Baseline** — re-transcribe `fm3pz7yref328m7` (53 min) as-is and run `node /tmp/measure-transcript-drift.mjs fm3pz7yref328m7 12 20`. This also verifies the already-deployed anchor fix (`13dfa48`), which has never been measured. Last known: max 28.6s, mean 10.2s.
