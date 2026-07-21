@@ -121,6 +121,29 @@ The systematic backward drift is GONE (−49.5s → −2.7s): that was the linea
 **⛔ OWNER TODO (~10 min, the only thing no machine can do):** data365.duckdns.org/dashboard/extension → download the zip → `chrome://extensions` → **remove the old data365 Recorder** → Load unpacked the new folder → it must read **0.5.0**. Then open a Meet with one other person, press **Record now** in the card at the top of the page, pick **Entire Screen**, talk for 2 minutes, Stop → the recording must appear under **Meetings** and their voice must be audible. If the card does not appear, `Ctrl+Shift+9` still works — say which one you used.
 
 ---
+## 🟢 2026-07-21 — CREDIT-FREE BACKLOG SWEEP (owner: "gemini kredit talab qilmaydigan barcha ishlar")
+
+Read the full 416 KB archive + cross-checked each candidate against current code (git is AHEAD of the old notes — several audit items were already fixed: H13 erasure cascade DONE in `delete-account.ts`, desktop delete twin now routes `permanentlyDelete`, idempotency test tracked, `shared-caps` dead route gone, C2 signup no-org membership DONE at `signup.ts:124`).
+
+**LANDED this session (branch `qa-fixes`, NOT deployed — owner approval needed to deploy):**
+- `2463c0b` **H5** — extension `result.mp4` uploads declared `size:0`, so real bytes never reached quota accounting. `/complete` now persists the S3-verified `storedBytes` into `videoUploads` in the same txn as the raw-recorder branch. Failing-test-first, 30/30 multipart tests pass.
+- `2678cad` **SDK `/complete` guard** — developer SDK multipart complete had no part-list validation (web + extension paths both do). Added the same `isSequentialPartList` 1..N guard BEFORE the credit debit, non-empty etag, split schema. 16 new tests.
+- `51f5d2e` **HELD: free-probe quota-skip** — built but NOT shipped: mutates a shared object inside a `"use step"` (durable), unprovable across the step boundary + unverifiable during the outage. Patch + step-safe redesign in `docs/plans/2026-07-21-free-probe-skip-HELD.md`. Finish when credit returns.
+
+**Deliberately NOT done, with reasons (do not re-chase without deciding):**
+- **HSTS max-age bump** — `next.config.mjs:132` has an explicit reasoned decision to keep it short (cert-lapse lock risk on self-hosted duckdns). Left as-is. Owner call: only ramp once cert-renewal has proven itself over several cycles.
+- **Settings `<title>` i18n** — the WHOLE dashboard hardcodes English titles; changing one page = a new one-off pattern. Needs an app-wide i18n-titles pass if wanted, not a patch.
+- **server-env Zod leak** — grepped the compiled client bundle: NO secret/`serverEnv` leak reaches the client today. Only a structural "safe-by-convention" risk; real fix (add `import "server-only"` + split `@cap/env` exports) has blast-radius on ~15 client importers of the barrel — a deliberate task, not a quick edit.
+- **XFF/IP spoof, nonce-CSP, Biome 676-file lint** — all need either live Coolify-proxy testing (lockout risk) or huge CRLF churn; low value / high risk. Skip.
+
+**STILL OPEN & credit-free, NOT started (owner to steer):**
+- **Chunk-streaming refactor** (hoist duplicated `sendMsg`/`ondataavailable→RECORDER_CHUNK` across the 3 recorder files) — verifiable via extension tsc + 124 vitest + e2e-audio-proof (no Gemini). But it's a NO-benefit refactor that risks the #1 feature (recording); the debt was explicitly deferred "until one of them changes." Recommend NOT now.
+- **Extension terminal-state stale message** (shows "Recording saved!" for a discarded upload) — small, unit-testable UX bug.
+- **Extension i18n** (popup/recorder English while web app is uz/ru/en) + **recorder a11y gaps** — real, credit-free, medium size.
+- **Requester "we'll contact you" screen + owner pending-requests dashboard** (three-kinds-of-person model) — needs owner product/design direction.
+- **Auto video-name templates → i18n** — owner decision; couples to `generate-ai.ts` `GENERATED_TITLE_PATTERN` (translate the generator AND the regex together or AI stops retitling).
+
+---
 ---
 # ===== BINDING DECISIONS (do NOT re-litigate) =====
 
