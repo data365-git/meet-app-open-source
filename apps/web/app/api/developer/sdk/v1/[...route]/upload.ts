@@ -12,7 +12,9 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
+import { isSequentialPartList } from "@/app/api/upload/[...route]/multipart-utils";
 import { withDeveloperPublicAuth } from "../../../../utils";
+import { developerCompletePartsSchema } from "./upload-validation";
 
 const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MAX_DURATION_SECS = 4 * 60 * 60;
@@ -149,13 +151,7 @@ app.post(
 		z.object({
 			videoId: z.string(),
 			uploadId: z.string(),
-			parts: z.array(
-				z.object({
-					partNumber: z.number().int().min(1).max(10000),
-					etag: z.string(),
-					size: z.number().nonnegative(),
-				}),
-			),
+			parts: developerCompletePartsSchema,
 			durationInSecs: z.number().positive(),
 			width: z.number().optional(),
 			height: z.number().optional(),
@@ -188,6 +184,17 @@ app.post(
 		}
 
 		const s3Key = video.s3Key;
+
+		// Defence-in-depth for the SDK /complete route, matching the guard the
+		// web and extension /complete paths (apps/web/app/api/upload/[...route]
+		// /multipart.ts) apply before completeMultipart: reject a gapped or
+		// duplicated part list (e.g. a mis-built client retry) before it can
+		// reach S3, where it would either fail or assemble a corrupt object.
+		// Checked before the credit debit below so a malformed request is
+		// rejected before any billing side effect.
+		if (!isSequentialPartList(parts)) {
+			return c.json({ error: "Part numbers are not sequential" }, 400);
+		}
 
 		try {
 			const totalBytes = parts.reduce((sum, p) => sum + p.size, 0);
