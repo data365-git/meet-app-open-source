@@ -1,5 +1,5 @@
 import { serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
+import { isValidStripePriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -8,8 +8,10 @@ export async function POST(request: NextRequest) {
 
 	console.log("Received guest checkout request:", { priceId, quantity });
 
-	if (!priceId) {
-		console.error("Missing required priceId");
+	if (!priceId || typeof priceId !== "string" || !isValidStripePriceId(priceId)) {
+		// Reject arbitrary/unknown prices — the client must not be able to
+		// substitute a cheaper or unintended Stripe price.
+		console.error("Invalid or unknown price ID");
 		return Response.json({ error: "priceId is required" }, { status: 400 });
 	}
 
