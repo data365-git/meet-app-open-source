@@ -582,37 +582,38 @@ app.post(
 
 					if (isRawRecorderUpload(subpath)) {
 						yield* db.use((db) =>
-							db.transaction(() =>
-								Promise.all([
-									db
-										.update(Db.videos)
-										.set({
-											duration: updateIfDefined(
-												body.durationInSecs,
-												Db.videos.duration,
-											),
-											width: updateIfDefined(body.width, Db.videos.width),
-											height: updateIfDefined(body.height, Db.videos.height),
-											fps: updateIfDefined(body.fps, Db.videos.fps),
-										})
-										.where(
-											and(
-												eq(Db.videos.id, Video.VideoId.make(videoId)),
-												eq(Db.videos.ownerId, user.id),
-											),
+							// Real transaction: the updates run on the tx's own
+							// connection (sequential awaits — mysql2 serializes one
+							// connection), so video dims + stored size commit atomically.
+							db.transaction(async (tx) => {
+								await tx
+									.update(Db.videos)
+									.set({
+										duration: updateIfDefined(
+											body.durationInSecs,
+											Db.videos.duration,
 										),
-									db
-										.update(Db.videoUploads)
-										.set({
-											uploaded: storedBytes,
-											total: storedBytes,
-											updatedAt: new Date(),
-										})
-										.where(
-											eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+										width: updateIfDefined(body.width, Db.videos.width),
+										height: updateIfDefined(body.height, Db.videos.height),
+										fps: updateIfDefined(body.fps, Db.videos.fps),
+									})
+									.where(
+										and(
+											eq(Db.videos.id, Video.VideoId.make(videoId)),
+											eq(Db.videos.ownerId, user.id),
 										),
-								]),
-							),
+									);
+								await tx
+									.update(Db.videoUploads)
+									.set({
+										uploaded: storedBytes,
+										total: storedBytes,
+										updatedAt: new Date(),
+									})
+									.where(
+										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									);
+							}),
 						);
 
 						const processingStarted = yield* Effect.tryPromise(() =>
@@ -672,45 +673,43 @@ app.post(
 					}
 
 					yield* db.use((db) =>
-						db.transaction(() =>
-							Promise.all([
-								db
-									.update(Db.videos)
-									.set({
-										duration: updateIfDefined(
-											body.durationInSecs,
-											Db.videos.duration,
-										),
-										width: updateIfDefined(body.width, Db.videos.width),
-										height: updateIfDefined(body.height, Db.videos.height),
-										fps: updateIfDefined(body.fps, Db.videos.fps),
-									})
-									.where(
-										and(
-											eq(Db.videos.id, Video.VideoId.make(videoId)),
-											eq(Db.videos.ownerId, user.id),
-										),
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.videos)
+								.set({
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
 									),
-								// (H5) This branch also covers the extension's "result.mp4"
-								// upload, which declares size:0 for every part. Without this,
-								// videoUploads.total/uploaded was never corrected to the real
-								// storage size for that path — the row sat at 0 (or the
-								// forged declared sum) until it was deleted at the end of
-								// processing, so the upload's real bytes never counted toward
-								// the quota. Persist the storage-verified size here too, same
-								// as the raw-recorder branch above.
-								db
-									.update(Db.videoUploads)
-									.set({
-										uploaded: storedBytes,
-										total: storedBytes,
-										updatedAt: new Date(),
-									})
-									.where(
-										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, Video.VideoId.make(videoId)),
+										eq(Db.videos.ownerId, user.id),
 									),
-							]),
-						),
+								);
+							// (H5) This branch also covers the extension's "result.mp4"
+							// upload, which declares size:0 for every part. Without this,
+							// videoUploads.total/uploaded was never corrected to the real
+							// storage size for that path — the row sat at 0 (or the
+							// forged declared sum) until it was deleted at the end of
+							// processing, so the upload's real bytes never counted toward
+							// the quota. Persist the storage-verified size here too, same
+							// as the raw-recorder branch above.
+							await tx
+								.update(Db.videoUploads)
+								.set({
+									uploaded: storedBytes,
+									total: storedBytes,
+									updatedAt: new Date(),
+								})
+								.where(
+									eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+								);
+						}),
 					);
 
 					// This is the extension (subpath "result.mp4") and import finalize

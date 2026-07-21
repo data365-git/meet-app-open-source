@@ -92,7 +92,9 @@ vi.mock("@cap/web-backend", async () => {
 	const { Effect: E, Option } = await import("effect");
 
 	const fakeDb = {
-		transaction: (fn: () => Promise<unknown>) => fn(),
+		// Model real drizzle: transaction passes a tx equivalent to the db so
+		// writes issued on tx.* are recorded (and actually run inside the tx).
+		transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
 		update: (table: unknown) => ({
 			set: (values: Record<string, unknown>) => {
 				if (table === TABLES.videoUploads) dbWrites.videoUploadSets.push(values);
