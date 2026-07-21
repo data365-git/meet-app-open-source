@@ -101,37 +101,56 @@ export async function deleteAccount(
 	// in orgs they do not own) are deliberately NOT touched — only the
 	// user's own membership rows go. aiUsageEvents must go before the users
 	// row: its FK has no ON DELETE and would reject the user delete.
-	await db().transaction(async (tx) => {
-		await tx.delete(comments).where(eq(comments.authorId, user.id));
-		await tx
-			.delete(notifications)
-			.where(eq(notifications.recipientId, user.id));
-		await tx.delete(authApiKeys).where(eq(authApiKeys.userId, user.id));
-		await tx.delete(aiUsageEvents).where(eq(aiUsageEvents.userId, user.id));
-		await tx.delete(spaceMembers).where(eq(spaceMembers.userId, user.id));
-		await tx
-			.delete(verificationTokens)
-			.where(eq(verificationTokens.identifier, user.email));
-		await tx
-			.delete(organizationMembers)
-			.where(eq(organizationMembers.userId, user.id));
-		// Sole-member orgs die with the account. Scoped children first (no FK
-		// cascade exists for organizationId columns), then the org row. Known,
-		// accepted orphans — same policy as Videos.permanentlyDelete: rows in
-		// storageIntegrations/s3Buckets (org-level custom storage creds) are an
-		// open owner decision and are NOT deleted here.
-		for (const orgId of soleMemberOrgIds) {
+	try {
+		await db().transaction(async (tx) => {
+			await tx.delete(comments).where(eq(comments.authorId, user.id));
 			await tx
-				.delete(organizationInvites)
-				.where(eq(organizationInvites.organizationId, orgId));
-			await tx.delete(folders).where(eq(folders.organizationId, orgId));
-			await tx.delete(spaces).where(eq(spaces.organizationId, orgId));
-			await tx.delete(organizations).where(eq(organizations.id, orgId));
-		}
-		await tx.delete(sessions).where(eq(sessions.userId, user.id));
-		await tx.delete(accounts).where(eq(accounts.userId, user.id));
-		await tx.delete(users).where(eq(users.id, user.id));
-	});
+				.delete(notifications)
+				.where(eq(notifications.recipientId, user.id));
+			await tx.delete(authApiKeys).where(eq(authApiKeys.userId, user.id));
+			await tx
+				.delete(aiUsageEvents)
+				.where(eq(aiUsageEvents.userId, user.id));
+			await tx.delete(spaceMembers).where(eq(spaceMembers.userId, user.id));
+			await tx
+				.delete(verificationTokens)
+				.where(eq(verificationTokens.identifier, user.email));
+			await tx
+				.delete(organizationMembers)
+				.where(eq(organizationMembers.userId, user.id));
+			// Sole-member orgs die with the account. Scoped children first (no
+			// FK cascade exists for organizationId columns), then the org row.
+			// Known, accepted orphans — same policy as
+			// Videos.permanentlyDelete: rows in storageIntegrations/s3Buckets
+			// (org-level custom storage creds) are an open owner decision and
+			// are NOT deleted here.
+			for (const orgId of soleMemberOrgIds) {
+				await tx
+					.delete(organizationInvites)
+					.where(eq(organizationInvites.organizationId, orgId));
+				await tx.delete(folders).where(eq(folders.organizationId, orgId));
+				await tx.delete(spaces).where(eq(spaces.organizationId, orgId));
+				// A DIFFERENT member's aiUsageEvents rows (e.g. someone since
+				// removed from the org) can still point at this orgId even
+				// though the user's OWN rows were already cleared above by
+				// userId. ai_usage_events_org_fk has no ON DELETE, so any
+				// leftover row here would reject the org delete below.
+				await tx
+					.delete(aiUsageEvents)
+					.where(eq(aiUsageEvents.orgId, orgId));
+				await tx.delete(organizations).where(eq(organizations.id, orgId));
+			}
+			await tx.delete(sessions).where(eq(sessions.userId, user.id));
+			await tx.delete(accounts).where(eq(accounts.userId, user.id));
+			await tx.delete(users).where(eq(users.id, user.id));
+		});
+	} catch (error) {
+		console.error("Account erasure: final delete transaction failed", error);
+		return {
+			ok: false,
+			error: "Account deletion could not be completed. Please try again.",
+		};
+	}
 
 	return { ok: true };
 }

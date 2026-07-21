@@ -43,6 +43,17 @@ const erasure = vi.hoisted(() => ({
 	failFor: [] as string[],
 }));
 
+// Records the ORDER of every delete() call inside the final transaction, so a
+// test can prove aiUsageEvents-by-orgId is cleared BEFORE the organizations
+// row (the FK it unblocks). `forceThrowAfterCommit` simulates the final
+// transaction failing (e.g. a DB constraint still rejecting it) so the
+// unhandled-500 regression can be pinned: deleteAccount must catch it and
+// return { ok: false }, never throw.
+const txControl = vi.hoisted(() => ({
+	deleteLog: [] as Array<{ table: string; cond: any }>,
+	forceThrowAfterCommit: false,
+}));
+
 function getStore(tableName: string) {
 	return (stores as Record<string, any[]>)[tableName] ?? [];
 }
@@ -70,6 +81,7 @@ function makeFakeDb(): any {
 		}),
 		delete: (table: any) => ({
 			where: (cond: any) => {
+				txControl.deleteLog.push({ table: table.__tableName, cond });
 				const store = getStore(table.__tableName);
 				const remaining = store.filter((row: any) => !rowMatches(row, cond));
 				store.length = 0;
@@ -77,7 +89,13 @@ function makeFakeDb(): any {
 				return Promise.resolve();
 			},
 		}),
-		transaction: async (cb: any) => cb(api),
+		transaction: async (cb: any) => {
+			const result = await cb(api);
+			if (txControl.forceThrowAfterCommit) {
+				throw new Error("simulated transaction failure");
+			}
+			return result;
+		},
 	};
 	return api;
 }
@@ -112,7 +130,7 @@ vi.mock("@cap/database/schema", () => ({
 	comments: fakeTable("comments", ["id", "authorId", "videoId"]),
 	notifications: fakeTable("notifications", ["id", "recipientId"]),
 	authApiKeys: fakeTable("authApiKeys", ["id", "userId"]),
-	aiUsageEvents: fakeTable("aiUsageEvents", ["id", "userId"]),
+	aiUsageEvents: fakeTable("aiUsageEvents", ["id", "userId", "orgId"]),
 	spaceMembers: fakeTable("spaceMembers", ["id", "spaceId", "userId"]),
 	verificationTokens: fakeTable("verificationTokens", ["identifier"]),
 	spaces: fakeTable("spaces", ["id", "createdById", "organizationId"]),
@@ -186,6 +204,8 @@ beforeEach(() => {
 	for (const store of Object.values(stores)) store.length = 0;
 	erasure.calls.length = 0;
 	erasure.failFor.length = 0;
+	txControl.deleteLog.length = 0;
+	txControl.forceThrowAfterCommit = false;
 
 	stores.users.push({ ...USER_A }, { ...USER_B });
 	// The shared org is owned by B, so A's owned-orgs guard passes.
@@ -393,6 +413,73 @@ describe("deleteAccount — real erasure behind the server-verified phrase", () 
 		// The SHARED org (owned by B) and its structures are untouched.
 		expect(stores.organizations.find((o) => o.id === "org-shared")).toBeDefined();
 		expect(stores.spaces.find((s) => s.id === "space-b")).toBeDefined();
+	});
+
+	// C1 (BLOCKER): ai_usage_events_org_fk has NO ON DELETE. A's own
+	// aiUsageEvents rows are cleared by userId earlier in the transaction, but
+	// a DIFFERENT member's row (e.g. someone since removed from A's personal
+	// org) can still point at the same orgId and would reject the org delete
+	// below it — rolling back the whole transaction AFTER the irreversible
+	// video/storage purge already ran. The fix must clear those by-orgId
+	// BEFORE deleting the org row.
+	it("clears a leftover member's aiUsageEvents row by orgId before deleting a sole-member org", async () => {
+		stores.organizations.push({
+			id: "org-personal-a",
+			name: "A's Personal Org",
+			ownerId: "user-a",
+		});
+		stores.organizationMembers.push({
+			id: "om-a-personal",
+			userId: "user-a",
+			organizationId: "org-personal-a",
+		});
+		// A former member's usage row: NOT user-a, so the earlier by-userId
+		// delete never touches it, yet it still references org-personal-a.
+		stores.aiUsageEvents.push({
+			id: "ai-orphan",
+			userId: "user-c-removed",
+			orgId: "org-personal-a",
+		});
+
+		const result = await deleteAccount(CONFIRMATION_PHRASE);
+		expect(result).toEqual({ ok: true });
+
+		// The leftover row is gone and the org delete went through.
+		expect(
+			stores.aiUsageEvents.find((e) => e.id === "ai-orphan"),
+		).toBeUndefined();
+		expect(
+			stores.organizations.find((o) => o.id === "org-personal-a"),
+		).toBeUndefined();
+
+		// Proof of ORDER, not just outcome: the aiUsageEvents-by-orgId delete
+		// must be logged before the organizations-by-id delete for this org —
+		// otherwise a real DB would reject the org delete with the FK still
+		// in place.
+		const aiDeleteIndex = txControl.deleteLog.findIndex(
+			(e) =>
+				e.table === "aiUsageEvents" &&
+				e.cond?.name === "orgId" &&
+				e.cond?.val === "org-personal-a",
+		);
+		const orgDeleteIndex = txControl.deleteLog.findIndex(
+			(e) =>
+				e.table === "organizations" && e.cond?.val === "org-personal-a",
+		);
+		expect(aiDeleteIndex).toBeGreaterThanOrEqual(0);
+		expect(orgDeleteIndex).toBeGreaterThan(aiDeleteIndex);
+	});
+
+	// Mirrors the video-purge try/catch: if the final transaction throws for
+	// any reason (e.g. a constraint the fix above didn't anticipate), the
+	// action must return { ok: false } — never let a 500 escape and strand
+	// the user in an unretryable state.
+	it("returns { ok: false } instead of throwing when the final transaction fails", async () => {
+		txControl.forceThrowAfterCommit = true;
+
+		await expect(deleteAccount(CONFIRMATION_PHRASE)).resolves.toEqual(
+			expect.objectContaining({ ok: false }),
+		);
 	});
 
 	it("still refuses while an owned org has OTHER members, deleting nothing", async () => {
