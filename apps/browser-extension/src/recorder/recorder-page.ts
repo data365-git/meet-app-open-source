@@ -34,6 +34,44 @@ interface RecorderSettings {
 	micDeviceId: string;
 }
 
+// getUserMedia does not resolve while Chrome's mic permission prompt is open —
+// it waits for the human. This tab stays VISIBLE for the whole recording, but
+// an unanswered prompt here still hangs startRecording() forever: the native
+// "Stop sharing" bar is already live, the display track can end at any time,
+// and a start that never finishes never wires the handler that would let the
+// owner recover. Same twin bug, same fix as content/inpage-recorder.ts
+// (MIC_ACQUIRE_TIMEOUT_MS + withTimeout) — the mic is best-effort with a
+// deadline; past it we record screen + tab audio without it.
+const MIC_ACQUIRE_TIMEOUT_MS = 8000;
+
+function withTimeout(
+	p: Promise<MediaStream>,
+	ms: number,
+): Promise<MediaStream | null> {
+	let settled = false;
+	const guarded = p
+		.then((stream) => {
+			// The user clicked "Allow" AFTER we gave up. Nobody owns this stream, so
+			// without stopping it the mic-in-use indicator stays lit for the rest of
+			// the session — a recorder that looks like it is eavesdropping.
+			if (settled) {
+				for (const t of stream.getTracks()) t.stop();
+				return null;
+			}
+			return stream;
+		})
+		.catch(() => null);
+	return Promise.race([
+		guarded,
+		new Promise<null>((resolve) =>
+			setTimeout(() => {
+				settled = true;
+				resolve(null);
+			}, ms),
+		),
+	]);
+}
+
 // ── Guaranteed-audio params (travel with THIS TAB, not the volatile SW
 // "arming" state) ────────────────────────────────────────────────────────
 //
@@ -568,25 +606,23 @@ async function startRecording(): Promise<void> {
 	try {
 		let micStream: MediaStream | null = null;
 		if (settings.micEnabled && settings.micDeviceId) {
-			try {
-				micStream = await navigator.mediaDevices.getUserMedia({
+			micStream = await withTimeout(
+				navigator.mediaDevices.getUserMedia({
 					audio: { deviceId: { exact: settings.micDeviceId } },
-				});
-			} catch {
-				try {
-					micStream = await navigator.mediaDevices.getUserMedia({
-						audio: true,
-					});
-				} catch {
-					micStream = null;
-				}
+				}),
+				MIC_ACQUIRE_TIMEOUT_MS,
+			);
+			if (!micStream) {
+				micStream = await withTimeout(
+					navigator.mediaDevices.getUserMedia({ audio: true }),
+					MIC_ACQUIRE_TIMEOUT_MS,
+				);
 			}
 		} else if (settings.micEnabled) {
-			try {
-				micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-			} catch {
-				micStream = null;
-			}
+			micStream = await withTimeout(
+				navigator.mediaDevices.getUserMedia({ audio: true }),
+				MIC_ACQUIRE_TIMEOUT_MS,
+			);
 		}
 
 		// Pull the SOURCE TAB's audio (the other meeting participants) via a

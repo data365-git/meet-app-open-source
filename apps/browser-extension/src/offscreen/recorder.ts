@@ -63,6 +63,45 @@ interface RecordingState {
 
 let state: RecordingState | null = null;
 
+// getUserMedia does not resolve while Chrome's mic permission prompt is open —
+// it waits for the human. This document is INVISIBLE (offscreen, no UI, no
+// user activation), so a stuck prompt hangs startCapture() forever with
+// nothing on screen to explain why. Same twin bug, same fix as
+// content/inpage-recorder.ts (MIC_ACQUIRE_TIMEOUT_MS + withTimeout) — the mic
+// is best-effort with a deadline; past it we record the tab without it. Does
+// NOT apply to the tab-capture getUserMedia in startCapture() below: that
+// consumes a pre-granted tabCapture streamId, which resolves immediately with
+// no prompt.
+const MIC_ACQUIRE_TIMEOUT_MS = 8000;
+
+function withTimeout(
+	p: Promise<MediaStream>,
+	ms: number,
+): Promise<MediaStream | null> {
+	let settled = false;
+	const guarded = p
+		.then((stream) => {
+			// The user clicked "Allow" AFTER we gave up. Nobody owns this stream, so
+			// without stopping it the mic-in-use indicator stays lit for the rest of
+			// the session — a recorder that looks like it is eavesdropping.
+			if (settled) {
+				for (const t of stream.getTracks()) t.stop();
+				return null;
+			}
+			return stream;
+		})
+		.catch(() => null);
+	return Promise.race([
+		guarded,
+		new Promise<null>((resolve) =>
+			setTimeout(() => {
+				settled = true;
+				resolve(null);
+			}, ms),
+		),
+	]);
+}
+
 // (H1) "Record Meet tab only" is a MEETING recording by construction — the popup
 // only offers it on a Meet tab. Capturing that tab without its audio means the
 // other participants are not recorded at all, which is the one outcome this
@@ -151,22 +190,21 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 
 		let micStream: MediaStream | null = null;
 		if (msg.micEnabled !== false) {
-			try {
-				// Use the specific device when one was chosen; otherwise capture the
-				// system default mic so an enabled mic is never silently dropped.
-				micStream = await navigator.mediaDevices.getUserMedia({
+			// Use the specific device when one was chosen; otherwise capture the
+			// system default mic so an enabled mic is never silently dropped.
+			micStream = await withTimeout(
+				navigator.mediaDevices.getUserMedia({
 					audio: msg.micDeviceId
 						? { deviceId: { exact: msg.micDeviceId } }
 						: true,
-				});
-			} catch {
-				try {
-					micStream = await navigator.mediaDevices.getUserMedia({
-						audio: true,
-					});
-				} catch {
-					micStream = null;
-				}
+				}),
+				MIC_ACQUIRE_TIMEOUT_MS,
+			);
+			if (!micStream) {
+				micStream = await withTimeout(
+					navigator.mediaDevices.getUserMedia({ audio: true }),
+					MIC_ACQUIRE_TIMEOUT_MS,
+				);
 			}
 		}
 

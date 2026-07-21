@@ -180,6 +180,13 @@ interface SetupOpts {
 	tabAudio?: "live" | "none";
 	/** Whether the user ticked "Also share system audio". */
 	systemAudio?: boolean;
+	/** Whether the mic toggle is on (GET_ALL_SETTINGS.micEnabled). Defaults to
+	 * false, matching every pre-existing test in this file. */
+	micEnabled?: boolean;
+	/** Make the MIC getUserMedia() call never resolve, like an unanswered
+	 * Chrome permission prompt — everything else (tab audio, display media)
+	 * still resolves normally. */
+	micHang?: boolean;
 }
 
 async function setup(opts: SetupOpts): Promise<Harness> {
@@ -209,7 +216,8 @@ async function setup(opts: SetupOpts): Promise<Harness> {
 			sendMessage: (msg: Record<string, unknown>, cb?: (r: unknown) => void) => {
 				sent.push(msg);
 				if (!cb) return Promise.resolve(undefined);
-				if (msg.type === "GET_ALL_SETTINGS") cb({ micEnabled: false });
+				if (msg.type === "GET_ALL_SETTINGS")
+					cb({ micEnabled: opts.micEnabled ?? false });
 				else if (msg.type === "REQUEST_TAB_AUDIO") {
 					cb(
 						opts.tabAudio === "live"
@@ -223,7 +231,21 @@ async function setup(opts: SetupOpts): Promise<Harness> {
 		},
 	};
 
-	const getUserMedia = vi.fn(async () => new FakeStream([new FakeTrack("audio")]));
+	const getUserMedia = vi.fn((constraints?: { audio?: unknown }) => {
+		// The tab-audio call (chromeMediaSource: "tab") consumes a pre-granted
+		// streamId and never shows a permission prompt — only the plain mic
+		// constraints ({ audio: true } / { audio: { deviceId } }) can hang on an
+		// unanswered "Allow microphone?" dialog, so only THOSE are made to hang.
+		const audioConstraint = constraints?.audio;
+		const isTabAudio =
+			typeof audioConstraint === "object" &&
+			audioConstraint !== null &&
+			"mandatory" in (audioConstraint as Record<string, unknown>);
+		if (opts.micHang && !isTabAudio) {
+			return new Promise<MediaStream>(() => {}); // the prompt just sits there
+		}
+		return Promise.resolve(new FakeStream([new FakeTrack("audio")]) as unknown as MediaStream);
+	});
 	const getDisplayMedia = vi.fn(async () => displayStream);
 
 	vi.stubGlobal("chrome", chromeStub);
@@ -403,5 +425,44 @@ describe("meeting mode validates the surface the user actually picked", () => {
 
 		expect(FakeRecorder.last?.startCalls).toBe(1);
 		expect(types(h)).toContain("RECORDER_STARTED");
+	});
+});
+
+describe("mic acquisition never blocks the start path (B2)", () => {
+	// THE DEFECT this guards against: getUserMedia() does not resolve while
+	// Chrome's mic permission prompt sits unanswered. inpage-recorder.ts already
+	// has MIC_ACQUIRE_TIMEOUT_MS + withTimeout for exactly this; this twin path
+	// (Ctrl+Shift+9 → recorder.html) had none, so an unanswered prompt hung
+	// startRecording() forever with the native "Stop sharing" bar already live.
+	it("proceeds WITHOUT the mic ~8s after an unanswered mic prompt, instead of hanging forever", async () => {
+		const h = await setup({
+			search: "?source=7&meeting=1",
+			displaySurface: "monitor",
+			tabAudio: "live",
+			micEnabled: true,
+			micHang: true,
+		});
+		vi.useFakeTimers();
+		h.click("btn-start");
+
+		// Flush the microtask chain up to the point where the mic getUserMedia
+		// race schedules its real (now fake) 8s timer.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(FakeRecorder.last?.startCalls ?? 0).toBe(0);
+
+		// GUARD THE GUARD: must still be waiting just short of the deadline —
+		// otherwise this test would pass even if the timeout were removed
+		// entirely and something else happened to unblock it early.
+		await vi.advanceTimersByTimeAsync(7999);
+		expect(FakeRecorder.last?.startCalls ?? 0).toBe(0);
+		expect(types(h)).not.toContain("RECORDER_STARTED");
+
+		// Cross the 8000ms mic deadline and let the rest of the start chain
+		// (tab audio + RECORDER_STARTED round-trip, all real microtasks) settle.
+		await vi.advanceTimersByTimeAsync(50);
+
+		expect(FakeRecorder.last?.startCalls).toBe(1);
+		expect(types(h)).toContain("RECORDER_STARTED");
+		expect(h.el("view-recording").hidden).toBe(false);
 	});
 });
