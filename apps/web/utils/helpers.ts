@@ -8,21 +8,38 @@ export function classNames(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
-// Base allowed origins
+// Strict allowlist for credentialed cross-origin requests.
+// SECURITY (S1, 2026-07-21): do NOT reflect arbitrary origins here — a
+// previous version echoed any `origin` back with
+// Access-Control-Allow-Credentials: true, letting any site read
+// cookie-authenticated responses. Only echo an origin that is in this list.
 export const allowedOrigins = [
 	buildEnv.NEXT_PUBLIC_WEB_URL,
-	"https://cap.link",
-	"cap.link",
+	"http://localhost:3001",
+	"http://localhost:3000",
+	"tauri://localhost",
+	"http://tauri.localhost",
+	"https://tauri.localhost",
 ];
 
-export function getHeaders(origin: string | null) {
-	// Allow "*" for custom domains or allowedOrigins for main domains
-	return {
-		"Access-Control-Allow-Origin": origin || "*",
-		"Access-Control-Allow-Credentials": "true",
+export function getHeaders(origin: string | null): Record<string, string> {
+	const baseHeaders: Record<string, string> = {
 		"Access-Control-Allow-Methods": "GET, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
 	};
+
+	// Only echo the origin (and allow credentials) if it's allowlisted.
+	// Non-allowlisted origins get no Access-Control-Allow-Origin at all, so
+	// the browser blocks the cross-origin read.
+	if (origin && allowedOrigins.includes(origin)) {
+		return {
+			...baseHeaders,
+			"Access-Control-Allow-Origin": origin,
+			"Access-Control-Allow-Credentials": "true",
+		};
+	}
+
+	return baseHeaders;
 }
 
 const rateLimitMap = new Map();

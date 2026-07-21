@@ -135,6 +135,11 @@ export const corsMiddleware = cors({
 		if (allowedOrigins.includes(origin)) {
 			return origin;
 		}
+		// Accepted risk (S1 review, 2026-07-21): any chrome-extension:// origin
+		// is allowed with credentials so unpacked/dev installs (which get a
+		// random extension ID) keep working. Not tightened here because it
+		// would break local extension development; revisit if a fixed
+		// published extension ID becomes the only supported install path.
 		if (origin?.startsWith("chrome-extension://")) {
 			return origin;
 		}
