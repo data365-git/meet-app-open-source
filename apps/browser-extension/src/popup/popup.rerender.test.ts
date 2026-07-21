@@ -162,14 +162,19 @@ function buttonByLabels(h: Harness, labels: string[]): FakeElement {
 }
 
 function pauseButton(h: Harness): FakeElement {
-	return buttonByLabels(h, ["Pause", "Resume", "Pausing...", "Resuming..."]);
+	return buttonByLabels(h, [
+		"Pauza",
+		"Davom ettirish",
+		"Pauza qilinmoqda…",
+		"Davom ettirilmoqda…",
+	]);
 }
 
 function discardButton(h: Harness): FakeElement {
 	return buttonByLabels(h, [
-		"Permanently discard",
-		"Tap again to delete this recording for good",
-		"Discarding...",
+		"Butunlay o'chirish",
+		"Bu yozuvni butunlay o'chirish uchun yana bosing",
+		"O'chirilmoqda…",
 	]);
 }
 
@@ -203,7 +208,7 @@ describe("Pause failure message survives the recording's re-renders", () => {
 		await drain();
 
 		expect(flashText(h).length).toBeGreaterThan(0);
-		expect(pauseButton(h).textContent).toBe("Pause");
+		expect(pauseButton(h).textContent).toBe("Pauza");
 		expect(pauseButton(h).disabled).toBe(false);
 	});
 
@@ -221,7 +226,7 @@ describe("Pause failure message survives the recording's re-renders", () => {
 		await drain();
 
 		expect(flashText(h)).toBe("");
-		expect(pauseButton(h).textContent).toBe("Resume");
+		expect(pauseButton(h).textContent).toBe("Davom ettirish");
 	});
 });
 
@@ -232,18 +237,18 @@ describe("Discard result message survives the uploading view's re-renders", () =
 
 		discardButton(h).click(); // arm
 		await drain();
-		expect(discardButton(h).textContent).toContain("Tap again");
+		expect(discardButton(h).textContent).toContain("yana bosing");
 
 		discardButton(h).click(); // confirm
 		await drain();
-		expect(flashText(h)).toContain("Deleted");
+		expect(flashText(h)).toContain("O'chirildi");
 
 		// Progress ticked: the uploading view rebuilds and would have replaced the
 		// button (and its result text) with a fresh "Permanently discard".
 		h.broadcast(uploadingState(600));
 		await drain();
 
-		expect(flashText(h)).toContain("Deleted");
+		expect(flashText(h)).toContain("O'chirildi");
 	});
 
 	it("keeps the honest 'Delete queued; will retry' when the server wasn't reached", async () => {
@@ -254,11 +259,11 @@ describe("Discard result message survives the uploading view's re-renders", () =
 		await drain();
 		discardButton(h).click();
 		await drain();
-		expect(flashText(h)).toContain("Delete queued");
+		expect(flashText(h)).toContain("navbatga qo'yildi");
 
 		h.broadcast(uploadingState(600));
 		await drain();
 
-		expect(flashText(h)).toContain("Delete queued");
+		expect(flashText(h)).toContain("navbatga qo'yildi");
 	});
 });

@@ -208,16 +208,16 @@ function notifyTabAudioDegraded(cause: "muted" | "suspended" | "ended"): void {
 	tabAudioDegradedNotified = true;
 	const messages: Record<typeof cause, string> = {
 		muted:
-			"The Meet tab was muted. Recording continues (screen+mic); client audio is not being captured until it's unmuted.",
+			"Meet tabi ovozsiz qilindi. Yozuv davom etmoqda (ekran+mikrofon); ovoz qayta yoqilmaguncha mijoz ovozi yozilmaydi.",
 		suspended:
-			"Client audio briefly dropped mid-recording. Recording continues; attempting to recover.",
+			"Mijoz ovozi yozuv davomida qisqa vaqtga uzildi. Yozuv davom etmoqda; tiklashga harakat qilinmoqda.",
 		ended:
-			"The Meet tab was closed or navigated away. Recording continues (screen+mic only) — client audio can't be reconnected.",
+			"Meet tabi yopildi yoki boshqa sahifaga o'tildi. Yozuv davom etmoqda (faqat ekran+mikrofon) — mijoz ovozini qayta ulab bo'lmaydi.",
 	};
 	chrome.notifications.create("tab-audio-degraded", {
 		type: "basic",
 		iconUrl: "icons/icon-128.png",
-		title: "Client audio degraded",
+		title: "Mijoz ovozi yomonlashdi",
 		message: messages[cause],
 	});
 	chrome.action.setBadgeText({ text: "!" });
@@ -930,7 +930,7 @@ async function handleMessage(
 				) {
 					const discardedState: ExtensionState = {
 						kind: "error",
-						reason: "This recording was permanently discarded.",
+						reason: "Bu yozuv butunlay o'chirildi.",
 						recoverable: false,
 					};
 					await setState(discardedState);
@@ -947,9 +947,9 @@ async function handleMessage(
 				chrome.notifications.create("discard-partial", {
 					type: "basic",
 					iconUrl: "icons/icon-128.png",
-					title: "Recording discarded on this device",
+					title: "Yozuv shu qurilmada o'chirildi",
 					message:
-						"We couldn't reach the server yet. Deleting it there is queued and will keep retrying automatically.",
+						"Serverga hali ulanib bo'lmadi. Uni serverdan o'chirish navbatga qo'yildi va avtomatik ravishda qayta urinilaveradi.",
 				});
 			}
 			// (W3c) Name the real outcome so the popup renders exactly what
@@ -1252,7 +1252,7 @@ async function handleMessage(
 				return {
 					ok: false,
 					error:
-						"A recording is already in progress. Stop it before starting a new one.",
+						"Yozuv allaqachon davom etmoqda. Yangisini boshlashdan oldin uni to'xtating.",
 				};
 			}
 			const mode = state.kind === "arming" ? state.mode : "instruction";
@@ -1334,13 +1334,13 @@ async function handleMessage(
 				console.error("[sw] initializeUpload failed:", err);
 				const errState: ExtensionState = {
 					kind: "error",
-					reason: `Failed to initialize upload: ${err instanceof Error ? err.message : String(err)}`,
+					reason: `Yuklashni ishga tushirib bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
 					recoverable: true,
 				};
 				await setState(errState);
 				updateBadge(errState);
 				await closeOffscreenDocument().catch(() => {});
-				return { ok: false, error: "initializeUpload failed" };
+				return { ok: false, error: "Yuklashni ishga tushirib bo'lmadi" };
 			}
 
 			const nextState: ExtensionState = {
@@ -1426,8 +1426,8 @@ async function handleMessage(
 					chrome.notifications.create("recorder-error", {
 						type: "basic",
 						iconUrl: "icons/icon-128.png",
-						title: "Recording error — saved",
-						message: `A recording error occurred (${error}), but ${bytesBefore} bytes were salvaged and saved.`,
+						title: "Yozuv xatosi — saqlandi",
+						message: `Yozuvda xatolik yuz berdi (${error}), lekin ${bytesBefore} bayt qutqarib saqlandi.`,
 					});
 					return;
 				}
@@ -1440,8 +1440,8 @@ async function handleMessage(
 					chrome.notifications.create("recorder-error", {
 						type: "basic",
 						iconUrl: "icons/icon-128.png",
-						title: "Recording error — retrying upload",
-						message: `A recording error occurred (${error}); the upload is retrying in the background.`,
+						title: "Yozuv xatosi — yuklash qayta urinilmoqda",
+						message: `Yozuvda xatolik yuz berdi (${error}); yuklash fonda qayta urinilmoqda.`,
 					});
 					return;
 				}
@@ -1453,7 +1453,7 @@ async function handleMessage(
 					chrome.notifications.create("recorder-error", {
 						type: "basic",
 						iconUrl: "icons/icon-128.png",
-						title: "Recording error",
+						title: "Yozuv xatosi",
 						message: stateAfter.reason,
 					});
 					return;
@@ -1472,7 +1472,7 @@ async function handleMessage(
 				chrome.notifications.create("recorder-error", {
 					type: "basic",
 					iconUrl: "icons/icon-128.png",
-					title: "Recording error",
+					title: "Yozuv xatosi",
 					message: error,
 				});
 			});
@@ -1549,7 +1549,7 @@ async function handleMessage(
 			} catch (err) {
 				return {
 					ok: false,
-					error: err instanceof Error ? err.message : "sign-in failed",
+					error: err instanceof Error ? err.message : "kirish amalga oshmadi",
 				};
 			}
 			if (!responseUrl) return { ok: false, error: "sign-in cancelled" };
@@ -1728,9 +1728,9 @@ chrome.runtime.onStartup.addListener(async () => {
 		chrome.notifications.create("recording-interrupted", {
 			type: "basic",
 			iconUrl: "icons/icon-128.png",
-			title: "Recording interrupted",
+			title: "Yozuv uzildi",
 			message:
-				"The browser restarted during recording. Uploading what was captured...",
+				"Brauzer yozuv davomida qayta ishga tushdi. Yozilgan qism yuklanmoqda…",
 		});
 		const nextState: ExtensionState = {
 			kind: "uploading",
@@ -1817,8 +1817,8 @@ chrome.runtime.onStartup.addListener(async () => {
 		const nextState: ExtensionState = {
 			kind: "error",
 			reason: resumed
-				? "The browser restarted while finishing an upload — we're completing it in the background. You can start a new recording."
-				: "The browser restarted while finishing an upload. Check your dashboard — the recording may have completed; otherwise please re-record.",
+				? "Yuklashni yakunlash paytida brauzer qayta ishga tushdi — uni fonda yakunlamoqdamiz. Yangi yozuvni boshlashingiz mumkin."
+				: "Yuklashni yakunlash paytida brauzer qayta ishga tushdi. Boshqaruv panelini tekshiring — yozuv yakunlangan bo'lishi mumkin; aks holda qayta yozib oling.",
 			recoverable: true,
 			previousVideoId: state.videoId,
 		};
