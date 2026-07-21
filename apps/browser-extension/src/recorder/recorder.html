@@ -199,10 +199,10 @@
 				     by applyMeetingCopy() in recorder-page.ts — the popup button that
 				     opens that path says "Record full-screen meeting", and arriving at
 				     a page headed "Record Instruction" read as the wrong screen. -->
-				<h1 id="idle-title">Record Instruction</h1>
+				<h1 id="idle-title">Yozib olish</h1>
 				<p class="sub" id="idle-sub">
-					Click below, then choose the screen, window, or tab you want to
-					record. Keep this tab open while recording.
+					Quyidagini bosing, so'ng yozmoqchi bo'lgan ekran, oyna yoki
+					tabni tanlang. Yozish davomida bu tabni ochiq qoldiring.
 				</p>
 				<!-- Meeting variant only: revealed by setupMicControl() in
 				     recorder-page.ts (the popup's own mic toggle/dropdown is skipped by
@@ -215,12 +215,12 @@
 					</label>
 					<select id="mic-select" class="device-select"></select>
 				</div>
-				<button id="btn-start" class="btn btn-primary">Choose screen &amp; start</button>
+				<button id="btn-start" class="btn btn-primary">Ekranni tanlab boshlash</button>
 				<!-- Meeting variant only: revealed by applyMeetingCopy() in
 				     recorder-page.ts. Quiet, secondary escape hatch back to the
 				     narrower "Record Meet tab only" (tabCapture-only) path. -->
 				<button id="btn-meet-tab-only" class="btn btn-secondary hidden">Faqat Meet tabini yozish</button>
-				<button id="btn-cancel" class="btn btn-secondary">Cancel</button>
+				<button id="btn-cancel" class="btn btn-secondary">Bekor</button>
 				<p id="idle-msg" class="msg"></p>
 			</div>
 
@@ -236,10 +236,10 @@
 			<div id="view-recording" class="hidden">
 				<div class="rec-row">
 					<span class="rec-dot"></span>
-					<span>Recording</span>
+					<span>Yozilmoqda</span>
 				</div>
 				<div id="timer" class="timer">00:00</div>
-				<p class="sub">Recording in progress. Keep this tab open.</p>
+				<p class="sub">Yozuv davom etmoqda. Bu tabni ochiq qoldiring.</p>
 				<!-- Text is set dynamically by the banner state machine in
 				     recorder-page.ts (mic-only / waived / muted / suspended / ended). -->
 				<p id="rec-audio-warn" class="msg msg-error hidden"></p>
@@ -247,33 +247,33 @@
 				     that node carries the persistent client-audio warning, which must
 				     survive a pause error appearing alongside it. -->
 				<p id="rec-ctl-msg" class="msg msg-error hidden"></p>
-				<button id="btn-pause" class="btn btn-secondary">Pause</button>
-				<button id="btn-stop" class="btn btn-danger">Stop &amp; upload</button>
+				<button id="btn-pause" class="btn btn-secondary">Pauza</button>
+				<button id="btn-stop" class="btn btn-danger">To'xtatish va yuklash</button>
 			</div>
 
 			<!-- UPLOADING -->
 			<div id="view-uploading" class="hidden">
-				<h1>Uploading…</h1>
-				<p id="upload-progress" class="sub">Sending your recording to data365…</p>
+				<h1>Yuklanmoqda…</h1>
+				<p id="upload-progress" class="sub">Yozuvingiz data365'ga yuborilmoqda…</p>
 			</div>
 
 			<!-- COMPLETE -->
 			<div id="view-complete" class="hidden">
-				<h1>Recording saved!</h1>
+				<h1>Yozuv saqlandi!</h1>
 				<p id="complete-url" class="share-url"></p>
 				<div class="btn-row">
-					<button id="btn-copy" class="btn btn-primary">Copy link</button>
-					<button id="btn-open" class="btn btn-primary">Open</button>
+					<button id="btn-copy" class="btn btn-primary">Havolani nusxalash</button>
+					<button id="btn-open" class="btn btn-primary">Ochish</button>
 				</div>
-				<button id="btn-close" class="btn btn-secondary">Close this tab</button>
+				<button id="btn-close" class="btn btn-secondary">Bu tabni yopish</button>
 			</div>
 
 			<!-- ERROR -->
 			<div id="view-error" class="hidden">
-				<h1>Something went wrong</h1>
+				<h1>Xatolik yuz berdi</h1>
 				<p id="error-msg" class="msg msg-error"></p>
-				<button id="btn-retry" class="btn btn-primary">Try again</button>
-				<button id="btn-close-err" class="btn btn-secondary">Close this tab</button>
+				<button id="btn-retry" class="btn btn-primary">Qayta urinish</button>
+				<button id="btn-close-err" class="btn btn-secondary">Bu tabni yopish</button>
 			</div>
 		</div>
 		<script type="module" src="recorder-page.js"></script>

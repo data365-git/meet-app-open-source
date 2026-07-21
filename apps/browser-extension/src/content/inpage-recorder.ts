@@ -129,7 +129,7 @@ function friendlyStartError(error: unknown): string {
 		return "Avval data365 belgisini bosib hisobga ulaning.";
 	}
 	if (raw.includes("meet tab") || raw.includes("tab")) {
-		return "Shu Meet tabini oching va Record now'ni qayta bosing.";
+		return "Shu Meet tabini oching va \"Hozir yozish\"ni qayta bosing.";
 	}
 	return "Yozuvni boshlab bo'lmadi. Ctrl+Shift+9 bilan urinib ko'ring.";
 }
