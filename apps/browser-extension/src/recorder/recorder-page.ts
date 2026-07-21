@@ -99,7 +99,7 @@ const AUDIO_WARN_TEXT: Record<AudioWarnCause, string> = {
 	suspended: "⚠️ Mijoz ovozi vaqtincha uzildi — tiklanmoqda…",
 	waived: "⚠️ Mijoz ovozi olinmayapti — faqat ekran va mikrofon yozilmoqda.",
 	"mic-only":
-		"⚠️ System audio is NOT shared — other people's voices won't be recorded (only your mic). Stop, start again, and tick “Also share system audio” in the picker.",
+		"⚠️ Tizim ovozi ulashilmagan — boshqalarning ovozi yozilmaydi (faqat mikrofoningiz). To'xtating, qaytadan boshlang va ekran tanlash oynasida “Tizim ovozini ham ulashish”ni belgilang.",
 };
 
 // Higher wins when more than one cause is simultaneously active.
@@ -229,7 +229,7 @@ function syncPauseLabel(): void {
 	if (controlInFlight) return;
 	const btn = $("btn-pause") as HTMLButtonElement | null;
 	if (!btn) return;
-	btn.textContent = state?.recorder.state === "paused" ? "Resume" : "Pause";
+	btn.textContent = state?.recorder.state === "paused" ? "Davom ettirish" : "Pauza";
 	btn.disabled = false;
 }
 
@@ -517,8 +517,8 @@ async function startRecording(): Promise<void> {
 		const name = err instanceof Error ? err.name : "";
 		const friendly =
 			name === "NotAllowedError"
-				? "Screen sharing was cancelled. Click the button to try again."
-				: `Couldn't start screen capture: ${err instanceof Error ? err.message : String(err)}`;
+				? "Ekranni ulashish bekor qilindi. Qayta urinish uchun tugmani bosing."
+				: `Ekran yozishni boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`;
 		setIdleMsg(friendly, true);
 		if (startBtn) startBtn.disabled = false;
 		return;
@@ -830,8 +830,8 @@ async function startRecording(): Promise<void> {
 		if (!startResp?.ok) {
 			cleanup(state);
 			state = null;
-			const reason = startResp?.error ?? "Couldn't start the upload session.";
-			setIdleMsg(`Couldn't start recording: ${reason}`, true);
+			const reason = startResp?.error ?? "Yuklash seansini boshlab bo'lmadi.";
+			setIdleMsg(`Yozishni boshlab bo'lmadi: ${reason}`, true);
 			showView("view-idle");
 			if (startBtn) startBtn.disabled = false;
 			return;
@@ -866,7 +866,7 @@ async function startRecording(): Promise<void> {
 			error: err instanceof Error ? err.message : String(err),
 		});
 		setIdleMsg(
-			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
+			`Yozishni boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
 			true,
 		);
 		showView("view-idle");
@@ -920,7 +920,7 @@ function handleStateChange(s: BroadcastState): void {
 				const startBtn = $("btn-start") as HTMLButtonElement | null;
 				if (startBtn) startBtn.disabled = true;
 				setIdleMsg(
-					"A recording is already in progress. Stop it before starting a new one.",
+					"Yozuv allaqachon davom etmoqda. Yangisini boshlashdan oldin uni to'xtating.",
 					false,
 				);
 			}
@@ -934,7 +934,7 @@ function handleStateChange(s: BroadcastState): void {
 					: 0;
 			const el = $("upload-progress");
 			if (el) {
-				el.textContent = `${formatBytes(s.uploadedBytes ?? 0)} uploaded (${pct}%)`;
+				el.textContent = `${formatBytes(s.uploadedBytes ?? 0)} yuklandi (${pct}%)`;
 			}
 			showView("view-uploading");
 			break;
@@ -942,7 +942,7 @@ function handleStateChange(s: BroadcastState): void {
 		case "finishing": {
 			stopTimer();
 			const el = $("upload-progress");
-			if (el) el.textContent = "Finishing up…";
+			if (el) el.textContent = "Yakunlanmoqda…";
 			showView("view-uploading");
 			break;
 		}
@@ -964,7 +964,7 @@ function handleStateChange(s: BroadcastState): void {
 				state = null;
 			}
 			const el = $("error-msg");
-			if (el) el.textContent = s.reason ?? "Unknown error";
+			if (el) el.textContent = s.reason ?? "Noma'lum xatolik";
 			showView("view-error");
 			break;
 		}
@@ -989,7 +989,7 @@ function wire(): void {
 	$("btn-start")?.addEventListener("click", () => {
 		startRecording().catch((err) => {
 			setIdleMsg(
-				`Couldn't start: ${err instanceof Error ? err.message : String(err)}`,
+				`Boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
 				true,
 			);
 		});
@@ -1027,7 +1027,7 @@ function wire(): void {
 			const btn = $("btn-pause") as HTMLButtonElement | null;
 			if (btn) {
 				btn.disabled = true;
-				btn.textContent = command === "PAUSE" ? "Pausing…" : "Resuming…";
+				btn.textContent = command === "PAUSE" ? "Pauza qilinmoqda…" : "Davom ettirilmoqda…";
 			}
 			setCtlMsg("");
 			controlInFlight = true;
@@ -1045,7 +1045,7 @@ function wire(): void {
 		const btn = $("btn-stop") as HTMLButtonElement | null;
 		if (btn) {
 			btn.disabled = true;
-			btn.textContent = "Finishing…";
+			btn.textContent = "Yakunlanmoqda…";
 		}
 		stopRecording();
 	});
@@ -1055,9 +1055,9 @@ function wire(): void {
 		navigator.clipboard.writeText(lastShareUrl).then(() => {
 			const btn = $("btn-copy");
 			if (btn) {
-				btn.textContent = "Copied!";
+				btn.textContent = "Nusxalandi!";
 				setTimeout(() => {
-					btn.textContent = "Copy link";
+					btn.textContent = "Havolani nusxalash";
 				}, 2000);
 			}
 		});
@@ -1167,13 +1167,13 @@ function wire(): void {
  * needed. Text only — the picker itself is unchanged. */
 function applyMeetingCopy(): void {
 	if (!meetingRequiredParam) return;
-	document.title = "data365 — Record full-screen meeting";
+	document.title = "data365 — Butun ekranli uchrashuvni yozish";
 	const title = $("idle-title");
-	if (title) title.textContent = "Record full-screen meeting";
+	if (title) title.textContent = "Butun ekranli uchrashuvni yozish";
 	const sub = $("idle-sub");
 	if (sub) {
 		sub.textContent =
-			'Click below, then choose "Entire Screen" so everything you show is recorded. The other participants\' voices are captured from your Meet tab automatically — leave that tab open, and keep this one open too.';
+			'Pastdagi tugmani bosing, so\'ng "Butun ekran"ni tanlang — shunda ko\'rsatgan hamma narsangiz yoziladi. Boshqa ishtirokchilarning ovozi Meet tabingizdan avtomatik olinadi — o\'sha tabni ochiq qoldiring, shu sahifani ham ochiq qoldiring.';
 	}
 	const start = $("btn-start");
 	// Single click still chains picker → checks → start (unchanged below) —

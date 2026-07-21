@@ -258,7 +258,7 @@ describe("recorder page Pause/Resume", () => {
 		const btn = h.doc.getElementById("btn-pause");
 		expect(btn, "#btn-pause is missing from recorder.html").not.toBeNull();
 		expect(btn?.hidden).toBe(false);
-		expect(btn?.textContent).toBe("Pause");
+		expect(btn?.textContent).toBe("Pauza");
 
 		await clickPause(h);
 
@@ -277,7 +277,7 @@ describe("recorder page Pause/Resume", () => {
 		expect(FakeRecorder.last?.pauseCalls).toBe(1);
 
 		const btn = h.doc.getElementById("btn-pause");
-		expect(btn?.textContent).toBe("Resume");
+		expect(btn?.textContent).toBe("Davom ettirish");
 		expect(btn?.disabled).toBe(false);
 		expect(h.doc.getElementById("rec-ctl-msg")?.hidden).toBe(true);
 	});
@@ -293,7 +293,7 @@ describe("recorder page Pause/Resume", () => {
 		expect(h.sent.filter((m) => m.type === "RESUME")).toHaveLength(1);
 		expect(FakeRecorder.last?.state).toBe("recording");
 		expect(FakeRecorder.last?.resumeCalls).toBe(1);
-		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Pause");
+		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Pauza");
 	});
 
 	// THE BLOCKER. The SW already answers { ok: false } when the control message
@@ -315,7 +315,7 @@ describe("recorder page Pause/Resume", () => {
 		await clickPause(h);
 
 		const btn = h.doc.getElementById("btn-pause");
-		expect(btn?.textContent).toBe("Pause");
+		expect(btn?.textContent).toBe("Pauza");
 		expect(btn?.disabled).toBe(false);
 		expect(FakeRecorder.last?.state).toBe("recording");
 		expect(FakeRecorder.last?.pauseCalls).toBe(0);
@@ -336,14 +336,14 @@ describe("recorder page Pause/Resume", () => {
 		const h = await setup();
 		await startRecording(h);
 		await clickPause(h);
-		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Resume");
+		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Davom ettirish");
 
 		h.control.reply = { ok: false };
 		await clickPause(h);
 
 		expect(FakeRecorder.last?.state).toBe("paused");
 		expect(FakeRecorder.last?.resumeCalls).toBe(0);
-		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Resume");
+		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Davom ettirish");
 		const ctl = h.doc.getElementById("rec-ctl-msg");
 		expect(ctl?.hidden).toBe(false);
 		expect((ctl?.textContent ?? "").length).toBeGreaterThan(0);
@@ -360,7 +360,7 @@ describe("recorder page Pause/Resume", () => {
 
 		expect(FakeRecorder.last?.state).toBe("recording");
 		expect(FakeRecorder.last?.pauseCalls).toBe(0);
-		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Pause");
+		expect(h.doc.getElementById("btn-pause")?.textContent).toBe("Pauza");
 		expect(h.doc.getElementById("rec-ctl-msg")?.hidden).toBe(false);
 	});
 

@@ -645,17 +645,17 @@ function renderDefaultNudge(): void {
 	container.textContent = "";
 	const card = makeEl("div", "cap-nudge-card");
 
-	const title = makeEl("div", "cap-nudge-title", "Record this meeting?");
+	const title = makeEl("div", "cap-nudge-title", "Ushbu uchrashuvni yozamizmi?");
 	const subtitle = makeEl(
 		"div",
 		"cap-nudge-subtitle",
-		"Make sure participants have agreed.",
+		"Ishtirokchilar rozi bo'lganiga ishonch hosil qiling.",
 	);
 	const buttons = makeEl("div", "cap-nudge-buttons");
 
-	const btnRecord = makeBtn("cap-nudge-btn-primary", "Record now");
-	const btnLater = makeBtn("cap-nudge-btn-secondary", "Later");
-	const btnDismiss = makeBtn("cap-nudge-btn-dismiss", "Dismiss");
+	const btnRecord = makeBtn("cap-nudge-btn-primary", "Hozir yozish");
+	const btnLater = makeBtn("cap-nudge-btn-secondary", "Keyinroq");
+	const btnDismiss = makeBtn("cap-nudge-btn-dismiss", "Yopish");
 
 	buttons.append(btnRecord, btnLater, btnDismiss);
 	card.append(title, subtitle, buttons);
@@ -682,7 +682,7 @@ function renderDefaultNudge(): void {
 			},
 			onFailed: () => {
 				btnRecord.disabled = false;
-				btnRecord.textContent = "Record now";
+				btnRecord.textContent = "Hozir yozish";
 			},
 		});
 	});
@@ -714,15 +714,15 @@ function renderCountdownNudge(): void {
 	const card = makeEl("div", "cap-nudge-card");
 
 	const titleEl = makeEl("div", "cap-nudge-title");
-	const titleText = document.createTextNode("Starting recording in ");
+	const titleText = document.createTextNode("Yozish boshlanishiga: ");
 	const numSpan = makeEl("span", undefined, String(countdownRemaining));
-	const titleSuffix = document.createTextNode("s");
+	const titleSuffix = document.createTextNode(" soniya qoldi");
 	titleEl.append(titleText, numSpan, titleSuffix);
 
-	const btnCancel = makeBtn("cap-nudge-btn-cancel", "Cancel");
+	const btnCancel = makeBtn("cap-nudge-btn-cancel", "Bekor qilish");
 	const btnNoAuto = makeBtn(
 		"cap-nudge-no-auto",
-		"Don’t auto-record this meeting",
+		"Bu uchrashuvni avtomatik yozmaslik",
 	);
 
 	card.append(titleEl, btnCancel, btnNoAuto);
@@ -753,7 +753,7 @@ function renderCountdownNudge(): void {
 			if (activeCard) {
 				showStartNote(
 					activeCard,
-					"Yozishni boshlash uchun \"Record now\" ni bosing — ekran tanlash oynasi darrov ochiladi.",
+					"Yozishni boshlash uchun \"Hozir yozish\" tugmasini bosing — ekran tanlash oynasi darrov ochiladi.",
 					false,
 				);
 			}
@@ -784,10 +784,10 @@ function renderRecordingPill(paused = false): void {
 		formatElapsed(Date.now() - recordingStartTime - pillPausedAccumMs),
 	);
 	elapsed.id = "cap-elapsed";
-	const btnStop = makeBtn("cap-nudge-btn-stop", "Stop");
+	const btnStop = makeBtn("cap-nudge-btn-stop", "To'xtatish");
 
 	if (paused) {
-		const pausedLabel = makeEl("span", "cap-nudge-paused-label", "Paused");
+		const pausedLabel = makeEl("span", "cap-nudge-paused-label", "Pauzada");
 		pill.append(dot, elapsed, pausedLabel, btnStop);
 	} else {
 		pill.append(dot, elapsed, btnStop);
@@ -827,7 +827,7 @@ function renderFinishingPill(): void {
 	const dot = makeEl("span", "cap-nudge-dot");
 	dot.style.background = "#3182ce";
 	dot.style.animation = "none";
-	const label = makeEl("span", "cap-nudge-elapsed", "Finishing up...");
+	const label = makeEl("span", "cap-nudge-elapsed", "Yakunlanmoqda…");
 	pill.append(dot, label);
 	container.appendChild(pill);
 	nudgeState = "finishing";
@@ -848,18 +848,18 @@ function renderCompletePill(shareUrl: string): void {
 	const card = makeEl("div", "cap-nudge-complete-card");
 
 	const check = makeEl("div", "cap-nudge-complete-check", "✓");
-	const title = makeEl("div", "cap-nudge-title", "Recording saved!");
+	const title = makeEl("div", "cap-nudge-title", "Yozuv saqlandi!");
 	const urlEl = makeEl("div", "cap-nudge-share-url", shareUrl);
 
 	const buttons = makeEl("div", "cap-nudge-buttons");
-	const copyBtn = makeBtn("cap-nudge-btn-copy", "Copy link");
-	const openBtn = makeBtn("cap-nudge-btn-open", "Open");
+	const copyBtn = makeBtn("cap-nudge-btn-copy", "Havolani nusxalash");
+	const openBtn = makeBtn("cap-nudge-btn-open", "Ochish");
 
 	copyBtn.addEventListener("click", () => {
 		navigator.clipboard.writeText(shareUrl).then(() => {
-			copyBtn.textContent = "Copied!";
+			copyBtn.textContent = "Nusxalandi!";
 			setTimeout(() => {
-				copyBtn.textContent = "Copy link";
+				copyBtn.textContent = "Havolani nusxalash";
 			}, 2000);
 		});
 	});
@@ -868,7 +868,7 @@ function renderCompletePill(shareUrl: string): void {
 		window.open(shareUrl, "_blank");
 	});
 
-	const dismissBtn = makeBtn("cap-nudge-btn-dismiss", "Dismiss");
+	const dismissBtn = makeBtn("cap-nudge-btn-dismiss", "Yopish");
 	dismissBtn.addEventListener("click", () => {
 		sendToBackground({ type: "CANCEL" } as OutboundMessage);
 		clearNudge();
@@ -894,20 +894,20 @@ function renderErrorCard(reason: string, recoverable: boolean): void {
 	recordingStartTime = 0;
 
 	const card = makeEl("div", "cap-nudge-error-card");
-	const title = makeEl("div", "cap-nudge-title", "Upload failed");
+	const title = makeEl("div", "cap-nudge-title", "Yuklash muvaffaqiyatsiz bo'ldi");
 	const msg = makeEl("div", "cap-nudge-error-msg", reason);
 
 	const buttons = makeEl("div", "cap-nudge-buttons");
 
 	if (recoverable) {
-		const retryBtn = makeBtn("cap-nudge-btn-primary", "Retry");
+		const retryBtn = makeBtn("cap-nudge-btn-primary", "Qayta urinish");
 		retryBtn.addEventListener("click", () => {
 			sendToBackground({ type: "RETRY" } as OutboundMessage);
 		});
 		buttons.appendChild(retryBtn);
 	}
 
-	const dismissBtn = makeBtn("cap-nudge-btn-secondary", "Dismiss");
+	const dismissBtn = makeBtn("cap-nudge-btn-secondary", "Yopish");
 	dismissBtn.addEventListener("click", () => {
 		sendToBackground({ type: "CANCEL" } as OutboundMessage);
 		clearNudge();
@@ -1041,7 +1041,7 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 		case "error":
 			clearNudge(() =>
 				renderErrorCard(
-					state.reason ?? "Unknown error",
+					state.reason ?? "Noma'lum xatolik",
 					state.recoverable ?? false,
 				),
 			);
