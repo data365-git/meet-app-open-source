@@ -88,8 +88,8 @@ Build rule: each fix on its own file-set (mostly disjoint), each with a test tha
 - [x] Grill decisions captured
 - [x] Audit complete (both agents) → plan filled + synthesized
 - [x] Fable plan-review → OK TO BUILD, corrections folded
-- [ ] Build (7 disjoint streams)  ← NEXT
-- [ ] Central gate (root typecheck + extension typecheck + all vitest) + my review
-- [ ] Fable review-of-review
+- [x] Build (7 disjoint streams) — DONE, committed `59962bc..77962f1` (7 commits). Notes: A3 = helper only, chat-route wiring deferred (already cost-bounded); C4 domain-info route DELETED (dead); C5 6 orphan .sql + dead script removed; extension bumped 0.5.2.
+- [x] Central gate — GREEN: root typecheck exit 0, extension tsc = only the 2 known pre-existing MessageBase errors, extension vitest 135/135, web vitest 1181 passed / 0 failed. (Fixed 2 test-only typecheck issues centrally: getHeaders return type → Record<string,string>; cost-guard test mock spread; removed a stale `.next/types` entry for the deleted route.) My review of the critical CORS + delete-account diffs: correct.
+- [~] Fable review-of-review  ← IN PROGRESS
 - [ ] Deploy + live-verify (curl CORS evil-origin rejected, /api/health, extension zip 0.5.2)
 - [ ] Morning report + STATE
