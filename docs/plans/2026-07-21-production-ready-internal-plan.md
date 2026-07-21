@@ -90,6 +90,16 @@ Build rule: each fix on its own file-set (mostly disjoint), each with a test tha
 - [x] Fable plan-review → OK TO BUILD, corrections folded
 - [x] Build (7 disjoint streams) — DONE, committed `59962bc..77962f1` (7 commits). Notes: A3 = helper only, chat-route wiring deferred (already cost-bounded); C4 domain-info route DELETED (dead); C5 6 orphan .sql + dead script removed; extension bumped 0.5.2.
 - [x] Central gate — GREEN: root typecheck exit 0, extension tsc = only the 2 known pre-existing MessageBase errors, extension vitest 135/135, web vitest 1181 passed / 0 failed. (Fixed 2 test-only typecheck issues centrally: getHeaders return type → Record<string,string>; cost-guard test mock spread; removed a stale `.next/types` entry for the deleted route.) My review of the critical CORS + delete-account diffs: correct.
-- [~] Fable review-of-review  ← IN PROGRESS
-- [ ] Deploy + live-verify (curl CORS evil-origin rejected, /api/health, extension zip 0.5.2)
+- [x] Fable review-of-review → **VERDICT SHIP**, no blocker/regression. It re-ran all gates itself (root pass, ext 135/135, web 1181/0-fail), unzipped the extension artifact to confirm the compiled timeout code ships, and scripted a full migration journal↔dir reconciliation (clean). Nits (non-blocking, deferred): `proxy.ts:13-15 mainOrigins` still lists cap.so/cap.link — DEAD entries (custom-domain routing skip, can never match on self-hosted; NOT a CORS/trust grant), safe to prune later; other cap.so literals in next.config.mjs/sitemap are pre-existing upstream leftovers.
+- [~] Deploy — IN PROGRESS. Pushed `d150c49` to `qa-fixes`, Coolify deployment `pwas79rn68icrfjral91xa91`, ~30 min build. A background poll will verify: image tag = `d150c49`, `/api/health` ok, extension zip `0.5.2`, and the B1 CORS proof (evil origin → NO ACAO; `data365.duckdns.org` origin still echoed).
 - [ ] Morning report + STATE
+
+## MORNING LIST (owner) — refined after the full run
+- ⛔ **The 2-person real Meet test on a real device, extension v0.5.2** (install from data365.duckdns.org/dashboard/extension AFTER the deploy lands) — the final production gate; press **"Hozir yozish"**, pick Entire Screen, talk 2 min with one other person, Stop → must appear under Meetings, remote voice audible, transcript/summary generates (credit is back).
+- **C2 — Trash restore: where should the restore button / Trash view live?** (dashboard tab vs quick-action) — decide, then I build the (decision-free) server action + that UI.
+- **C7 — Is the Tauri DESKTOP recorder client actually used by the team?** If yes, its stuck-upload cron needs scheduling.
+- **C6 — set `TELEGRAM_ALERT_CHAT_ID`** (30s via @userinfobot) so backup/ops failures alert; the dead `db-backup.yml` workflow can be disabled (needs a `workflow`-scoped push).
+- A3 chat-route wiring (deferred, low-urgency — cost already bounded); proxy.ts cap.so dead-entry prune; dashboard `<title>` i18n app-wide pass; recorder a11y — all deferred nice-to-haves.
+
+## PROVABLE ONLY IN PRODUCTION (the background poll handles B1; note the rest)
+- B1 CORS re-curl on the live build (in the poll). C1 assumes prod carries `ai_usage_events_org_fk` (harmless if absent). One real-Chrome mic-prompt sanity start (device-only). Behavioral: worst-case mic wait is now 8+8=16s before recording proceeds mic-less on the chosen-device path (intentional, same as the inpage twin).
