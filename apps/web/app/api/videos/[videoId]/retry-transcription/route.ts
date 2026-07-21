@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-transcription">,
 ) {
 	try {
@@ -34,6 +34,29 @@ export async function POST(
 		const video = videoQuery[0];
 		if (!video || video.ownerId !== user.id) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
+		}
+
+		// Re-running transcription re-spends paid AI budget. If a transcript
+		// already completed, require an explicit confirm/force flag before
+		// deleting it and paying to redo the work.
+		let confirmed = false;
+		try {
+			const body = (await request.json()) as
+				| { confirm?: unknown; force?: unknown }
+				| null;
+			confirmed = body?.confirm === true || body?.force === true;
+		} catch {
+			// No/invalid JSON body — treat as not confirmed (fail closed).
+		}
+
+		if (video.transcriptionStatus === "COMPLETE" && !confirmed) {
+			return Response.json(
+				{
+					error:
+						"This video already has a transcript. Pass confirm to re-run (this costs money).",
+				},
+				{ status: 409 },
+			);
 		}
 
 		await db()

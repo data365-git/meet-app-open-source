@@ -814,6 +814,7 @@ export async function transcribeAudio(
 							inputTokens: res.inputTokens,
 							outputTokens: res.outputTokens,
 							audioInTokens: res.audioInTokens,
+							modelUsed: res.modelUsed,
 						};
 					},
 				});
@@ -850,6 +851,11 @@ export async function transcribeAudio(
 					inputTokens: res.inputTokens,
 					outputTokens: res.outputTokens,
 					audioInTokens: res.audioInTokens,
+					// transcribeWithGemini can fall back past the requested primary
+					// model on overload (GEMINI_TRANSCRIBE_MODELS chain) — pass through
+					// which one actually ran so withCostGuard prices/records THAT model,
+					// not the "gemini-3-flash-preview" literal above.
+					modelUsed: res.modelUsed,
 				};
 			},
 		});

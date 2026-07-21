@@ -9,6 +9,12 @@ export interface GeminiTranscribeResult {
 		end: number;
 		language?: string;
 	}>;
+	/** The model that ACTUALLY produced this result. transcribeWithGemini can
+	 * fall back through GEMINI_TRANSCRIBE_MODELS on overload, so the caller's
+	 * requested model is not always the billed one — callers (withCostGuard)
+	 * should price/record this when present. Optional so other result-shaped
+	 * callers are unaffected. */
+	modelUsed?: string;
 }
 
 interface GeminiFileResponse {
@@ -952,6 +958,10 @@ export async function transcribeWithGemini(
 	try {
 		let genRes!: Response;
 		let genData!: GenData;
+		// Which model actually produced genRes/genData — the fallback loop can
+		// move past transcribeModels[0], so this is the truth for cost accounting,
+		// not the caller's requested/primary model.
+		let modelUsed: string = transcribeModels[0] ?? "";
 		for (let mi = 0; mi < transcribeModels.length; mi++) {
 			const model = transcribeModels[mi];
 			try {
@@ -1000,7 +1010,8 @@ export async function transcribeWithGemini(
 
 					return { genRes: res, genData: data };
 				}, maxAttempts, signal));
-				break; // primary model succeeded
+				modelUsed = model ?? modelUsed;
+				break; // this model succeeded
 			} catch (err) {
 				const isPermanent = (err as { permanent?: boolean })?.permanent === true;
 				const isLastModel = mi === transcribeModels.length - 1;
@@ -1059,7 +1070,7 @@ export async function transcribeWithGemini(
 			);
 		}
 
-		return { transcriptVtt, inputTokens, outputTokens, audioInTokens };
+		return { transcriptVtt, inputTokens, outputTokens, audioInTokens, modelUsed };
 	} finally {
 		cleanupUploadedFile();
 	}

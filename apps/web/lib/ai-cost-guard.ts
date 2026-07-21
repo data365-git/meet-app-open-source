@@ -211,7 +211,17 @@ interface CostGuardOptions<T> {
 	/** Free-tier call (billing-off key): record the usage but at $0 cost. */
 	free?: boolean;
 	fn: () => Promise<
-		T & { inputTokens: number; outputTokens: number; audioInTokens?: number }
+		T & {
+			inputTokens: number;
+			outputTokens: number;
+			audioInTokens?: number;
+			/** The model that ACTUALLY produced this result, when the caller's fn
+			 * can fall back to a different model than `options.model` requested
+			 * (e.g. transcribeWithGemini's overload fallback chain). When present,
+			 * this — not options.model — is what gets priced and recorded, so
+			 * spend is never attributed to a model that wasn't actually billed. */
+			modelUsed?: string;
+		}
 	>;
 }
 
@@ -284,6 +294,12 @@ export async function withCostGuard<T>(
 
 	const result = await options.fn();
 
+	// The model that actually produced this result (e.g. after an overload
+	// fallback chain inside fn) takes priority over the requested model — both
+	// for pricing and for what gets recorded, so spend is never attributed to a
+	// model that wasn't the one actually billed.
+	const billedModel = result.modelUsed ?? options.model;
+
 	const rawAudioInTokens = result.audioInTokens ?? 0;
 	// Transcription input is essentially all audio; when the caller couldn't
 	// determine an audio split (e.g. Gemini omitted promptTokensDetails), don't
@@ -297,7 +313,7 @@ export async function withCostGuard<T>(
 			: rawAudioInTokens;
 	const costUsdMicros = options.free
 		? 0
-		: priceForMicros(options.model, {
+		: priceForMicros(billedModel, {
 				textInTokens: Math.max(0, result.inputTokens - audioInTokens),
 				audioInTokens,
 				outputTokens: result.outputTokens,
@@ -313,7 +329,7 @@ export async function withCostGuard<T>(
 				userId: options.userId as User.UserId,
 				videoId: (options.videoId as Video.VideoId) ?? null,
 				operation: options.operation,
-				model: options.model,
+				model: billedModel,
 				inputTokens: result.inputTokens,
 				outputTokens: result.outputTokens,
 				costUsdMicros,
