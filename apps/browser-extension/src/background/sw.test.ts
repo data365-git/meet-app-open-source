@@ -2627,6 +2627,177 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(after.kind).toBe("recording");
 		expect(after.kind === "recording" && after.totalBytes).toBe(before + 4096);
 	});
+
+	// The RESIDUAL bug left after the recording-B fix above: stillOurs correctly
+	// refuses to reset to "idle" once the drain has moved state past "uploading"
+	// — but when that landing spot is a TERMINAL state (complete/error) for the
+	// SAME discarded video (no recording B ever started), leaving it untouched
+	// is itself wrong. The popup would show "Recording saved!" with a share link
+	// — or an "please re-record" error — for a video this very discard just
+	// deleted server-side (cleanUpDiscardedVideoOnServer's delete-permanent runs
+	// even after an already-completed multipart). Proved with the real handlers,
+	// same gated-race technique as the test above, minus the recording-B step.
+	it("overwrites a TERMINAL 'complete' state landing on the SAME discarded video with a discarded marker, not a misleading share link", async () => {
+		const { captured, storage, setState } = await freshSw();
+		const { getState } = await import("./state");
+
+		await setState(uploadingState("vid-A", "upload-A"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-A",
+						videoId: "vid-A",
+						parts: [{ partNumber: 1, etag: "etag-1", size: 0 }],
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		let releaseComplete!: () => void;
+		const completeGate = new Promise<void>((r) => {
+			releaseComplete = r;
+		});
+		let releaseAbort!: () => void;
+		const abortGate = new Promise<void>((r) => {
+			releaseAbort = r;
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/multipart/complete")) {
+				await completeGate;
+				return jsonResponse({ success: true });
+			}
+			if (url.includes("/multipart/abort")) {
+				await abortGate;
+				return jsonResponse({ success: true });
+			}
+			if (url.includes("/api/video/delete-permanent"))
+				return jsonResponse({ ok: true });
+			if (url.includes("/recording-complete")) return jsonResponse({ ok: true });
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		// (1) drain enters the queue and parks on completeMultipart.
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		// (2) user clicks "Permanently discard"; the guard reads "uploading" ->
+		// passes, and discardUpload is enqueued BEHIND the in-flight drain.
+		const discardResp = sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		// (3) drain finishes: multipart A completes server-side, state -> "complete".
+		// NO new recording starts this time — this is the residual case.
+		releaseComplete();
+		await flushAsync();
+		expect((await getState()).kind).toBe("complete");
+
+		// (4) discard's own abort/delete calls finally resolve; the handler's
+		// tail (the afterDiscard read + overwrite) runs.
+		releaseAbort();
+		await discardResp;
+		await flushAsync();
+
+		const final = await getState();
+		// Must NOT be the misleading "Recording saved!" + share-link state for a
+		// video that was just permanently deleted on purpose.
+		expect(final.kind).not.toBe("complete");
+		expect(final.kind).toBe("error");
+		expect(final.kind === "error" && final.recoverable).toBe(false);
+		expect(final.kind === "error" && final.reason).toMatch(/discard/i);
+	});
+
+	// Same residual bug, other terminal branch: the drain can also dead-letter a
+	// permanently-failed part for the SAME video mid-discard, which sets a
+	// generic "please re-record" error (moveToDeadLetter in upload.ts). That
+	// copy is a lie for a recording the user just asked to destroy.
+	it("overwrites a TERMINAL 'error' state landing on the SAME discarded video with a discarded marker, not a 'please re-record' lie", async () => {
+		const { captured, storage, setState } = await freshSw();
+		const { getState } = await import("./state");
+
+		await setState(uploadingState("vid-A", "upload-A"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "part",
+					payload: {
+						partNumber: 2,
+						videoId: "vid-A",
+						uploadId: "upload-A",
+						partDataBase64: Buffer.from("bytes").toString("base64"),
+					},
+					// One more failed attempt exhausts PART_MAX_ATTEMPTS, so this single
+					// drain pass dead-letters it immediately (deterministic, no need to
+					// loop the alarm).
+					attempts: PART_MAX_ATTEMPTS - 1,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		let releasePresign!: () => void;
+		const presignGate = new Promise<void>((r) => {
+			releasePresign = r;
+		});
+		let releaseAbort!: () => void;
+		const abortGate = new Promise<void>((r) => {
+			releaseAbort = r;
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/upload/multipart/presign-part")) {
+				await presignGate;
+				return new Response("boom", { status: 500 });
+			}
+			if (url.includes("/multipart/abort")) {
+				await abortGate;
+				return jsonResponse({ success: true });
+			}
+			if (url.includes("/api/video/delete-permanent"))
+				return jsonResponse({ ok: true });
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		// (1) drain begins, parks on the failing presign-part fetch.
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		// (2) user clicks discard while state is still "uploading" — the guard
+		// reads it, passes, and queues discardUpload BEHIND the in-flight drain.
+		const discardResp = sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		// (3) the part's retries are exhausted -> dead-lettered -> state flips to
+		// a TERMINAL "error" for the SAME video (the generic "please re-record"
+		// reason), while the discard is still queued behind it.
+		releasePresign();
+		await flushAsync();
+		const midState = await getState();
+		expect(midState.kind).toBe("error");
+		expect(midState.kind === "error" && midState.previousVideoId).toBe(
+			"vid-A",
+		);
+
+		// (4) discard's own abort/delete calls finally resolve; the handler's
+		// tail (the afterDiscard read + overwrite) runs.
+		releaseAbort();
+		await discardResp;
+		await flushAsync();
+
+		const final = await getState();
+		expect(final.kind).toBe("error");
+		// Must NOT still be the generic "please re-record" lie for a recording
+		// deliberately destroyed by this same discard.
+		expect(final.kind === "error" && final.reason).not.toMatch(/re-record/i);
+		expect(final.kind === "error" && final.recoverable).toBe(false);
+		expect(final.kind === "error" && final.reason).toMatch(/discard/i);
+	});
 });
 
 // ── MEDIUM: pause/resume must not lie ──────────────────────────────────────

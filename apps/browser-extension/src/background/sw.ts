@@ -903,6 +903,39 @@ async function handleMessage(
 			if (stillOurs) {
 				await setState({ kind: "idle" });
 				updateBadge({ kind: "idle" });
+			} else {
+				// Residual case of the same race (same recording, no recording B):
+				// the drain can also legitimately finish resolving THIS discarded
+				// upload into a TERMINAL state — "complete" with a real share link,
+				// or "error" telling the user to re-record — while discardUpload's
+				// own abort/delete calls above were still resolving. cleanUpDiscard-
+				// edVideoOnServer's delete-permanent runs even when the multipart had
+				// already completed, so a "complete" seen here is already a dead
+				// link server-side; showing it (or an unrelated "please re-record")
+				// misleads the user about a recording they deliberately destroyed.
+				// Only overwrite when the terminal state's OWN videoId still matches
+				// THIS discard — a different videoId means recording B is the one in
+				// progress/done and must be left completely alone, exactly like the
+				// stillOurs guard above (see its comment + adversarial test).
+				const terminalVideoId =
+					afterDiscard.kind === "complete"
+						? afterDiscard.videoId
+						: afterDiscard.kind === "error"
+						  ? afterDiscard.previousVideoId
+						  : undefined;
+				if (
+					(afterDiscard.kind === "complete" ||
+						afterDiscard.kind === "error") &&
+					terminalVideoId === discardState.videoId
+				) {
+					const discardedState: ExtensionState = {
+						kind: "error",
+						reason: "This recording was permanently discarded.",
+						recoverable: false,
+					};
+					await setState(discardedState);
+					updateBadge(discardedState);
+				}
 			}
 			if (!serverCleaned) {
 				// Do not claim more than we did. The local side is genuinely gone,
