@@ -345,4 +345,33 @@ describe("/complete recorded size (H5)", () => {
 			total: 4242,
 		});
 	});
+
+	// The browser extension uploads under the "result.mp4" key (not
+	// "raw-upload.*"), so isRawRecorderUpload(subpath) is false and this took
+	// the non-raw-recorder branch. That branch never wrote storedBytes into
+	// videoUploads — an extension client declaring size:0 for every part
+	// therefore left the row's total/uploaded at 0 forever (the row is deleted
+	// once processing finishes), so its bytes never counted against the quota.
+	it("also persists the storage ContentLength for an extension upload (key result.mp4), not the forged client sum", async () => {
+		storage.headContentLength = 7_500_000;
+
+		const res = await postComplete({
+			uploadId: "upload-1",
+			videoId: "video-1",
+			subpath: "result.mp4",
+			// The browser extension declares size 0 for every part.
+			parts: [
+				{ partNumber: 1, etag: "etag-1", size: 0 },
+				{ partNumber: 2, etag: "etag-2", size: 0 },
+			],
+		});
+
+		expect(res.status).toBe(200);
+		expect(dbWrites.videoUploadSets).toContainEqual(
+			expect.objectContaining({
+				uploaded: 7_500_000,
+				total: 7_500_000,
+			}),
+		);
+	});
 });
