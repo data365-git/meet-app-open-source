@@ -369,6 +369,8 @@
     "policyRestrictedTitle": "Kirish cheklangan",
     "policyRestrictedDesc": "Elektron pochtangiz video egasi belgilagan talablarga mos kelmaydi.",
     "policySignIn": "Kirish",
+    "storageMissingTitle": "Bu yozuv topilmadi",
+    "storageMissingDesc": "Iltimos, administratoringizga murojaat qiling.",
     "metaPrivateTitle": "data365: Maxfiy video",
     "metaPrivateDesc": "Bu video maxfiy va ulashib bo'lmaydi.",
     "metaRestrictedTitle": "data365: Kirishi cheklangan video",
@@ -825,5 +827,19 @@
     "title": "Ish maydoningizni yuklab bo'lmadi",
     "body": "Hisobingizni tekshirishda xatolik yuz berdi. Odatda bu vaqtinchalik — biroz o'tib qayta urinib ko'ring.",
     "retry": "Qayta urinish"
+  },
+  "errorBoundary": {
+    "staleTitle": "Yangilanmoqda…",
+    "staleDescDashboard": "Eng so'nggi versiya bilan qayta yuklanmoqda.",
+    "staleDescDeployed": "Yangi versiya chiqdi. Bir zumda qayta yuklanadi.",
+    "errorIdLabel": "Xato ID: {digest}",
+    "tryAgain": "Qayta urinish",
+    "dashboardTitle": "Bu sahifani yuklab bo'lmadi",
+    "dashboardDesc": "Boshqaruv paneli ichida xatolik yuz berdi. Yon panel hali ham ishlaydi — boshqa bo'limga o'tib ko'ring.",
+    "goToDashboardHome": "Boshqaruv paneliga o'tish",
+    "capsTitle": "Videolaringizni yuklab bo'lmadi",
+    "meetingsTitle": "Uchrashuv yozuvlarini yuklab bo'lmadi",
+    "genericDesc": "Bu sahifani yuklashda xatolik yuz berdi. Xato qayd etildi.",
+    "backToDashboard": "Boshqaruv paneliga qaytish"
   }
 }

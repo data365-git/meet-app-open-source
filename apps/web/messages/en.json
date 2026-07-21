@@ -369,6 +369,8 @@
     "policyRestrictedTitle": "Access restricted",
     "policyRestrictedDesc": "Your email address does not meet the requirements set by the video owner.",
     "policySignIn": "Sign in",
+    "storageMissingTitle": "This recording could not be found",
+    "storageMissingDesc": "Please contact your admin for help.",
     "metaPrivateTitle": "data365: This video is private",
     "metaPrivateDesc": "This video is private and cannot be shared.",
     "metaRestrictedTitle": "data365: This video is restricted",
@@ -825,5 +827,19 @@
     "title": "We couldn't load your workspace",
     "body": "Something went wrong on our end while checking your account. This is usually temporary — try again in a moment.",
     "retry": "Try again"
+  },
+  "errorBoundary": {
+    "staleTitle": "Updating…",
+    "staleDescDashboard": "Reloading with the latest version.",
+    "staleDescDeployed": "A new version was deployed. Reloading in a moment.",
+    "errorIdLabel": "Error ID: {digest}",
+    "tryAgain": "Try again",
+    "dashboardTitle": "Couldn't load this page",
+    "dashboardDesc": "Something failed inside the dashboard. Your sidebar still works — try going to a different section.",
+    "goToDashboardHome": "Go to dashboard home",
+    "capsTitle": "Couldn't load your videos",
+    "meetingsTitle": "Couldn't load your meeting recordings",
+    "genericDesc": "Something went wrong loading this page. The error has been logged.",
+    "backToDashboard": "Back to dashboard"
   }
 }

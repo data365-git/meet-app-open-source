@@ -45,6 +45,7 @@ import { TranscriptPanel } from "./panels/TranscriptPanel";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
+	StorageMissingOverlay,
 } from "./RecordingInProgress";
 import { SharePanel } from "./SharePanel";
 import { toStandardWebVtt } from "./utils/caption-vtt";
@@ -680,7 +681,9 @@ export const ShareVideo = forwardRef<
 					}`}
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
-					{isActivelyRecording ? (
+					{data.metadata?.storageMissing ? (
+						<StorageMissingOverlay className="h-full" />
+					) : isActivelyRecording ? (
 						<div className="relative h-full overflow-hidden rounded-xl bg-black">
 							<CapVideoPlayer
 								videoId={data.id}

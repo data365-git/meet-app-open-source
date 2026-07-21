@@ -1,6 +1,7 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
+import { AlertTriangle } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 export function RecordingInProgressOverlay({
@@ -70,6 +71,27 @@ export function PreparingVideoOverlay({
 		>
 			<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
 			<p className="text-white/50 text-sm">{resolvedLabel}</p>
+		</div>
+	);
+}
+
+// C3: shown in place of the player when the nightly storage-reconciliation
+// cron (reconcile-storage/route.ts) has confirmed the video's S3 object is
+// gone (`metadata.storageMissing`). Without this, the viewer just sees a
+// broken/loading player with no explanation.
+export function StorageMissingOverlay({ className }: { className?: string }) {
+	const t = useTranslations("share");
+	return (
+		<div
+			className={`flex flex-col gap-2 justify-center items-center bg-black rounded-xl px-6 text-center ${className ?? ""}`}
+		>
+			<AlertTriangle className="size-6 text-white/50" />
+			<p className="text-white font-semibold text-sm sm:text-base">
+				{t("storageMissingTitle")}
+			</p>
+			<p className="text-white/50 text-xs sm:text-sm max-w-xs leading-relaxed">
+				{t("storageMissingDesc")}
+			</p>
 		</div>
 	);
 }
