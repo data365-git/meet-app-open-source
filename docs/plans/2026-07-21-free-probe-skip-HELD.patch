@@ -1,0 +1,87 @@
+diff --git a/apps/web/workflows/transcribe.ts b/apps/web/workflows/transcribe.ts
+index cf7936a..f741b00 100644
+--- a/apps/web/workflows/transcribe.ts
++++ b/apps/web/workflows/transcribe.ts
+@@ -750,6 +750,13 @@ export async function transcribeAudio(
+ 	ownerEncryptedGeminiKey: string | null,
+ 	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
+ 	knownSpeakers: string[] = [],
++	// Run-scoped (per transcribeAudioChunks invocation), NOT persisted: once a
++	// chunk's free attempt dies with a quota-like error, every LATER chunk in the
++	// same run skips the free probe entirely and goes straight to paid — the free
++	// daily quota (~20 calls) is exhausted for the whole account, so re-probing it
++	// per chunk only burns FREE_TRANSCRIBE_PROBE_MS (30s) for nothing. A one-off
++	// transient (non-quota) free failure must NOT set this — see the catch below.
++	freeProbeState?: { exhausted: boolean },
+ ): Promise<string> {
+ 	"use step";
+ 
+@@ -784,7 +791,7 @@ export async function transcribeAudio(
+ 		// key/model on any free-key failure. Cheap mode is patient: free-key quota
+ 		// failures throw so cron can retry from the partial checkpoint later.
+ 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
+-		if (freeKey) {
++		if (freeKey && !freeProbeState?.exhausted) {
+ 			try {
+ 				const freeResult = await withCostGuard({
+ 					orgId: context.orgId,
+@@ -827,6 +834,14 @@ export async function transcribeAudio(
+ 						`Free-tier transcription quota exhausted for video=${context.videoId}`,
+ 					);
+ 				}
++				// Fast mode only reaches here (cheap already threw above). A quota-like
++				// failure means the free key's daily quota is spent for the WHOLE run,
++				// not just this chunk — trip the flag so later chunks skip the 30s
++				// probe. A non-quota (transient) failure leaves it untouched: a single
++				// network blip on one chunk shouldn't disable free for the rest.
++				if (freeProbeState && isQuotaLikeAiError(error)) {
++					freeProbeState.exhausted = true;
++				}
+ 				console.warn(
+ 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
+ 				);
+@@ -1025,6 +1040,13 @@ export async function transcribeAudioChunks(
+ 		}
+ 	};
+ 
++	// Shared across every chunk in THIS run (not persisted): once one chunk's
++	// free attempt dies with a quota-like error, every later chunk skips the
++	// free probe and goes straight to paid (see transcribeAudio's freeProbeState
++	// param) — the free daily quota is spent for the whole account, so re-probing
++	// it per chunk only burns the 30s deadline for nothing.
++	const freeProbeState = { exhausted: false };
++
+ 	// Worker shared by the serial first chunk and the concurrent rest — keeps
+ 	// the fault-tolerance, progress-callback and result-indexing behavior
+ 	// identical for every chunk.
+@@ -1055,6 +1077,7 @@ export async function transcribeAudioChunks(
+ 				ownerEncryptedGeminiKey,
+ 				context,
+ 				knownSpeakers,
++				freeProbeState,
+ 			});
+ 			// DRIFT FIX (measured 2026-07-19 on a real 42-min recording): Gemini's
+ 			// within-chunk clock runs at a near-constant fraction of real time
+@@ -1631,11 +1654,14 @@ export async function transcribeAudioChunkWithRetry(
+ 		ownerEncryptedGeminiKey,
+ 		context,
+ 		knownSpeakers,
++		freeProbeState,
+ 	}: {
+ 		chunk: ExtractedAudioChunk;
+ 		ownerEncryptedGeminiKey: string | null;
+ 		context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode };
+ 		knownSpeakers?: string[];
++		/** Threaded straight through to transcribeAudio — see its param doc. */
++		freeProbeState?: { exhausted: boolean };
+ 	},
+ 	transcribeFn: typeof transcribeAudio = transcribeAudio,
+ ): Promise<string> {
+@@ -1659,6 +1685,7 @@ export async function transcribeAudioChunkWithRetry(
+ 				ownerEncryptedGeminiKey,
+ 				context,
+ 				knownSpeakers ?? [],
++				freeProbeState,
+ 			);
+ 			const coverage = webVttCoverageSec(vtt);
+ 			const largestGap = webVttLargestGapSec(vtt, chunkDurationSec);
