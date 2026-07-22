@@ -144,6 +144,11 @@ app.post(
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
+				// An ownership/policy denial is a 403, not a server error. Surfacing it as
+				// a 500 made auth denials look like crashes to callers and monitoring (a
+				// non-owner initiating an upload used to get "Error initiating…" 500).
+				if (e._tag === "PolicyDenied")
+					return Effect.succeed<Response>(c.text("Forbidden", 403));
 
 				return Effect.succeed<Response>(
 					c.json({ error: "Error initiating multipart upload" }, 500),

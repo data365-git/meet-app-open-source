@@ -148,8 +148,11 @@ const TableCard = ({
 		percentage: 0,
 	})) as TableCardProps["rows"];
 
-	const displayRows = isLoading || !hasRows ? placeholders : rows;
-	const showSkeletons = isLoading || !hasRows;
+	// Skeletons ONLY while actually loading. An empty-but-loaded account must show a
+	// calm empty state (below), NOT a permanent pulsing skeleton — the latter reads as
+	// "stuck loading forever" and never resolves for an account with no analytics yet.
+	const displayRows = isLoading ? placeholders : rows;
+	const showSkeletons = isLoading;
 
 	const handleCapNameClick = (capId: string | undefined) => {
 		if (capId && type === "cap") {
@@ -176,7 +179,12 @@ const TableCard = ({
         />
       </div> */}
 			<div className="flex flex-1 flex-col gap-4 justify-center">
-				<div className="relative w-full">
+				{!isLoading && !hasRows ? (
+					<div className="flex justify-center items-center min-h-[320px] text-sm text-gray-11">
+						No data yet
+					</div>
+				) : (
+					<div className="relative w-full">
 					<Table className="w-full border-separate table-fixed border-spacing-y-2">
 						<TableHeader className="sticky top-0 z-10 bg-gray-2 text-xs uppercase text-gray-11 opacity-70">
 							<TableRow>
@@ -253,6 +261,7 @@ const TableCard = ({
 						</TableBody>
 					</Table>
 				</div>
+				)}
 			</div>
 		</div>
 	);

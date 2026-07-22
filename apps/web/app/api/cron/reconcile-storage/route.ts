@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videoUploads, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { Storage } from "@cap/web-backend";
-import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import { runPromise } from "@/lib/server";
@@ -24,29 +24,39 @@ const NON_TERMINAL_UPLOAD_PHASES = [
 
 type ReconcileCandidate = typeof videos.$inferSelect;
 
-async function objectExists(video: ReconcileCandidate, key: string) {
-	const [bucket] = await Storage.getAccessForVideo(
-		decodeStorageVideo(video),
-	).pipe(runPromise);
-
-	return await bucket.headObject(key).pipe(
-		Effect.as(true),
-		Effect.catchAll(() => Effect.succeed(false)),
-		runPromise,
-	);
-}
-
-async function resolveVideoKey(video: ReconcileCandidate): Promise<string> {
+// The playback path (/api/playlist) treats a video as present if ANY of its media
+// objects exist — the recorded raw upload, the optimized result, or the raw fallbacks
+// by convention. reconcile MUST check the SAME set, or it false-flags "storageMissing"
+// on a recording whose ffmpeg optimize step failed (result.mp4 never written) even
+// though the raw upload plays fine — and, once flagged, it was never re-checked, so the
+// share page showed "recording unavailable" on a perfectly playable video. (2026-07-22.)
+async function anyObjectExists(video: ReconcileCandidate): Promise<boolean> {
 	const [uploadRow] = await db()
 		.select({ rawFileKey: videoUploads.rawFileKey })
 		.from(videoUploads)
 		.where(eq(videoUploads.videoId, video.id))
 		.limit(1);
 
-	// Same candidate order as video-proxy/playlist resolution: prefer the
-	// recorded raw upload key, then the produced result, then raw fallbacks.
-	if (uploadRow?.rawFileKey) return uploadRow.rawFileKey;
-	return `${video.ownerId}/${video.id}/result.mp4`;
+	const candidateKeys = [
+		...(uploadRow?.rawFileKey ? [uploadRow.rawFileKey] : []),
+		`${video.ownerId}/${video.id}/result.mp4`,
+		`${video.ownerId}/${video.id}/raw-upload.mp4`,
+		`${video.ownerId}/${video.id}/raw-upload.webm`,
+	];
+
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
+
+	for (const key of candidateKeys) {
+		const exists = await bucket.headObject(key).pipe(
+			Effect.as(true),
+			Effect.catchAll(() => Effect.succeed(false)),
+			runPromise,
+		);
+		if (exists) return true;
+	}
+	return false;
 }
 
 export async function GET(request: Request) {
@@ -70,35 +80,42 @@ export async function GET(request: Request) {
 
 	const olderThan = new Date(Date.now() - CHECK_OLDER_THAN_MS);
 
+	// We intentionally do NOT exclude already-flagged videos: they are re-checked every
+	// run so a stale false-positive (see anyObjectExists) self-heals — the flag is
+	// cleared below the moment the media turns out to be present.
 	const candidates = await db()
 		.select()
 		.from(videos)
-		.where(
-			and(
-				isNull(videos.deletedAt),
-				lt(videos.createdAt, olderThan),
-				sql`JSON_EXTRACT(${videos.metadata}, '$.storageMissing') IS NULL`,
-			),
-		)
+		.where(and(isNull(videos.deletedAt), lt(videos.createdAt, olderThan)))
 		.orderBy(desc(videos.createdAt))
 		.limit(MAX_VIDEOS_PER_RUN);
 
 	let checked = 0;
 	let missing = 0;
+	let cleared = 0;
 	const missingVideoIds: string[] = [];
 
 	for (const video of candidates) {
 		checked++;
 		try {
-			const key = await resolveVideoKey(video);
-			const exists = await objectExists(video, key);
-			if (!exists) {
+			const exists = await anyObjectExists(video);
+			const metadata = (video.metadata as VideoMetadata) ?? {};
+			const wasFlagged = metadata.storageMissing === true;
+			if (!exists && !wasFlagged) {
 				missing++;
 				missingVideoIds.push(video.id);
-				const metadata = (video.metadata as VideoMetadata) ?? {};
 				await db()
 					.update(videos)
 					.set({ metadata: { ...metadata, storageMissing: true } })
+					.where(eq(videos.id, video.id));
+			} else if (exists && wasFlagged) {
+				// Previously mis-flagged but the media is in fact present — clear the
+				// stale flag so the share page stops showing a false "unavailable".
+				cleared++;
+				const { storageMissing: _drop, ...rest } = metadata;
+				await db()
+					.update(videos)
+					.set({ metadata: rest })
 					.where(eq(videos.id, video.id));
 			}
 		} catch (error) {
@@ -139,5 +156,5 @@ export async function GET(request: Request) {
 		);
 	}
 
-	return NextResponse.json({ checked, missing, staleUploads });
+	return NextResponse.json({ checked, missing, cleared, staleUploads });
 }

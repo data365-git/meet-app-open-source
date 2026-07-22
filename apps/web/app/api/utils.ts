@@ -130,7 +130,7 @@ export const allowedOrigins = [
 	"https://tauri.localhost",
 ];
 
-export const corsMiddleware = cors({
+const rawCorsMiddleware = cors({
 	origin: (origin) => {
 		if (allowedOrigins.includes(origin)) {
 			return origin;
@@ -151,6 +151,29 @@ export const corsMiddleware = cors({
 	credentials: true,
 	allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
+});
+
+// hono/cors sets Access-Control-Allow-Credentials unconditionally whenever
+// credentials:true is set — even for a cross-origin request whose Origin was NOT
+// allowlisted (it merely omits Access-Control-Allow-Origin). A browser ignores ACAC
+// without a matching ACAO, so this isn't exploitable, but a lone ACAC to a disallowed
+// origin is inconsistent with getHeaders (the B1 CORS-reflection lineage), which pairs
+// both headers behind one allowlist check. Strip the lone ACAC so a disallowed
+// cross-origin request gets NEITHER header. Allowlisted origins (web/tauri/
+// chrome-extension) get ACAO set → the condition is false → their responses are
+// left completely untouched.
+export const corsMiddleware = createMiddleware(async (c, next) => {
+	await rawCorsMiddleware(c, next);
+	const origin = c.req.header("origin");
+	if (origin && !c.res.headers.get("Access-Control-Allow-Origin")) {
+		const headers = new Headers(c.res.headers);
+		headers.delete("Access-Control-Allow-Credentials");
+		c.res = new Response(c.res.body, {
+			status: c.res.status,
+			statusText: c.res.statusText,
+			headers,
+		});
+	}
 });
 
 export const developerSdkCors = cors({
