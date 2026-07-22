@@ -773,6 +773,11 @@ function renderRecordingPill(paused = false): void {
 	const container = root.getElementById("cap-nudge-container");
 	if (!container) return;
 
+	// showLiveNote's contract is that a note (the "recording via system audio"
+	// reassurance, the silence-watchdog warning) SURVIVES the card→pill swap.
+	// textContent="" used to wipe it, so a note emitted at start flashed for one
+	// frame and vanished. Carry it across the clear so it stays visible.
+	const liveNote = container.querySelector(".cap-nudge-live-note");
 	container.textContent = "";
 	if (recordingStartTime === 0) recordingStartTime = Date.now();
 
@@ -794,6 +799,7 @@ function renderRecordingPill(paused = false): void {
 	}
 
 	container.appendChild(pill);
+	if (liveNote) container.appendChild(liveNote);
 	nudgeState = "recording";
 
 	if (elapsedTimer !== null) clearInterval(elapsedTimer);

@@ -39,9 +39,19 @@ const require = createRequire(join(here, "..", "..", "web", "package.json"));
 // file — that is what proves the recorder prunes dead taps and re-taps, rather
 // than silently recording nothing for the rest of the call.
 const SWAP_TEST = process.env.PROOF_SWAP === "1";
-const RECORD_MS = SWAP_TEST ? 18_000 : 10_000;
+// PROOF_SECOND=1 reproduces the 2026-07-22 prod bug: record → stop → record
+// AGAIN on the SAME page. Recording #1's cleanup used to stop()
+// captureStream()-derived tracks, which — on a srcObject-backed element like
+// real Meet's — terminally kills the element's OWN underlying WebRTC track.
+// Recording #2 then finds zero live taps and shows the "Mijoz ovozi olinmadi"
+// confirm dialog instead of just recording. Requires ?tone=stream (the
+// srcObject-backed fake element): ?tone=media is file-backed and takes a
+// different Blink captureStream() path that cannot reproduce this at all.
+// See docs/plans/2026-07-22-remote-voice-2nd-recording-bug.md §6.2.
+const SECOND_TEST = process.env.PROOF_SECOND === "1";
+const RECORD_MS = SWAP_TEST ? 18_000 : SECOND_TEST ? 8_000 : 10_000;
 const SERVE_PORT = 8443;
-const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=media${SWAP_TEST ? "&swap=8000" : ""}`;
+const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
 
 const log = (m) => console.log(`[proof-inpage] ${m}`);
 
@@ -197,7 +207,7 @@ async function main() {
 		let centre = null;
 		for (let i = 0; i < 20 && !centre; i++) {
 			await meetPage.waitForTimeout(500);
-			centre = await centreOfShadowNode(cdp, "Record now").catch(() => null);
+			centre = await centreOfShadowNode(cdp, "Hozir yozish").catch(() => null);
 		}
 		if (!centre) return verdict("FAIL", "reason=nudge-record-now-never-appeared");
 		log(`nudge button at ${Math.round(centre.x)},${Math.round(centre.y)}`);
@@ -213,7 +223,7 @@ async function main() {
 		let stopCentre = null;
 		for (let i = 0; i < 40 && !stopCentre; i++) {
 			await meetPage.waitForTimeout(500);
-			stopCentre = await centreOfShadowNode(cdp, "Stop").catch(() => null);
+			stopCentre = await centreOfShadowNode(cdp, "To'xtatish").catch(() => null);
 		}
 		if (!stopCentre) {
 			// Say WHY: the in-card note carries the real reason (picker cancelled,
@@ -247,6 +257,109 @@ async function main() {
 		if (!manifest?.assembledFile)
 			return verdict("FAIL", "reason=upload-never-completed-to-mock");
 
+		const { spawnSync } = await import("node:child_process");
+
+		if (SECOND_TEST) {
+			// Baseline sanity: recording #1 must actually contain the tone, or the
+			// harness itself is broken (wrong element / wrong session file) and a
+			// 2nd-recording test would prove nothing either way.
+			const analyze1 = spawnSync(
+				process.execPath,
+				[join(here, "analyze-audio.mjs"), manifest.assembledFile],
+				{ encoding: "utf8" },
+			);
+			const analyze1Line = (analyze1.stdout ?? "").trim();
+			log(`recording #1 analyzer: ${analyze1Line}`);
+			if (analyze1.status !== 0) {
+				return verdict("FAIL", `reason=first-recording-no-tone ${analyze1Line}`);
+			}
+
+			// Recording #1 landed on the TERMINAL "complete" card ("Yozuv saqlandi!")
+			// and stays there until the user closes it — nudgeState only leaves
+			// "complete" on that click (meet-detect.ts maybeShow() early-returns
+			// while nudgeState === "complete"). Close it first, exactly like a real
+			// user would before recording again. This sends CANCEL, which the SW
+			// treats as a no-op reset to idle when nothing is mid-upload (state is
+			// already "complete") — recording #1's file is untouched.
+			let dismissCentre = null;
+			for (let i = 0; i < 20 && !dismissCentre; i++) {
+				await meetPage.waitForTimeout(500);
+				dismissCentre = await centreOfShadowNode(cdp, "Yopish").catch(() => null);
+			}
+			if (!dismissCentre)
+				return verdict("FAIL", "reason=complete-card-close-button-never-appeared");
+			await meetPage.mouse.click(dismissCentre.x, dismissCentre.y);
+			log("dismissed the complete card (Yopish)");
+
+			// Re-find the record button — the default nudge re-renders ~800ms after
+			// the SW's state settles back to idle (meet-detect.ts handleStateChange
+			// "idle" case).
+			let centre2 = null;
+			for (let i = 0; i < 20 && !centre2; i++) {
+				await meetPage.waitForTimeout(500);
+				centre2 = await centreOfShadowNode(cdp, "Hozir yozish").catch(() => null);
+			}
+			if (!centre2)
+				return verdict("FAIL", "reason=record-button-never-reappeared-for-2nd-recording");
+			log(`record button (2nd recording) at ${Math.round(centre2.x)},${Math.round(centre2.y)}`);
+
+			await meetPage.mouse.click(centre2.x, centre2.y);
+			log("clicked Hozir yozish (2nd recording)");
+
+			// THE OWNER'S BUG lives right here: if recording #1's cleanup killed
+			// every page-audio tap (the pre-fix `t.stop()`), the extension shows the
+			// "Mijoz ovozi olinmadi" confirm instead of going straight into the
+			// pill. Probe for BOTH outcomes in the same loop — whichever appears
+			// first is the true outcome, and we must not click "Baribir boshla" to
+			// paper over it.
+			let stop2Centre = null;
+			let dialogCentre = null;
+			for (let i = 0; i < 40 && !stop2Centre && !dialogCentre; i++) {
+				await meetPage.waitForTimeout(500);
+				stop2Centre = await centreOfShadowNode(cdp, "To'xtatish").catch(() => null);
+				if (!stop2Centre) {
+					dialogCentre = await centreOfShadowNode(cdp, "Baribir boshla").catch(() => null);
+				}
+			}
+			if (dialogCentre) {
+				return verdict("FAIL", "reason=second-recording-lost-page-audio");
+			}
+			if (!stop2Centre) {
+				const note = await shadowDump(cdp);
+				return verdict("FAIL", `reason=second-recording-never-started note=${note}`);
+			}
+			log("2nd recording started (pill visible, no confirm dialog)");
+
+			await meetPage.waitForTimeout(RECORD_MS);
+			await meetPage.mouse.click(stop2Centre.x, stop2Centre.y);
+			log("stopped 2nd recording; waiting for upload to the mock server");
+
+			const manifest2Path = join(outDir, "manifest-2.json");
+			let manifest2 = null;
+			for (let i = 0; i < 60; i++) {
+				if (existsSync(manifest2Path)) {
+					manifest2 = JSON.parse(readFileSync(manifest2Path, "utf8"));
+					if (manifest2.recordingComplete && manifest2.assembledFile) break;
+				}
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			if (!manifest2?.assembledFile)
+				return verdict("FAIL", "reason=second-recording-upload-never-completed-to-mock");
+
+			const analyze2 = spawnSync(
+				process.execPath,
+				[join(here, "analyze-audio.mjs"), manifest2.assembledFile],
+				{ encoding: "utf8" },
+			);
+			const analyze2Line = (analyze2.stdout ?? "").trim();
+			log(`recording #2 analyzer: ${analyze2Line}`);
+
+			return verdict(
+				analyze2.status === 0 ? "PASS" : "FAIL",
+				`metric=second-recording-tone tone=${analyze2.status === 0 ? "OK" : "MISSING"} sustained_ms=${RECORD_MS} ${analyze2Line}`,
+			);
+		}
+
 		const claims = [];
 		const cv = manifest.createVideo ?? {};
 		claims.push(
@@ -257,7 +370,6 @@ async function main() {
 			`duration=${typeof dur === "number" && dur >= 5 && dur <= 60 ? `OK(${dur}s)` : `WRONG(${dur})`}`,
 		);
 
-		const { spawnSync } = await import("node:child_process");
 		const analyze = spawnSync(
 			process.execPath,
 			[join(here, "analyze-audio.mjs"), manifest.assembledFile],

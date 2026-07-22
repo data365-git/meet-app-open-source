@@ -14,16 +14,25 @@ const port = Number(process.argv[2] ?? 8787);
 const outDir = process.argv[3] ?? join(here, "out");
 mkdirSync(outDir, { recursive: true });
 
-const parts = new Map(); // partNumber -> Buffer
-const manifest = {
-	createVideo: null, // {recordingMode, extensionContext, meetingId, name}
-	completeMultipart: null, // {durationInSecs, partCount}
-	recordingComplete: false,
-	assembledFile: null,
-};
+let parts = new Map(); // partNumber -> Buffer
+// Session counter: PROOF_SECOND records TWICE back-to-back on the same fake
+// Meet page. Without per-recording isolation, recording #2's parts Map would
+// still hold recording #1's stale high-numbered parts (corrupting assembly)
+// and its manifest.json / recording.bin would silently overwrite #1's before
+// the harness can read it. Each /api/desktop/video/create bumps the session
+// number, clears `parts`, and every subsequent write for that session goes to
+// manifest-<n>.json / recording-<n>.bin. Session 1 ALSO writes the original
+// manifest.json / recording.bin so run-proof-inpage.mjs's single-recording
+// (non-PROOF_SECOND) path keeps working unchanged.
+let session = 0;
+let manifest = null; // current session's manifest object
 
-const save = () =>
-	writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+const manifestPathFor = (n) => join(outDir, n === 1 ? "manifest.json" : `manifest-${n}.json`);
+const recordingPathFor = (n) => join(outDir, n === 1 ? "recording.bin" : `recording-${n}.bin`);
+
+const save = () => {
+	writeFileSync(manifestPathFor(session), JSON.stringify(manifest, null, 2));
+};
 
 const readBody = (req) =>
 	new Promise((resolve) => {
@@ -54,14 +63,24 @@ const server = createServer(async (req, res) => {
 	}
 
 	if (path === "/api/desktop/video/create") {
-		manifest.createVideo = {
-			recordingMode: url.searchParams.get("recordingMode"),
-			name: url.searchParams.get("name"),
-			extensionContext: url.searchParams.get("extensionContext"),
-			meetingId: url.searchParams.get("meetingId"),
+		// A new recording session starts here — reset per-session state so a 2nd
+		// back-to-back recording (PROOF_SECOND) cannot collide with the 1st's parts.
+		session += 1;
+		parts = new Map();
+		manifest = {
+			session,
+			createVideo: {
+				recordingMode: url.searchParams.get("recordingMode"),
+				name: url.searchParams.get("name"),
+				extensionContext: url.searchParams.get("extensionContext"),
+				meetingId: url.searchParams.get("meetingId"),
+			},
+			completeMultipart: null,
+			recordingComplete: false,
+			assembledFile: null,
 		};
 		save();
-		return json(res, { id: "proof-video-1", user_id: "proof-user" });
+		return json(res, { id: `proof-video-${session}`, user_id: "proof-user" });
 	}
 	if (path === "/api/upload/multipart/initiate") {
 		await readBody(req);
@@ -85,7 +104,7 @@ const server = createServer(async (req, res) => {
 		const body = JSON.parse((await readBody(req)).toString() || "{}");
 		const ordered = [...parts.entries()].sort((a, b) => a[0] - b[0]);
 		const assembled = Buffer.concat(ordered.map(([, b]) => b));
-		const file = join(outDir, "recording.bin");
+		const file = recordingPathFor(session);
 		writeFileSync(file, assembled);
 		manifest.completeMultipart = {
 			durationInSecs: body.durationInSecs ?? null,

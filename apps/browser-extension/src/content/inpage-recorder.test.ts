@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type InPageState,
 	attachPageAudio,
+	detachAllPageAudio,
 	pruneDeadTaps,
 } from "./inpage-recorder";
 
@@ -25,7 +26,19 @@ interface FakeTrack {
 }
 
 function track(id: string, readyState: "live" | "ended" = "live"): FakeTrack {
-	return { id, readyState, kind: "audio", stop: () => {} };
+	// stop() is TERMINAL — exactly like Blink's MediaStreamTrackImpl::stopTrack: the
+	// track goes to "ended" and never comes back. The old fake made stop() a no-op,
+	// which is precisely why the 2026-07-22 second-recording bug slipped past unit
+	// tests (detachAllPageAudio stopped tracks it never owned, and nothing noticed).
+	const t: FakeTrack = {
+		id,
+		readyState,
+		kind: "audio",
+		stop: () => {
+			t.readyState = "ended";
+		},
+	};
+	return t;
 }
 
 /** Chrome hands back the SAME MediaStream object across source changes, with a
@@ -146,6 +159,25 @@ describe("attachPageAudio", () => {
 		elements = [el];
 
 		expect(attachPageAudio(makeState())).toBe(0);
+	});
+});
+
+describe("second recording on the same page (the 2026-07-22 prod bug)", () => {
+	it("can still tap the same element after the first recording is cleaned up", () => {
+		// Recording #1's cleanup used to stop() the captured tracks. On real Meet's
+		// srcObject-backed elements those wrap Meet's OWN live track, so stopping them
+		// left recording #2 with only dead tracks → attachPageAudio returns 0 →
+		// "Mijoz ovozi olinmadi" and a file with no remote voices. detachAllPageAudio
+		// must disconnect the source nodes only, never stop tracks it does not own.
+		const el = new FakeElement(track("t1"));
+		elements = [el];
+
+		const s1 = makeState();
+		expect(attachPageAudio(s1)).toBe(1); // recording #1 taps fine
+		detachAllPageAudio(s1); // recording #1 stops + cleans up
+
+		const s2 = makeState(); // recording #2: fresh state, SAME page/element
+		expect(attachPageAudio(s2)).toBe(1); // must still find the live track
 	});
 });
 

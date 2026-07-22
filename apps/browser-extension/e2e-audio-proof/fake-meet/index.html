@@ -64,6 +64,48 @@ function startToneElement() {
 	return el;
 }
 
+// ?tone=stream — the tone comes out of a real <audio> element that is
+// srcObject-BACKED (an AudioContext oscillator routed through a
+// MediaStreamDestination), exactly like real Meet's remote-participant
+// elements (WebRTC MediaStreams assigned via el.srcObject, never el.src).
+// This is the ONLY mode that can reproduce the 2026-07-22 "2nd recording lost
+// remote voice" bug: Blink's HTMLMediaElement.captureStream() takes a special
+// path for srcObject-backed elements that hands back wrappers around the
+// element's OWN underlying MediaStreamTrack components (no cloning) — so
+// calling stop() on a captured track terminally kills a track the extension
+// never owned. The file-backed ?tone=media mode goes through a DIFFERENT
+// Blink capturer (a fresh per-call CreateHTMLAudioElementCapturer) and cannot
+// exhibit this at all. See docs/plans/2026-07-22-remote-voice-2nd-recording-bug.md §6.2.
+function startToneStreamElement() {
+	const ctx = new AudioContext();
+	const osc = ctx.createOscillator();
+	osc.type = "sine";
+	osc.frequency.value = 440;
+	const gain = ctx.createGain();
+	gain.gain.value = 0.05; // same quiet level as the other modes
+	const dest = ctx.createMediaStreamDestination();
+	osc.connect(gain).connect(dest);
+	osc.start();
+	if (ctx.state === "suspended") ctx.resume();
+
+	const el = document.createElement("audio");
+	el.srcObject = dest.stream;
+	el.autoplay = true;
+	el.id = "remote-participant";
+	document.body.appendChild(el);
+	el.play()
+		.then(() => {
+			status.textContent = `tone: playing (srcObject, ctx=${ctx.state})`;
+			setInterval(() => {
+				status.textContent = `tone: srcObject t=${el.currentTime.toFixed(1)} paused=${el.paused} ctx=${ctx.state}`;
+			}, 1000);
+		})
+		.catch((e) => {
+			status.textContent = "tone: SRCOBJECT FAILED " + e;
+		});
+	return el;
+}
+
 // &swap=<ms> — REUSE the same element with a new source part-way through, which
 // is what Google Meet actually does when the active speaker changes: the element
 // stays in the DOM, its stream is replaced. An audio tap bound to the old track
@@ -91,7 +133,9 @@ function scheduleSourceSwap(el) {
 // Auto-play ONLY when the harness asks (?tone=1 | ?tone=media). A human opening
 // this file (e.g. an accidental Browser-pane preview) gets silence + a button.
 const toneMode = new URLSearchParams(location.search).get("tone");
-if (toneMode === "media") {
+if (toneMode === "stream") {
+	startToneStreamElement();
+} else if (toneMode === "media") {
 	scheduleSourceSwap(startToneElement());
 } else if (toneMode === "1") {
 	startTone();

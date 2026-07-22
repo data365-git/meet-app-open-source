@@ -226,12 +226,17 @@ export function pruneDeadTaps(s: InPageState): number {
 	return pruned;
 }
 
-function detachAllPageAudio(s: InPageState): void {
+export function detachAllPageAudio(s: InPageState): void {
 	for (const tap of s.taps.values()) {
 		try {
 			tap.source.disconnect();
 		} catch {}
-		for (const t of tap.stream.getTracks()) t.stop();
+		// Do NOT stop() these tracks. On the srcObject path (real Meet) captureStream()
+		// wraps the ELEMENT'S OWN live WebRTC track, so stop() terminally kills a track the
+		// extension never owned — and any LATER recording on the same page then finds only
+		// dead ("ended") tracks, shows "Mijoz ovozi olinmadi", and records without the remote
+		// voices (the 2026-07-22 prod bug). Disconnecting our source node is all we must undo
+		// here; cleanup() closes the whole AudioContext, releasing everything we actually own.
 	}
 	s.taps.clear();
 }
@@ -470,6 +475,14 @@ export async function startInPageRecording(
 
 		const tapped = attachPageAudio(pending);
 
+		// Did the user share the picker's system (loopback) audio? On Windows that
+		// carries everything the machine plays — including the remote voices from
+		// Meet — so it is a valid stand-in when no live page tap exists yet.
+		const hasSystemAudio = displayStream.getAudioTracks().length > 0;
+		// Start with NO live page tap but system audio WILL carry the voices via the
+		// stand-in wired below. Drives the honest note at the end.
+		const usingSystemAudioForClient = tapped === 0 && hasSystemAudio;
+
 		// CLIENT-AUDIO GATE. What is checked here is that a capturable audio pipe
 		// EXISTS — not that sound is currently coming through it. A meeting is
 		// legitimately silent at the moment you press record, and the 2026-07-19
@@ -477,15 +490,25 @@ export async function startInPageRecording(
 		// wrong answer. Energy is therefore the WATCHDOG's job (below), not the
 		// gate's.
 		if (tapped === 0) {
-			const proceed = await host.confirmWithoutClientAudio();
-			if (!proceed) {
-				cleanup(pending);
-				pending = null;
-				sendMsg({ type: "MEET_NUDGE_CANCEL" });
-				host.note(NO_CLIENT_AUDIO_MSG, true);
-				host.onFailed();
-				return;
+			// Only raise the alarming "record without the other voices?" question when
+			// the voice is GENUINELY absent — no page tap AND no system audio. When
+			// system audio was shared it already carries the remote voices (stand-in
+			// below), so the confirm would be a false alarm — the exact 2026-07-22
+			// complaint where a 2nd recording showed "Mijoz ovozi olinmadi" while the
+			// voice was in fact being recorded.
+			if (!hasSystemAudio) {
+				const proceed = await host.confirmWithoutClientAudio();
+				if (!proceed) {
+					cleanup(pending);
+					pending = null;
+					sendMsg({ type: "MEET_NUDGE_CANCEL" });
+					host.note(NO_CLIENT_AUDIO_MSG, true);
+					host.onFailed();
+					return;
+				}
 			}
+			// User waived it, or system audio will carry the voice — either way the
+			// silence watchdog must not treat the quiet page-tap side as a fault.
 			clientAudioWaived = true;
 		}
 
@@ -497,7 +520,7 @@ export async function startInPageRecording(
 		// STAND-IN for a call with no page audio yet, and it goes through its own
 		// gain node that attachPageAudio() mutes the instant real page audio shows
 		// up (the owner starts recording alone; the client joins a minute later).
-		if (tapped === 0 && displayStream.getAudioTracks().length > 0) {
+		if (usingSystemAudioForClient) {
 			const systemGain = audioCtx.createGain();
 			systemGain.connect(dest);
 			audioCtx.createMediaStreamSource(displayStream).connect(systemGain);
@@ -643,7 +666,10 @@ export async function startInPageRecording(
 
 		recorder.start(200);
 		host.onRecordingStarted();
-		if (clientAudioWaived) {
+		if (usingSystemAudioForClient) {
+			// NOT a warning: the remote voices ARE being recorded, via system audio.
+			host.note("Mijoz ovozi tizim ovozi orqali yozilmoqda.", false);
+		} else if (clientAudioWaived) {
 			host.note(
 				"⚠️ Mijoz ovozisiz yozilmoqda — faqat ekran va mikrofon.",
 				true,
