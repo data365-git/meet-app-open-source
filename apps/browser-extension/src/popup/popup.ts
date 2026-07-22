@@ -214,7 +214,7 @@ function renderIdlePanel(
 	meetBtn.className = "btn btn-secondary";
 
 	if (isMeetTab && meetingId) {
-		meetBtn.textContent = `Faqat Meet tabini yozish · ${meetingId}`;
+		meetBtn.textContent = `Record Meet tab only · ${meetingId}`;
 		meetBtn.addEventListener("click", () => {
 			const msg: Record<string, unknown> = { type: "START_MEET", meetingId };
 			if (activeTabId !== undefined) msg.tabId = activeTabId;
@@ -222,7 +222,7 @@ function renderIdlePanel(
 			window.close();
 		});
 	} else {
-		meetBtn.textContent = "Faqat Meet tabini yozish";
+		meetBtn.textContent = "Record Meet tab only";
 		meetBtn.disabled = true;
 		meetBtn.classList.add("btn--disabled");
 	}
@@ -230,7 +230,7 @@ function renderIdlePanel(
 	const instrBtn = el(
 		"button",
 		{ className: isMeetTab ? "btn btn-primary" : "btn btn-secondary" },
-		isMeetTab ? "Butun ekranli uchrashuvni yozish" : "Ekranni yozish",
+		isMeetTab ? "Record full-screen meeting" : "Record screen",
 	);
 	instrBtn.addEventListener("click", () => {
 		const msg: Record<string, unknown> = { type: "START_INSTRUCTION" };
@@ -258,7 +258,7 @@ function renderIdlePanel(
 		const hint = el(
 			"p",
 			{ className: "panel-hint" },
-			"Uchrashuvni yozish uchun Google Meetga qo'shiling",
+			"Join a Google Meet to record a meeting",
 		);
 		actionsSection.appendChild(hint);
 	}
@@ -268,7 +268,7 @@ function renderIdlePanel(
 
 	const devicesSection = el("div", { className: "panel-section" });
 	devicesSection.appendChild(
-		el("p", { className: "panel-section-label" }, "Qurilmalar"),
+		el("p", { className: "panel-section-label" }, "Devices"),
 	);
 
 	let micEnabled = settings.micEnabled !== false;
@@ -288,7 +288,7 @@ function renderIdlePanel(
 	const micEnableBtn = el(
 		"button",
 		{ className: "btn btn-secondary perm-btn" },
-		"Mikrofonni yoqish",
+		"Enable microphone",
 	);
 	micEnableBtn.style.display = "none";
 	micEnableBtn.addEventListener("click", () => {
@@ -298,7 +298,7 @@ function renderIdlePanel(
 	const micRow = el(
 		"div",
 		{ className: "device-row" },
-		el("span", { className: "device-row-label" }, "Mikrofon"),
+		el("span", { className: "device-row-label" }, "Mic"),
 		micToggleWrap,
 		micSelect,
 		micEnableBtn,
@@ -413,7 +413,7 @@ function renderIdlePanel(
 	root.appendChild(el("div", { className: "panel-divider" }));
 
 	const footer = el("div", { className: "panel-footer" });
-	const settingsLink = el("button", { className: "link-btn" }, "Sozlamalar");
+	const settingsLink = el("button", { className: "link-btn" }, "Settings");
 	settingsLink.addEventListener("click", () => {
 		chrome.runtime.openOptionsPage();
 	});
@@ -441,13 +441,13 @@ function renderNotSignedIn(
 	const signInBtn = el(
 		"button",
 		{ className: "btn btn-primary" },
-		"data365 orqali kirish",
+		"Sign in with data365",
 	);
 
 	const oauthMsg = el("p", { className: "inline-msg" });
 
 	signInBtn.addEventListener("click", () => {
-		oauthMsg.textContent = "Kirish oynasi ochilmoqda…";
+		oauthMsg.textContent = "Opening sign-in…";
 		oauthMsg.style.color = "";
 		chrome.runtime.sendMessage({ type: "START_SIGNIN" }, (resp) => {
 			if (chrome.runtime.lastError) return; // popup may have closed; SW still finishes
@@ -455,7 +455,7 @@ function renderNotSignedIn(
 			if (ok) {
 				location.reload();
 			} else {
-				oauthMsg.textContent = "Avtomatik kirib bo'lmadi — pastdan kalitingizni joylashtiring";
+				oauthMsg.textContent = "Couldn't sign in automatically — paste your key below instead";
 				oauthMsg.style.color = "#e53e3e";
 			}
 		});
@@ -465,7 +465,7 @@ function renderNotSignedIn(
 	const keyDivider = el(
 		"p",
 		{ className: "inline-msg" },
-		"— yoki API kalitingizni joylashtiring —",
+		"— or paste your API key —",
 	);
 	keyDivider.style.textAlign = "center";
 	keyDivider.style.color = "#888";
@@ -474,7 +474,7 @@ function renderNotSignedIn(
 	const keyHint = el(
 		"p",
 		{ className: "inline-msg" },
-		"Kalitni bu yerdan toping: data365 server → /extension/callback",
+		"Find your key at: data365 server → /extension/callback",
 	);
 	keyHint.style.fontSize = "11px";
 	keyHint.style.color = "#888";
@@ -483,13 +483,13 @@ function renderNotSignedIn(
 	const apiKeyInput = el("input", {
 		className: "api-key-input",
 		type: "text",
-		placeholder: "cak_... kalitingizni shu yerga joylashtiring",
+		placeholder: "Paste your cak_... key here",
 	} as unknown as Partial<HTMLInputElement>);
 
 	const connectBtn = el(
 		"button",
 		{ className: "btn btn-secondary" },
-		"Kalit bilan ulanish",
+		"Connect with key",
 	);
 
 	const inlineMsg = el("p", { className: "inline-msg" });
@@ -497,13 +497,13 @@ function renderNotSignedIn(
 	connectBtn.addEventListener("click", async () => {
 		const key = (apiKeyInput as HTMLInputElement).value.trim();
 		if (!key) {
-			inlineMsg.textContent = "Iltimos, kalitni joylashtiring";
+			inlineMsg.textContent = "Please paste a key";
 			inlineMsg.style.color = "#e53e3e";
 			return;
 		}
 		inlineMsg.textContent = "";
 		connectBtn.disabled = true;
-		connectBtn.textContent = "Tekshirilmoqda…";
+		connectBtn.textContent = "Verifying...";
 		chrome.runtime.sendMessage(
 			{
 				type: "SAVE_SETTINGS",
@@ -512,10 +512,10 @@ function renderNotSignedIn(
 			async () => {
 				// Fix #4: bail out if the save itself failed
 				if (chrome.runtime.lastError) {
-					inlineMsg.textContent = "Kalitni saqlab bo'lmadi — qayta urinib ko'ring";
+					inlineMsg.textContent = "Couldn't save key — try again";
 					inlineMsg.style.color = "#e53e3e";
 					connectBtn.disabled = false;
-					connectBtn.textContent = "Kalit bilan ulanish";
+					connectBtn.textContent = "Connect with key";
 					return;
 				}
 				try {
@@ -534,25 +534,25 @@ function renderNotSignedIn(
 									? data.email
 									: "";
 						if (name) {
-							inlineMsg.textContent = `Ulandi: ${name}`;
+							inlineMsg.textContent = `Connected as ${name}`;
 							inlineMsg.style.color = "#38a169";
 						}
 						setTimeout(() => location.reload(), 800);
 					} else if (res.status === 401) {
 						inlineMsg.textContent =
-							"Kalit qabul qilinmadi — qayta kiring yoki yangi kalit joylashtiring";
+							"Key not accepted — sign in again or paste a new key";
 						inlineMsg.style.color = "#e53e3e";
 						connectBtn.disabled = false;
-						connectBtn.textContent = "Kalit bilan ulanish";
+						connectBtn.textContent = "Connect with key";
 						chrome.runtime.sendMessage({
 							type: "SAVE_SETTINGS",
 							settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
 						});
 					} else {
-						inlineMsg.textContent = `Server xatosi (${res.status}) — qayta urinib ko'ring`;
+						inlineMsg.textContent = `Server error (${res.status}) — try again`;
 						inlineMsg.style.color = "#e53e3e";
 						connectBtn.disabled = false;
-						connectBtn.textContent = "Kalit bilan ulanish";
+						connectBtn.textContent = "Connect with key";
 						chrome.runtime.sendMessage({
 							type: "SAVE_SETTINGS",
 							settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
@@ -560,10 +560,10 @@ function renderNotSignedIn(
 					}
 				} catch {
 					inlineMsg.textContent =
-						"Serverga ulanib bo'lmadi — Sozlamalarda manzilni tekshiring";
+						"Can't reach the server — check the address in Settings";
 					inlineMsg.style.color = "#e53e3e";
 					connectBtn.disabled = false;
-					connectBtn.textContent = "Kalit bilan ulanish";
+					connectBtn.textContent = "Connect with key";
 					chrome.runtime.sendMessage({
 						type: "SAVE_SETTINGS",
 						settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
@@ -603,7 +603,7 @@ function renderRecording(
 		"div",
 		{ className: "recording-header" },
 		el("span", { className: "rec-dot" }),
-		el("span", { className: "rec-label" }, "Yozuv"),
+		el("span", { className: "rec-label" }, "Recording"),
 	);
 
 	const timerEl = el(
@@ -620,16 +620,16 @@ function renderRecording(
 	const modeEl = el(
 		"p",
 		{ className: "mode-label" },
-		isMeeting ? "Uchrashuv" : "Ko'rsatma",
+		isMeeting ? "Meeting" : "Instruction",
 	);
 
-	const pauseLabel = state.paused ? "Davom ettirish" : "Pauza";
+	const pauseLabel = state.paused ? "Resume" : "Pause";
 	const pauseBtn = el("button", { className: "btn btn-secondary" }, pauseLabel);
 	pauseBtn.addEventListener("click", () => {
 		void (async () => {
 			const command = state.paused ? "RESUME" : "PAUSE";
 			pauseBtn.disabled = true;
-			pauseBtn.textContent = command === "PAUSE" ? "Pauza qilinmoqda…" : "Davom ettirilmoqda…";
+			pauseBtn.textContent = command === "PAUSE" ? "Pausing..." : "Resuming...";
 			// AWAIT the answer. This used to fire-and-forget and re-enable itself on
 			// a fixed 200ms timer — shorter than the SW's own retry budget, so the
 			// button went live while the command was still retrying, and a command
@@ -651,10 +651,10 @@ function renderRecording(
 		})();
 	});
 
-	const stopBtn = el("button", { className: "btn btn-danger" }, "To'xtatish");
+	const stopBtn = el("button", { className: "btn btn-danger" }, "Stop");
 	stopBtn.addEventListener("click", () => {
 		stopBtn.disabled = true;
-		stopBtn.textContent = "Yakunlanmoqda…";
+		stopBtn.textContent = "Finishing...";
 		pauseBtn.disabled = true;
 		sendMsg({ type: "STOP" });
 	});
@@ -683,14 +683,14 @@ function renderUploading(
 ): void {
 	const wrap = el("div", { className: "uploading-wrap" });
 
-	const title = el("p", { className: "uploading-title" }, "Yuklanmoqda…");
+	const title = el("p", { className: "uploading-title" }, "Uploading...");
 	const spinner = el("div", { className: "spinner" });
 
 	const pct =
 		state.totalBytes > 0
 			? Math.round((state.uploadedBytes / state.totalBytes) * 100)
 			: 0;
-	const progressText = `${formatBytes(state.uploadedBytes)} yuklandi (${pct}%)`;
+	const progressText = `${formatBytes(state.uploadedBytes)} uploaded (${pct}%)`;
 	const partsEl = el("p", { className: "parts-count" }, progressText);
 
 	// TWO DISTINCT ACTIONS. This used to be a single "Cancel upload" link, which
@@ -703,7 +703,7 @@ function renderUploading(
 	const closeBtn = el(
 		"button",
 		{ className: "btn btn-primary" },
-		"Yopish — yuklash fonda davom etadi",
+		"Close — upload continues in the background",
 	);
 	closeBtn.addEventListener("click", () => {
 		window.close();
@@ -712,13 +712,13 @@ function renderUploading(
 	const discardBtn = el(
 		"button",
 		{ className: "link-btn link-btn--danger" },
-		"Butunlay o'chirish",
+		"Permanently discard",
 	);
 	// Step two of two. Deliberately in-place rather than a confirm() dialog: the
 	// popup closes the moment it loses focus, which would dismiss a native modal.
 	discardBtn.addEventListener("click", () => {
 		if (discardBtn.dataset.confirming === "1") {
-			discardBtn.textContent = "O'chirilmoqda…";
+			discardBtn.textContent = "Discarding...";
 			discardBtn.disabled = true;
 			// AWAIT the reply. Fire-and-forget left "Discarding..." on screen forever
 			// and, worse, would have had to claim success blind. Only two honest
@@ -750,17 +750,17 @@ function renderUploading(
 				showFlash({
 					text:
 						outcome === "deleted"
-							? "O'chirildi"
+							? "Deleted"
 							: outcome === "queued"
-								? "O'chirish navbatga qo'yildi; qayta urinib ko'riladi"
-								: "O'chiradigan narsa yo'q — bu yozuv allaqachon davom etgan",
+								? "Delete queued; will retry"
+								: "Nothing to delete — this recording already moved on",
 					isError: false,
 				});
 			});
 			return;
 		}
 		discardBtn.dataset.confirming = "1";
-		discardBtn.textContent = "Bu yozuvni butunlay o'chirish uchun yana bosing";
+		discardBtn.textContent = "Tap again to delete this recording for good";
 	});
 
 	wrap.appendChild(title);
@@ -773,7 +773,7 @@ function renderUploading(
 
 function renderFinishing(root: HTMLElement): void {
 	const wrap = el("div", { className: "uploading-wrap" });
-	const title = el("p", { className: "uploading-title" }, "Yakunlanmoqda…");
+	const title = el("p", { className: "uploading-title" }, "Finishing up...");
 	const spinner = el("div", { className: "spinner" });
 	wrap.appendChild(title);
 	wrap.appendChild(spinner);
@@ -787,28 +787,28 @@ function renderComplete(
 	const wrap = el("div", { className: "complete-wrap" });
 
 	const check = el("div", { className: "complete-icon" }, "✓");
-	const title = el("p", { className: "complete-title" }, "Yozuv saqlandi!");
+	const title = el("p", { className: "complete-title" }, "Recording saved!");
 
 	const linkEl = el("p", { className: "share-url" }, state.shareUrl);
 
 	const btnRow = el("div", { className: "btn-row" });
 
-	const copyBtn = el("button", { className: "btn btn-primary" }, "Havolani nusxalash");
+	const copyBtn = el("button", { className: "btn btn-primary" }, "Copy link");
 	copyBtn.addEventListener("click", () => {
 		navigator.clipboard.writeText(state.shareUrl).then(() => {
-			copyBtn.textContent = "Nusxalandi!";
+			copyBtn.textContent = "Copied!";
 			setTimeout(() => {
-				copyBtn.textContent = "Havolani nusxalash";
+				copyBtn.textContent = "Copy link";
 			}, 2000);
 		});
 	});
 
-	const openBtn = el("button", { className: "btn btn-secondary" }, "Ochish");
+	const openBtn = el("button", { className: "btn btn-secondary" }, "Open");
 	openBtn.addEventListener("click", () => {
 		chrome.tabs.create({ url: state.shareUrl });
 	});
 
-	const doneBtn = el("button", { className: "link-btn" }, "Tugatish");
+	const doneBtn = el("button", { className: "link-btn" }, "Done");
 	doneBtn.addEventListener("click", () => {
 		sendMsg({ type: "CANCEL" });
 	});
@@ -837,7 +837,7 @@ function renderError(
 	wrap.appendChild(msg);
 
 	if (state.recoverable) {
-		const retryBtn = el("button", { className: "btn btn-primary" }, "Qayta urinish");
+		const retryBtn = el("button", { className: "btn btn-primary" }, "Retry");
 		retryBtn.addEventListener("click", () => {
 			sendMsg({ type: "RETRY" });
 		});
@@ -847,7 +847,7 @@ function renderError(
 	const dismissBtn = el(
 		"button",
 		{ className: "btn btn-secondary" },
-		"Yopish",
+		"Dismiss",
 	);
 	dismissBtn.addEventListener("click", () => {
 		sendMsg({ type: "CANCEL" });
@@ -858,7 +858,7 @@ function renderError(
 }
 
 function renderArming(root: HTMLElement): void {
-	const msg = el("p", { className: "footnote" }, "Yozuv boshlanmoqda…");
+	const msg = el("p", { className: "footnote" }, "Starting recording...");
 	root.appendChild(msg);
 }
 
@@ -958,13 +958,13 @@ async function maybeStartPendingMeet(data: PopupData): Promise<boolean> {
 
 // ── Meeting flow: 4 clicks → 2 ───────────────────────────────────────────
 //
-// Toolbar icon click → recorder tab opens → one "Boshlash" click → picker →
+// Toolbar icon click → recorder tab opens → one "Start" click → picker →
 // recording starts. Previously the popup itself was a required click (pick
 // "Record full-screen meeting" from the panel) before the recorder tab even
 // opened. When the popup opens directly onto an idle, signed-in Meet tab,
 // skip straight to the same START_INSTRUCTION the "Record full-screen
 // meeting" button sends and close — the recorder tab's own mic control /
-// "Faqat Meet tabini yozish" affordance (recorder-page.ts) now covers what
+// "Record Meet tab only" affordance (recorder-page.ts) now covers what
 // the skipped popup screen used to offer.
 //
 // Only called once, from init() below (a popup document is fresh every time
@@ -1049,21 +1049,21 @@ function renderOnboarding(root: HTMLElement, onDone: () => void): void {
 	logo.height = 48;
 	logo.alt = "data365";
 
-	const heading = el("h1", {}, "data365'ga xush kelibsiz");
+	const heading = el("h1", {}, "Welcome to data365");
 
 	const list = el(
 		"ul",
 		{ className: "onboarding-list" },
-		el("li", {}, "data365 siz tanlagan narsani yozadi — ekran, oyna yoki tab"),
+		el("li", {}, "data365 records what you choose — screen, window, or tab"),
 		el(
 			"li",
 			{},
-			"Biz hech qachon ko'rinadigan sanoqsiz yozishni boshlamaymiz",
+			"We never start recording without showing a visible countdown",
 		),
-		el("li", {}, "Google Meetda avtomatik yozish standart holatda o'chirilgan"),
+		el("li", {}, "Auto-record on Google Meet is off by default"),
 	);
 
-	const gotItBtn = el("button", { className: "btn btn-primary" }, "Tushunarli");
+	const gotItBtn = el("button", { className: "btn btn-primary" }, "Got it");
 	gotItBtn.addEventListener("click", () => {
 		chrome.storage.local.set({ capExtFirstRun: false }, () => {
 			onDone();

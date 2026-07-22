@@ -43,7 +43,7 @@ const SWAP_TEST = process.env.PROOF_SWAP === "1";
 // AGAIN on the SAME page. Recording #1's cleanup used to stop()
 // captureStream()-derived tracks, which — on a srcObject-backed element like
 // real Meet's — terminally kills the element's OWN underlying WebRTC track.
-// Recording #2 then finds zero live taps and shows the "Mijoz ovozi olinmadi"
+// Recording #2 then finds zero live taps and shows the "the other person's audio wasn't captured"
 // confirm dialog instead of just recording. Requires ?tone=stream (the
 // srcObject-backed fake element): ?tone=media is file-backed and takes a
 // different Blink captureStream() path that cannot reproduce this at all.
@@ -207,7 +207,7 @@ async function main() {
 		let centre = null;
 		for (let i = 0; i < 20 && !centre; i++) {
 			await meetPage.waitForTimeout(500);
-			centre = await centreOfShadowNode(cdp, "Hozir yozish").catch(() => null);
+			centre = await centreOfShadowNode(cdp, "Record now").catch(() => null);
 		}
 		if (!centre) return verdict("FAIL", "reason=nudge-record-now-never-appeared");
 		log(`nudge button at ${Math.round(centre.x)},${Math.round(centre.y)}`);
@@ -223,7 +223,7 @@ async function main() {
 		let stopCentre = null;
 		for (let i = 0; i < 40 && !stopCentre; i++) {
 			await meetPage.waitForTimeout(500);
-			stopCentre = await centreOfShadowNode(cdp, "To'xtatish").catch(() => null);
+			stopCentre = await centreOfShadowNode(cdp, "Stop").catch(() => null);
 		}
 		if (!stopCentre) {
 			// Say WHY: the in-card note carries the real reason (picker cancelled,
@@ -274,7 +274,7 @@ async function main() {
 				return verdict("FAIL", `reason=first-recording-no-tone ${analyze1Line}`);
 			}
 
-			// Recording #1 landed on the TERMINAL "complete" card ("Yozuv saqlandi!")
+			// Recording #1 landed on the TERMINAL "complete" card ("Recording saved!")
 			// and stays there until the user closes it — nudgeState only leaves
 			// "complete" on that click (meet-detect.ts maybeShow() early-returns
 			// while nudgeState === "complete"). Close it first, exactly like a real
@@ -284,12 +284,12 @@ async function main() {
 			let dismissCentre = null;
 			for (let i = 0; i < 20 && !dismissCentre; i++) {
 				await meetPage.waitForTimeout(500);
-				dismissCentre = await centreOfShadowNode(cdp, "Yopish").catch(() => null);
+				dismissCentre = await centreOfShadowNode(cdp, "Close").catch(() => null);
 			}
 			if (!dismissCentre)
 				return verdict("FAIL", "reason=complete-card-close-button-never-appeared");
 			await meetPage.mouse.click(dismissCentre.x, dismissCentre.y);
-			log("dismissed the complete card (Yopish)");
+			log("dismissed the complete card (Close)");
 
 			// Re-find the record button — the default nudge re-renders ~800ms after
 			// the SW's state settles back to idle (meet-detect.ts handleStateChange
@@ -297,28 +297,28 @@ async function main() {
 			let centre2 = null;
 			for (let i = 0; i < 20 && !centre2; i++) {
 				await meetPage.waitForTimeout(500);
-				centre2 = await centreOfShadowNode(cdp, "Hozir yozish").catch(() => null);
+				centre2 = await centreOfShadowNode(cdp, "Record now").catch(() => null);
 			}
 			if (!centre2)
 				return verdict("FAIL", "reason=record-button-never-reappeared-for-2nd-recording");
 			log(`record button (2nd recording) at ${Math.round(centre2.x)},${Math.round(centre2.y)}`);
 
 			await meetPage.mouse.click(centre2.x, centre2.y);
-			log("clicked Hozir yozish (2nd recording)");
+			log("clicked Record now (2nd recording)");
 
 			// THE OWNER'S BUG lives right here: if recording #1's cleanup killed
 			// every page-audio tap (the pre-fix `t.stop()`), the extension shows the
-			// "Mijoz ovozi olinmadi" confirm instead of going straight into the
+			// "the other person's audio wasn't captured" confirm instead of going straight into the
 			// pill. Probe for BOTH outcomes in the same loop — whichever appears
-			// first is the true outcome, and we must not click "Baribir boshla" to
+			// first is the true outcome, and we must not click "Start anyway" to
 			// paper over it.
 			let stop2Centre = null;
 			let dialogCentre = null;
 			for (let i = 0; i < 40 && !stop2Centre && !dialogCentre; i++) {
 				await meetPage.waitForTimeout(500);
-				stop2Centre = await centreOfShadowNode(cdp, "To'xtatish").catch(() => null);
+				stop2Centre = await centreOfShadowNode(cdp, "Stop").catch(() => null);
 				if (!stop2Centre) {
-					dialogCentre = await centreOfShadowNode(cdp, "Baribir boshla").catch(() => null);
+					dialogCentre = await centreOfShadowNode(cdp, "Start anyway").catch(() => null);
 				}
 			}
 			if (dialogCentre) {

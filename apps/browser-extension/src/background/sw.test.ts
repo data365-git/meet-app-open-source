@@ -470,7 +470,7 @@ describe("P1.1 — RECORDER_ERROR salvage", () => {
 		if (finalState.kind === "error") {
 			// finalizeUpload's specific "too short" reason must survive, not be
 			// overwritten by the generic RECORDER_ERROR message.
-			expect(finalState.reason).toMatch(/qisqa/i);
+			expect(finalState.reason).toMatch(/too short/i);
 		}
 	});
 });
@@ -1557,7 +1557,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 			{ tab: { id: 5 }, url: "chrome-extension://fake/recorder.html" },
 		)) as { ok: boolean; error?: string };
 		expect(owner.ok).toBe(false);
-		expect(owner.error).toMatch(/allaqachon davom etmoqda/);
+		expect(owner.error).toMatch(/already in progress/);
 		expect(getCreateCalls()).toBe(0);
 
 		// Any OTHER tab is refused identically — the rule is uniform, not
@@ -2067,7 +2067,7 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(res.serverCleaned).toBe(false);
 		const note = notifications.find((n) => n.id === "discard-partial");
 		expect(note, "no honest warning was surfaced").toBeDefined();
-		expect(note?.message ?? "").toMatch(/ulanib bo'lmadi/i);
+		expect(note?.message ?? "").toMatch(/couldn't reach the server/i);
 		// Copy must never claim more than it did.
 		expect(`${note?.title} ${note?.message}`).not.toMatch(/deleted from/i);
 	});
@@ -2709,7 +2709,7 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(final.kind).not.toBe("complete");
 		expect(final.kind).toBe("error");
 		expect(final.kind === "error" && final.recoverable).toBe(false);
-		expect(final.kind === "error" && final.reason).toMatch(/o'chirildi/i);
+		expect(final.kind === "error" && final.reason).toMatch(/discard/i);
 	});
 
 	// Same residual bug, other terminal branch: the drain can also dead-letter a
@@ -2794,9 +2794,9 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(final.kind).toBe("error");
 		// Must NOT still be the generic "please re-record" lie for a recording
 		// deliberately destroyed by this same discard.
-		expect(final.kind === "error" && final.reason).not.toMatch(/qayta yozib/i);
+		expect(final.kind === "error" && final.reason).not.toMatch(/re-record/i);
 		expect(final.kind === "error" && final.recoverable).toBe(false);
-		expect(final.kind === "error" && final.reason).toMatch(/o'chirildi/i);
+		expect(final.kind === "error" && final.reason).toMatch(/discard/i);
 	});
 });
 

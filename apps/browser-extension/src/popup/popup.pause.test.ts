@@ -148,7 +148,7 @@ function pauseButton(h: Harness): FakeElement {
 		.find(
 			(e) =>
 				e.tagName === "button" &&
-				["Pauza", "Davom ettirish", "Pauza qilinmoqda…", "Davom ettirilmoqda…"].includes(e.textContent),
+				["Pause", "Resume", "Pausing...", "Resuming..."].includes(e.textContent),
 		);
 	if (!btn) throw new Error("no pause/resume button in the rendered recording view");
 	return btn;
@@ -170,7 +170,7 @@ afterEach(() => {
 describe("popup Pause/Resume tells the truth about the recorder", () => {
 	it("renders a Pause button for a live recording", async () => {
 		const h = await setup();
-		expect(pauseButton(h).textContent).toBe("Pauza");
+		expect(pauseButton(h).textContent).toBe("Pause");
 		expect(inlineErrorText(h)).toBe("");
 	});
 
@@ -186,7 +186,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 		expect(h.sent.filter((m) => m.type === "PAUSE")).toHaveLength(1);
 
 		const btn = pauseButton(h);
-		expect(btn.textContent).toBe("Pauza");
+		expect(btn.textContent).toBe("Pause");
 		expect(btn.disabled).toBe(false);
 		// Visible, in-UI explanation — a silent no-op is indistinguishable from
 		// success, which is the same lie in a quieter voice.
@@ -200,7 +200,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 		pauseButton(h).click();
 		await drain();
 
-		expect(pauseButton(h).textContent).toBe("Pauza");
+		expect(pauseButton(h).textContent).toBe("Pause");
 		expect(inlineErrorText(h).length).toBeGreaterThan(0);
 	});
 
@@ -221,7 +221,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 
 		const btn = pauseButton(h);
 		expect(btn.disabled).toBe(true);
-		expect(btn.textContent).toBe("Pauza qilinmoqda…");
+		expect(btn.textContent).toBe("Pausing...");
 
 		h.control.release?.();
 		await drain();
@@ -241,7 +241,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 		h.broadcast(recordingState(true));
 		await drain();
 
-		expect(pauseButton(h).textContent).toBe("Davom ettirish");
+		expect(pauseButton(h).textContent).toBe("Resume");
 		expect(inlineErrorText(h)).toBe("");
 	});
 
@@ -249,7 +249,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 		const h = await setup();
 		h.broadcast(recordingState(true));
 		await drain();
-		expect(pauseButton(h).textContent).toBe("Davom ettirish");
+		expect(pauseButton(h).textContent).toBe("Resume");
 
 		h.control.reply = { ok: false };
 		pauseButton(h).click();
@@ -258,7 +258,7 @@ describe("popup Pause/Resume tells the truth about the recorder", () => {
 		expect(h.sent.filter((m) => m.type === "RESUME")).toHaveLength(1);
 		expect(h.sent.filter((m) => m.type === "PAUSE")).toHaveLength(0);
 		// Failed resume: still showing Resume, with a reason.
-		expect(pauseButton(h).textContent).toBe("Davom ettirish");
+		expect(pauseButton(h).textContent).toBe("Resume");
 		expect(inlineErrorText(h).length).toBeGreaterThan(0);
 	});
 });

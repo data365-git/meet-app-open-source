@@ -115,7 +115,7 @@ async function populateMicrophoneSelect(
 	} catch {
 		const opt = document.createElement("option");
 		opt.value = "";
-		opt.textContent = "Mikrofonga ruxsat berilmadi";
+		opt.textContent = "Microphone permission denied";
 		select.appendChild(opt);
 		return;
 	}
@@ -125,13 +125,13 @@ async function populateMicrophoneSelect(
 
 	const defaultOpt = document.createElement("option");
 	defaultOpt.value = "";
-	defaultOpt.textContent = "Standart mikrofon";
+	defaultOpt.textContent = "Default microphone";
 	select.appendChild(defaultOpt);
 
 	if (audioInputs.length === 0) {
 		const noneOpt = document.createElement("option");
 		noneOpt.value = "";
-		noneOpt.textContent = "Mikrofon topilmadi";
+		noneOpt.textContent = "No microphones found";
 		noneOpt.disabled = true;
 		select.appendChild(noneOpt);
 		return;
@@ -141,7 +141,7 @@ async function populateMicrophoneSelect(
 		const opt = document.createElement("option");
 		opt.value = device.deviceId;
 		opt.textContent =
-			device.label || `Mikrofon ${device.deviceId.slice(0, 8)}`;
+			device.label || `Microphone ${device.deviceId.slice(0, 8)}`;
 		if (device.deviceId === currentDeviceId) opt.selected = true;
 		select.appendChild(opt);
 	}
@@ -152,7 +152,7 @@ async function populateMicrophoneSelect(
 }
 
 async function buildPermissionsSection(container: HTMLElement): Promise<void> {
-	container.appendChild(sectionHeader("Ruxsatlar"));
+	container.appendChild(sectionHeader("Permissions"));
 
 	async function permRow(
 		label: string,
@@ -175,7 +175,7 @@ async function buildPermissionsSection(container: HTMLElement): Promise<void> {
 		const grantBtn = document.createElement("button");
 		grantBtn.type = "button";
 		grantBtn.className = "btn btn--primary";
-		grantBtn.textContent = `${label.toLowerCase()}ga ruxsat berish`;
+		grantBtn.textContent = `Grant ${label.toLowerCase()} access`;
 
 		async function refresh(): Promise<void> {
 			let state: PermissionState = "prompt";
@@ -187,15 +187,15 @@ async function buildPermissionsSection(container: HTMLElement): Promise<void> {
 			}
 
 			if (state === "granted") {
-				statusEl.textContent = "✓ Yoqilgan";
+				statusEl.textContent = "✓ Enabled";
 				statusEl.className = "perm-status perm-status--ok";
 				grantBtn.style.display = "none";
 			} else if (state === "denied") {
-				statusEl.textContent = "Bloklangan — brauzer sozlamalarini tekshiring";
+				statusEl.textContent = "Blocked — check browser settings";
 				statusEl.className = "perm-status perm-status--denied";
 				grantBtn.style.display = "none";
 			} else {
-				statusEl.textContent = "Berilmagan";
+				statusEl.textContent = "Not granted";
 				statusEl.className = "perm-status perm-status--unknown";
 				grantBtn.style.display = "";
 			}
@@ -206,11 +206,11 @@ async function buildPermissionsSection(container: HTMLElement): Promise<void> {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia(constraint);
 				for (const t of stream.getTracks()) t.stop();
-				statusEl.textContent = "✓ Yoqilgan";
+				statusEl.textContent = "✓ Enabled";
 				statusEl.className = "perm-status perm-status--ok";
 				grantBtn.style.display = "none";
 			} catch {
-				statusEl.textContent = "Ruxsat berilmadi — brauzer sozlamalarini tekshiring";
+				statusEl.textContent = "Permission denied — check browser settings";
 				statusEl.className = "perm-status perm-status--denied";
 				grantBtn.style.display = "none";
 			} finally {
@@ -227,8 +227,8 @@ async function buildPermissionsSection(container: HTMLElement): Promise<void> {
 		await refresh();
 	}
 
-	await permRow("Mikrofon", { audio: true }, "microphone" as PermissionName);
-	await permRow("Kamera", { video: true }, "camera" as PermissionName);
+	await permRow("Microphone", { audio: true }, "microphone" as PermissionName);
+	await permRow("Camera", { video: true }, "camera" as PermissionName);
 }
 
 function buildAccountSection(
@@ -238,7 +238,7 @@ function buildAccountSection(
 	apiBaseUrlInput: HTMLInputElement;
 	apiKeyInput: HTMLInputElement;
 } {
-	container.appendChild(sectionHeader("Hisob"));
+	container.appendChild(sectionHeader("Account"));
 
 	const apiBaseUrlInput = document.createElement("input");
 	apiBaseUrlInput.type = "url";
@@ -246,7 +246,7 @@ function buildAccountSection(
 	apiBaseUrlInput.className = "text-input";
 	apiBaseUrlInput.value = settings.apiBaseUrl || DEFAULT_API_BASE_URL;
 	apiBaseUrlInput.placeholder = "https://your-data365-instance.com";
-	container.appendChild(fieldGroup("data365 server manzili", apiBaseUrlInput));
+	container.appendChild(fieldGroup("data365 Server URL", apiBaseUrlInput));
 
 	const apiKeyWrapper = document.createElement("div");
 	apiKeyWrapper.className = "input-with-button";
@@ -256,30 +256,30 @@ function buildAccountSection(
 	apiKeyInput.id = "apiKey";
 	apiKeyInput.className = "text-input";
 	apiKeyInput.value = settings.apiKey || "";
-	apiKeyInput.placeholder = "data365 API kalitini joylashtiring";
+	apiKeyInput.placeholder = "Paste your data365 API key";
 
 	const showHideBtn = document.createElement("button");
 	showHideBtn.type = "button";
 	showHideBtn.className = "btn btn--secondary btn--icon";
-	showHideBtn.textContent = "Ko'rsatish";
+	showHideBtn.textContent = "Show";
 	showHideBtn.addEventListener("click", () => {
 		if (apiKeyInput.type === "password") {
 			apiKeyInput.type = "text";
-			showHideBtn.textContent = "Yashirish";
+			showHideBtn.textContent = "Hide";
 		} else {
 			apiKeyInput.type = "password";
-			showHideBtn.textContent = "Ko'rsatish";
+			showHideBtn.textContent = "Show";
 		}
 	});
 
 	const saveConnectBtn = document.createElement("button");
 	saveConnectBtn.type = "button";
 	saveConnectBtn.className = "btn btn--primary";
-	saveConnectBtn.textContent = "Saqlash va ulanish";
+	saveConnectBtn.textContent = "Save & Connect";
 	saveConnectBtn.addEventListener("click", async () => {
 		const key = apiKeyInput.value.trim();
 		if (!key) {
-			showToast("Avval kalitni joylashtiring");
+			showToast("Paste a key first");
 			return;
 		}
 		saveConnectBtn.disabled = true;
@@ -291,19 +291,19 @@ function buildAccountSection(
 			});
 			if (res.ok) {
 				await saveSettings({ apiKey: key, apiBaseUrl: baseUrl });
-				showToast("Ulandi ✓");
+				showToast("Connected ✓");
 			} else {
 				// Persist the base URL alone (user may have changed it) but NOT the bad key
 				await saveSettings({ apiBaseUrl: baseUrl });
 				showToast(
 					res.status === 401
-						? "Kalit qabul qilinmadi — kalitni tekshiring"
-						: `Server xatosi (${res.status}) — kalitni tekshiring`,
+						? "Key not accepted — check the key"
+						: `Server error (${res.status}) — check the key`,
 				);
 			}
 		} catch {
 			await saveSettings({ apiBaseUrl: baseUrl });
-			showToast("Serverga ulanib bo'lmadi — URL manzilini tekshiring");
+			showToast("Can't reach the server — check the URL");
 		} finally {
 			saveConnectBtn.disabled = false;
 		}
@@ -318,7 +318,7 @@ function buildAccountSection(
 	const apiKeyLabel = document.createElement("label");
 	apiKeyLabel.className = "field-label";
 	apiKeyLabel.htmlFor = "apiKey";
-	apiKeyLabel.textContent = "API kaliti";
+	apiKeyLabel.textContent = "API Key";
 	apiKeyGroup.appendChild(apiKeyLabel);
 	apiKeyGroup.appendChild(apiKeyWrapper);
 	container.appendChild(apiKeyGroup);
@@ -329,7 +329,7 @@ function buildAccountSection(
 	const testBtn = document.createElement("button");
 	testBtn.type = "button";
 	testBtn.className = "btn btn--primary";
-	testBtn.textContent = "Ulanishni tekshirish";
+	testBtn.textContent = "Test connection";
 
 	const connectionStatus = document.createElement("span");
 	connectionStatus.className = "connection-status";
@@ -337,7 +337,7 @@ function buildAccountSection(
 	testBtn.addEventListener("click", async () => {
 		testBtn.disabled = true;
 		connectionStatus.className = "connection-status connection-status--loading";
-		connectionStatus.textContent = "Tekshirilmoqda…";
+		connectionStatus.textContent = "Testing…";
 
 		const baseUrl = apiBaseUrlInput.value.trim() || DEFAULT_API_BASE_URL;
 		const key = apiKeyInput.value.trim();
@@ -349,7 +349,7 @@ function buildAccountSection(
 			if (res.ok) {
 				connectionStatus.className =
 					"connection-status connection-status--success";
-				let label = "✓ Ulandi";
+				let label = "✓ Connected";
 				try {
 					const data = (await res.json()) as Record<string, unknown>;
 					const identity =
@@ -358,19 +358,19 @@ function buildAccountSection(
 							: typeof data.email === "string" && data.email
 								? data.email
 								: null;
-					if (identity) label = `✓ ${identity} sifatida ulandi`;
+					if (identity) label = `✓ Connected as ${identity}`;
 				} catch {
-					// ignore JSON parse errors — label stays "✓ Ulandi"
+					// ignore JSON parse errors — label stays "✓ Connected"
 				}
 				connectionStatus.textContent = label;
 			} else {
 				connectionStatus.className =
 					"connection-status connection-status--error";
-				connectionStatus.textContent = "× Ulanish amalga oshmadi";
+				connectionStatus.textContent = "× Connection failed";
 			}
 		} catch {
 			connectionStatus.className = "connection-status connection-status--error";
-			connectionStatus.textContent = "× Ulanish amalga oshmadi";
+			connectionStatus.textContent = "× Connection failed";
 		} finally {
 			testBtn.disabled = false;
 		}
@@ -379,22 +379,22 @@ function buildAccountSection(
 	const signInBtn = document.createElement("button");
 	signInBtn.type = "button";
 	signInBtn.className = "btn btn--secondary";
-	signInBtn.textContent = "data365 orqali kirish";
+	signInBtn.textContent = "Sign in with data365";
 	signInBtn.addEventListener("click", () => {
 		signInBtn.disabled = true;
-		showToast("Kirish oynasi ochilmoqda…");
+		showToast("Opening sign-in…");
 		chrome.runtime.sendMessage({ type: "START_SIGNIN" }, (resp) => {
 			signInBtn.disabled = false;
 			if (chrome.runtime.lastError) {
-				showToast("Kirishda xatolik — qayta urinib ko'ring");
+				showToast("Sign-in error — try again");
 				return;
 			}
 			const r = (resp ?? {}) as { ok?: boolean; error?: string };
 			if (r.ok) {
-				showToast("Ulandi ✓");
+				showToast("Connected ✓");
 				location.reload();
 			} else {
-				showToast(r.error ? `Kirish amalga oshmadi: ${r.error}` : "Kirish amalga oshmadi — pastga kalitni joylashtiring");
+				showToast(r.error ? `Sign-in failed: ${r.error}` : "Sign-in failed — paste key below");
 			}
 		});
 	});
@@ -412,17 +412,17 @@ async function buildRecordingSection(
 	container: HTMLElement,
 ): Promise<void> {
 	container.appendChild(divider());
-	container.appendChild(sectionHeader("Yozuv"));
+	container.appendChild(sectionHeader("Recording"));
 
 	const micSelect = document.createElement("select");
 	micSelect.id = "micDeviceId";
 	micSelect.className = "text-input";
-	container.appendChild(fieldGroup("Mikrofon", micSelect));
+	container.appendChild(fieldGroup("Microphone", micSelect));
 	populateMicrophoneSelect(micSelect, settings.micDeviceId).catch(() => {});
 
 	micSelect.addEventListener("change", async () => {
 		await saveSettings({ micDeviceId: micSelect.value });
-		showToast("Saqlandi");
+		showToast("Saved");
 	});
 
 	// Camera overlay toggle: HIDDEN (R4) — nothing in the recording pipeline
@@ -463,7 +463,7 @@ async function buildRecordingSection(
 	captureModeGroup.className = "field-group";
 	const captureModeLabel = document.createElement("span");
 	captureModeLabel.className = "field-label";
-	captureModeLabel.textContent = "Ekranni yozish usuli";
+	captureModeLabel.textContent = "Screen capture method";
 	captureModeGroup.appendChild(captureModeLabel);
 
 	const modes: Array<{
@@ -473,14 +473,14 @@ async function buildRecordingSection(
 	}> = [
 		{
 			value: "picker",
-			label: "Tizim tanlagichi",
-			description: "Har safar ekran, oyna yoki tabni tanlang (tavsiya etiladi)",
+			label: "System picker",
+			description: "Choose screen, window, or tab each time (recommended)",
 		},
 		{
 			value: "silent-tab",
-			label: "Joriy tabni tezkor yozish",
+			label: "Quick-record current tab",
 			description:
-				"Tanlash oynasini ko'rsatmasdan faol tabni yozadi (murakkab foydalanuvchilar uchun)",
+				"Captures the active tab without showing a picker (advanced)",
 		},
 	];
 
@@ -511,7 +511,7 @@ async function buildRecordingSection(
 		radio.addEventListener("change", async () => {
 			if (radio.checked) {
 				await saveSettings({ captureMode: mode.value });
-				showToast("Saqlandi");
+				showToast("Saved");
 			}
 		});
 	}
@@ -540,7 +540,7 @@ function buildMeetSection(
 	const autoRecordTextBlock = document.createElement("div");
 	const autoRecordLabel = document.createElement("span");
 	autoRecordLabel.className = "field-label";
-	autoRecordLabel.textContent = "Meetga qo'shilganda avtomatik yozish";
+	autoRecordLabel.textContent = "Auto-record on Meet join";
 	autoRecordTextBlock.appendChild(autoRecordLabel);
 
 	autoRecordRow.appendChild(autoRecordTextBlock);
@@ -553,7 +553,7 @@ function buildMeetSection(
 	const warningBox = document.createElement("div");
 	warningBox.className = "warning-box";
 	warningBox.textContent =
-		"Google Meet chaqiruviga qo'shilganingizda avtomatik yozish 5 soniyalik sanoq bilan boshlanadi. Ishtirokchilar yozib olinishga rozi bo'lganiga ishonch hosil qiling. data365 hech qachon bu sanoqni ko'rsatmasdan yozishni boshlamaydi. Sanoq davomida uni bekor qilishingiz mumkin.";
+		"Auto-recording will start a 5-second countdown when you join a Google Meet call. Make sure participants have consented to being recorded. data365 will never start recording without showing this countdown. You can cancel during the countdown.";
 	warningBox.style.display = settings.autoRecordOnMeet ? "block" : "none";
 	autoRecordGroup.appendChild(warningBox);
 	container.appendChild(autoRecordGroup);
@@ -566,7 +566,7 @@ function buildMeetSection(
 	const countdownLabel = document.createElement("label");
 	countdownLabel.className = "field-label";
 	countdownLabel.htmlFor = "countdownSlider";
-	countdownLabel.textContent = "Sanoq davomiyligi";
+	countdownLabel.textContent = "Countdown duration";
 	countdownGroup.appendChild(countdownLabel);
 
 	const sliderRow = document.createElement("div");
@@ -583,15 +583,15 @@ function buildMeetSection(
 
 	const sliderValue = document.createElement("span");
 	sliderValue.className = "slider-value";
-	sliderValue.textContent = `${countdownSec} soniya`;
+	sliderValue.textContent = `${countdownSec} seconds`;
 
 	slider.addEventListener("input", () => {
-		sliderValue.textContent = `${slider.value} soniya`;
+		sliderValue.textContent = `${slider.value} seconds`;
 	});
 
 	slider.addEventListener("change", async () => {
 		await saveSettings({ autoRecordCountdownSec: Number(slider.value) });
-		showToast("Saqlandi");
+		showToast("Saved");
 	});
 
 	sliderRow.appendChild(slider);
@@ -604,7 +604,7 @@ function buildMeetSection(
 		warningBox.style.display = on ? "block" : "none";
 		countdownGroup.style.display = on ? "block" : "none";
 		await saveSettings({ autoRecordOnMeet: on });
-		showToast("Saqlandi");
+		showToast("Saved");
 	});
 
 	const soundToggleEl = createToggle("soundEnabled", settings.soundEnabled);
@@ -616,7 +616,7 @@ function buildMeetSection(
 	const soundTextBlock = document.createElement("div");
 	const soundLabel = document.createElement("span");
 	soundLabel.className = "field-label";
-	soundLabel.textContent = "Bildirishnoma ovozlari";
+	soundLabel.textContent = "Notification sounds";
 	soundTextBlock.appendChild(soundLabel);
 
 	soundRow.appendChild(soundTextBlock);
@@ -629,7 +629,7 @@ function buildMeetSection(
 
 	soundInput.addEventListener("change", async () => {
 		await saveSettings({ soundEnabled: soundInput.checked });
-		showToast("Saqlandi");
+		showToast("Saved");
 	});
 }
 
@@ -638,7 +638,7 @@ function buildAboutSection(
 	container: HTMLElement,
 ): void {
 	container.appendChild(divider());
-	container.appendChild(sectionHeader("Haqida"));
+	container.appendChild(sectionHeader("About"));
 
 	const version = document.createElement("p");
 	version.className = "about-version";
@@ -651,10 +651,10 @@ function buildAboutSection(
 	const baseUrl = settings.apiBaseUrl || DEFAULT_API_BASE_URL;
 
 	const linkDefs: Array<{ label: string; href: string }> = [
-		{ label: "Kengaytma sahifasi", href: `${baseUrl}/extension/install` },
-		{ label: "data365 boshqaruv paneli", href: `${baseUrl}/dashboard` },
+		{ label: "Extension page", href: `${baseUrl}/extension/install` },
+		{ label: "data365 Dashboard", href: `${baseUrl}/dashboard` },
 		{
-			label: "Muammo haqida xabar berish",
+			label: "Report an issue",
 			href: "https://github.com/CapSoftware/Cap/issues",
 		},
 	];
@@ -673,7 +673,7 @@ function buildAboutSection(
 
 	const tagline = document.createElement("p");
 	tagline.className = "about-tagline";
-	tagline.textContent = "data365 — ko'rsatmalar uchun ekran yozish";
+	tagline.textContent = "data365 — screen recording for instruction";
 	container.appendChild(tagline);
 }
 
@@ -705,7 +705,7 @@ async function init(): Promise<void> {
 	): void {
 		input.addEventListener("blur", async () => {
 			await saveSettings({ [key]: input.value.trim() });
-			showToast("Saqlandi");
+			showToast("Saved");
 		});
 	}
 
@@ -731,7 +731,7 @@ async function init(): Promise<void> {
 				apiKey: token,
 				...(newBaseUrl ? { apiBaseUrl: newBaseUrl } : {}),
 			})
-				.then(() => showToast("Muvaffaqiyatli kirildi!"))
+				.then(() => showToast("Signed in successfully!"))
 				.catch(() => {});
 		}
 	});

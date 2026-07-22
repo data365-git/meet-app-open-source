@@ -167,7 +167,7 @@ describe("second recording on the same page (the 2026-07-22 prod bug)", () => {
 		// Recording #1's cleanup used to stop() the captured tracks. On real Meet's
 		// srcObject-backed elements those wrap Meet's OWN live track, so stopping them
 		// left recording #2 with only dead tracks → attachPageAudio returns 0 →
-		// "Mijoz ovozi olinmadi" and a file with no remote voices. detachAllPageAudio
+		// "the other person's audio wasn't captured" and a file with no remote voices. detachAllPageAudio
 		// must disconnect the source nodes only, never stop tracks it does not own.
 		const el = new FakeElement(track("t1"));
 		elements = [el];

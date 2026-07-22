@@ -173,7 +173,7 @@ async function main() {
 		await recorderPage.waitForLoadState("domcontentloaded");
 		log(`recorder tab: ${recorderPage.url()}`);
 
-		// 7. ONE Boshlash click â€” the genuine gesture for getDisplayMedia; the
+		// 7. ONE Start click â€” the genuine gesture for getDisplayMedia; the
 		//    flag auto-picks "Entire screen".
 		await recorderPage.locator("#btn-start").click();
 		// Did the click actually reach startRecording? The button disables itself

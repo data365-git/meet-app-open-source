@@ -315,7 +315,7 @@ describe("meeting mode validates the surface the user actually picked", () => {
 		for (const t of h.displayStream.getTracks()) expect(t.stopped).toBe(true);
 		// The owner's copy, on the idle view, with the button live again — a
 		// re-ask, not a dead end.
-		expect(h.el("idle-msg").textContent).toMatch(/To'liq ekranni tanlang/);
+		expect(h.el("idle-msg").textContent).toMatch(/Choose "Entire Screen"/);
 		expect(h.el("btn-start").disabled).toBe(false);
 		expect(h.el("view-idle").hidden).toBe(false);
 		expect(h.el("view-error").hidden).toBe(true);
@@ -333,7 +333,7 @@ describe("meeting mode validates the surface the user actually picked", () => {
 		expect(FakeRecorder.last?.startCalls ?? 0).toBe(0);
 		expect(types(h)).not.toContain("RECORDER_STARTED");
 		expect(types(h)).toContain("INSTRUCTION_CANCEL");
-		expect(h.el("idle-msg").textContent).toMatch(/To'liq ekranni tanlang/);
+		expect(h.el("idle-msg").textContent).toMatch(/Choose "Entire Screen"/);
 	});
 
 	// GUARD THE GUARD. Without this, a broken harness in which recording never

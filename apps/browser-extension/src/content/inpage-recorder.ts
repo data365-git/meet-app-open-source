@@ -2,7 +2,7 @@
 //
 // Owner's target flow: click "Record now" inside the Meet page → Chrome's screen
 // picker opens → done. Two actions. The shortcut path (Ctrl+Shift+9 → recorder
-// tab → "Boshlash" → picker) needs three, because that page's button exists only
+// tab → "Start" → picker) needs three, because that page's button exists only
 // to supply the user activation getDisplayMedia() requires. An in-page click IS
 // that activation, so the capture can start right here.
 //
@@ -83,14 +83,14 @@ let intentionalStop = false;
 let clientAudioWaived = false;
 
 const SURFACE_NOT_MONITOR_MSG =
-	"To'liq ekranni tanlang — \"Entire Screen\". Tab yoki oyna tanlansa, " +
-	"suhbat to'liq yozilmaydi. Qaytadan urinib ko'ring.";
+	"Choose \"Entire Screen\" — picking a tab or window won't record the full " +
+	"call. Please try again.";
 
 const NO_CLIENT_AUDIO_MSG =
-	"Mijoz ovozi olinmadi — yozuv bekor qilindi. Ctrl+Shift+9 bilan urinib ko'ring.";
+	"The other person's audio wasn't captured — recording cancelled. Try again with Ctrl+Shift+9.";
 
 const SILENCE_WARN_MSG =
-	"⚠️ Mijoz ovozi eshitilmayapti — Meet tabi ochiq va ovozi yoqilganini tekshiring.";
+	"⚠️ The other person's audio isn't coming through — check that the Meet tab is open and unmuted.";
 
 // How long the mix may stay completely silent on the PAGE-AUDIO side before we
 // warn. Deliberately long: a meeting is legitimately silent for minutes at a
@@ -124,14 +124,14 @@ function sendMsgAwait(msg: Record<string, unknown>): Promise<unknown> {
 
 function friendlyStartError(error: unknown): string {
 	const raw = typeof error === "string" ? error.toLowerCase() : "";
-	if (raw.includes("already")) return "Yozuv allaqachon ketmoqda.";
+	if (raw.includes("already")) return "A recording is already in progress.";
 	if (raw.includes("not signed")) {
-		return "Avval data365 belgisini bosib hisobga ulaning.";
+		return "Sign in with data365 first by clicking the icon.";
 	}
 	if (raw.includes("meet tab") || raw.includes("tab")) {
-		return "Shu Meet tabini oching va \"Hozir yozish\"ni qayta bosing.";
+		return "Open this Meet tab and press \"Record now\" again.";
 	}
-	return "Yozuvni boshlab bo'lmadi. Ctrl+Shift+9 bilan urinib ko'ring.";
+	return "Couldn't start recording. Try again with Ctrl+Shift+9.";
 }
 
 // ── Page audio (the remote participants) ───────────────────────────────────
@@ -234,7 +234,7 @@ export function detachAllPageAudio(s: InPageState): void {
 		// Do NOT stop() these tracks. On the srcObject path (real Meet) captureStream()
 		// wraps the ELEMENT'S OWN live WebRTC track, so stop() terminally kills a track the
 		// extension never owned — and any LATER recording on the same page then finds only
-		// dead ("ended") tracks, shows "Mijoz ovozi olinmadi", and records without the remote
+		// dead ("ended") tracks, shows "the other person's audio wasn't captured", and records without the remote
 		// voices (the 2026-07-22 prod bug). Disconnecting our source node is all we must undo
 		// here; cleanup() closes the whole AudioContext, releasing everything we actually own.
 	}
@@ -297,7 +297,7 @@ export function resumeInPageRecording(): boolean {
 // getUserMedia does not resolve while Chrome's mic permission prompt is open —
 // it waits for the human. On the recorder page that is harmless (it is a page
 // the user is looking at), but here the user is in a CALL and the only feedback
-// is a button stuck on "Boshlanmoqda…". Measured by the in-page proof, which hung
+// is a button stuck on "Starting…". Measured by the in-page proof, which hung
 // exactly there on a profile with no mic grant. A meeting recording must never be
 // lost to a mic prompt, so the mic is best-effort with a deadline: past it we
 // record screen + the other participants without it.
@@ -360,7 +360,7 @@ export async function startInPageRecording(
 	host: InPageRecorderHost,
 ): Promise<void> {
 	if (state) {
-		host.note("Yozuv allaqachon ketmoqda.", true);
+		host.note("A recording is already in progress.", true);
 		host.onFailed();
 		return;
 	}
@@ -385,8 +385,8 @@ export async function startInPageRecording(
 		const name = err instanceof Error ? err.name : "";
 		host.note(
 			name === "NotAllowedError" || name === "AbortError"
-				? "Ekran ulashish bekor qilindi. Qaytadan bosing."
-				: `Ekranni ulab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
+				? "Screen sharing was cancelled. Click again to retry."
+				: `Couldn't share the screen: ${err instanceof Error ? err.message : String(err)}`,
 			true,
 		);
 		host.onFailed();
@@ -395,7 +395,7 @@ export async function startInPageRecording(
 
 	if (displayStream.getVideoTracks().length === 0) {
 		for (const t of displayStream.getTracks()) t.stop();
-		host.note("Video oqimi kelmadi. Qaytadan urinib ko'ring.", true);
+		host.note("No video stream arrived. Please try again.", true);
 		host.onFailed();
 		return;
 	}
@@ -494,7 +494,7 @@ export async function startInPageRecording(
 			// the voice is GENUINELY absent — no page tap AND no system audio. When
 			// system audio was shared it already carries the remote voices (stand-in
 			// below), so the confirm would be a false alarm — the exact 2026-07-22
-			// complaint where a 2nd recording showed "Mijoz ovozi olinmadi" while the
+			// complaint where a 2nd recording showed "the other person's audio wasn't captured" while the
 			// voice was in fact being recorded.
 			if (!hasSystemAudio) {
 				const proceed = await host.confirmWithoutClientAudio();
@@ -536,7 +536,7 @@ export async function startInPageRecording(
 			cleanup(pending);
 			pending = null;
 			sendMsg({ type: "MEET_NUDGE_CANCEL" });
-			host.note("Ekran ulashish to'xtatildi. Qaytadan bosing.", true);
+			host.note("Screen sharing stopped. Click again to retry.", true);
 			host.onFailed();
 			return;
 		}
@@ -609,7 +609,7 @@ export async function startInPageRecording(
 			cleanup(pending);
 			pending = null;
 			host.note(
-				`Yozuvni boshlab bo'lmadi: ${startResp?.error ?? "yuklash sessiyasi ochilmadi"}`,
+				`Couldn't start recording: ${startResp?.error ?? "upload session didn't open"}`,
 				true,
 			);
 			host.onFailed();
@@ -668,10 +668,10 @@ export async function startInPageRecording(
 		host.onRecordingStarted();
 		if (usingSystemAudioForClient) {
 			// NOT a warning: the remote voices ARE being recorded, via system audio.
-			host.note("Mijoz ovozi tizim ovozi orqali yozilmoqda.", false);
+			host.note("The other person's audio is being recorded via system audio.", false);
 		} else if (clientAudioWaived) {
 			host.note(
-				"⚠️ Mijoz ovozisiz yozilmoqda — faqat ekran va mikrofon.",
+				"⚠️ Recording without the other person's audio. Stop and re-record with 'Share system audio' enabled.",
 				true,
 			);
 		}
@@ -684,7 +684,7 @@ export async function startInPageRecording(
 			error: err instanceof Error ? err.message : String(err),
 		});
 		host.note(
-			`Yozuvni boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
+			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
 			true,
 		);
 		host.onFailed();

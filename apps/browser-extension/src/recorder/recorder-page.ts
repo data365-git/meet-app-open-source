@@ -89,7 +89,7 @@ const meetingRequiredParam = _recorderUrlParams.get("meeting") === "1";
 // alongside source/meeting. Sent back on RECORDER_STARTED (same trust/fallback
 // pattern as sourceTabId/meeting — see sw.ts) so the recording files as a
 // meeting even if the SW's "arming" record was cleared in between, and reused
-// by the "Faqat Meet tabini yozish" secondary action below.
+// by the "Record Meet tab only" secondary action below.
 const meetingIdParam = _recorderUrlParams.get("meetingId") ?? undefined;
 
 interface RecordingState {
@@ -116,7 +116,7 @@ let pausedAccumMs = 0;
 // `intentionalStop` is set true BEFORE any deliberate stop begins (Stop &
 // upload button, SW-initiated STOP_CAPTURE, this tab closing) so the mid-
 // recording watchdog below never mistakes an ordinary stop for a tab-audio
-// loss. `clientAudioWaived` records the Item-1 "Boshla anyway" decision (at
+// loss. `clientAudioWaived` records the Item-1 "Start anyway" decision (at
 // most one confirm per start — see resolveClientAudioGap). Both reset at the
 // start of each new recording.
 let intentionalStop = false;
@@ -132,12 +132,12 @@ type AudioWarnCause = "ended" | "muted" | "suspended" | "waived" | "mic-only";
 
 const AUDIO_WARN_TEXT: Record<AudioWarnCause, string> = {
 	ended:
-		"⚠️ Meet tab yopildi — qayta oching va extension'ni bosing, yoki yozuvni to'xtating.",
-	muted: "⚠️ Mijoz ovozi o'chirilgan — Meet tab ovozini yoqing.",
-	suspended: "⚠️ Mijoz ovozi vaqtincha uzildi — tiklanmoqda…",
-	waived: "⚠️ Mijoz ovozi olinmayapti — faqat ekran va mikrofon yozilmoqda.",
+		"⚠️ The Meet tab was closed — reopen it and click the extension icon, or stop the recording.",
+	muted: "⚠️ The other person's audio is muted — unmute the Meet tab.",
+	suspended: "⚠️ The other person's audio briefly dropped — recovering…",
+	waived: "⚠️ Recording without the other person's audio — only screen and mic are being recorded.",
 	"mic-only":
-		"⚠️ Tizim ovozi ulashilmagan — boshqalarning ovozi yozilmaydi (faqat mikrofoningiz). To'xtating, qaytadan boshlang va ekran tanlash oynasida “Tizim ovozini ham ulashish”ni belgilang.",
+		"⚠️ System audio is NOT shared — other people's voices won't be recorded (only your mic). Stop, start again, and tick “Also share system audio” in the picker.",
 };
 
 // Higher wins when more than one cause is simultaneously active.
@@ -267,7 +267,7 @@ function syncPauseLabel(): void {
 	if (controlInFlight) return;
 	const btn = $("btn-pause") as HTMLButtonElement | null;
 	if (!btn) return;
-	btn.textContent = state?.recorder.state === "paused" ? "Davom ettirish" : "Pauza";
+	btn.textContent = state?.recorder.state === "paused" ? "Resume" : "Pause";
 	btn.disabled = false;
 }
 
@@ -383,7 +383,7 @@ async function getSettings(): Promise<RecorderSettings> {
 // reachable before the picker runs — here, on the idle view of the recorder
 // tab itself. Persists into the SAME chrome.storage settings startRecording()
 // already reads (getSettings() above), so no other wiring is needed: change
-// the toggle/select, then click Boshlash, and the next getUserMedia() call
+// the toggle/select, then click Start, and the next getUserMedia() call
 // picks it up. Off the meeting path the popup remains the only mic surface
 // (unchanged), so this stays hidden there.
 async function setupMicControl(): Promise<void> {
@@ -422,7 +422,7 @@ async function setupMicControl(): Promise<void> {
 // release the SW arming lock, and show a clear error instead of recording.
 
 const TAB_AUDIO_UNAVAILABLE_MSG =
-	"Mijoz ovozini ulab bo'lmadi — Meet tabini yangilab, qaytadan boshlang.";
+	"Couldn't capture the other person's audio — reload the Meet tab and start again.";
 
 // Meeting mode only. `displaySurface: "monitor"` in the getDisplayMedia
 // constraints below is a picker HINT, not a guarantee — it merely pre-selects
@@ -434,8 +434,8 @@ const TAB_AUDIO_UNAVAILABLE_MSG =
 // the Meet tab, which is independent of the chosen surface. What is lost is the
 // full-screen video the meeting mode exists to capture.)
 const SURFACE_NOT_MONITOR_MSG =
-	"To'liq ekranni tanlang — \"Entire Screen\". Tab yoki oyna tanlansa, " +
-	"suhbat to'liq yozilmaydi. Qaytadan urinib ko'ring.";
+	"Choose \"Entire Screen\" — picking a tab or window won't record the full " +
+	"call. Please try again.";
 
 function failClosedStart(
 	message: string,
@@ -465,8 +465,8 @@ function failClosedStart(
 // When the client (Meet tab) audio guarantee can't be met, ask the user
 // instead of silently failing closed. The video track's `onended` (native
 // "Stop sharing") is wired BEFORE the modal shows so a share-stop while the
-// modal is open resolves as Bekor; `readyState` is re-checked after resolve
-// too, closing the race where "Stop sharing" and the "Boshla" click land
+// modal is open resolves as Cancel; `readyState` is re-checked after resolve
+// too, closing the race where "Stop sharing" and the "Start anyway" click land
 // almost simultaneously.
 function confirmProceedWithoutClientAudio(
 	displayStream: MediaStream,
@@ -495,7 +495,7 @@ function confirmProceedWithoutClientAudio(
 
 /** Shared by both fail points (no tab audio at all, and the liveness gate).
  * Returns true when the caller should continue starting the recording
- * (the user chose Boshla and the display track is still live); false when
+ * (the user chose Start anyway and the display track is still live); false when
  * the caller must fail-closed and return (already handled here). */
 async function resolveClientAudioGap(
 	streams: {
@@ -555,8 +555,8 @@ async function startRecording(): Promise<void> {
 		const name = err instanceof Error ? err.name : "";
 		const friendly =
 			name === "NotAllowedError"
-				? "Ekranni ulashish bekor qilindi. Qayta urinish uchun tugmani bosing."
-				: `Ekran yozishni boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`;
+				? "Screen sharing was cancelled. Click the button to try again."
+				: `Couldn't start screen capture: ${err instanceof Error ? err.message : String(err)}`;
 		setIdleMsg(friendly, true);
 		if (startBtn) startBtn.disabled = false;
 		return;
@@ -866,8 +866,8 @@ async function startRecording(): Promise<void> {
 		if (!startResp?.ok) {
 			cleanup(state);
 			state = null;
-			const reason = startResp?.error ?? "Yuklash seansini boshlab bo'lmadi.";
-			setIdleMsg(`Yozishni boshlab bo'lmadi: ${reason}`, true);
+			const reason = startResp?.error ?? "Couldn't start the upload session.";
+			setIdleMsg(`Couldn't start recording: ${reason}`, true);
 			showView("view-idle");
 			if (startBtn) startBtn.disabled = false;
 			return;
@@ -902,7 +902,7 @@ async function startRecording(): Promise<void> {
 			error: err instanceof Error ? err.message : String(err),
 		});
 		setIdleMsg(
-			`Yozishni boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
+			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
 			true,
 		);
 		showView("view-idle");
@@ -956,7 +956,7 @@ function handleStateChange(s: BroadcastState): void {
 				const startBtn = $("btn-start") as HTMLButtonElement | null;
 				if (startBtn) startBtn.disabled = true;
 				setIdleMsg(
-					"Yozuv allaqachon davom etmoqda. Yangisini boshlashdan oldin uni to'xtating.",
+					"A recording is already in progress. Stop it before starting a new one.",
 					false,
 				);
 			}
@@ -970,7 +970,7 @@ function handleStateChange(s: BroadcastState): void {
 					: 0;
 			const el = $("upload-progress");
 			if (el) {
-				el.textContent = `${formatBytes(s.uploadedBytes ?? 0)} yuklandi (${pct}%)`;
+				el.textContent = `${formatBytes(s.uploadedBytes ?? 0)} uploaded (${pct}%)`;
 			}
 			showView("view-uploading");
 			break;
@@ -978,7 +978,7 @@ function handleStateChange(s: BroadcastState): void {
 		case "finishing": {
 			stopTimer();
 			const el = $("upload-progress");
-			if (el) el.textContent = "Yakunlanmoqda…";
+			if (el) el.textContent = "Finishing up…";
 			showView("view-uploading");
 			break;
 		}
@@ -1000,7 +1000,7 @@ function handleStateChange(s: BroadcastState): void {
 				state = null;
 			}
 			const el = $("error-msg");
-			if (el) el.textContent = s.reason ?? "Noma'lum xatolik";
+			if (el) el.textContent = s.reason ?? "Unknown error";
 			showView("view-error");
 			break;
 		}
@@ -1025,7 +1025,7 @@ function wire(): void {
 	$("btn-start")?.addEventListener("click", () => {
 		startRecording().catch((err) => {
 			setIdleMsg(
-				`Boshlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
+				`Couldn't start: ${err instanceof Error ? err.message : String(err)}`,
 				true,
 			);
 		});
@@ -1063,7 +1063,7 @@ function wire(): void {
 			const btn = $("btn-pause") as HTMLButtonElement | null;
 			if (btn) {
 				btn.disabled = true;
-				btn.textContent = command === "PAUSE" ? "Pauza qilinmoqda…" : "Davom ettirilmoqda…";
+				btn.textContent = command === "PAUSE" ? "Pausing…" : "Resuming…";
 			}
 			setCtlMsg("");
 			controlInFlight = true;
@@ -1081,7 +1081,7 @@ function wire(): void {
 		const btn = $("btn-stop") as HTMLButtonElement | null;
 		if (btn) {
 			btn.disabled = true;
-			btn.textContent = "Yakunlanmoqda…";
+			btn.textContent = "Finishing…";
 		}
 		stopRecording();
 	});
@@ -1091,9 +1091,9 @@ function wire(): void {
 		navigator.clipboard.writeText(lastShareUrl).then(() => {
 			const btn = $("btn-copy");
 			if (btn) {
-				btn.textContent = "Nusxalandi!";
+				btn.textContent = "Copied!";
 				setTimeout(() => {
-					btn.textContent = "Havolani nusxalash";
+					btn.textContent = "Copy link";
 				}, 2000);
 			}
 		});
@@ -1203,20 +1203,20 @@ function wire(): void {
  * needed. Text only — the picker itself is unchanged. */
 function applyMeetingCopy(): void {
 	if (!meetingRequiredParam) return;
-	document.title = "data365 — Butun ekranli uchrashuvni yozish";
+	document.title = "data365 — Record full-screen meeting";
 	const title = $("idle-title");
-	if (title) title.textContent = "Butun ekranli uchrashuvni yozish";
+	if (title) title.textContent = "Record full-screen meeting";
 	const sub = $("idle-sub");
 	if (sub) {
 		sub.textContent =
-			'Pastdagi tugmani bosing, so\'ng "Butun ekran"ni tanlang — shunda ko\'rsatgan hamma narsangiz yoziladi. Boshqa ishtirokchilarning ovozi Meet tabingizdan avtomatik olinadi — o\'sha tabni ochiq qoldiring, shu sahifani ham ochiq qoldiring.';
+			'Click below, then choose "Entire Screen" so everything you show is recorded. The other participants\' voices are captured from your Meet tab automatically — leave that tab open, and keep this one open too.';
 	}
 	const start = $("btn-start");
 	// Single click still chains picker → checks → start (unchanged below) —
 	// only the label is shorter now that this page opens straight off the
 	// toolbar-icon auto-start (popup.ts maybeAutoStartMeeting) instead of a
 	// second explicit "Record full-screen meeting" pick in the popup.
-	if (start) start.textContent = "Boshlash";
+	if (start) start.textContent = "Start";
 	const meetTabOnlyBtn = $("btn-meet-tab-only");
 	if (meetTabOnlyBtn) meetTabOnlyBtn.classList.remove("hidden");
 }

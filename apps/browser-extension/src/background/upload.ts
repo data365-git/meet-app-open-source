@@ -326,9 +326,9 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 		chrome.notifications.create({
 			type: "basic",
 			iconUrl: "/icons/icon-48.png",
-			title: "Yozuvni serverdan o'chirib bo'lmadi",
+			title: "Could not delete recording from the server",
 			message:
-				"Bu yozuv shu qurilmadan o'chirildi, lekin uni serverdan o'chirib bo'lmadi. Iltimos, uni boshqaruv panelingizdan o'chiring.",
+				"This recording was removed from this device, but we could not delete it from the server. Please delete it from your dashboard.",
 		});
 		return;
 	}
@@ -349,7 +349,7 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 			await setState({
 				kind: "error",
 				reason:
-					"Yuklash amalga oshmadi va uni tiklab bo'lmadi. Iltimos, qayta yozib oling — hozir yangi yozuvni boshlashingiz mumkin.",
+					"Upload failed and could not be recovered. Please re-record — you can start a new recording now.",
 				recoverable: true,
 				previousVideoId: deadVideoId,
 			});
@@ -359,9 +359,9 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 	chrome.notifications.create({
 		type: "basic",
 		iconUrl: "/icons/icon-48.png",
-		title: "data365 yuklash muvaffaqiyatsiz tugadi",
+		title: "data365 upload failed",
 		message:
-			"Yuklash amalga oshmadi va uni tiklab bo'lmadi. Bu yozuv yo'qoldi — iltimos, qayta yozib oling.",
+			"Upload failed and could not be recovered. This recording is lost — please re-record.",
 	});
 }
 
@@ -1022,7 +1022,7 @@ export async function finalizeUpload(
 		await setState({
 			kind: "error",
 			reason:
-				"Yozuv juda qisqa bo'ldi — video yozilmadi. Iltimos, kamida bir necha soniya yozib, qayta urinib ko'ring.",
+				"Recording was too short — no video was captured. Please record for at least a couple of seconds and try again.",
 			recoverable: true,
 			previousVideoId: videoId,
 		});
@@ -1120,7 +1120,7 @@ export async function finalizeUpload(
 		// to retry and the recording cannot be completed. Terminal state.
 		await setState({
 			kind: "error",
-			reason: "Yuklash qismini qayta yuklash amalga oshmadi. Internetni tekshirib, qayta urinib ko'ring.",
+			reason: "Upload part retry failed. Check network and try again.",
 			recoverable: true,
 			previousVideoId: videoId,
 		});
@@ -1136,8 +1136,8 @@ export async function finalizeUpload(
 			kind: "error",
 			reason:
 				totalBytes === 0
-					? "Hech qanday yozuv ma'lumoti olinmadi. Ekran yozish ruxsatlarini tekshirib, qayta urinib ko'ring."
-					: `Yuklash amalga oshmadi — ${totalBytes} bayt olindi, lekin hech qanday qism yuklanmadi. Internetni tekshiring yoki qayta urinib ko'ring.`,
+					? "No recording data was captured. Check screen-capture permissions and try again."
+					: `Upload failed — ${totalBytes} bytes captured but no parts uploaded. Check network or try again.`,
 			recoverable: true,
 			previousVideoId: videoId,
 		});
@@ -1186,7 +1186,7 @@ export async function finalizeUpload(
 		});
 		await setState({
 			kind: "error",
-			reason: `Yuklashni yakunlab bo'lmadi: ${err instanceof Error ? err.message : String(err)}`,
+			reason: `Upload finalization failed: ${err instanceof Error ? err.message : String(err)}`,
 			recoverable: true,
 			previousVideoId: videoId,
 		});

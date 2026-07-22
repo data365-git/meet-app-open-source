@@ -909,11 +909,11 @@ describe("moveToDeadLetter notification (P1.4 honest messaging)", () => {
 
 		expect(notifications.length).toBeGreaterThan(0);
 		const deadLetterNotif = notifications.find((n) =>
-			n.title?.includes("yuklash muvaffaqiyatsiz"),
+			n.title?.includes("upload failed"),
 		);
 		expect(deadLetterNotif).toBeDefined();
 		expect(deadLetterNotif?.message).not.toMatch(/saved locally/i);
-		expect(deadLetterNotif?.message).toMatch(/yo'qoldi|qayta yozib|tiklab bo'lmadi/i);
+		expect(deadLetterNotif?.message).toMatch(/lost|re-record|not.*recover/i);
 	});
 });
 
