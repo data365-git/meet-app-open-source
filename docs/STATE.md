@@ -3,6 +3,35 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## ▶▶ RESUME HERE (2026-07-22 pm — prepared for /clear; read THIS first)
+**GOAL:** finish Ustoz + hand to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless + AI results good + no money waste, confirmed by the owner's real 2-person Meet test.
+
+**✅ DONE + DEPLOYED + LIVE-VERIFIED this session (prod = `518cbd5`, `/api/health` ok):**
+- 🎙 **2nd-recording remote-voice bug FIXED → extension v0.5.3 live.** Machine-proven RED→GREEN (unit + real-browser e2e). Root cause: `detachAllPageAudio` stopped `captureStream()` tracks it didn't own → recording #2 found only dead tracks. Fix + memory lesson in [[feedback_blast_radius]] (checker-twin) + `playbook_gotchas_chrome_extension`.
+- 🔍 **Production QA (61-test plan, Fable-approved): 0 BLOCKERS, 7 shoulds.** Fixed+deployed+verified (`518cbd5`): E6b (storage false-"unavailable" self-heal — 11 stale flags cleared on prod, media was always safe), E8 (analytics empty-state), A4 (upload 500→403). E2b (CORS) built then REVERTED (broke hono OPTIONS preflight — Fable caught it pre-deploy). Each Fable-reviewed.
+
+**✅ COMMITTED (`16a93d8`) + DEPLOYING (v0.5.4)** — Coolify deployment `d129io6v6b64q8yalv93nn1r`, ~30 min build (triggered 2026-07-22 pm). Verified PRE-deploy: ext vitest **136/136**, root typecheck **0**, **no user-facing Uzbek** left, **no CRLF churn** (313=313), recording-fix intact (`detachAllPageAudio` still has no stop-loop), dist+zip **0.5.4**. What shipped in `16a93d8`:
+- **Extension → English** (owner: "extension faqat inglizcha"). Reverted the Uzbek pass across meet-detect, inpage-recorder, recorder page+html, popup, options, sw, upload + coupled tests + e2e-harness probes ("Record now"/"Stop"/"Start anyway").
+- **Recording GUIDANCE** (owner UX catch): the record card now instructs Entire-Screen + Share-system-audio; the no-client-audio confirm + the recording warning are ACTIONABLE (English).
+- **Web app default locale → English** (`apps/web/i18n/locales.ts` uz→en): new/anon users see English; logged-in keep their `NEXT_LOCALE` choice; uz/ru still via Settings→Account switcher. `en.json` complete (791=791). Blast-radius clean, no middleware locale routing.
+
+**▶ NEXT STEP (a fresh session starts here):** **verify the v0.5.4 deploy landed** — `ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'docker ps --format "{{.Image}}"'` tag contains `16a93d8` · `/api/health` ok · served zip `curl -s https://data365.duckdns.org/365-extension.zip` → its `manifest.json` = **0.5.4** · a new visitor (no `NEXT_LOCALE` cookie) gets the English web UI. Then tell the owner to install v0.5.4 for the O7/O7b Meet test (OWNER TODO below). (RUNBOOK §3a to re-check/re-trigger; deployment `d129io6v6b64q8yalv93nn1r`.)
+
+**⛔ OWNER TODO (the ONE physical gate, ~10 min):** install v0.5.4 (data365.duckdns.org/dashboard/extension → download → chrome://extensions → remove old → Load unpacked → must read **0.5.4**) → real 2-person Meet → **"Record now"** → **Entire Screen + tick Share system audio** → talk 2 min → Stop → **record AGAIN on the same call** → BOTH recordings under Meetings must contain the other person's voice; the 2nd must NOT show "audio not captured". If wrong → tell me. This fresh LOUD recording ALSO unblocks: free timestamp (Flow T) + model eval (Flow N) within the **$2** budget + the reconcile-persistence check.
+
+**OPEN DECISIONS:** none — owner answered: web default English (uz/ru switchable); extension English-only; $2 paid-Gemini budget (timestamp + model-eval, each run once, nothing spent yet). **Optional (owner's call, needs prod writes I won't do alone):** M-DEL + E10 live-tests (already code-verified + Fable-approved).
+
+**📋 OTHER IMPORTANT OPEN WORK (beyond the v0.5.4 stream — surfaced from STATE + archives 2026-07-22, for the full handover):**
+- ✅ **SECURITY — DONE (owner confirmed 2026-07-22):** `admin@ustoz.uz`'s password was rotated in the live app, so the old cleartext still in git history no longer works (exposure neutralized). A git-history scrub is optional cleanup, not urgent.
+- **AI results on a REAL fresh meeting (O8 / DONE-criterion a):** P1–P4 verified AI results only on OLD videos; confirm summary/chapters/tasks/chat on the owner's fresh O7 recording from the current build.
+- **Timestamp (Flow T, free path, ~10s→target) + new-model eval (Flow N)** on the fresh recording, ≤$2 — the last two H2 items (d timestamp + f model-eval). Needs a fresh LOUD recording (`fm3pz7…` has no result.mp4; `t91bnh…` is too quiet).
+- **Verify the scheduled crons actually fire** (reconcile-storage self-heal + recover-stale-ai-jobs = GitHub Actions hitting the deployed endpoint; confirm `CRON_SECRET` set + `gh run list`). ⚠️ Scheduled Actions run from **`main`**, but the product runs on **`qa-fixes`** — confirm `main` isn't stale-blocking the schedules (consider merging qa-fixes→main after handover).
+- **Re-verify transcription failure-recovery** (QUOTA-vs-FAILED auto-retry, `bbf3ae2`) — shipped but NEVER live-verified (every Gemini call was 429 then; credit is back now, so it can finally be tested).
+- **Chrome Web Store publish** (owner: $5 dev account + ~1–3 day review) — 1-click install for the team instead of load-unpacked. Deferred; decide when more users need it.
+- **Backlog (documented, non-blocking):** E2b CORS proper hono-aware fix + preflight test; E4 (unknown path→404 not /login), K4 (free-probe 30s latency), recorder a11y, chunk-streaming refactor across the 3 recorder paths, XFF IP-spoof, HSTS max-age bump. **OUT of scope (internal-team-only per H1):** requester "we'll contact you" flow + pending-requests dashboard, domain purchase, transactional email.
+
+---
+
 ## 🎯 ACTIVE GOAL (2026-07-22) — FINISH the project and HAND IT OVER to the internal IT team.
 **Owner ran /grill-with-docs and CONFIRMED the plan, then said: "cleardan keyin men aytgan tartibda ishlab bu loyihani yakunlaymiz."** So a fresh session RESUMES the handover finish-plan.
 **▶ READ FIRST + RESUME FROM: `docs/plans/2026-07-22-handover-to-team-plan.md`** — it holds the agreed decisions (H1–H4) and the 6-phase order. Do NOT re-grill; the decisions are settled.
@@ -42,6 +71,11 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
   - **O1 + O7/O7b (THE gate):** install v0.5.3 → real 2-person Meet → record, stop, **record AGAIN on the same call** → remote voice on BOTH, no "Mijoz ovozi olinmadi" on the 2nd.
   - That fresh LOUD recording is ALSO the subject for **Phase 4 timestamp** (the old subject `fm3pz7…` has no `result.mp4`) and **Phase 5 model eval** (both run within the $2 budget once a good recording exists) + the **fresh-recording-persistence** check (Fable's E6b condition — does a new recording survive a reconcile cycle; the fix says it will).
   - **Optional extra assurance (owner's call, needs prod writes I won't do unilaterally):** M-DEL live disposable-user test + E10 live private-video test — both already code-verified + Fable-approved; live-testing needs creating throwaway data / flipping a video `public=0`.
+
+## 🆕 2026-07-22 (pm) — OWNER UX + LANGUAGE decisions (new work → folds into v0.5.4, defers the stopping point)
+1. **UX gap (owner-caught, valid):** the recorder said "client audio not captured" but never told the user HOW to fix it, and gave no upfront tip about the "Share system audio" checkbox. FIXED (uncommitted working tree, extension) — 3 strings in `meet-detect.ts`/`inpage-recorder.ts`: (a) the record-card now instructs "when the screen picker opens, choose Entire Screen + turn on Share system audio"; (b) the "no client audio" confirm now says to cancel + re-record with it enabled; (c) the recording-time warning is actionable. (Note: with the v0.5.3 tap fix the voice is usually captured AUTOMATICALLY without the checkbox; this guidance is the safety net + recovery path.) Ext suite 136/136, no test asserts the changed strings.
+2. **LANGUAGE (owner decisions):** **web app default → English** (`apps/web/i18n/locales.ts` `defaultLocale "uz"→"en"`, uncommitted) — new users see English; uz/ru still selectable via the existing Settings→Account `LanguageSwitcher` (`NEXT_LOCALE` cookie); `en.json` is complete (791=791 keys) so it's safe. **Extension → English ONLY** (owner: "extension faqat inglizcha yetarli"; no uz/ru switcher there) — a Sonnet agent is reverting the recent Uzbek pass (`ebf514b`/`f5534e5`) back to English + updating the e2e-harness probes + coupled tests + `friendlyStartError` matchers; the guidance strings above ship in English.
+3. **NEXT:** review the Sonnet English revert → bump extension **v0.5.3 → v0.5.4** → rebuild dist + repackage zip → commit (extension English + guidance + web English-default) → deploy (one build serves the new zip AND the web English-default) → owner installs **v0.5.4** (recording fix + guidance + English UI) for the O7/O7b test. This defers the stopping point until v0.5.4 is deployed.
 - **THEN Phase 4 timestamp (≤$2 — subject `fm3pz7…` is storage-flagged, use the working `t91bnh582gnhgy8` or a fresh recording) → Phase 5 model eval. Owner-gated STOPPING POINT:** M-DEL/E10 live-tests need prod writes (disposable user / flip a video public=0) = account-creation + data-mutation I must NOT do unilaterally → hand to owner; plus O1/O7/O7b real 2-person Meet + fresh-recording-persistence. Honest QA score: ~38 clean live passes + ~10 code-read/flag.
 
 ---
