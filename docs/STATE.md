@@ -3,10 +3,18 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
+## 🎯 ACTIVE GOAL (2026-07-22) — FINISH the project and HAND IT OVER to the internal IT team.
+**Owner ran /grill-with-docs and CONFIRMED the plan, then said: "cleardan keyin men aytgan tartibda ishlab bu loyihani yakunlaymiz."** So a fresh session RESUMES the handover finish-plan.
+**▶ READ FIRST + RESUME FROM: `docs/plans/2026-07-22-handover-to-team-plan.md`** — it holds the agreed decisions (H1–H4) and the 6-phase order. Do NOT re-grill; the decisions are settled.
+**"Done" = (a) post-recording AI results (summary/chapters/action-items/chat) flawless, (b) recording captured accurately, (c) no money-waste/malfunction, (d) reached via a Fable-written LIVE test plan executed by agents, (e) timestamp fixed (FREE path, ~5-10s target), (f) new Gemini models evaluated.** Client = internal team only (no domain/email/billing/multi-tenant).
+**NEXT STEP (start here after /clear): Phase 1 — spawn Fable (model: fable) to write the comprehensive live test plan** against the deployed build (`d150c49`, data365.duckdns.org). Then execute → fix → timestamp → model-eval → handover readiness, each fix through plan→Fable-review→build→my-review→Fable-review-of-review→deploy.
+**The one owner-physical gate that no machine can do:** the real 2-person Meet test on extension **v0.5.2** (install from data365.duckdns.org/dashboard/extension). Everything else, I do + prove.
+
+---
 ## ✅ GEMINI CREDIT RESTORED (2026-07-21) — the outage is OVER, AI features work again.
 The 2026-07-20 credit depletion is RESOLVED (owner topped up billing 2026-07-21). The technical findings further down (free-tier ~20/day cap, model behavior, the free-probe/quota parking) are kept as REFERENCE, not as a live incident. Do not re-raise the outage.
 
-## 🌙 OVERNIGHT AUTONOMOUS RUN IN PROGRESS (2026-07-21 night → morning) — make it production-ready for the INTERNAL IT team
+## 🌙 OVERNIGHT AUTONOMOUS RUN — COMPLETE + DEPLOYED (2026-07-21 night → 2026-07-22 ~00:28) — production-readiness batch for the INTERNAL IT team
 Owner grilled the key decisions, then went to sleep authorizing an overnight build. **Live plan + all decisions: `docs/plans/2026-07-21-production-ready-internal-plan.md` — a fresh session should read THAT and resume at its PIPELINE STATUS checklist.** Pipeline (owner-specified): audit → PLAN → Fable plan-review → BUILD → my review → Fable review-of-review → DEPLOY → morning report. Deploy authorized ONLY after the full review chain passes; risky/unverifiable items are HELD, never shipped blind. Scope = internal IT team only (requester flow SKIP, domain/email out of scope). Final "production ready" stamp still needs the owner's real 2-person Meet QA on a device — this run will NOT claim "done".
 
 **✅ OVERNIGHT RUN COMPLETE + DEPLOYED + LIVE-VERIFIED (2026-07-22 ~00:28).** 7 build commits (`59962bc..77962f1`) — B1 CORS-reflect-any fix, C1 delete-account crash fix, A1+A2 transcription-cost, A3 guest-chat helper (groundwork; wiring deferred), B3+B4+C3 UX (loading/error-i18n/storageMissing), C4+C5 authz+cleanup (deleted dead domain-info route + 6 orphan migrations), B2 extension mic-timeout → **v0.5.2**. Both Fable gates passed (plan-review OK-to-build; review-of-review SHIP). Central gate green (root typecheck 0, ext 135/135, web 1181/0-fail). **DEPLOYED `d150c49`** (Coolify `pwas79rn68icrfjral91xa91`), LIVE-VERIFIED: `/api/health` ok, extension zip **v0.5.2**, and the **B1 CORS hole is CLOSED on prod** — `Origin: https://evil.example.com` → NO Access-Control-Allow-Origin, while `https://data365.duckdns.org` is still echoed. Prod is now `d150c49` (was `8fb3470`). Morning owner-list + what's provable only on device: `docs/plans/2026-07-21-production-ready-internal-plan.md`.
