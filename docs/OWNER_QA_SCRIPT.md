@@ -1,18 +1,22 @@
-# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish
+# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish (v0.5.4)
 
-Sana: 2026-07-18 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutbukdagi Chrome**
+Sana: 2026-07-22 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutbukdagi Chrome**
+
+> **Extension endi faqat inglizcha.** Ekranda ko'radigan tugma/ogohlantirishlarni quyida
+> tirnoq ichida ("...") aynan qanday yozilishini ko'rsatdim — shu matnni izlang.
 
 ---
 
 ## Buni nega siz qilyapsiz
 
 Men (Claude) mashina qila oladigan hamma tekshiruvni qildim: testlar, kod tekshiruvi,
-qurish. Lekin bitta narsani hech qanday test isbotlay olmaydi:
+qurish, prod'ga chiqarish (v0.5.4 tirik). Lekin bitta narsani hech qanday test isbotlay olmaydi:
 
-> **Haqiqiy Meet'da suhbatdoshingizning ovozi yozuvda eshitiladimi?**
+> **Haqiqiy Meet'da suhbatdoshingizning ovozi yozuvda eshitiladimi — va bitta qo'ng'iroqda
+> IKKINCHI marta yozganda ham eshitiladimi?**
 
-Buni faqat tirik odam, tirik mikrofon va tirik uchrashuv isbotlaydi. Shuning uchun
-quyidagi qadamlar sizda.
+Aynan shu ikkinchisi bu safar tuzatilgan asosiy xato edi. Buni faqat tirik odam, tirik
+mikrofon va tirik uchrashuv isbotlaydi. Shuning uchun quyidagi qadamlar sizda.
 
 **Qoida:** har bir qadamda faqat bitta ish qiling. Kutilgani chiqmasa — **to'xtang**
 va menga nima ko'rganingizni ayting. "Ishlamadi" yetarli emas; ekranda nima
@@ -29,125 +33,111 @@ yozilganini ayting.
 4. Eski "data365 Recorder" ni **Remove** qiling (eskisi qolsa, ikkitasi urishadi).
 5. **Load unpacked** bosing → yangi chiqargan papkani tanlang.
 
-✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.0** turibdi, qizil xato
-yo'q. Versiya 0.5.0 bo'lishi SHART — 0.4.x bo'lsa eski kodni sinayapsiz.
+✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.4** turibdi, qizil xato
+yo'q. Versiya **0.5.4** bo'lishi SHART — 0.5.3 yoki undan pasti bo'lsa eski kodni sinayapsiz.
 ❌ **Xato bo'lsa:** qizil "Errors" tugmasi chiqadi. Bosing, matnini menga yuboring.
 
 ---
 
-## 1-qadam — ⭐ ASOSIY TEKSHIRUV: 3 daqiqalik yozuv (yolg'iz, 5 daqiqa)
+## 1-qadam — ⭐ ASOSIY: 3 daqiqalik yozuv (yolg'iz, 5 daqiqa)
 
-Bu eng muhimi. Faqat shu o'tsa, qolganlari mayda-chuyda.
+Bu birinchi darvoza. Faqat shu o'tsa, keyingisiga o'tamiz.
 
-**YANGI (0.5.0): endi ikki harakat.** Meet sahifasining o'zida tugma chiqadi —
-extension belgisini bosish shart emas.
+Meet sahifasining o'zida karta chiqadi — extension belgisini bosish shart emas.
 
 1. `meet.google.com` ga kiring → **New meeting** → **Start an instant meeting**.
    (Hech kim kerak emas, o'zingiz yolg'iz.)
-2. Ekran yuqorisida **"Record this meeting?"** kartasi chiqadi → **Record now**
-   bosing. *(Karta chiqmasa: sahifani yangilang — yoki eski yo'l bilan
-   **Ctrl+Shift+9** bosing, u ham ishlaydi.)*
-3. Chrome darrov tanlash oynasini ochadi — **Entire Screen** bo'limini tanlang,
-   ekranni bosing, **Share** bosing.
-   *(«Also share system audio» katagini belgilashingiz shart emas — suhbatdosh
-   ovozi endi Meet sahifasining o'zidan olinadi. Belgilasangiz ham zarari yo'q.)*
+2. Ekran yuqorisida **"Record this meeting?"** kartasi chiqadi. Ostida maslahat
+   yozuvi bor: *"...choose 'Entire Screen' and turn on 'Share system audio'..."*.
+   **"Record now"** tugmasini bosing.
+   *(Karta chiqmasa: sahifani yangilang — yoki eski yo'l **Ctrl+Shift+9**, u ham ishlaydi.)*
+3. Chrome darrov tanlash oynasini ochadi → **Entire Screen** ni tanlang → pastda
+   **"Share system audio"** (yoki "Also share tab/system audio") **katagini belgilang** →
+   ekranni bosing → **Share** bosing.
 4. Bir necha jumla gapiring. **3 daqiqa** kuting.
-5. Ekran yuqorisidagi qizil taymerdagi **Stop** ni bosing.
+5. Ekran yuqorisidagi qizil taymerdagi **"Stop"** ni bosing → **"Recording saved!"** chiqadi.
 6. Yuklanishini kuting → `https://data365.duckdns.org` dashboard'ni oching.
 
 ✅ **Ko'rishingiz kerak:** yozuv ro'yxatda paydo bo'ladi → uni ochasiz →
 **oxirigacha o'ynaydi** va **o'z ovozingiz eshitiladi**. Davomiyligi ~3 daqiqa.
-
-Qo'shimcha (siz so'ragan avto-ochiq): yozuvning **Share havolasini** nusxalab,
-Chrome'ning **Incognito** oynasida oching (login'siz). Video o'sha yerda ham
-o'ynashi kerak — endi har yangi yozuv havola orqali darhol ochiq.
 ❌ **Xato bo'lsa:** yozuv umuman chiqmasa · ochilmasa · yarmida to'xtasa ·
-davomiyligi noto'g'ri bo'lsa (masalan 3 daqiqa yozdingiz, 40 soniya chiqdi) ·
-ovoz umuman yo'q bo'lsa.
+davomiyligi noto'g'ri bo'lsa · ovoz umuman yo'q bo'lsa.
 
 ---
 
-## 2-qadam — Noto'g'ri tanlov rad etiladimi (1 daqiqa)
+## 2-qadam — ⭐⭐ ENG MUHIMI: suhbatdosh ovozi + IKKINCHI yozuv (ikki kishi kerak)
 
-Bu men bugun tuzatgan asosiy xato. Ilgari siz **tab** tanlasangiz ham yozuv
-boshlanaverar edi — va suhbatdosh ovozi yozilmasdi.
+**Bu loyihaning #1 talabi va bu sessiyada tuzatilgan xato.** Ikkinchi odam kerak
+(telefon ham bo'ladi). Bitta qo'ng'iroqda **ikki marta** yozamiz.
 
-1. Yana Meet oching → **Record now** bosing.
+**Tayyorlash:**
+1. Meet oching → havolani ikkinchi odamga (yoki o'z telefoningizga) yuboring. U kirsin.
+   **Uning mikrofoni yoqiq** bo'lsin, sizniki ham.
+
+**Birinchi yozuv:**
+2. **"Record now"** → **Entire Screen** + **"Share system audio"** katagi belgilangan → Share.
+3. **Suhbatdoshingizga ayting:** o'ziga xos bitta jumla aytsin — masalan
+   **"olma daraxti to'qqiz"**. Tasodifan chiqmaydigan so'z tanlang.
+4. Siz ham bir nima ayting. **2 daqiqa** yozing → **"Stop"**.
+
+**Ikkinchi yozuv — SHU O'SHA qo'ng'iroqni yopmasdan:**
+5. O'sha Meet sahifasida yana **"Record now"** → **Entire Screen** + **"Share system audio"** → Share.
+6. Suhbatdoshingiz **boshqa** o'ziga xos jumla aytsin — masalan **"ko'k qush yetti"**.
+7. **1-2 daqiqa** yozing → **"Stop"**.
+
+**Tekshirish:**
+8. Dashboard'da **ikkala** yozuvni oching va **quloq soling**.
+
+✅ **O'tdi hisoblanadi:**
+   - 1-yozuvda **"olma daraxti to'qqiz"** aniq eshitiladi.
+   - 2-yozuvda **"ko'k qush yetti"** aniq eshitiladi.
+   - 2-yozuvni boshlaganda **"The other person's audio wasn't captured"** ogohlantirishi
+     **CHIQMASLIGI** kerak. (Agar *"...being recorded via system audio"* deb yozsa —
+     bu **yaxshi**, xato emas: ovoz yozilyapti.)
+❌ **Yiqildi:** biror yozuvda faqat o'z ovozingiz eshitilsa, suhbatdoshniki yo'q bo'lsa ·
+   yoki 2-yozuvda **"...audio wasn't captured"** chiqib, keyin uning ovozi yozuvda bo'lmasa.
+   Bu — deploy qilib bo'lmaydigan holat, chunki mahsulotning butun ma'nosi shu.
+
+---
+
+## 3-qadam — Noto'g'ri tanlov rad etiladimi (1 daqiqa, ixtiyoriy)
+
+1. Yana Meet oching → **"Record now"** bosing.
 2. Chrome oynasida ataylab **noto'g'ri** tanlang: **Chrome Tab** bo'limidan bitta
    tab tanlab **Share** bosing.
 
-✅ **Ko'rishingiz kerak:** yozuv **boshlanmaydi**. "To'liq ekranni tanlang" degan
-mazmunda ogohlantirish chiqadi va tanlash oynasi qaytadan so'raladi.
-❌ **Xato bo'lsa:** yozuv baribir boshlanib ketsa — bu tuzatilmaganini bildiradi.
+✅ **Ko'rishingiz kerak:** *"Choose 'Entire Screen' — picking a tab or window won't
+   record the full..."* mazmunidagi ogohlantirish chiqadi.
+❌ **Xato bo'lsa:** hech ogohlantirishsiz to'liq yozib ketaversa.
 
-Keyin **Entire Screen** tanlab davom eting va **Stop** bosing (bu yozuv kerak emas).
+Keyin **Entire Screen** tanlab davom eting va **"Stop"** bosing (bu yozuv kerak emas).
 
 ---
 
-## 3-qadam — Pauza rostini gapiradimi (2 daqiqa)
+## 4-qadam — Pauza rostini gapiradimi (2 daqiqa, ixtiyoriy)
 
 1. Yozuvni boshlang (1-qadamdagidek, Entire Screen).
-2. 20 soniya gapiring → **Pause** bosing.
-3. Pauza paytida **balandroq ovozda sanang: "bir, ikki, uch..."** — 15 soniya.
-4. **Resume** bosing → yana 20 soniya gapiring → **Stop**.
+2. 20 soniya gapiring → **"Pause"** bosing.
+3. Pauza paytida **balandroq sanang: "bir, ikki, uch..."** — 15 soniya.
+4. **"Resume"** bosing → yana 20 soniya gapiring → **"Stop"**.
 
 ✅ **Ko'rishingiz kerak:** pauza paytida taymer **to'xtab turadi**. Tayyor yozuvda
-"bir, ikki, uch" sanog'i **eshitilmaydi** — u qismi tushib qolgan bo'lishi kerak.
-❌ **Xato bo'lsa:** taymer pauzada ham yurib tursa · yoki sanoq yozuvda eshitilsa
-(demak "pauza" degan yozuv yolg'on bo'lgan).
+"bir, ikki, uch" sanog'i **eshitilmaydi**.
+❌ **Xato bo'lsa:** taymer pauzada ham yursa · yoki sanoq yozuvda eshitilsa.
 
 ---
 
-## 4-qadam — Internet uzilsa yozuv yo'qoladimi (3 daqiqa)
-
-Eng qo'rqinchli holat: yozib turganda internet uzildi.
+## 5-qadam — Internet uzilsa yozuv yo'qoladimi (3 daqiqa, ixtiyoriy)
 
 1. Yozuvni boshlang → 1 daqiqa gapiring.
-2. **Wi-Fi'ni o'chiring** (yoki internet kabelini uzing).
-3. Yana 30 soniya gapiring → **Stop** bosing.
-4. Chrome'ni **butunlay yoping** (hamma oynasini).
-5. Wi-Fi'ni yoqing → Chrome'ni qaytadan oching → 2 daqiqa kuting.
-6. Dashboard'ni oching.
+2. **Wi-Fi'ni o'chiring**.
+3. Yana 30 soniya gapiring → **"Stop"**.
+4. Chrome'ni **butunlay yoping** → Wi-Fi'ni yoqing → Chrome'ni qayta oching → 2 daqiqa kuting.
+5. Dashboard'ni oching.
 
 ✅ **Ko'rishingiz kerak:** yozuv o'zi paydo bo'ladi va **oxirigacha** o'ynaydi —
-internet uzilgandan keyin gapirgan 30 soniyangiz ham ichida bo'ladi.
-❌ **Xato bo'lsa:** yozuv umuman kelmasa · yoki internet uzilgan joyda kesilib
-qolsa · yoki "yo'qoldi" degan xabar chiqsa.
-
----
-
-## 5-qadam — O'chirish rostdan o'chiradimi (2 daqiqa)
-
-1. Qisqa yozuv qiling (30 soniya) → **Stop**.
-2. Yuklanayotganda **Permanently discard** (butunlay o'chirish) ni tanlang.
-3. Tasdiqlashni so'raydi — tasdiqlang.
-4. Dashboard'ni oching.
-
-✅ **Ko'rishingiz kerak:** "Deleted" (o'chirildi) **yoki** "Delete queued; will
-retry" (o'chirish navbatga qo'yildi) — ikkalasidan biri aniq yoziladi. Dashboard'da
-bu yozuv yo'q.
-❌ **Xato bo'lsa:** hech narsa yozilmasa · yoki "o'chirildi" desa-yu dashboard'da
-turgan bo'lsa.
-
----
-
-## 6-qadam — ⭐⭐ ENG MUHIMI: suhbatdoshning ovozi (ikki kishi kerak)
-
-**Bu loyihaning #1 talabi.** Buni mendan boshqa hech kim, hech qanday test
-bajarolmaydi — ikkinchi odam kerak (telefon ham bo'ladi).
-
-1. Meet oching → havolani ikkinchi odamga (yoki o'z telefoningizga) yuboring.
-2. U kirsin. **Uning mikrofoni yoqiq** bo'lsin, sizniki ham.
-3. **Record now** → **Entire Screen** → Share. (Suhbatdosh ovozi Meet sahifasidan
-   olinadi; system audio katagi shart emas.)
-4. **Unga aytiliring:** o'ziga xos bitta jumla aytsin — masalan
-   **"olma daraxti to'qqiz"**. Shunday so'z tanlangki, tasodifan chiqmasin.
-5. Siz ham bir nima ayting. 2 daqiqa yozing → **Stop**.
-6. Dashboard'da yozuvni oching va **quloq soling**.
-
-✅ **O'tdi hisoblanadi:** yozuvda **"olma daraxti to'qqiz"** aniq eshitiladi.
-❌ **Yiqildi:** faqat o'z ovozingiz eshitilsa, uniki yo'q bo'lsa. Bu — deploy
-qilib bo'lmaydigan holat, chunki mahsulotning butun ma'nosi shu.
+internet uzilgandan keyingi 30 soniya ham ichida.
+❌ **Xato bo'lsa:** yozuv kelmasa · uzilgan joyda kesilsa · "yo'qoldi" chiqsa.
 
 ---
 
@@ -158,14 +148,13 @@ Har bir qadam uchun bitta so'z yetadi:
 ```
 0-qadam: ha / yo'q
 1-qadam: ha / yo'q
-2-qadam: ha / yo'q
-3-qadam: ha / yo'q
-4-qadam: ha / yo'q
-5-qadam: ha / yo'q
-6-qadam: ha / yo'q / hali qilmadim
+2-qadam: ha / yo'q   ← ENG MUHIMI (ikkala yozuvda ham suhbatdosh ovozi)
+3-qadam: ha / yo'q / qilmadim
+4-qadam: ha / yo'q / qilmadim
+5-qadam: ha / yo'q / qilmadim
 ```
 
 "Yo'q" bo'lsa — **ekranda nima yozilganini** qo'shing.
 
-**Deploy qilish qarori:** 1-qadam va 6-qadam o'tmaguncha deploy qilmaymiz. Qolgan
+**Deploy qarori:** 1-qadam va 2-qadam o'tmaguncha "production ready" demaymiz. Qolgan
 qadamlar yiqilsa — muhim, lekin to'xtatuvchi emas; men tuzataman.
