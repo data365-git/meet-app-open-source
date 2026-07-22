@@ -8,7 +8,7 @@ _Goal (owner's words): finish all important work and HAND THE PROJECT OVER TO TH
 - **H3 — Timestamp: FREE path, target ~5-10s (or better).** Measure the deployed anchor fix, then 3-minute chunks + grid-warp. NO paid ElevenLabs Scribe unless free genuinely can't reach a usable bar. (STATE's open timing decision, resolved free-first.)
 - **H4 — "AI dashboard" = the post-recording AI results** on a recording (summary / chapters / action items / AI chat). Not a separate admin analytics screen.
 
-## PROPOSED EXECUTION ORDER (for owner confirmation — NOT started yet)
+## EXECUTION ORDER (CONFIRMED by owner 2026-07-22 — start Phase 1 after /clear)
 1. **Fable writes a comprehensive LIVE test plan** — every flow end-to-end on the deployed build: record a Meet → upload → transcribe → AI results (summary/chapters/tasks/chat) → share/watch → member access/onboarding → empty/error/loading states → cost/no-waste checks. Marks which steps a machine can do vs which need the owner's real device.
 2. **Execute the plan with agents** against prod (data365) → a ranked defect list (bugs, wrong/empty AI results, waste, malfunctions). (Owner-device-only steps — the real 2-person Meet capture — are flagged for him.)
 3. **Fix everything found** so recording + AI results are flawless and nothing wastes money; each fix Fable-reviewed and deployed (the established plan→build→review→review-of-review→deploy chain).
