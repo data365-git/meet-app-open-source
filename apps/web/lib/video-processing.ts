@@ -2,7 +2,6 @@ import { db } from "@cap/database";
 import { videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
-import { start } from "workflow/api";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
@@ -119,14 +118,16 @@ export async function startVideoProcessingWorkflow({
 	}
 
 	try {
-		await start(processVideoWorkflow, [
-			{
-				videoId,
-				userId,
-				rawFileKey,
-				bucketId: bucketId as S3Bucket.S3BucketId | null,
-			},
-		]);
+		// Workflow DevKit plugin is disabled (see apps/web/next.config.mjs) — the
+		// media server was removed, so "processing" is just clearing the upload
+		// record. Run it inline instead of through the WDK `start()` runtime,
+		// which would reject the function without the build plugin.
+		await processVideoWorkflow({
+			videoId,
+			userId,
+			rawFileKey,
+			bucketId: bucketId as S3Bucket.S3BucketId | null,
+		});
 		return "started";
 	} catch (error) {
 		const normalizedError =

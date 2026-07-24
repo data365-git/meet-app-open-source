@@ -1,0 +1,20 @@
+# Exclude heavy marketing/landing media from the Railway upload.
+# These are referenced by URL only (not imported at build time), so the
+# Docker build succeeds without them; they would only 404 on marketing pages.
+apps/web/public/illustrations/
+apps/web/public/blog/
+apps/web/public/rive/
+apps/web/public/app/
+apps/web/public/docs/
+apps/web/public/*.mp4
+apps/web/public/*.riv
+apps/web/public/cap-emoji-banner.png
+apps/web/public/windows-smartscreen.mp4
+
+# Repo documentation (not needed to build/run)
+QA_FLOWS.md
+QA_REPORT.md
+QA_PLAN.md
+QA_SMOKE.md
+PIPELINE_MAP.md
+OPERATIONS.md
