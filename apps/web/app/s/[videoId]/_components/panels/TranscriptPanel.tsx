@@ -91,22 +91,42 @@ function vttTimeToSeconds(timeStr: string): number | null {
 	return null;
 }
 
+// Remove WebVTT voice tags (<v Name> opener + any stray </v> closer) from text.
+function stripVoiceTags(t: string): string {
+	return t.replace(/<\/?v\b[^>]*>/gi, "").trim();
+}
+
 function extractSpeaker(text: string): { speaker: string; text: string } {
-	const match = text.match(/^<v\s+([^>]+)>(.*)$/);
+	const match = text.match(/^<v\s+([^>]+)>(.*)$/s);
 	if (match) {
 		return {
 			speaker: match[1]?.trim() ?? "Speaker",
-			text: match[2]?.trim() ?? text,
+			text: stripVoiceTags(match[2] ?? text),
 		};
 	}
-	const colonMatch = text.match(/^([^:]{1,30}):\s+(.+)$/);
+	const colonMatch = text.match(/^([^:]{1,30}):\s+(.+)$/s);
 	if (colonMatch) {
 		return {
 			speaker: colonMatch[1]?.trim() ?? "Speaker",
-			text: colonMatch[2]?.trim() ?? text,
+			text: stripVoiceTags(colonMatch[2] ?? text),
 		};
 	}
-	return { speaker: "Speaker", text };
+	return { speaker: "Speaker", text: stripVoiceTags(text) };
+}
+
+// Render **bold** segments (foreign words) as <strong>, like v2.
+function renderRichText(text: string): React.ReactNode {
+	const parts = text.split(/(\*\*[^*]+\*\*)/g);
+	return parts.map((part, i) => {
+		if (part.startsWith("**") && part.endsWith("**")) {
+			return (
+				<strong key={i} className="font-semibold">
+					{part.slice(2, -2)}
+				</strong>
+			);
+		}
+		return part;
+	});
 }
 
 function formatTimestamp(seconds: number): string {
@@ -220,7 +240,7 @@ export function TranscriptPanel({
 									</div>
 
 									<p className="min-w-0 px-2 pt-1 text-sm leading-relaxed text-gray-800 break-words">
-										{cue.text}
+										{renderRichText(cue.text)}
 									</p>
 
 									<div className="flex items-start justify-end pt-1">
