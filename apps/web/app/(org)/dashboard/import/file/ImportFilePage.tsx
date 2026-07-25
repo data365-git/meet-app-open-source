@@ -76,11 +76,12 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			const file = e.dataTransfer.files[0];
 			if (!file) return;
 
-			const isVideo =
+			const isMedia =
 				file.type.startsWith("video/") ||
-				/\.(mov|mp4|avi|mkv|webm|m4v)$/i.test(file.name);
-			if (!isVideo) {
-				toast.error("Please drop a video file.");
+				file.type.startsWith("audio/") ||
+				/\.(mov|mp4|avi|mkv|webm|m4v|mp3|m4a|wav|aac|ogg)$/i.test(file.name);
+			if (!isMedia) {
+				toast.error("Please drop a video or audio file.");
 				return;
 			}
 			const maxSize = 500 * 1024 * 1024;
@@ -133,7 +134,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				</Link>
 				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Upload a video file from your device.
+					Upload a video or audio file from your device.
 				</p>
 			</div>
 
@@ -181,10 +182,10 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 						</span>
 						<span className="flex flex-col items-center gap-1">
 							<span className="text-sm font-medium text-gray-12">
-								Drag and drop your video here
+								Drag and drop your video or audio here
 							</span>
 							<span className="text-xs text-gray-10">
-								MP4, MOV, AVI, MKV, WebM up to any size
+								MP4, MOV, MKV, WebM, MP3, M4A, WAV up to any size
 							</span>
 						</span>
 						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
@@ -197,7 +198,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			<input
 				ref={inputRef}
 				type="file"
-				accept="video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
+				accept="video/*,audio/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.mp3,.MP3,.m4a,.M4A,.wav,.WAV,.aac,.AAC,.ogg,.OGG"
 				onChange={handleFileChange}
 				className="hidden"
 			/>
@@ -262,6 +263,8 @@ async function uploadVideoForServerProcessing(
 			resolution,
 			folderId,
 			orgId,
+			fileName: file.name,
+			contentType: file.type || undefined,
 		});
 
 		const uploadId = videoData.id;

@@ -17,6 +17,7 @@ interface BelowVideoTabsProps {
 	tasks?: React.ReactNode;
 	transcript?: React.ReactNode;
 	refined?: React.ReactNode;
+	headerAction?: React.ReactNode;
 }
 
 export function BelowVideoTabs({
@@ -24,6 +25,7 @@ export function BelowVideoTabs({
 	tasks,
 	transcript,
 	refined,
+	headerAction,
 }: BelowVideoTabsProps) {
 	const searchParams = useSearchParams();
 	const router = useRouter();
@@ -105,6 +107,9 @@ export function BelowVideoTabs({
 
 	return (
 		<div className="flex flex-col w-full">
+			{headerAction && (
+				<div className="flex justify-end mb-2">{headerAction}</div>
+			)}
 			{/* Sticky tab bar */}
 			<div
 				className="sticky top-0 z-10 border-b border-gray-200"

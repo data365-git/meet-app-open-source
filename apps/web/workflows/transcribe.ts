@@ -14,7 +14,7 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
 import {
@@ -138,7 +138,12 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 
 	await db()
 		.update(videos)
-		.set({ transcriptionStatus: "PROCESSING" })
+		.set({
+			transcriptionStatus: "PROCESSING",
+			// Seed progress at 1% so the UI shows "Transcribing… 1%" immediately
+			// (during audio extraction), not a blank "Generating…".
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, '{}'), '$.transcriptionProgress', 1)`,
+		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	return {
@@ -251,9 +256,31 @@ async function resolveVideoSourceUrl(
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
 		.limit(1);
 
+	// The stored raw upload uses the owner id as prefix (see
+	// actions/video/create-for-processing.ts: `${user.id}/${videoId}/raw-upload.<ext>`).
+	const ownerId = video.ownerId;
+
+	// After processing deletes the videoUploads row, upload[0]?.rawFileKey is gone,
+	// so we must also probe every extension a raw upload may be stored under
+	// (video + audio). Mirrors resolveRawPreviewKey in app/api/playlist/route.ts.
+	const rawUploadKeys = [
+		"mp4",
+		"webm",
+		"mov",
+		"mkv",
+		"avi",
+		"m4v",
+		"mp3",
+		"m4a",
+		"wav",
+		"aac",
+		"ogg",
+	].map((ext) => `${ownerId}/${videoId}/raw-upload.${ext}`);
+
 	const candidateKeys = [
 		`${userId}/${videoId}/result.mp4`,
 		upload[0]?.rawFileKey,
+		...rawUploadKeys,
 	].filter(
 		(value, index, values): value is string =>
 			Boolean(value) && values.indexOf(value) === index,
@@ -319,6 +346,22 @@ async function transcribeAudio(
 			const res = await transcribeWithGemini(audioUrl, {
 				apiKey: resolvedApiKey,
 				audioDurationSec: videoDuration ?? undefined,
+				onProgress: async (done, total) => {
+					const pct = Math.min(
+						99,
+						Math.round((done / Math.max(1, total)) * 100),
+					);
+					try {
+						await db()
+							.update(videos)
+							.set({
+								metadata: sql`JSON_SET(COALESCE(${videos.metadata}, '{}'), '$.transcriptionProgress', ${pct})`,
+							})
+							.where(eq(videos.id, context.videoId as Video.VideoId));
+					} catch (err) {
+						console.error("[transcribe] progress update failed:", err);
+					}
+				},
 			});
 			return {
 				transcriptVtt: res.transcriptVtt,

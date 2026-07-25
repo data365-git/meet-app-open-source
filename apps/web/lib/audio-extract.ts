@@ -250,12 +250,14 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<VideoProbeRe
 			const hasVideo = /Stream #\d+:\d+.*Video:/.test(stderr);
 			const hasAudio = /Stream #\d+:\d+.*Audio:/.test(stderr);
 
-			if (!hasVideo) {
+			// Allow audio-only files (no video stream). Only fail when ffmpeg
+			// found neither a video nor an audio stream (unreadable file).
+			if (!hasVideo && !hasAudio) {
 				console.error(
-					`[checkHasAudioTrack] No video stream found — ffmpeg may not be able to read the file. stderr: ${stderr.substring(0, 500)}`,
+					`[checkHasAudioTrack] No media streams found — ffmpeg may not be able to read the file. stderr: ${stderr.substring(0, 500)}`,
 				);
 				reject(
-					new Error(`ffmpeg could not read video file: no streams detected`),
+					new Error(`ffmpeg could not read media file: no streams detected`),
 				);
 				return;
 			}

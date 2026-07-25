@@ -465,7 +465,10 @@ function chunkTranscriptWithTimestamps(
 	return chunks;
 }
 
-const GEMINI_SUMMARY_MODEL = "gemini-3-flash-preview";
+// Stable model with thinking disabled (the 3-flash preview burns the output
+// budget on hidden thinking tokens, truncating summaries).
+const GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
+const SUMMARY_MAX_OUTPUT_TOKENS = 32768;
 
 interface AiApiResult {
 	content: string;
@@ -481,44 +484,67 @@ async function callAiApi(prompt: string): Promise<AiApiResult> {
 		return { content: "{}", model: "unknown", inputTokens: 0, outputTokens: 0 };
 	}
 
-	const res = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SUMMARY_MODEL}:generateContent?key=${apiKey}`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				contents: [{ parts: [{ text: prompt }] }],
-				generationConfig: {
-					temperature: 0.2,
-					maxOutputTokens: 8192,
+	let lastErr: unknown;
+	// Retry so transient rate/quota spikes (common right after a big
+	// transcription burst) don't kill the summary. Longer waits for quota so
+	// per-minute limits have time to reset.
+	for (let attempt = 1; attempt <= 4; attempt++) {
+		try {
+			const res = await fetch(
+				`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SUMMARY_MODEL}:generateContent?key=${apiKey}`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						contents: [{ parts: [{ text: prompt }] }],
+						generationConfig: {
+							temperature: 0.2,
+							maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
+							thinkingConfig: { thinkingBudget: 0 },
+						},
+					}),
 				},
-			}),
-		},
-	);
+			);
 
-	const data = (await res.json()) as {
-		candidates?: Array<{
-			content: { parts: Array<{ text?: string }> };
-		}>;
-		usageMetadata?: {
-			promptTokenCount?: number;
-			candidatesTokenCount?: number;
-		};
-		error?: { message: string };
-	};
+			const data = (await res.json()) as {
+				candidates?: Array<{
+					content: { parts: Array<{ text?: string }> };
+				}>;
+				usageMetadata?: {
+					promptTokenCount?: number;
+					candidatesTokenCount?: number;
+				};
+				error?: { message: string };
+			};
 
-	if (!res.ok) {
-		throw new Error(
-			`Gemini generateContent failed: ${data.error?.message ?? res.status}`,
-		);
+			if (!res.ok) {
+				throw new Error(
+					`Gemini generateContent failed: ${data.error?.message ?? res.status}`,
+				);
+			}
+
+			const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+			const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
+			const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
+			return { content, model: GEMINI_SUMMARY_MODEL, inputTokens, outputTokens };
+		} catch (err) {
+			lastErr = err;
+			const msg = err instanceof Error ? err.message : String(err);
+			const isQuota =
+				/quota|rate limit|429|high demand|RESOURCE_EXHAUSTED/i.test(msg);
+			console.error(
+				`[generate-ai] callAiApi attempt ${attempt}/4 failed: ${msg}`,
+			);
+			if (attempt < 4) {
+				await new Promise((r) =>
+					setTimeout(r, (isQuota ? 15000 : 2000) * attempt),
+				);
+			}
+		}
 	}
-
-	const content =
-		data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
-	const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
-	const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
-
-	return { content, model: GEMINI_SUMMARY_MODEL, inputTokens, outputTokens };
+	throw lastErr instanceof Error
+		? lastErr
+		: new Error("Gemini generateContent failed after retries");
 }
 
 function cleanJsonResponse(content: string): string {

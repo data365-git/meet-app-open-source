@@ -102,15 +102,28 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 
 		if (
 			video.source.type !== "webMP4" &&
+			video.source.type !== "webAudio" &&
 			video.source.type !== "extensionWeb"
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
 
+		// Cover every extension an upload may be stored under (video + audio).
+		// After processing deletes the videoUploads row, this fallback is what
+		// locates the raw file, so it must include all accepted media types.
 		const candidateKeys = [
-			`${video.ownerId}/${video.id}/raw-upload.mp4`,
-			`${video.ownerId}/${video.id}/raw-upload.webm`,
-		];
+			"mp4",
+			"webm",
+			"mov",
+			"mkv",
+			"avi",
+			"m4v",
+			"mp3",
+			"m4a",
+			"wav",
+			"aac",
+			"ogg",
+		].map((ext) => `${video.ownerId}/${video.id}/raw-upload.${ext}`);
 		const headResults = yield* Effect.all(
 			candidateKeys.map((key) => bucket.headObject(key).pipe(Effect.option)),
 			{ concurrency: "unbounded" },
@@ -138,6 +151,7 @@ const getPlaylistResponse = (
 		const isMp4Source =
 			video.source.type === "desktopMP4" ||
 			video.source.type === "webMP4" ||
+			video.source.type === "webAudio" ||
 			video.source.type === "extensionWeb";
 
 		if (urlParams.videoType === "raw-preview") {

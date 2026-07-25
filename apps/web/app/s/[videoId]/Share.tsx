@@ -317,6 +317,8 @@ export const Share = ({
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
 
+	const transcriptionProgress = videoStatus?.transcriptionProgress ?? null;
+
 	const aiData = useMemo(
 		() => ({
 			title: videoStatus?.aiTitle || null,
@@ -544,6 +546,7 @@ export const Share = ({
 									areReactionStampsDisabled={areReactionStampsDisabled}
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
+									transcriptionProgress={transcriptionProgress}
 									canRetryProcessing={viewerId === data.owner.id}
 									canFinalizeDesktopSegments={viewerId === data.owner.id}
 									showPlaybackStatusBadge={viewerId === data.owner.id}

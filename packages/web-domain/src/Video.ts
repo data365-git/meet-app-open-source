@@ -27,6 +27,7 @@ export class Video extends Schema.Class<Video>("Video")({
 			"desktopMP4",
 			"desktopSegments",
 			"webMP4",
+			"webAudio",
 			"extensionWeb",
 		),
 	}),
@@ -68,6 +69,7 @@ export class Video extends Schema.Class<Video>("Video")({
 		if (
 			self.source.type === "desktopMP4" ||
 			self.source.type === "webMP4" ||
+			self.source.type === "webAudio" ||
 			self.source.type === "extensionWeb"
 		)
 			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });

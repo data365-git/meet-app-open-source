@@ -21,6 +21,7 @@ import type { VideoData } from "../types";
 import { AIChatPopup } from "./AIChatPopup";
 import { AIFab } from "./AIFab";
 import { BelowVideoTabs } from "./BelowVideoTabs";
+import { GenerateAiButton } from "./GenerateAiButton";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import {
@@ -63,6 +64,7 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
+		transcriptionProgress?: number | null;
 		canRetryProcessing?: boolean;
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
@@ -80,6 +82,8 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			aiGenerationStatus,
+			transcriptionProgress,
 			canRetryProcessing,
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
@@ -343,7 +347,9 @@ export const ShareVideo = forwardRef<
 		// The /api/playlist?videoType=mp4 route returns a signed redirect to result.mp4.
 		const videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 		const rawFallbackSrc =
-			data.source.type === "webMP4" || data.source.type === "extensionWeb"
+			data.source.type === "webMP4" ||
+			data.source.type === "webAudio" ||
+			data.source.type === "extensionWeb"
 				? `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=raw-preview`
 				: undefined;
 		const enableCrossOrigin = true;
@@ -502,6 +508,15 @@ export const ShareVideo = forwardRef<
 
 				<div className="mt-4">
 					<BelowVideoTabs
+						headerAction={
+							<GenerateAiButton
+								videoId={data.id}
+								isOwner={Boolean(canRetryProcessing)}
+								transcriptionStatus={data.transcriptionStatus}
+								aiGenerationStatus={aiGenerationStatus}
+								transcriptionProgress={transcriptionProgress}
+							/>
+						}
 						summary={
 							<SummaryPanel
 								data={{

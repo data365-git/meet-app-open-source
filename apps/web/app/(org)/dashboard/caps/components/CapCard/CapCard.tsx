@@ -27,6 +27,7 @@ import {
 	faTrash,
 	faUnlock,
 	faVideo,
+	faWandMagicSparkles,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -551,6 +552,46 @@ export const CapCard = ({
 							</DropdownMenuItem>
 							{isOwner && (
 								<>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											toast.promise(
+												fetch(`/api/videos/${cap.id}/generate`, {
+													method: "POST",
+													headers: { "Content-Type": "application/json" },
+												}).then(async (r) => {
+													const b = (await r.json().catch(() => ({}))) as {
+														success?: boolean;
+														error?: string;
+														message?: string;
+													};
+													if (!r.ok || b?.success === false)
+														throw new Error(
+															b?.error || b?.message || "Failed to start",
+														);
+													return b;
+												}),
+												{
+													loading: "Starting summary & transcript...",
+													success: "Generating summary & transcript",
+													error: (err) =>
+														err instanceof Error
+															? err.message
+															: "Failed to start generation",
+												},
+											);
+										}}
+										disabled={cap.hasActiveUpload}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon
+											className="size-3"
+											icon={faWandMagicSparkles}
+										/>
+										<p className="text-sm text-gray-12">
+											Generate summary &amp; transcript
+										</p>
+									</DropdownMenuItem>
 									<DropdownMenuItem
 										onClick={() => {
 											toast.promise(duplicateMutation.mutateAsync(), {

@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
-import { users, videos, videoUploads } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
@@ -12,10 +12,7 @@ import {
 	isRetryableDesktopSegmentsFinalizationError,
 	queueDesktopSegmentsFinalization,
 } from "@/lib/desktop-segments-finalization";
-import { startAiGeneration } from "@/lib/generate-ai";
 import * as EffectRuntime from "@/lib/server";
-import { transcribeVideo } from "../../lib/transcribe";
-import { isAiGenerationEnabled } from "../../utils/flags";
 
 type TranscriptionStatus =
 	| "PROCESSING"
@@ -38,6 +35,7 @@ export interface VideoStatusResult {
 	aiTitle: string | null;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
+	transcriptionProgress: number | null;
 	error?: string;
 }
 
@@ -98,45 +96,13 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
+			transcriptionProgress: metadata.transcriptionProgress ?? null,
 			};
 		}
 
-		console.log(
-			`[Get Status] Transcription not started for video ${videoId}, triggering transcription`,
-		);
-		try {
-			transcribeVideo(videoId, video.ownerId).catch((error) => {
-				console.error(
-					`[Get Status] Error starting transcription for video ${videoId}:`,
-					error,
-				);
-			});
-
-			return {
-				transcriptionStatus: "PROCESSING",
-				aiGenerationStatus:
-					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
-				name: video.name,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-			};
-		} catch (error) {
-			console.error(
-				`[Get Status] Error triggering transcription for video ${videoId}:`,
-				error,
-			);
-			return {
-				transcriptionStatus: "ERROR",
-				aiGenerationStatus:
-					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
-				name: video.name,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-				error: "Failed to start transcription",
-			};
-		}
+		// Manual mode: transcription/AI are only started when the owner clicks
+		// "Generate" (POST /api/videos/[id]/generate). Do not auto-start here —
+		// just report the current (not-started) status via the return below.
 	}
 
 	if (video.transcriptionStatus === "ERROR") {
@@ -148,57 +114,14 @@ export async function getVideoStatus(
 			aiTitle: metadata.aiTitle || null,
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
+			transcriptionProgress: metadata.transcriptionProgress ?? null,
 			error: "Transcription failed",
 		};
 	}
 
-	const shouldTriggerAiGeneration =
-		video.transcriptionStatus === "COMPLETE" &&
-		!metadata.aiGenerationStatus &&
-		!metadata.summary &&
-		serverEnv().GEMINI_API_KEY;
-
-	if (shouldTriggerAiGeneration) {
-		try {
-			const ownerQuery = await db()
-				.select({
-					email: users.email,
-					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-				})
-				.from(users)
-				.where(eq(users.id, video.ownerId))
-				.limit(1);
-
-			const owner = ownerQuery[0];
-			if (owner && (await isAiGenerationEnabled(owner))) {
-				console.log(
-					`[Get Status] AI generation not started for video ${videoId}, triggering generation`,
-				);
-				startAiGeneration(videoId, video.ownerId).catch((error) => {
-					console.error(
-						`[Get Status] Error starting AI generation for video ${videoId}:`,
-						error,
-					);
-				});
-
-				return {
-					transcriptionStatus:
-						(video.transcriptionStatus as TranscriptionStatus) || null,
-					aiGenerationStatus: "QUEUED" as AiGenerationStatus,
-					name: video.name,
-					aiTitle: metadata.aiTitle || null,
-					summary: metadata.summary || null,
-					chapters: metadata.chapters || null,
-				};
-			}
-		} catch (error) {
-			console.error(
-				`[Get Status] Error checking AI generation eligibility for video ${videoId}:`,
-				error,
-			);
-		}
-	}
+	// Manual mode: AI generation is only started via the manual "Generate" flow
+	// (which passes aiGenerationEnabled=true to transcribeVideo, chaining into AI).
+	// Do not auto-start it here — just report status.
 
 	return {
 		transcriptionStatus:

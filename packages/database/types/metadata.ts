@@ -54,6 +54,11 @@ export interface VideoMetadata {
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 	isDemo?: boolean;
 	aiSummary?: AiSummary | null;
+	/**
+	 * Live transcription progress (0-100) while a long audio is being
+	 * transcribed in chunks. Used to show a percentage in the UI.
+	 */
+	transcriptionProgress?: number;
 }
 
 export type VideoEditRange = {

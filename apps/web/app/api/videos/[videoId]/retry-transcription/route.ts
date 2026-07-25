@@ -4,6 +4,7 @@ import { transcriptChunks, videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { transcribeVideo } from "@/lib/transcribe";
 
 export async function POST(
 	_request: Request,
@@ -40,11 +41,14 @@ export async function POST(
 			.delete(transcriptChunks)
 			.where(eq(transcriptChunks.videoId, videoId));
 
-		// Reset status to null - this will trigger automatic retry via get-status.ts
+		// Reset status, then start transcription directly. (Auto-trigger was
+		// removed when transcription became manual, so we must kick it off here.)
 		await db()
 			.update(videos)
 			.set({ transcriptionStatus: null })
 			.where(eq(videos.id, videoId));
+
+		await transcribeVideo(videoId, video.ownerId, /* aiGenerationEnabled */ true);
 
 		// Revalidate the video page to ensure UI updates with fresh data
 		revalidatePath(`/s/${videoId}`);

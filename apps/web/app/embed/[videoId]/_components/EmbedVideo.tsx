@@ -175,7 +175,9 @@ export const EmbedVideo = forwardRef<
 		// All source types use the native <video> player via the mp4 playlist endpoint.
 		const videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
 		const rawFallbackSrc =
-			data.source.type === "webMP4" || data.source.type === "extensionWeb"
+			data.source.type === "webMP4" ||
+			data.source.type === "webAudio" ||
+			data.source.type === "extensionWeb"
 				? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=raw-preview`
 				: undefined;
 		const enableCrossOrigin = true;

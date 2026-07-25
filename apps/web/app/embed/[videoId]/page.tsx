@@ -25,7 +25,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import * as EffectRuntime from "@/lib/server";
-import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -253,15 +252,8 @@ async function EmbedContent({
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 	}
 
-	if (
-		!rules.settings.disableTranscript &&
-		video.transcriptionStatus !== "COMPLETE" &&
-		video.transcriptionStatus !== "PROCESSING" &&
-		video.transcriptionStatus !== "SKIPPED" &&
-		video.transcriptionStatus !== "NO_AUDIO"
-	) {
-		transcribeVideo(video.id, video.ownerId, aiGenerationEnabled);
-	}
+	// Manual mode: no auto-transcription on embed view. Transcription/AI are
+	// started only via the owner's "Generate" action in the app.
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	let initialAiData = null;

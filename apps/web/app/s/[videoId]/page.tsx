@@ -57,7 +57,6 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
-import { transcribeVideo } from "@/lib/transcribe";
 import {
 	isEditSourceKey,
 	reconcileStaleEditUpload,
@@ -570,24 +569,8 @@ async function AuthorizedContent({
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 	}
 
-	if (
-		transcriptionGenerationAvailable &&
-		!hasActiveUpload &&
-		video.transcriptionStatus !== "COMPLETE" &&
-		video.transcriptionStatus !== "PROCESSING" &&
-		video.transcriptionStatus !== "SKIPPED" &&
-		video.transcriptionStatus !== "NO_AUDIO"
-	) {
-		console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-		transcribeVideo(videoId, video.owner.id, aiGenerationEnabled).catch(
-			(error) => {
-				console.error(
-					`[ShareVideoPage] Error transcribing video ${videoId}:`,
-					error,
-				);
-			},
-		);
-	}
+	// Manual mode: transcription/AI are only started when the owner clicks
+	// "Generate" (POST /api/videos/[id]/generate). No auto-start on page view.
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	const metadata = currentMetadata;
