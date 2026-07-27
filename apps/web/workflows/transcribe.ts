@@ -70,9 +70,9 @@ export async function transcribeVideoWorkflow(
 	await initPipelineProgress(videoId, isAudioSource);
 
 	try {
-		const audioUrl = await extractAudio(videoId, userId, videoData.video);
+		const audio = await extractAudio(videoId, userId, videoData.video);
 
-		if (!audioUrl) {
+		if (!audio) {
 			await markNoAudio(videoId);
 			return {
 				success: true,
@@ -96,8 +96,8 @@ export async function transcribeVideoWorkflow(
 
 		const [transcription] = await Promise.all([
 			transcribeAudio(
-				audioUrl,
-				videoData.video.duration,
+				audio.url,
+				audio.durationSec ?? videoData.video.duration,
 				videoData.ownerEncryptedGeminiKey,
 				{ userId, orgId: videoData.orgId, videoId },
 			),
@@ -246,7 +246,7 @@ async function extractAudio(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
-): Promise<string | null> {
+): Promise<{ url: string; durationSec: number | null } | null> {
 	"use step";
 
 	const [bucket] = await Storage.getAccessForVideo(
@@ -298,7 +298,9 @@ async function extractAudio(
 		.getInternalSignedObjectUrl(audioKey)
 		.pipe(runPromise);
 
-	return audioSignedUrl;
+	// Return the freshly-probed duration so transcription chunks against the real
+	// length, not the possibly-null DB value captured at workflow start.
+	return { url: audioSignedUrl, durationSec: probe.durationSec ?? null };
 }
 
 async function resolveVideoSourceUrl(

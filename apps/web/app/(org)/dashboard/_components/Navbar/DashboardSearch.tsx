@@ -166,8 +166,8 @@ export function DashboardSearch({
 			},
 			{
 				id: "import-video",
-				title: "Import Video",
-				subtitle: "Bring an existing video into Cap",
+				title: "Import",
+				subtitle: "Bring an existing video or audio into Cap",
 				href: "/dashboard/import",
 				value: "import upload loom video file",
 				icon: Upload,

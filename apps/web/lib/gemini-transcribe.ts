@@ -306,46 +306,69 @@ function runFfmpeg(args: string[]): Promise<void> {
 	});
 }
 
-// Split the full audio into CHUNK_SEC-long mp3 segments using ffmpeg.
-async function splitAudioBytes(
-	audioBytes: Uint8Array,
+// Probe the true duration (seconds) of an audio file straight from its bytes,
+// by parsing the "Duration: HH:MM:SS.mm" line ffmpeg prints to stderr. This is
+// authoritative: it does NOT trust the DB `video.duration`, which can be null or
+// stale at transcription time — the bug that made a 1-hour upload transcribe only
+// ~5 minutes (a null duration fell back to a 300s default, so chunking stopped
+// after ~6 min). `ffmpeg -i <file>` with no output exits non-zero but still emits
+// the Duration line, so we parse stderr regardless of exit code.
+function probeDurationSec(filePath: string): Promise<number | null> {
+	const ffmpeg = getFfmpegPath();
+	return new Promise((resolve) => {
+		const proc = spawn(ffmpeg, ["-i", filePath], {
+			stdio: ["ignore", "ignore", "pipe"],
+		});
+		let stderr = "";
+		proc.stderr?.on("data", (d: Buffer) => {
+			stderr += d.toString();
+		});
+		proc.on("error", () => resolve(null));
+		proc.on("close", () => {
+			const m = stderr.match(/Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+			if (!m) return resolve(null);
+			const sec =
+				Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+			resolve(Number.isFinite(sec) && sec > 0 ? sec : null);
+		});
+	});
+}
+
+// Split the full audio (already written to inputPath) into CHUNK_SEC-long mp3
+// segments using ffmpeg. `totalSec` is the authoritative probed duration, so the
+// loop covers the ENTIRE audio — not a stale/short DB value.
+async function splitAudioFile(
+	inputPath: string,
 	totalSec: number,
 ): Promise<Array<{ bytes: Uint8Array; startSec: number }>> {
-	const inputPath = join(tmpdir(), `src-${randomUUID()}.audio`);
-	await fs.writeFile(inputPath, audioBytes);
-
 	const chunks: Array<{ bytes: Uint8Array; startSec: number }> = [];
-	try {
-		for (let start = 0; start < totalSec; start += CHUNK_SEC) {
-			const outPath = join(tmpdir(), `chunk-${randomUUID()}.mp3`);
-			await runFfmpeg([
-				"-ss",
-				String(start),
-				"-t",
-				String(CHUNK_SEC),
-				"-i",
-				inputPath,
-				"-vn",
-				"-acodec",
-				"libmp3lame",
-				"-b:a",
-				"128k",
-				"-f",
-				"mp3",
-				"-y",
-				outPath,
-			]);
-			try {
-				const buf = await fs.readFile(outPath);
-				if (buf.length > 0) {
-					chunks.push({ bytes: new Uint8Array(buf), startSec: start });
-				}
-			} finally {
-				await fs.unlink(outPath).catch(() => {});
+	for (let start = 0; start < totalSec; start += CHUNK_SEC) {
+		const outPath = join(tmpdir(), `chunk-${randomUUID()}.mp3`);
+		await runFfmpeg([
+			"-ss",
+			String(start),
+			"-t",
+			String(CHUNK_SEC),
+			"-i",
+			inputPath,
+			"-vn",
+			"-acodec",
+			"libmp3lame",
+			"-b:a",
+			"128k",
+			"-f",
+			"mp3",
+			"-y",
+			outPath,
+		]);
+		try {
+			const buf = await fs.readFile(outPath);
+			if (buf.length > 0) {
+				chunks.push({ bytes: new Uint8Array(buf), startSec: start });
 			}
+		} finally {
+			await fs.unlink(outPath).catch(() => {});
 		}
-	} finally {
-		await fs.unlink(inputPath).catch(() => {});
 	}
 
 	return chunks;
@@ -583,8 +606,22 @@ export async function transcribeWithGemini(
 
 	const mimeType = detectMimeType(audioUrl);
 
+	// Probe the REAL duration straight from the audio bytes. The `audioDurationSec`
+	// passed in comes from the DB `video.duration`, which can be null/stale at
+	// transcription time; trusting it (and the 300s default) is what made a 1-hour
+	// upload stop after ~5 minutes. The probe is authoritative; we only fall back
+	// to the passed value if ffmpeg can't read a duration.
+	const inputPath = join(tmpdir(), `src-${randomUUID()}.audio`);
+	await fs.writeFile(inputPath, audioBytes);
+	const probedSec = await probeDurationSec(inputPath);
+	const effectiveDuration = probedSec ?? (audioDurationSec > 0 ? audioDurationSec : 0);
+	console.log(
+		`[gemini-transcribe] duration passed=${audioDurationSec} probed=${probedSec} -> effective=${Math.round(effectiveDuration)}s`,
+	);
+
 	// Short audio: single request (the model transcribes it fully).
-	if (!audioDurationSec || audioDurationSec <= CHUNK_SEC) {
+	if (!effectiveDuration || effectiveDuration <= CHUNK_SEC) {
+		await fs.unlink(inputPath).catch(() => {});
 		const r = await runGeminiTranscription(audioBytes, mimeType, apiKey);
 		console.log(
 			`[gemini-transcribe] single finishReason=${r.finishReason} in=${r.inputTokens} out=${r.outputTokens} chars=${r.rawText.length}`,
@@ -592,17 +629,23 @@ export async function transcribeWithGemini(
 		await onProgress?.(1, 1);
 		return {
 			transcriptVtt: collapseRepeatedCues(
-				toVtt(r.rawText, audioDurationSec || 300),
+				toVtt(r.rawText, effectiveDuration || 300),
 			),
 			inputTokens: r.inputTokens,
 			outputTokens: r.outputTokens,
 		};
 	}
 
-	// Long audio: split into segments, transcribe each, merge with offsets.
-	const chunks = await splitAudioBytes(audioBytes, audioDurationSec);
+	// Long audio: split into segments from the probed length, transcribe each,
+	// merge with offsets.
+	let chunks: Array<{ bytes: Uint8Array; startSec: number }>;
+	try {
+		chunks = await splitAudioFile(inputPath, effectiveDuration);
+	} finally {
+		await fs.unlink(inputPath).catch(() => {});
+	}
 	console.log(
-		`[gemini-transcribe] long audio ${Math.round(audioDurationSec)}s -> ${chunks.length} chunks of ${CHUNK_SEC}s`,
+		`[gemini-transcribe] long audio ${Math.round(effectiveDuration)}s -> ${chunks.length} chunks of ${CHUNK_SEC}s`,
 	);
 
 	let inputTokens = 0;
@@ -617,7 +660,10 @@ export async function transcribeWithGemini(
 		bytes: Uint8Array;
 		startSec: number;
 	}) => {
-		const chunkDuration = Math.min(CHUNK_SEC, audioDurationSec - chunk.startSec);
+		const chunkDuration = Math.min(
+			CHUNK_SEC,
+			effectiveDuration - chunk.startSec,
+		);
 		let r: Awaited<ReturnType<typeof runGeminiTranscription>> | null = null;
 		for (let attempt = 1; attempt <= 3; attempt++) {
 			try {
