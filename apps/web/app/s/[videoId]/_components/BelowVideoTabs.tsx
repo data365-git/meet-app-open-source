@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 type TabId = "summary" | "tasks" | "transcript" | "refined";
 
@@ -41,78 +41,32 @@ export function BelowVideoTabs({
 
 	const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
-	const sectionRefs = useRef<Partial<Record<TabId, HTMLElement | null>>>({});
-
-	// Scroll-spy: highlight the tab whose section is most visible
-	useEffect(() => {
-		const observers: IntersectionObserver[] = [];
-
-		TABS.forEach(({ id }) => {
-			const el = sectionRefs.current[id];
-			if (!el) return;
-
-			const observer = new IntersectionObserver(
-				(entries) => {
-					const entry = entries[0];
-					if (entry?.isIntersecting) {
-						setActiveTab(id);
-					}
-				},
-				{ threshold: 0.4 },
-			);
-
-			observer.observe(el);
-			observers.push(observer);
-		});
-
-		return () => {
-			observers.forEach((o) => o.disconnect());
-		};
-	}, []);
-
 	const handleTabClick = useCallback(
 		(id: TabId) => {
-			// Update URL param for shareability
+			setActiveTab(id);
+			// Update URL param for shareability (no scroll/navigation).
 			const params = new URLSearchParams(searchParams.toString());
 			params.set("tab", id);
 			router.replace(`?${params.toString()}`, { scroll: false });
-
-			// Smooth-scroll to the section
-			const el = sectionRefs.current[id];
-			if (el) {
-				el.scrollIntoView({ behavior: "smooth", block: "start" });
-			}
 		},
 		[router, searchParams],
 	);
 
-	// On initial load, scroll to the tab indicated by the URL param
-	useEffect(() => {
-		if (initialTab !== "summary") {
-			const el = sectionRefs.current[initialTab];
-			if (el) {
-				el.scrollIntoView({ behavior: "smooth", block: "start" });
-			}
-		}
-		// Only run once on mount
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
-
-	const panels: { id: TabId; content: React.ReactNode }[] = [
-		{ id: "summary", content: summary },
-		{ id: "tasks", content: tasks },
-		{ id: "transcript", content: transcript },
-		{ id: "refined", content: refined },
-	];
+	const panels: Record<TabId, React.ReactNode> = {
+		summary,
+		tasks,
+		transcript,
+		refined,
+	};
 
 	return (
 		<div className="flex flex-col w-full">
 			{headerAction && (
 				<div className="flex justify-end mb-2">{headerAction}</div>
 			)}
-			{/* Sticky tab bar */}
+			{/* Tab bar */}
 			<div
-				className="sticky top-0 z-10 border-b border-gray-200"
+				className="border-b border-gray-200"
 				style={{
 					fontFamily:
 						"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -120,8 +74,6 @@ export function BelowVideoTabs({
 					gap: "4px",
 					padding: "8px",
 					background: "rgba(255,255,255,0.95)",
-					backdropFilter: "blur(6px)",
-					WebkitBackdropFilter: "blur(6px)",
 					borderRadius: "16px 16px 0 0",
 				}}
 			>
@@ -155,27 +107,10 @@ export function BelowVideoTabs({
 				))}
 			</div>
 
-			{/* Stacked panels */}
-			<div className="flex flex-col gap-6 mt-3">
-				{panels.map(({ id, content }) => (
-					<section
-						key={id}
-						id={`panel-${id}`}
-						ref={(el) => {
-							sectionRefs.current[id] = el;
-						}}
-						className="bg-white border border-gray-200 rounded-xl shadow-sm p-5"
-					>
-						<h2
-							className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3"
-							style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}
-						>
-							{TABS.find((t) => t.id === id)?.label}
-						</h2>
-						{content}
-					</section>
-				))}
-			</div>
+			{/* Only the active panel is rendered — true tab switching. */}
+			<section className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mt-3">
+				{panels[activeTab]}
+			</section>
 		</div>
 	);
 }
