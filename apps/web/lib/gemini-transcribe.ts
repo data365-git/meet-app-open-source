@@ -39,77 +39,55 @@ const CHUNK_CONCURRENCY = 3; // parallel Gemini calls
 const TRANSCRIBE_MODEL = "gemini-2.5-flash";
 const MAX_OUTPUT_TOKENS = 16384; // ample for a 3-min chunk; smaller = faster
 
-const TRANSCRIBE_PROMPT = `You are a professional Uzbek meeting transcription editor.
+// System instruction for the transcription agent. The user-authored rules below
+// govern language, cleaning, speaker labeling, and foreign-word handling; the
+// OUTPUT FORMAT section pins the representation to WebVTT because the whole app
+// (transcript panel, captions, RAG chunking, AI-summary parser) reads VTT. The
+// speaker scheme (unlabeled primary; "Savol:" / "Ishtirokchi:" for others) maps
+// directly onto cue text, and foreign-word bolding uses **markdown** which the
+// panel renders as bold.
+const TRANSCRIBE_PROMPT = `Transcription Task: Uzbek Language
 
-Transcribe the attached online/offline meeting fully and accurately in Uzbek Latin.
+Task: Transcribe the provided audio file into the Uzbek language (Latin script). This transcription must be highly accurate, following specific formatting rules for foreign words and speaker identification regardless of the subject matter.
 
-Rules:
+1. Script and Language
+Main Language: All Uzbek words must be written in the Latin alphabet. Do not use Cyrillic for Uzbek words.
+Clean Verbatim: Remove filler words (e.g., "eee", "mmm", "haligi"), stutters, and false starts. The final text should be professional and readable while remaining faithful to the original meaning.
 
-1. Transcribe the entire meeting from beginning to end. Do not summarize, skip, shorten, or stop halfway.
+2. Output Format (WebVTT) — REQUIRED
+Output the transcript as a WebVTT file. Start the response with a "WEBVTT" header line, then one blank line, then the cues. Do not use tables, numbered lists, markdown headings, or any commentary.
+Represent each speaker turn as its own cue. If one person speaks for a long stretch, split into a new cue at least every 2 minutes.
+Each cue is two lines: a timestamp range line "HH:MM:SS.mmm --> HH:MM:SS.mmm" (real timestamps taken from the audio — never sample, fake, guessed, or template values), followed by the spoken text line.
+Example:
 
-2. Uzbek words must be written only in Uzbek Latin. Do not write Uzbek words in Cyrillic.
+WEBVTT
 
-3. This meeting has multiple speakers. Identify speakers by voice, context, and conversation flow.
+00:00:00.000 --> 00:00:07.500
+Assalomu alaykum, bugun biz **growth hacking** haqida gaplashamiz.
 
-If speaker names are known from the audio, use their names.
+00:00:07.500 --> 00:00:12.000
+Savol: Bu usul kichik bizneslar uchun ham ishlaydimi?
 
-If names are not clear, use:
-Speaker 1
-Speaker 2
-Speaker 3
+3. Speaker Identification
+Primary Speaker: Identify the main voice (e.g., lecturer, interviewer, or host). Do NOT use a label or prefix for this person's speech — begin the cue text directly with their words.
+Secondary Speakers: When anyone else speaks (e.g., a student, an interviewee, or an audience member), begin that cue's text with "Savol:" or "Ishtirokchi:" depending on the context (a question vs. other participation). Keep this consistent across the whole transcript.
 
-Keep speaker labels consistent across the whole transcript.
+4. Foreign Language Handling (Crucial)
+The speakers may use terms from other languages (Russian, English, etc.). You must:
+Maintain Original Script: Write Russian words in the Cyrillic alphabet and English/other Latin-based languages in their original Latin spelling.
+Formatting: Every single foreign word or phrase must be wrapped in **double asterisks** (bold).
+No Transliteration: Do not write Russian words in Uzbek Latin (e.g., write **конечно**, not "konechno").
+Universal Application: This applies to all terminology — technical, medical, legal, or slang.
+Example (Russian): ...ushbu holatda **сразу** javob berish **обязательно** hisoblanadi.
+Example (English): Biznesingizda **growth hacking** usullarini va **customer acquisition cost** ko'rsatkichlarini tekshiring.
 
-Each WEBVTT cue must contain EXACTLY ONE speaker. Begin each cue's text with a WebVTT voice tag: <v Speaker Name> followed by that speaker's words. NEVER merge two speakers into a single cue. Example of correct format:
+5. Contextual Accuracy
+If a word is muffled or unclear, use the surrounding context (the topic of discussion) to determine the most logical word. If it is impossible to identify, write [noaniq].
+Ensure that technical jargon specific to the topic is spelled correctly according to its professional usage.
 
-00:00:12.500 --> 00:00:15.200
-<v Bunyodbek>Salom, qanday yangiliklar bor?
-
-00:00:15.500 --> 00:00:18.100
-<v Jahongir>Yangi mijoz keldi, **deadline** ertaga.
-
-If two people talk over each other and both cannot be clearly separated, split into two adjacent cues with the same or overlapping timestamps and add the [ustma-ust gaplashildi] tag on the second cue.
-
-4. Add real, accurate timestamps from the audio. Do not use sample, fake, guessed, or template timestamps.
-
-Put timestamps only where they exactly match the audio:
-- at the beginning,
-- when the speaker changes,
-- when a new discussion topic starts,
-- when decisions, tasks, objections, or important points appear,
-- when there is a meaningful pause or transition.
-
-Timestamp format:
-**[HH:MM:SS]**
-
-5. Clean the transcript professionally:
-- remove filler sounds like "umm", "aa", "eee", "э"
-- remove repeated stutters
-- remove meaningless false starts
-- keep the original meaning and speaking style
-
-6. If an Uzbek word is unclear, correct it based on surrounding context. If it is impossible to identify, write [noaniq].
-
-7. Keep foreign words exactly as spoken:
-- Russian words must stay in Cyrillic and be bold: **сразу**, **любой**, **дефицит**
-- English words must stay in English/Latin and be bold: **deadline**, **CRM**, **dashboard**
-- Do not translate foreign words.
-- Do not transliterate Russian words into Latin.
-- Bold every foreign word or phrase.
-
-RUSSIAN MUST BE IN CYRILLIC SCRIPT — this is mandatory, not a preference.
-Write **полностью**, never **polnostyu**. Write **подробный**, never **podrobniy**.
-Write **аудит**, never **audit**. Whenever you hear a Russian word, output it in
-Cyrillic letters and wrap it in **bold**.
-
-8. Identify REAL speaker names. The speakers address each other by name during
-the meeting — listen for those names and use them as the voice tag, e.g.
-<v Shohrux> and <v Bunyodbek>. Only fall back to <v Speaker 1> when no name is
-ever spoken aloud.
-
-9. Output only the transcript. No intro, no explanation, no table, no numbering.
-
-IMPORTANT: Start your response with "WEBVTT" header and format each line as WebVTT cues with timestamps in HH:MM:SS.mmm --> HH:MM:SS.mmm format. The speaker labels, bold formatting, and content rules above still apply within each cue text.`;
+6. Completeness
+Transcribe the ENTIRE audio file from the first second to the last.
+Do not summarize, skip sections, or stop before the file ends. If the audio is long, provide the full text in its entirety.`;
 
 function detectMimeType(audioUrl: string): string {
 	const url = audioUrl.split("?")[0] ?? audioUrl;
@@ -249,11 +227,18 @@ async function runGeminiTranscription(
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
+				// The transcription rules live in the system instruction so they act
+				// as the agent's role, per product requirement.
+				systemInstruction: {
+					parts: [{ text: TRANSCRIBE_PROMPT }],
+				},
 				contents: [
 					{
 						parts: [
 							{ fileData: { mimeType, fileUri } },
-							{ text: TRANSCRIBE_PROMPT },
+							{
+								text: "Transcribe this audio into a WebVTT transcript following the system instructions exactly.",
+							},
 						],
 					},
 				],

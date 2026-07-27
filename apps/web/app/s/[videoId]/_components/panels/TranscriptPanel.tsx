@@ -100,18 +100,20 @@ function extractSpeaker(text: string): { speaker: string; text: string } {
 	const match = text.match(/^<v\s+([^>]+)>(.*)$/s);
 	if (match) {
 		return {
-			speaker: match[1]?.trim() ?? "Speaker",
+			speaker: match[1]?.trim() ?? "So'zlovchi",
 			text: stripVoiceTags(match[2] ?? text),
 		};
 	}
-	const colonMatch = text.match(/^([^:]{1,30}):\s+(.+)$/s);
+	// Secondary speakers are prefixed "Savol:" / "Ishtirokchi:" per the
+	// transcription prompt; the primary speaker is unlabeled and falls through.
+	const colonMatch = text.match(/^(Savol|Ishtirokchi)\s*:\s*(.+)$/s);
 	if (colonMatch) {
 		return {
-			speaker: colonMatch[1]?.trim() ?? "Speaker",
+			speaker: colonMatch[1]?.trim() ?? "Ishtirokchi",
 			text: stripVoiceTags(colonMatch[2] ?? text),
 		};
 	}
-	return { speaker: "Speaker", text: stripVoiceTags(text) };
+	return { speaker: "So'zlovchi", text: stripVoiceTags(text) };
 }
 
 // Render **bold** segments (foreign words) as <strong>, like v2.
