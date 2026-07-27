@@ -1,10 +1,24 @@
 "use client";
 
 import { Play } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { RichText } from "../RichText";
+import { Skeleton, SkeletonGroup } from "../Skeleton";
+import "../panels.css";
 import { formatTimeMinutes } from "../utils/transcript-utils";
 
+const MANUAL_SCROLL_GRACE_MS = 3000;
+
 interface RefinedTranscriptPanelProps {
+	transcriptionStatus?: string | null;
+	aiGenerationStatus?: string | null;
+	currentTime?: number;
 	refinedTranscript?: {
+		intro?: {
+			participants: string[];
+			duration: string;
+			purpose: string;
+		};
 		chapters: {
 			startSec: number;
 			title: string;
@@ -15,58 +29,155 @@ interface RefinedTranscriptPanelProps {
 }
 
 export function RefinedTranscriptPanel({
+	transcriptionStatus,
+	aiGenerationStatus,
+	currentTime = 0,
 	refinedTranscript,
 	onVideoJump,
 }: RefinedTranscriptPanelProps) {
+	const containerRef = useRef<HTMLElement | null>(null);
+	const activeRef = useRef<HTMLElement | null>(null);
+	const lastUserScrollAt = useRef<number>(0);
+	const programmaticScroll = useRef<boolean>(false);
+
+	const chapters = refinedTranscript?.chapters ?? [];
+
+	// Active chapter = last chapter whose startSec <= currentTime
+	const activeStartSec =
+		chapters.reduce<number | null>((acc, ch) => {
+			if (ch.startSec <= currentTime) {
+				return acc === null || ch.startSec > acc ? ch.startSec : acc;
+			}
+			return acc;
+		}, null);
+
+	// Scroll listener on the scrollable ancestor (parent of the wrapper div)
+	useEffect(() => {
+		const container = containerRef.current?.parentElement;
+		if (!container) return;
+		const onScroll = () => {
+			if (programmaticScroll.current) return;
+			lastUserScrollAt.current = Date.now();
+		};
+		container.addEventListener("scroll", onScroll, { passive: true });
+		return () => container.removeEventListener("scroll", onScroll);
+	}, []);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: activeStartSec drives which DOM node activeRef points to; re-running when it changes is intentional
+	useEffect(() => {
+		if (!activeRef.current) return;
+		if (Date.now() - lastUserScrollAt.current < MANUAL_SCROLL_GRACE_MS) return;
+
+		programmaticScroll.current = true;
+		activeRef.current.scrollIntoView({
+			behavior: "smooth",
+			block: "center",
+		});
+		Promise.resolve().then(() => {
+			setTimeout(() => {
+				programmaticScroll.current = false;
+			}, 50);
+		});
+	}, [activeStartSec]);
+
 	if (!refinedTranscript || refinedTranscript.chapters.length === 0) {
+		const isInFlight =
+			aiGenerationStatus === "PROCESSING" ||
+			aiGenerationStatus === "QUEUED" ||
+			transcriptionStatus === "PROCESSING" ||
+			transcriptionStatus === "QUEUED";
+
+		if (isInFlight) {
+			return (
+				<SkeletonGroup>
+					{/* Intro card */}
+					<Skeleton style={{ height: 60 }} />
+					{/* Chapter sections */}
+					{[0, 1, 2].map((i) => (
+						<div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+							<Skeleton style={{ height: 20, width: "60%" }} />
+							<Skeleton style={{ height: 14 }} />
+							<Skeleton style={{ height: 14 }} />
+							<Skeleton style={{ height: 14, width: "80%" }} />
+						</div>
+					))}
+				</SkeletonGroup>
+			);
+		}
+
 		return (
-			<div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-8 text-center">
-				<p className="text-sm text-gray-500">
-					Refined transcript not available yet
-				</p>
+			<div className="rd-empty">
+				Hali tayyor emas — yuqoridagi tugma orqali generatsiya qiling.
 			</div>
 		);
 	}
 
+	const intro = refinedTranscript.intro;
+	const hasIntro =
+		intro &&
+		((intro.participants && intro.participants.length > 0) ||
+			intro.duration ||
+			intro.purpose);
+
 	return (
-		<div className="flex flex-col gap-4">
-			{refinedTranscript.chapters.map((chapter) => (
-				<section
-					key={chapter.startSec}
-					className="refined-section rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-				>
-					<div className="mb-3 flex items-center gap-2">
-						<button
-							type="button"
-							onClick={() => onVideoJump?.(chapter.startSec)}
-							className="rounded-md bg-purple-50 px-2 py-0.5 font-mono text-xs font-medium text-purple-700 transition-colors hover:bg-purple-100"
-						>
-							{formatTimeMinutes(chapter.startSec)}
-						</button>
-						<h3 className="flex-1 text-sm font-semibold text-gray-900">
-							{chapter.title}
-						</h3>
-						<button
-							type="button"
-							onClick={() => onVideoJump?.(chapter.startSec)}
-							aria-label={`Play from ${chapter.title}`}
-							className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600 transition-colors hover:bg-purple-100"
-						>
-							<Play className="size-3.5 fill-current" />
-						</button>
+		<div ref={(el) => { containerRef.current = el; }}>
+			{hasIntro && intro && (
+				<div className="refined-doc-intro">
+					<div className="refined-doc-intro-label">Uchrashuv hisoboti</div>
+					<div className="refined-doc-intro-text">
+						{intro.participants && intro.participants.length > 0 && (
+							<>
+								<strong>Ishtirokchilar:</strong>{" "}
+								{intro.participants.join(", ")}
+								{(intro.duration || intro.purpose) && " · "}
+							</>
+						)}
+						{intro.duration && (
+							<>
+								<strong>Davomiyligi:</strong> {intro.duration}
+								{intro.purpose && " · "}
+							</>
+						)}
+						{intro.purpose && (
+							<>
+								<strong>Maqsad:</strong> {intro.purpose}
+							</>
+						)}
 					</div>
-					<div className="flex flex-col gap-2">
-						{chapter.paragraphs.map((paragraph) => (
-							<p
-								key={paragraph}
-								className="text-sm leading-relaxed text-gray-700"
+				</div>
+			)}
+			{refinedTranscript.chapters.map((chapter) => {
+				const isActive = chapter.startSec === activeStartSec;
+				return (
+					<section
+						className={`refined-section${isActive ? " refined-section-active" : ""}`}
+						key={chapter.startSec}
+						ref={isActive ? (el) => { activeRef.current = el; } : undefined}
+					>
+						<div className="refined-head">
+							<button
+								type="button"
+								className="refined-play"
+								onClick={() => onVideoJump?.(chapter.startSec)}
+								aria-label={`Jump to ${chapter.title}`}
 							>
-								{paragraph}
+								<Play fill="currentColor" aria-hidden="true" />
+							</button>
+							<div className="refined-head-text">
+								<div className="refined-section-title">{chapter.title}</div>
+								<div className="refined-time-badge">
+									{formatTimeMinutes(chapter.startSec)}
+								</div>
+							</div>
+						</div>
+						{chapter.paragraphs.map((paragraph) => (
+							<p className="refined-para" key={paragraph}>
+								<RichText>{paragraph}</RichText>
 							</p>
 						))}
-					</div>
-				</section>
-			))}
+					</section>
+				);
+			})}
 		</div>
 	);
 }

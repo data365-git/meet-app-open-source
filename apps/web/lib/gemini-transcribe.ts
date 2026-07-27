@@ -37,6 +37,10 @@ const CHUNK_CONCURRENCY = 3; // parallel Gemini calls
 // Stable model with "thinking" disabled (the 3-flash preview spends its output
 // budget on hidden thinking tokens, truncating the transcript).
 const TRANSCRIBE_MODEL = "gemini-2.5-flash";
+// Fallback model used on retries. Gemini free-tier quota is per-model, so when
+// gemini-2.5-flash is quota-exhausted, gemini-3-flash-preview draws from a
+// SEPARATE bucket and can still transcribe the chunk (it's also a newer model).
+const TRANSCRIBE_MODEL_FALLBACK = "gemini-3-flash-preview";
 const MAX_OUTPUT_TOKENS = 16384; // ample for a 3-min chunk; smaller = faster
 
 // System instruction for the transcription agent. The user-authored rules below
@@ -163,6 +167,7 @@ async function runGeminiTranscription(
 	mimeType: string,
 	apiKey: string,
 	temperature = 0.1,
+	model: string = TRANSCRIBE_MODEL,
 ): Promise<{
 	rawText: string;
 	inputTokens: number;
@@ -223,7 +228,7 @@ async function runGeminiTranscription(
 	}
 
 	const genRes = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${TRANSCRIBE_MODEL}:generateContent?key=${apiKey}`,
+		`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -619,10 +624,22 @@ export async function transcribeWithGemini(
 		`[gemini-transcribe] duration passed=${audioDurationSec} probed=${probedSec} -> effective=${Math.round(effectiveDuration)}s`,
 	);
 
-	// Short audio: single request (the model transcribes it fully).
+	// Short audio: single request (the model transcribes it fully). Try the
+	// primary model, then fall back to gemini-3-flash-preview (separate quota).
 	if (!effectiveDuration || effectiveDuration <= CHUNK_SEC) {
 		await fs.unlink(inputPath).catch(() => {});
-		const r = await runGeminiTranscription(audioBytes, mimeType, apiKey);
+		let r: Awaited<ReturnType<typeof runGeminiTranscription>> | null = null;
+		for (const model of [TRANSCRIBE_MODEL, TRANSCRIBE_MODEL_FALLBACK]) {
+			try {
+				r = await runGeminiTranscription(audioBytes, mimeType, apiKey, 0.1, model);
+				break;
+			} catch (err) {
+				console.error(
+					`[gemini-transcribe] single via ${model} failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		if (!r) throw new Error("Transcription failed on all models");
 		console.log(
 			`[gemini-transcribe] single finishReason=${r.finishReason} in=${r.inputTokens} out=${r.outputTokens} chars=${r.rawText.length}`,
 		);
@@ -676,11 +693,17 @@ export async function transcribeWithGemini(
 					// Bump the temperature on retries to break a repetition loop (the
 					// deterministic low-temp call would otherwise re-loop identically).
 					const temp = attempt === 1 ? 0.1 : 0.6;
+					// Attempt 1 uses the primary model; retries switch to the fallback
+					// model, which has a SEPARATE quota bucket — so a chunk that 2.5-flash
+					// can't serve (quota) still gets transcribed by gemini-3-flash-preview.
+					const model =
+						attempt === 1 ? TRANSCRIBE_MODEL : TRANSCRIBE_MODEL_FALLBACK;
 					const candidate = await runGeminiTranscription(
 						chunk.bytes,
 						"audio/mpeg",
 						apiKey,
 						temp,
+						model,
 					);
 					r = candidate;
 					// Accept a clean result; keep a degenerate one only as a last resort

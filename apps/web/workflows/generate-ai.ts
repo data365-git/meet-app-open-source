@@ -64,6 +64,7 @@ const AiSummarySchema = z.object({
 		.array(
 			z.object({
 				title: z.string(),
+				category: z.string().default(""),
 				assignee: z.string().default(""),
 				priority: z.enum(["high", "medium", "low"]).default("medium"),
 				deadline: z.string().default(""),
@@ -82,6 +83,13 @@ const AiSummarySchema = z.object({
 		.default([]),
 	refinedTranscript: z
 		.object({
+			intro: z
+				.object({
+					participants: z.array(z.string()).default([]),
+					duration: z.string().default(""),
+					purpose: z.string().default(""),
+				})
+				.optional(),
 			chapters: z
 				.array(
 					z.object({
@@ -483,6 +491,9 @@ function chunkTranscriptWithTimestamps(
 // Stable model with thinking disabled (the 3-flash preview burns the output
 // budget on hidden thinking tokens, truncating summaries).
 const GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
+// Fallback on retries — separate per-model quota bucket, so a quota-blocked
+// summary still completes when the primary model is exhausted.
+const GEMINI_SUMMARY_MODEL_FALLBACK = "gemini-3-flash-preview";
 const SUMMARY_MAX_OUTPUT_TOKENS = 32768;
 
 interface AiApiResult {
@@ -504,9 +515,13 @@ async function callAiApi(prompt: string): Promise<AiApiResult> {
 	// transcription burst) don't kill the summary. Longer waits for quota so
 	// per-minute limits have time to reset.
 	for (let attempt = 1; attempt <= 4; attempt++) {
+		// Attempt 1 uses the primary model; retries switch to the fallback model
+		// (separate quota bucket) so a quota-blocked summary still completes.
+		const activeModel =
+			attempt === 1 ? GEMINI_SUMMARY_MODEL : GEMINI_SUMMARY_MODEL_FALLBACK;
 		try {
 			const res = await fetch(
-				`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SUMMARY_MODEL}:generateContent?key=${apiKey}`,
+				`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${apiKey}`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -541,7 +556,7 @@ async function callAiApi(prompt: string): Promise<AiApiResult> {
 			const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
 			const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
 			const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
-			return { content, model: GEMINI_SUMMARY_MODEL, inputTokens, outputTokens };
+			return { content, model: activeModel, inputTokens, outputTokens };
 		} catch (err) {
 			lastErr = err;
 			const msg = err instanceof Error ? err.message : String(err);
@@ -592,9 +607,10 @@ async function generateSingleChunk(
     "overview": "A weekly sync covering roadmap and blockers.",
     "topics": [{"title": "Q3 Roadmap", "body": "The team aligned on three key priorities."}],
     "nextSteps": ["Share updated roadmap doc by Friday"],
-    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}],
+    "tasks": [{"title": "Update roadmap", "category": "Roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}, {"title": "Find owner for data migration", "category": "Migration", "assignee": "Unassigned", "priority": "medium", "deadline": "", "done": false}],
     "chapters": [{"startSec": 0, "title": "Intro", "body": "Brief intro and agenda."}, {"startSec": 45, "title": "Q3 Roadmap", "body": "Discussion of top priorities."}],
     "refinedTranscript": {
+      "intro": {"participants": ["Alice", "Bob"], "duration": "21 daqiqa 30 soniya", "purpose": "Discuss Q3 roadmap and unblock deployment."},
       "chapters": [{"startSec": 0, "title": "Intro", "paragraphs": ["Welcome everyone.", "Today we cover roadmap and blockers."]}]
     }
   }
@@ -611,6 +627,8 @@ Rules:
 - All chapter "start" / "startSec" values must be between 0 and ${videoDuration} seconds; derive them from the transcript timestamps
 - tasks[].priority must be "high", "medium", or "low"
 - tasks[].done is always false unless explicitly resolved in the transcript
+- tasks[].category GROUPS the tasks: pick ONE grouping axis for the whole list — by workstream/topic ("Ombor", "Moliya", "Ishlab chiqarish"), by stage, or by person — and use that same axis for EVERY task's "category". The category is a group label, NOT a copy of the assignee. Keep category labels short (1-3 words) and reuse the same label for tasks that belong together.
+- refinedTranscript.intro summarizes the whole meeting: participants (real names heard in the audio), duration (human-readable), and purpose (one sentence)
 - refinedTranscript cleans filler words and restructures the speech into readable paragraphs
 - Keep ALL JSON property names exactly as shown
 
@@ -721,9 +739,10 @@ ${chunk.text}`;
     "overview": "A weekly sync covering roadmap and blockers.",
     "topics": [{"title": "Q3 Roadmap", "body": "The team aligned on three key priorities."}],
     "nextSteps": ["Share updated roadmap doc by Friday"],
-    "tasks": [{"title": "Update roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}],
+    "tasks": [{"title": "Update roadmap", "category": "Roadmap", "assignee": "Alice", "priority": "high", "deadline": "2024-07-05", "done": false}, {"title": "Find owner for data migration", "category": "Migration", "assignee": "Unassigned", "priority": "medium", "deadline": "", "done": false}],
     "chapters": [{"startSec": 0, "title": "Intro", "body": "Brief intro and agenda."}, {"startSec": 45, "title": "Q3 Roadmap", "body": "Discussion of top priorities."}],
     "refinedTranscript": {
+      "intro": {"participants": ["Alice", "Bob"], "duration": "21 daqiqa 30 soniya", "purpose": "Discuss Q3 roadmap and unblock deployment."},
       "chapters": [{"startSec": 0, "title": "Intro", "paragraphs": ["Welcome everyone.", "Today we cover roadmap and blockers."]}]
     }
   }
@@ -744,6 +763,8 @@ ${schemaExample}
 Rules:
 - aiSummary.chapters[].startSec must be between 0 and ${videoDuration}; use the section timestamps provided above
 - tasks[].priority must be "high", "medium", or "low"
+- tasks[].category GROUPS the tasks: pick ONE grouping axis for the whole list — by workstream/topic ("Ombor", "Moliya", "Ishlab chiqarish"), by stage, or by person — and use that same axis for EVERY task's "category" (a short 1-3 word group label, NOT the assignee's name; reuse the same label for related tasks)
+- refinedTranscript.intro summarizes the whole meeting: participants (real names heard), duration (human-readable), purpose (one sentence)
 - refinedTranscript restructures speech into clean readable paragraphs
 - Keep ALL JSON property names exactly as shown`;
 

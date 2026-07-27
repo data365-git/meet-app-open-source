@@ -531,6 +531,8 @@ export const ShareVideo = forwardRef<
 					<BelowVideoTabs
 						summary={
 							<SummaryPanel
+								transcriptionStatus={data.transcriptionStatus ?? undefined}
+								aiGenerationStatus={aiGenerationStatus ?? undefined}
 								data={{
 									duration: data.duration ?? undefined,
 									aiSummary: data.metadata?.aiSummary ?? undefined,
@@ -542,6 +544,8 @@ export const ShareVideo = forwardRef<
 						tasks={
 							<TasksPanel
 								videoId={data.id}
+								transcriptionStatus={data.transcriptionStatus ?? undefined}
+								aiGenerationStatus={aiGenerationStatus ?? undefined}
 								tasks={data.metadata?.aiSummary?.tasks ?? []}
 							/>
 						}
@@ -554,6 +558,9 @@ export const ShareVideo = forwardRef<
 						}
 						refined={
 							<RefinedTranscriptPanel
+								transcriptionStatus={data.transcriptionStatus ?? undefined}
+								aiGenerationStatus={aiGenerationStatus ?? undefined}
+								currentTime={currentTime}
 								refinedTranscript={
 									data.metadata?.aiSummary?.refinedTranscript ?? undefined
 								}

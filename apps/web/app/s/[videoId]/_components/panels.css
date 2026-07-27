@@ -1,0 +1,796 @@
+/*
+ * Styles for SummaryPanel / TasksPanel / RefinedTranscriptPanel, ported from
+ * v2's `share-redesign.css`. Extracted (unscoped from the v2 `.share-rd`
+ * ancestor) so these three panels render exactly like v2 without requiring a
+ * page-level wrapper class in V3.
+ *
+ * Design tokens below are namespaced `--rd-*` (rather than v2's bare
+ * `--accent`, `--ink`, `--radius`, ...) to avoid colliding with V3's existing
+ * global theme tokens of the same bare names (see app/globals.css).
+ */
+
+:root {
+	--rd-accent: #2563eb;
+	--rd-accent-ink: #1d4ed8;
+	--rd-accent-soft: #eef4ff;
+	--rd-accent-glow: 37, 99, 235;
+
+	--rd-ink: #0f172a;
+	--rd-ink-2: #475569;
+	--rd-ink-3: #94a3b8;
+	--rd-line: #e9edf3;
+	--rd-line-2: #f1f4f9;
+	--rd-surface: #ffffff;
+	--rd-surface-2: #f7f9fc;
+	--rd-surface-3: #f0f4f9;
+
+	--rd-sp-1: #475569;
+	--rd-sp-2: var(--rd-accent);
+
+	--rd-prio-high: #ef4444;
+	--rd-prio-med: #f59e0b;
+	--rd-prio-low: #38bdf8;
+	--rd-prio-done: #10b981;
+
+	--rd-radius: 16px;
+	--rd-radius-sm: 11px;
+	--rd-shadow-sm:
+		0 1px 2px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.07);
+	--rd-shadow-md:
+		0 2px 6px rgba(15, 23, 42, 0.06), 0 8px 20px rgba(15, 23, 42, 0.1), 0 16px
+		32px -8px rgba(15, 23, 42, 0.08);
+	--rd-shadow-lg:
+		0 24px 60px rgba(15, 23, 42, 0.2), 0 6px 16px rgba(15, 23, 42, 0.1);
+	--rd-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--rd-dur: 320ms;
+}
+
+/* section eyebrow */
+.sec-eyebrow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	color: var(--rd-ink-3);
+	margin: 26px 0 12px;
+}
+.sec-eyebrow::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--rd-line);
+}
+.sec-eyebrow .ic {
+	color: var(--rd-accent);
+	display: inline-flex;
+}
+.sec-eyebrow:first-child {
+	margin-top: 0;
+}
+
+/* ===== SUMMARY: stat strip ===== */
+.sum-stats {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 10px;
+	margin-bottom: 8px;
+}
+.stat-card {
+	background: var(--rd-surface-2);
+	border: 1px solid var(--rd-line);
+	border-radius: var(--rd-radius-sm);
+	padding: 12px 13px;
+	transition:
+		transform var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease),
+		border-color var(--rd-dur) var(--rd-ease);
+}
+.stat-card:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--rd-shadow-md);
+	border-color: rgba(var(--rd-accent-glow), 0.25);
+}
+.stat-ic {
+	width: 26px;
+	height: 26px;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--rd-accent-soft);
+	color: var(--rd-accent-ink);
+	margin-bottom: 9px;
+}
+.stat-ic svg {
+	width: 15px;
+	height: 15px;
+}
+.stat-num {
+	font-size: 21px;
+	font-weight: 750;
+	color: var(--rd-ink);
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+.stat-lbl {
+	font-size: 11px;
+	color: var(--rd-ink-3);
+	margin-top: 4px;
+	font-weight: 500;
+}
+
+/* lead / overview card */
+.lead-card {
+	background: linear-gradient(135deg, var(--rd-accent-soft), var(--rd-surface-2));
+	border: 1px solid rgba(var(--rd-accent-glow), 0.15);
+	border-radius: var(--rd-radius-sm);
+	padding: 16px 18px;
+	margin: 20px 0 6px;
+	position: relative;
+}
+.lead-card p {
+	margin: 0;
+	color: var(--rd-ink);
+	font-size: 13.5px;
+	line-height: 1.72;
+	max-width: 88ch;
+}
+
+/* topic cards grid */
+.topic-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+}
+.topic-card {
+	display: flex;
+	gap: 11px;
+	align-items: flex-start;
+	background: var(--rd-surface);
+	border: 1px solid var(--rd-line);
+	border-radius: var(--rd-radius-sm);
+	padding: 13px 14px;
+	transition:
+		transform var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease),
+		border-color var(--rd-dur) var(--rd-ease);
+}
+.topic-card:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--rd-shadow-md);
+	border-color: rgba(var(--rd-accent-glow), 0.3);
+}
+.topic-dot {
+	flex-shrink: 0;
+	width: 30px;
+	height: 30px;
+	border-radius: 9px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--rd-accent-soft);
+	color: var(--rd-accent-ink);
+	font-size: 15px;
+}
+.topic-dot svg {
+	width: 16px;
+	height: 16px;
+}
+.topic-text {
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--rd-ink-2);
+}
+.topic-text b {
+	color: var(--rd-ink);
+	font-weight: 650;
+}
+
+/* next steps as accent checklist */
+.step-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.step-item {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	background: var(--rd-surface);
+	border: 1px solid var(--rd-line);
+	border-left: 3px solid var(--rd-accent);
+	border-radius: 10px;
+	padding: 12px 14px;
+	transition:
+		transform var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease);
+}
+.step-item:hover {
+	transform: translateX(3px);
+	box-shadow: var(--rd-shadow-sm);
+}
+.step-num {
+	flex-shrink: 0;
+	font-size: 12px;
+	font-weight: 750;
+	color: var(--rd-accent-ink);
+	font-variant-numeric: tabular-nums;
+	min-width: 18px;
+}
+.step-item .t {
+	font-size: 13px;
+	line-height: 1.6;
+	color: var(--rd-ink);
+}
+
+.rd-empty {
+	border: 1px dashed var(--rd-line);
+	border-radius: var(--rd-radius-sm);
+	background: var(--rd-surface-2);
+	padding: 22px 16px;
+	text-align: center;
+	color: var(--rd-ink-3);
+	font-size: 13px;
+}
+
+/* ===== Depth pass: lift elements off the surface ===== */
+.stat-card,
+.topic-card,
+.step-item {
+	background-image: linear-gradient(
+		180deg,
+		rgba(255, 255, 255, 0.92),
+		rgba(255, 255, 255, 0) 62%
+	);
+	box-shadow:
+		var(--rd-shadow-sm),
+		inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.lead-card {
+	box-shadow:
+		var(--rd-shadow-md),
+		inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.stat-ic,
+.topic-dot {
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.5),
+		0 2px 6px rgba(var(--rd-accent-glow), 0.18);
+}
+
+@media (max-width: 640px) {
+	.sum-stats {
+		overflow-x: auto;
+	}
+}
+
+/* ===== TASKS ===== */
+.tasks-head {
+	background: var(--rd-surface-2);
+	border: 1px solid var(--rd-line);
+	border-radius: var(--rd-radius-sm);
+	padding: 14px 16px;
+	margin-bottom: 6px;
+	background-image: linear-gradient(
+		180deg,
+		rgba(255, 255, 255, 0.92),
+		rgba(255, 255, 255, 0) 62%
+	);
+	box-shadow:
+		var(--rd-shadow-sm),
+		inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.th-top {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 9px;
+}
+.tasks-head .t {
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--rd-ink);
+}
+.th-pct {
+	font-size: 14px;
+	font-weight: 750;
+	color: var(--rd-accent-ink);
+	font-variant-numeric: tabular-nums;
+}
+.th-bar {
+	height: 8px;
+	background: var(--rd-surface-3);
+	border-radius: 999px;
+	overflow: hidden;
+}
+.th-bar-fill {
+	height: 100%;
+	width: 0%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, var(--rd-accent), var(--rd-accent-ink));
+	box-shadow: 0 0 10px rgba(var(--rd-accent-glow), 0.4);
+	transition: width 600ms var(--rd-ease);
+}
+.tasks-head .s {
+	font-size: 12px;
+	color: var(--rd-ink-3);
+	margin-top: 8px;
+}
+
+.tasks-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	margin: 14px 0;
+}
+.tasks-switch {
+	display: inline-flex;
+	gap: 3px;
+	padding: 3px;
+	background: var(--rd-surface-3);
+	border: 1px solid var(--rd-line);
+	border-radius: 999px;
+	box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+.tasks-switch-btn {
+	border: none;
+	background: none;
+	cursor: pointer;
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--rd-ink-2);
+	padding: 6px 15px;
+	border-radius: 999px;
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	transition:
+		color var(--rd-dur) var(--rd-ease),
+		background var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease);
+}
+.tasks-switch-btn:hover {
+	color: var(--rd-ink);
+}
+.tasks-switch-btn.active {
+	background: var(--rd-surface);
+	color: var(--rd-accent-ink);
+	box-shadow: var(--rd-shadow-sm);
+}
+.tasks-switch-btn svg {
+	width: 15px;
+	height: 15px;
+}
+
+.task-group {
+	margin-top: 22px;
+}
+.task-group:first-child {
+	margin-top: 18px;
+}
+.task-group-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--rd-ink-3);
+	margin-bottom: 11px;
+}
+.task-group-count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	background: var(--rd-surface-3);
+	border-radius: 7px;
+	color: var(--rd-ink-2);
+	font-weight: 700;
+	font-size: 10px;
+}
+
+.task-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+}
+.tasks-wrap[data-tasks="checklist"] .task-grid {
+	grid-template-columns: 1fr;
+	gap: 6px;
+}
+
+.task-card {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	background: var(--rd-surface);
+	border: 1px solid var(--rd-line);
+	border-radius: 12px;
+	padding: 13px 14px;
+	position: relative;
+	overflow: hidden;
+	background-image: linear-gradient(
+		180deg,
+		rgba(255, 255, 255, 0.92),
+		rgba(255, 255, 255, 0) 62%
+	);
+	box-shadow:
+		var(--rd-shadow-sm),
+		inset 0 1px 0 rgba(255, 255, 255, 0.65);
+	transition:
+		transform var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease),
+		border-color var(--rd-dur) var(--rd-ease);
+}
+.task-card::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 3px;
+	background: var(--prio, var(--rd-ink-3));
+	opacity: 0.45;
+}
+.task-card.p-high {
+	--prio: var(--rd-prio-high);
+}
+.task-card.p-med {
+	--prio: var(--rd-prio-med);
+}
+.task-card.p-low {
+	--prio: var(--rd-prio-low);
+}
+.task-card.is-done {
+	--prio: var(--rd-prio-done);
+	background: var(--rd-surface-2);
+}
+.task-card:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--rd-shadow-md);
+	border-color: rgba(var(--rd-accent-glow), 0.22);
+}
+.task-card.is-done .task-title {
+	color: var(--rd-ink-3);
+	text-decoration: line-through;
+	text-decoration-color: var(--rd-line);
+}
+.tasks-wrap[data-tasks="checklist"] .task-card {
+	border-radius: 10px;
+	padding: 11px 14px;
+}
+
+.task-check {
+	width: 21px;
+	height: 21px;
+	border: 2px solid var(--rd-line);
+	border-radius: 7px;
+	flex-shrink: 0;
+	margin-top: 1px;
+	cursor: pointer;
+	position: relative;
+	background: var(--rd-surface);
+	padding: 0;
+	transition:
+		background var(--rd-dur) var(--rd-ease),
+		border-color var(--rd-dur) var(--rd-ease),
+		transform var(--rd-dur) var(--rd-ease);
+}
+.task-check:hover {
+	border-color: var(--rd-accent);
+}
+.task-check::after {
+	content: "";
+	position: absolute;
+	left: 6px;
+	top: 2px;
+	width: 5px;
+	height: 10px;
+	border: solid #fff;
+	border-width: 0 2px 2px 0;
+	transform: rotate(45deg) scale(0);
+	transition: transform var(--rd-dur) var(--rd-ease);
+}
+.task-check.done {
+	background: var(--rd-prio-done);
+	border-color: var(--rd-prio-done);
+}
+.task-check.done::after {
+	transform: rotate(45deg) scale(1);
+}
+
+.task-body {
+	flex: 1;
+	min-width: 0;
+}
+.task-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--rd-ink);
+	line-height: 1.45;
+}
+.task-meta {
+	display: flex;
+	gap: 6px;
+	margin-top: 9px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+.task-assignee {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.assignee-av {
+	width: 19px;
+	height: 19px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 9.5px;
+	font-weight: 700;
+	color: #fff;
+	background: var(--rd-sp-1);
+	flex-shrink: 0;
+}
+.assignee-name {
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--rd-ink-2);
+}
+.task-tag {
+	font-size: 11px;
+	padding: 2.5px 9px;
+	border-radius: 999px;
+	background: var(--rd-surface-3);
+	color: var(--rd-ink-2);
+	font-weight: 600;
+}
+.task-tag.deadline {
+	background: transparent;
+	color: var(--rd-ink-3);
+	padding: 2.5px 0;
+	font-weight: 500;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.task-tag.deadline svg {
+	width: 11px;
+	height: 11px;
+	opacity: 0.5;
+}
+
+/* ===== REFINED (doc cards with play heads) ===== */
+.refined-doc-intro {
+	background: var(--rd-surface-2);
+	border: 1px solid var(--rd-line);
+	border-left: 3px solid var(--rd-accent);
+	border-radius: var(--rd-radius-sm);
+	padding: 14px 16px;
+	margin-bottom: 16px;
+}
+.refined-doc-intro-label {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	color: var(--rd-accent-ink);
+	margin-bottom: 6px;
+}
+.refined-doc-intro-text {
+	font-size: 13.5px;
+	line-height: 1.72;
+	color: var(--rd-ink);
+	max-width: 88ch;
+}
+.refined-section {
+	background: var(--rd-surface);
+	border: 1px solid var(--rd-line);
+	border-radius: 14px;
+	padding: 18px 20px;
+	margin-bottom: 12px;
+	box-shadow:
+		var(--rd-shadow-sm),
+		inset 0 1px 0 rgba(255, 255, 255, 0.65);
+	transition:
+		box-shadow var(--rd-dur) var(--rd-ease),
+		border-color var(--rd-dur) var(--rd-ease),
+		transform var(--rd-dur) var(--rd-ease);
+}
+.refined-section:last-child {
+	margin-bottom: 0;
+}
+.refined-section:hover {
+	box-shadow: var(--rd-shadow-md);
+	border-color: rgba(var(--rd-accent-glow), 0.18);
+	transform: translateY(-1px);
+}
+.refined-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 13px;
+	margin-bottom: 12px;
+}
+.refined-head-text {
+	flex: 1;
+	min-width: 0;
+}
+.refined-section-title {
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--rd-ink);
+	letter-spacing: -0.01em;
+	margin-bottom: 3px;
+}
+.refined-time-badge {
+	color: var(--rd-accent-ink);
+	font-weight: 600;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.refined-play {
+	flex-shrink: 0;
+	margin-top: 1px;
+	width: 36px;
+	height: 36px;
+	border-radius: 11px;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	background: var(--rd-accent-soft);
+	color: var(--rd-accent-ink);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: inset 0 0 0 1px rgba(var(--rd-accent-glow), 0.14);
+	transition:
+		background var(--rd-dur) var(--rd-ease),
+		color var(--rd-dur) var(--rd-ease),
+		transform var(--rd-dur) var(--rd-ease),
+		box-shadow var(--rd-dur) var(--rd-ease);
+}
+.refined-play:hover {
+	background: var(--rd-accent);
+	color: #fff;
+	transform: scale(1.08);
+	box-shadow: 0 8px 20px rgba(var(--rd-accent-glow), 0.42);
+}
+.refined-play:active {
+	transform: scale(0.96);
+}
+.refined-play svg {
+	width: 13px;
+	height: 13px;
+	margin-left: 1px;
+}
+.refined-para {
+	font-size: 13.5px;
+	line-height: 1.72;
+	color: var(--rd-ink-2);
+	margin: 0 0 8px;
+	max-width: 88ch;
+}
+.refined-para:last-child {
+	margin-bottom: 0;
+}
+
+/* extra depth on refined chapter cards */
+.refined-section {
+	box-shadow:
+		0 8px 24px rgba(0, 0, 0, 0.12),
+		0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+/* === UX polish: press/active + focus, for the interactive elements these
+   three panels render (kept narrow — no bare `button`/[role="button"]
+   selectors here, since those would leak globally beyond these panels) === */
+.stat-card,
+.topic-card,
+.step-item,
+.tasks-switch-btn,
+.task-check,
+.task-card,
+.refined-play {
+	transition:
+		transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		opacity 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		background-color 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		box-shadow 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		filter 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		color 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+		border-color 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.stat-card:active,
+.topic-card:active,
+.step-item:active,
+.tasks-switch-btn:active,
+.task-check:active,
+.task-card:active,
+.refined-play:active {
+	transform: scale(0.97);
+	filter: brightness(0.95);
+}
+.stat-card:focus-visible,
+.topic-card:focus-visible,
+.step-item:focus-visible,
+.tasks-switch-btn:focus-visible,
+.task-check:focus-visible,
+.task-card:focus-visible,
+.refined-play:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+
+/* T1 — active refined chapter centers under the pinned video */
+.refined-section-active {
+	scroll-margin-top: calc(var(--pinned-player-height, 0px) + 16px);
+}
+
+/* FIX 1 — smooth highlight transition + one-shot pulse on active state */
+.refined-section {
+	transition:
+		background 200ms ease,
+		transform 200ms ease,
+		box-shadow 200ms ease;
+}
+.refined-section-active {
+	animation: cap-active-pulse 420ms ease-out 1;
+}
+@keyframes cap-active-pulse {
+	0% {
+		background: rgba(37, 99, 235, 0);
+		transform: scale(0.995);
+	}
+	50% {
+		background: rgba(37, 99, 235, 0.12);
+		transform: scale(1);
+		box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
+	}
+	100% {
+		background: rgba(37, 99, 235, 0.05);
+		transform: scale(1);
+		box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.refined-section-active {
+		animation: none;
+	}
+}
+
+/* === Skeleton shimmer (Skeleton.tsx) === */
+.cap-skel {
+	background: linear-gradient(
+		90deg,
+		var(--surface-1, rgba(255, 255, 255, 0.04)) 0%,
+		var(--surface-2, rgba(255, 255, 255, 0.08)) 50%,
+		var(--surface-1, rgba(255, 255, 255, 0.04)) 100%
+	);
+	background-size: 200% 100%;
+	animation: cap-skel-shimmer 1.4s linear infinite;
+	border-radius: 8px;
+}
+@keyframes cap-skel-shimmer {
+	0% {
+		background-position: 200% 0;
+	}
+	100% {
+		background-position: -200% 0;
+	}
+}
+.cap-skel-group {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
