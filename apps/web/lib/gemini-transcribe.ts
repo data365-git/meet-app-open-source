@@ -162,6 +162,7 @@ async function runGeminiTranscription(
 	audioBytes: Uint8Array,
 	mimeType: string,
 	apiKey: string,
+	temperature = 0.1,
 ): Promise<{
 	rawText: string;
 	inputTokens: number;
@@ -243,7 +244,7 @@ async function runGeminiTranscription(
 					},
 				],
 				generationConfig: {
-					temperature: 0.1,
+					temperature,
 					maxOutputTokens: MAX_OUTPUT_TOKENS,
 					// Disable "thinking" — transcription needs no reasoning, and
 					// thinking tokens otherwise consume the whole output budget and
@@ -354,16 +355,51 @@ function stripVttHeader(vtt: string): string {
 	return vtt.replace(/^﻿?\s*WEBVTT[^\n]*\n?/, "").trim();
 }
 
+function msFrac(ms: string): number {
+	const n = Number((ms || "0").slice(0, 3).padEnd(3, "0"));
+	return Number.isNaN(n) ? 0 : n / 1000;
+}
+
+// Tolerant VTT timestamp parser. Gemini is inconsistent for short chunks and
+// emits ALL of these: "HH:MM:SS.mmm", "MM:SS.mmm", single-digit "M:SS.mmm", and
+// the malformed "MM:SS:mmm" / "HH:MM:SS:mmm" where a colon is used instead of a
+// decimal before the milliseconds (e.g. "01:04:655" = 1m 4.655s). Returns the
+// total seconds, or null if unparseable.
+function parseVttSeconds(ts: string): number | null {
+	const t = ts.trim().replace(",", ".");
+	let main = t;
+	let msPart = "0";
+	const dot = t.indexOf(".");
+	if (dot >= 0) {
+		main = t.slice(0, dot);
+		msPart = t.slice(dot + 1);
+	}
+	const parts = main.split(":").map((p) => p.trim());
+	// No decimal ms, but a trailing 3-digit (or > 59) group means a colon was
+	// mistakenly used as the ms separator — that group is milliseconds.
+	if (dot < 0 && parts.length >= 3) {
+		const last = parts[parts.length - 1] ?? "";
+		if (last.length === 3 || Number(last) > 59) {
+			msPart = last;
+			parts.pop();
+		}
+	}
+	if (parts.length === 1) {
+		const only = Number(parts[0]);
+		return Number.isNaN(only) ? null : only + msFrac(msPart);
+	}
+	if (parts.length < 2 || parts.length > 3) return null;
+	const h = parts.length === 3 ? Number(parts[0]) : 0;
+	const m = Number(parts[parts.length - 2]);
+	const s = Number(parts[parts.length - 1]);
+	if ([h, m, s].some((x) => Number.isNaN(x))) return null;
+	return h * 3600 + m * 60 + s + msFrac(msPart);
+}
+
 function shiftVttTime(ts: string, offsetSec: number): string {
-	const m = ts.trim().match(/(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})/);
-	if (!m) return ts.trim();
-	const seconds =
-		Number(m[1]) * 3600 +
-		Number(m[2]) * 60 +
-		Number(m[3]) +
-		Number((m[4] ?? "0").padEnd(3, "0")) / 1000 +
-		offsetSec;
-	return formatVttTimestamp(seconds);
+	const seconds = parseVttSeconds(ts);
+	if (seconds === null) return ts.trim();
+	return formatVttTimestamp(seconds + offsetSec);
 }
 
 // Shift every cue timestamp in a chunk's VTT by its global start offset.
@@ -405,6 +441,104 @@ function toVtt(rawText: string, durationSec: number): string {
 	return trimmed.startsWith("WEBVTT")
 		? trimmed
 		: plainTextToWebVTT(rawText, durationSec);
+}
+
+// Detect a repetition-loop response: a short token dominating the cue texts
+// (e.g. "33." repeated 147× when the model looped instead of transcribing).
+function isDegenerateRaw(rawText: string): boolean {
+	const cues = stripVttHeader(toVtt(rawText, CHUNK_SEC))
+		.split(/\n\s*\n/)
+		.map((b) =>
+			b
+				.split("\n")
+				.filter((l) => !l.includes("-->") && !/^\d+$/.test(l.trim()))
+				.join(" ")
+				.trim(),
+		)
+		.filter(Boolean);
+	if (cues.length < 5) return false;
+	const counts = new Map<string, number>();
+	for (const c of cues) {
+		const norm = normCueText(c);
+		counts.set(norm, (counts.get(norm) ?? 0) + 1);
+	}
+	let max = 0;
+	let maxNorm = "";
+	for (const [k, v] of counts) {
+		if (v > max) {
+			max = v;
+			maxNorm = k;
+		}
+	}
+	return maxNorm.length <= 12 && max / cues.length >= 0.5;
+}
+
+// Normalize cue text for repetition comparison (strip voice tags, bold markers,
+// punctuation and case).
+function normCueText(t: string): string {
+	return t
+		.replace(/<\/?v\b[^>]*>/gi, "")
+		.replace(/\*\*/g, "")
+		.replace(/[.,!?;:’'"()\s]+/g, " ")
+		.trim()
+		.toLowerCase();
+}
+
+// Rewrite a cue's "start --> end" line into canonical HH:MM:SS.mmm on both ends,
+// repairing malformed separators / short fields. Left unchanged if unparseable.
+function normalizeTsLine(tsLine: string): string {
+	const [left, right = ""] = tsLine.split("-->");
+	const leftTs = (left ?? "").trim().split(/\s+/)[0] ?? "";
+	const rightTs = right.trim().split(/\s+/)[0] ?? "";
+	const l = parseVttSeconds(leftTs);
+	const r = parseVttSeconds(rightTs);
+	if (l === null || r === null) return tsLine.trim();
+	return `${formatVttTimestamp(l)} --> ${formatVttTimestamp(r)}`;
+}
+
+// Remove Gemini repetition-loop spam (e.g. the same "33." emitted across dozens
+// of cues on an unclear/silent stretch). Drops a cue when its text repeats the
+// immediately-preceding cue, and caps how many times any short degenerate token
+// may appear across the whole transcript. Preserves the first occurrence and its
+// timestamp so real (rare) short lines still show once. Also normalizes each
+// cue's timestamp line to canonical HH:MM:SS.mmm.
+function collapseRepeatedCues(vtt: string): string {
+	const body = stripVttHeader(vtt);
+	const blocks = body
+		.split(/\n\s*\n/)
+		.map((b) => b.trim())
+		.filter(Boolean);
+	const out: string[] = [];
+	const counts = new Map<string, number>();
+	let prev = "";
+	let n = 1;
+	for (const block of blocks) {
+		const lines = block.split("\n");
+		if (lines[0] && /^\d+$/.test(lines[0].trim())) lines.shift();
+		const tsLine = lines.find((l) => l.includes("-->"));
+		if (!tsLine) continue;
+		const text = lines
+			.filter((l) => !l.includes("-->"))
+			.join(" ")
+			.trim();
+		const norm = normCueText(text);
+		if (norm) {
+			// Drop an exact repeat of the previous cue.
+			if (norm === prev) continue;
+			// Cap short degenerate tokens (<= 8 chars) to 3 total appearances.
+			if (norm.length <= 8) {
+				const c = (counts.get(norm) ?? 0) + 1;
+				counts.set(norm, c);
+				if (c > 3) {
+					prev = norm;
+					continue;
+				}
+			}
+		}
+		prev = norm;
+		out.push(`${n++}\n${normalizeTsLine(tsLine)}\n${text}`);
+	}
+	return `WEBVTT\n\n${out.join("\n\n")}\n`;
 }
 
 export async function transcribeWithGemini(
@@ -457,7 +591,9 @@ export async function transcribeWithGemini(
 		);
 		await onProgress?.(1, 1);
 		return {
-			transcriptVtt: toVtt(r.rawText, audioDurationSec || 300),
+			transcriptVtt: collapseRepeatedCues(
+				toVtt(r.rawText, audioDurationSec || 300),
+			),
 			inputTokens: r.inputTokens,
 			outputTokens: r.outputTokens,
 		};
@@ -485,8 +621,22 @@ export async function transcribeWithGemini(
 		let r: Awaited<ReturnType<typeof runGeminiTranscription>> | null = null;
 		for (let attempt = 1; attempt <= 3; attempt++) {
 			try {
-				r = await runGeminiTranscription(chunk.bytes, "audio/mpeg", apiKey);
-				break;
+				// Bump the temperature on retries to break a repetition loop (the
+				// deterministic low-temp call would otherwise re-loop identically).
+				const temp = attempt === 1 ? 0.1 : 0.6;
+				const candidate = await runGeminiTranscription(
+					chunk.bytes,
+					"audio/mpeg",
+					apiKey,
+					temp,
+				);
+				r = candidate;
+				// Accept a clean result; keep a degenerate one only as a last resort
+				// (collapseRepeatedCues will strip its spam).
+				if (!isDegenerateRaw(candidate.rawText) || attempt === 3) break;
+				console.warn(
+					`[gemini-transcribe] chunk@${chunk.startSec}s degenerate output (attempt ${attempt}/3), retrying at higher temperature`,
+				);
 			} catch (err) {
 				console.error(
 					`[gemini-transcribe] chunk@${chunk.startSec}s attempt ${attempt}/3 failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -544,7 +694,7 @@ export async function transcribeWithGemini(
 	const bodies = results.map((r) => r.body).filter(Boolean);
 
 	return {
-		transcriptVtt: mergeVttBodies(bodies),
+		transcriptVtt: collapseRepeatedCues(mergeVttBodies(bodies)),
 		inputTokens,
 		outputTokens,
 	};
