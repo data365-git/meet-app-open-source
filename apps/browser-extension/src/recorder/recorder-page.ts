@@ -28,6 +28,7 @@ import {
 	VIDEO_BITS_PER_SECOND,
 	pickMimeType,
 } from "../shared/recording-quality";
+import { newSessionId } from "../shared/recorder-session";
 
 interface RecorderSettings {
 	micEnabled: boolean;
@@ -93,6 +94,8 @@ const meetingRequiredParam = _recorderUrlParams.get("meeting") === "1";
 const meetingIdParam = _recorderUrlParams.get("meetingId") ?? undefined;
 
 interface RecordingState {
+	/** (F2) Identity of THIS recording session — see shared/recorder-session.ts. */
+	sessionId: string;
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
 	dest: MediaStreamAudioDestinationNode;
@@ -521,6 +524,10 @@ async function resolveClientAudioGap(
 // ── Start recording (called from a user gesture) ────────────────────────────
 
 async function startRecording(): Promise<void> {
+	// (F2) Minted BEFORE any await so every callback and message of this attempt
+	// carries one identity, even if a second start races this one while it is
+	// still acquiring media.
+	const mySessionId = newSessionId();
 	setIdleMsg("", false);
 	const startBtn = $("btn-start") as HTMLButtonElement | null;
 	if (startBtn) startBtn.disabled = true;
@@ -759,13 +766,33 @@ async function startRecording(): Promise<void> {
 		let pendingChunks = 0;
 		let stopRequested = false;
 
+		// (F2) Every callback below belongs to THIS session — see
+		// shared/recorder-session.ts. Reading the module-level `state` instead let a
+		// late callback from an OLD recording tear down the current one, and let an
+		// old recorder's chunks be appended to the current upload.
+		const isMine = () => state !== null && state.sessionId === mySessionId;
+		/** Release THIS recording's hardware once it no longer owns the module state. */
+		const retireOrphan = () => {
+			try {
+				if (recorder.state !== "inactive") recorder.stop();
+			} catch {}
+			for (const t of displayStream.getTracks()) t.stop();
+			if (micStream) for (const t of micStream.getTracks()) t.stop();
+			if (tabAudioStream) for (const t of tabAudioStream.getTracks()) t.stop();
+			audioCtx.close().catch(() => {});
+		};
+
 		const finishStop = () => {
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
 			if (state) {
 				cleanup(state);
 				state = null;
 			}
 			stopTimer();
-			sendMsg({ type: "RECORDER_STOPPED" });
+			sendMsg({ type: "RECORDER_STOPPED", sessionId: mySessionId });
 		};
 
 		recorder.ondataavailable = async (e) => {
@@ -776,13 +803,21 @@ async function startRecording(): Promise<void> {
 			pendingChunks++;
 			try {
 				const buffer = await e.data.arrayBuffer();
-				sendMsg({
+				// arrayBuffer() is async — the session may have been replaced while it
+				// resolved, which is exactly how a stale chunk reaches the SW.
+				if (!isMine()) {
+					retireOrphan();
+					return;
+				}
+				const reply = (await sendMsgAwait({
 					type: "RECORDER_CHUNK",
 					chunk: Array.from(new Uint8Array(buffer)),
 					index: chunkIndex++,
 					mime: recorder.mimeType,
 					ts: Date.now(),
-				});
+					sessionId: mySessionId,
+				})) as { reason?: string } | undefined;
+				if (reply?.reason === "stale-session") retireOrphan();
 			} finally {
 				pendingChunks--;
 				if (stopRequested && pendingChunks === 0) finishStop();
@@ -790,7 +825,15 @@ async function startRecording(): Promise<void> {
 		};
 
 		recorder.onerror = () => {
-			sendMsg({ type: "RECORDER_ERROR", error: "MediaRecorder error" });
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
+			sendMsg({
+				type: "RECORDER_ERROR",
+				error: "MediaRecorder error",
+				sessionId: mySessionId,
+			});
 			if (state) {
 				cleanup(state);
 				state = null;
@@ -813,7 +856,15 @@ async function startRecording(): Promise<void> {
 			};
 		}
 
-		state = { recorder, audioCtx, dest, displayStream, micStream, tabAudioStream };
+		state = {
+			sessionId: mySessionId,
+			recorder,
+			audioCtx,
+			dest,
+			displayStream,
+			micStream,
+			tabAudioStream,
+		};
 
 		// MID-RECORDING WATCHDOG (guaranteed client audio): belt-and-suspenders
 		// signals that the client's tab audio has degraded. `onended` is
@@ -855,6 +906,8 @@ async function startRecording(): Promise<void> {
 		// it only struck when upload-init was slower than the first chunk.)
 		const startResp = (await sendMsgAwait({
 			type: "RECORDER_STARTED",
+			// (F2) Registers THIS session as the owner of the upload.
+			sessionId: mySessionId,
 			mime,
 			hasVideo: displayStream.getVideoTracks().length > 0,
 			hasAudio: dest.stream.getAudioTracks().length > 0,
@@ -900,6 +953,7 @@ async function startRecording(): Promise<void> {
 		sendMsg({
 			type: "RECORDER_ERROR",
 			error: err instanceof Error ? err.message : String(err),
+			sessionId: mySessionId,
 		});
 		setIdleMsg(
 			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,
@@ -916,9 +970,15 @@ function stopRecording(): void {
 	intentionalStop = true;
 	if (state && state.recorder.state !== "inactive") {
 		state.recorder.stop();
-	} else {
+	} else if (state) {
 		stopTimer();
-		sendMsg({ type: "RECORDER_STOPPED" });
+		sendMsg({ type: "RECORDER_STOPPED", sessionId: state.sessionId });
+	} else {
+		// (F2) No session in THIS tab — nothing of ours to stop, so say nothing.
+		// Sending an unstamped stop from a leftover recorder tab (one whose own
+		// recording already errored, tab still open) would have finalized whatever
+		// recording is live elsewhere, cutting it short mid-stream.
+		stopTimer();
 	}
 }
 

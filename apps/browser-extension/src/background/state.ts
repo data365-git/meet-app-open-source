@@ -81,6 +81,15 @@ interface RecordingState {
 	pausedAt?: number;
 	// Total paused time (ms) accumulated across prior pause/resume cycles.
 	pausedAccumMs?: number;
+	// (F2) Identity of the RECORDER that owns this recording — minted by the
+	// recorder itself at start and echoed on every RECORDER_CHUNK/STOPPED/ERROR.
+	// Without it the SW appends whatever arrives to whatever upload is live, so a
+	// MediaRecorder still running from an EARLIER session writes its fragments
+	// into this one: that is what produced the 2026-07-23 unplayable recording
+	// (two fMP4 streams interleaved in a single result.mp4). Optional only for
+	// forward-compat of a state persisted by an older build; a recording that HAS
+	// one strict-drops any message that does not match, including unstamped ones.
+	recorderSessionId?: string;
 }
 
 interface UploadingState {

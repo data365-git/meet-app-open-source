@@ -34,6 +34,7 @@ import {
 	VIDEO_BITS_PER_SECOND,
 	pickMimeType,
 } from "../shared/recording-quality";
+import { newSessionId } from "../shared/recorder-session";
 
 /** Everything this module needs from the nudge UI, so the recorder itself owns
  * no DOM and stays testable. */
@@ -61,6 +62,12 @@ export interface PageAudioTap {
 }
 
 export interface InPageState {
+	/** (F2) Identity of THIS recorder session, minted at start and echoed on every
+	 * message to the SW. A content script outlives a recording (the Meet page is
+	 * not reloaded between them), so without it the SW cannot tell a chunk from
+	 * the previous session apart from a live one — that is what interleaved two
+	 * fMP4 streams into one unplayable file on 2026-07-23. */
+	sessionId: string;
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
 	dest: MediaStreamAudioDestinationNode;
@@ -270,9 +277,10 @@ export function stopInPageRecording(): void {
 	if (state && state.recorder.state !== "inactive") {
 		state.recorder.stop();
 	} else if (state) {
+		const sessionId = state.sessionId;
 		cleanup(state);
 		state = null;
-		sendMsg({ type: "RECORDER_STOPPED" });
+		sendMsg({ type: "RECORDER_STOPPED", sessionId });
 	}
 }
 
@@ -459,6 +467,7 @@ export async function startInPageRecording(
 		analyser.fftSize = 2048;
 
 		pending = {
+			sessionId: newSessionId(),
 			recorder: undefined as unknown as MediaRecorder, // set below
 			audioCtx,
 			dest,
@@ -557,10 +566,33 @@ export async function startInPageRecording(
 		let pendingChunks = 0;
 		let stopRequested = false;
 
+		// (F2) EVERY callback below belongs to THIS session. They used to read the
+		// module-level `state`, so a late callback from an OLD recorder ran
+		// cleanup(state)/state = null against whatever recording was live BY THEN —
+		// tearing down a healthy session. `mine` is captured once and compared
+		// before anything shared is touched.
+		const mine = pending;
+		const mySessionId = mine.sessionId;
+		/** True while this session is still the one the module owns. */
+		const isMine = () => state === mine;
+		/** Release THIS session's hardware even though it no longer owns the module
+		 * state — an orphan that is merely ignored keeps the screen-share/mic
+		 * indicator lit and goes on encoding forever. */
+		const retireOrphan = () => {
+			try {
+				if (mine.recorder.state !== "inactive") mine.recorder.stop();
+			} catch {}
+			cleanup(mine);
+		};
+
 		const finishStop = () => {
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
 			cleanup(state);
 			state = null;
-			sendMsg({ type: "RECORDER_STOPPED" });
+			sendMsg({ type: "RECORDER_STOPPED", sessionId: mySessionId });
 		};
 
 		recorder.ondataavailable = async (event) => {
@@ -571,13 +603,23 @@ export async function startInPageRecording(
 			pendingChunks++;
 			try {
 				const buffer = await event.data.arrayBuffer();
-				sendMsg({
+				// arrayBuffer() is async: the session may have been replaced while it
+				// resolved, which is exactly how a stale chunk reaches the SW.
+				if (!isMine()) {
+					retireOrphan();
+					return;
+				}
+				const reply = (await sendMsgAwait({
 					type: "RECORDER_CHUNK",
 					chunk: Array.from(new Uint8Array(buffer)),
 					index: chunkIndex++,
 					mime: recorder.mimeType,
 					ts: Date.now(),
-				});
+					sessionId: mySessionId,
+				})) as { reason?: string } | undefined;
+				// The SW is the authority on which session owns the upload. If it says
+				// this one is stale, stop rather than keep emitting rejected chunks.
+				if (reply?.reason === "stale-session") retireOrphan();
 			} finally {
 				pendingChunks--;
 				if (stopRequested && pendingChunks === 0) finishStop();
@@ -585,7 +627,15 @@ export async function startInPageRecording(
 		};
 
 		recorder.onerror = () => {
-			sendMsg({ type: "RECORDER_ERROR", error: "MediaRecorder error" });
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
+			sendMsg({
+				type: "RECORDER_ERROR",
+				error: "MediaRecorder error",
+				sessionId: mySessionId,
+			});
 			cleanup(state);
 			state = null;
 		};
@@ -603,6 +653,9 @@ export async function startInPageRecording(
 			mime,
 			hasVideo: displayStream.getVideoTracks().length > 0,
 			hasAudio: dest.stream.getAudioTracks().length > 0,
+			// (F2) Registers THIS session as the owner of the upload the SW is about
+			// to create; every later message must carry the same id.
+			sessionId: mySessionId,
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
@@ -676,12 +729,17 @@ export async function startInPageRecording(
 			);
 		}
 	} catch (err) {
-		cleanup(pending ?? state);
+		// (F2) Only tear down the module state if the failing attempt is still the
+		// one that owns it — a start that lost a race must clean up ITSELF, never
+		// the recording that won.
+		const failed = pending ?? state;
+		cleanup(failed);
 		pending = null;
-		state = null;
+		if (failed === state) state = null;
 		sendMsg({
 			type: "RECORDER_ERROR",
 			error: err instanceof Error ? err.message : String(err),
+			sessionId: failed?.sessionId,
 		});
 		host.note(
 			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,

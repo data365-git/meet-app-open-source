@@ -1,6 +1,63 @@
 # PLAN — 2026-07-27: stop cross-recording chunk contamination (session-id stamping + stale-recorder teardown)
 
-Status: PLAN, not yet built. Branch `qa-fixes`, extension at v0.5.4.
+Status: **v2 — REVIEWED BY BOTH FABLE AND CODEX (independent, non-authoring, different model families), both
+VERDICT = BUILD-WITH-FIXES. Their must-fixes are folded in below (§2bis). Not yet built.**
+Branch `qa-fixes`, extension at v0.5.4.
+
+## 0. What the two reviews changed (read this before §2 — §2 as originally written is INSUFFICIENT)
+
+**Both reviewers independently converged on the same two points — treat these as settled:**
+1. **The identity check must run INSIDE `enqueueRecorder`, against freshly-read state — not at the
+   `sw.ts` handler edge.** A handler-edge check is time-of-check/time-of-use: chunk A passes the edge,
+   B becomes live, then A's queued job mutates B. The codebase already documents this exact race in
+   its own R7 guard (`upload.ts:897-911`), and I verified the hole myself: `handleChunk` (`upload.ts:837`)
+   reads state and checks only `kind === "recording"` before `appendToBuffer` at `:843`.
+2. **STRICT-DROP is correct** for a message with no `sessionId` while the live recording has one.
+   Accept-if-absent re-opens the exact observed hole under a compatibility disguise. Budget for the
+   strict-drop failure mode instead: a missed send site drops ALL that path's chunks → loud, immediate,
+   test-catchable. Requires (a) every send site stamped, (b) a test that an unstamped chunk is dropped
+   and warn-logged.
+
+**Codex-only must-fixes (its model family caught what Fable's did not — the value of two families):**
+3. **Bind the id during ARMING and make registration atomic** (`sw.ts:305`, `1208-1366`). `isInProgress`
+   deliberately excludes `"arming"`, so two `RECORDER_STARTED` calls can BOTH initialize uploads —
+   one upload is orphaned and the wrong recorder can claim the session.
+4. **Define identity handling while arming, not only while recording** (`sw.ts:1396-1468`). A stale
+   `RECORDER_ERROR(A)` arriving while B is arming currently overwrites B with an error and closes its
+   offscreen document, because no live id exists yet to compare against.
+5. **Ownership must cover every async start continuation, rejection and catch** — not just the recorder
+   callbacks (`offscreen/recorder.ts:143-147,299,363-391`; `inpage-recorder.ts:427,601-620,678-685`;
+   `recorder-page.ts:816,856-903`). Otherwise an older attempt cleans up the current session, or the
+   accepted recorder becomes an unreachable orphan producing no accepted chunks.
+6. **There are 20 send sites, not 18** — my grep count in §4 was wrong. Full list:
+   `inpage-recorder.ts:275,563,575,588,602,683`; `offscreen/recorder.ts:253,265,278,364,376,385,401,419`;
+   `recorder-page.ts:768,780,793,857,901,921`.
+7. **`offscreen/recorder.ts:143-147` permits overlapping `START_CAPTURE`** while the first start is still
+   awaiting media (state is still null), so a later call can destroy or orphan the first capture.
+
+**Fable-only must-fixes:**
+8. **The cross-context orphan is NOT neutralized by the `state !== mine` check.** That check only fires in
+   a context whose module state was replaced; an orphaned offscreen document or leftover recorder tab has
+   its own intact state, so `state === mine` and it emits forever — chunks dropped, but the recorder keeps
+   running with the mic/share indicator lit. Fix: the SW's drop reply must say so
+   (`{ok:false, reason:"stale-session"}`) and each sender must stop its recorder + release tracks on that
+   reply. Note the chunk `sendMsg` calls are currently fire-and-forget — the response must be read.
+9. **`RECORDER_ERROR(stale)` needs its own regression test** — it is the worst of the three: `sw.ts:1399-1419`
+   flips state, runs a salvage `finalizeUpload`, and calls `closeOffscreenDocument()`, which would tear down
+   a LIVE offscreen recording.
+10. **Blast radius omits `src/background/state.ts`** — `recorderSessionId` is a new persisted field, plus the
+    shared message type definitions. "Data: none" was wrong.
+
+**Paths BOTH reviewers checked and cleared (recorded so nobody re-audits):** `sw.ts:1383` is the only caller
+of `handleChunk`; `retryPendingUploads` / pending-buffer restore are keyed by `videoId`/`uploadId`;
+`inMemoryBuffer` is reset at `initializeUpload` (`upload.ts:613`); pause/resume reuses the one MediaRecorder
+per session, so one id per session is sound.
+
+**Test list grows to:** interleaved two-session chunks (only live session's bytes land) · stale STOPPED does
+not finalize · stale ERROR does not tear down a live recording · unstamped chunk against a stamped recording
+is dropped + warn-logged · overlapping starts (both during arming and during an awaited start continuation) ·
+a delayed `arrayBuffer()` resolving after the session was replaced · after the stale-session reply, the loser
+recorder's tracks are actually released.
 Bug evidence + root cause: [`docs/HANDOFF_2026-07-23_broken-recording.md`](../HANDOFF_2026-07-23_broken-recording.md).
 
 ## 1. The defect, restated

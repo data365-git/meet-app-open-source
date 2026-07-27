@@ -27,6 +27,7 @@ import {
 	VIDEO_BITS_PER_SECOND,
 	pickMimeType,
 } from "../shared/recording-quality";
+import { newSessionId } from "../shared/recorder-session";
 
 interface StartCaptureMsg {
 	type: "START_CAPTURE";
@@ -54,6 +55,8 @@ type InboundMsg =
 	| ResumeCaptureMsg;
 
 interface RecordingState {
+	/** (F2) Identity of THIS capture session — see shared/recorder-session.ts. */
+	sessionId: string;
 	recorder: MediaRecorder;
 	audioCtx: AudioContext;
 	displayStream: MediaStream;
@@ -145,6 +148,11 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		cleanup(state);
 		state = null;
 	}
+	// (F2) Minted BEFORE any await so every callback and message below belongs to
+	// one identifiable session, even if a second startCapture arrives while this
+	// one is still acquiring media (state is null throughout that window, so the
+	// guard above cannot see the overlap).
+	const mySessionId = newSessionId();
 
 	try {
 		if (!msg.streamId) throw new Error("streamId required for tab capture");
@@ -245,12 +253,31 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		let pendingChunks = 0;
 		let stopRequested = false;
 
+		// (F2) See shared/recorder-session.ts. These callbacks used to act on the
+		// module-level `state` whatever it had become, so a late callback from an
+		// OLD capture could tear down the CURRENT one and its chunks could be
+		// appended to the current upload. Both are keyed off this session's id now.
+		const isMine = () => state !== null && state.sessionId === mySessionId;
+		/** Release THIS capture's hardware when it no longer owns the module state. */
+		const retireOrphan = () => {
+			try {
+				if (recorder.state !== "inactive") recorder.stop();
+			} catch {}
+			for (const t of displayStream.getTracks()) t.stop();
+			if (micStream) for (const t of micStream.getTracks()) t.stop();
+			audioCtx.close().catch(() => {});
+		};
+
 		const finishStop = () => {
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
 			if (state) {
 				cleanup(state);
 				state = null;
 			}
-			sendMsg({ type: "RECORDER_STOPPED" });
+			sendMsg({ type: "RECORDER_STOPPED", sessionId: mySessionId });
 		};
 
 		recorder.ondataavailable = async (e) => {
@@ -261,13 +288,21 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			pendingChunks++;
 			try {
 				const buffer = await e.data.arrayBuffer();
-				sendMsg({
+				// arrayBuffer() is async — the capture may have been replaced while it
+				// resolved, which is precisely how a stale chunk reaches the SW.
+				if (!isMine()) {
+					retireOrphan();
+					return;
+				}
+				const reply = (await sendMsgAwait({
 					type: "RECORDER_CHUNK",
 					chunk: Array.from(new Uint8Array(buffer)),
 					index: chunkIndex++,
 					mime: recorder.mimeType,
 					ts: Date.now(),
-				});
+					sessionId: mySessionId,
+				})) as { reason?: string } | undefined;
+				if (reply?.reason === "stale-session") retireOrphan();
 			} finally {
 				pendingChunks--;
 				if (stopRequested && pendingChunks === 0) finishStop();
@@ -275,7 +310,15 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		};
 
 		recorder.onerror = () => {
-			sendMsg({ type: "RECORDER_ERROR", error: "MediaRecorder error" });
+			if (!isMine()) {
+				retireOrphan();
+				return;
+			}
+			sendMsg({
+				type: "RECORDER_ERROR",
+				error: "MediaRecorder error",
+				sessionId: mySessionId,
+			});
 			if (state) {
 				cleanup(state);
 				state = null;
@@ -296,7 +339,14 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			};
 		}
 
-		state = { recorder, audioCtx, displayStream, micStream, chunkIndex };
+		state = {
+			sessionId: mySessionId,
+			recorder,
+			audioCtx,
+			displayStream,
+			micStream,
+			chunkIndex,
+		};
 
 		// (H1) MID-RECORDING WATCHDOG. Client-audio loss after start (typically the
 		// user muting the Meet tab from Chrome's tab strip) was completely
@@ -365,16 +415,23 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			mime,
 			hasVideo: displayStream.getVideoTracks().length > 0,
 			hasAudio: dest.stream.getAudioTracks().length > 0,
+			// (F2) Registers THIS session as the owner of the upload.
+			sessionId: mySessionId,
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
-			if (state) {
+			// (F2) Only tear down the module state if it is still OURS. Two
+			// overlapping START_CAPTUREs are possible because `state` stays null
+			// while media is being acquired, so the loser must never clean up the
+			// winner's capture — that would orphan a recording the SW believes live.
+			if (state && state.sessionId === mySessionId) {
 				cleanup(state);
 				state = null;
 			}
 			sendMsg({
 				type: "RECORDER_ERROR",
 				error: startResp?.error ?? "Couldn't start the upload session.",
+				sessionId: mySessionId,
 			});
 			return;
 		}
@@ -384,8 +441,9 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		sendMsg({
 			type: "RECORDER_ERROR",
 			error: err instanceof Error ? err.message : String(err),
+			sessionId: mySessionId,
 		});
-		if (state) {
+		if (state && state.sessionId === mySessionId) {
 			cleanup(state);
 			state = null;
 		}
@@ -414,9 +472,10 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
 		if (state.recorder.state !== "inactive") {
 			state.recorder.stop();
 		} else {
+			const sessionId = state.sessionId;
 			cleanup(state);
 			state = null;
-			sendMsg({ type: "RECORDER_STOPPED" });
+			sendMsg({ type: "RECORDER_STOPPED", sessionId });
 		}
 		sendResponse({ ok: true });
 		return;

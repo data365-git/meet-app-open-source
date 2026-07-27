@@ -3008,3 +3008,148 @@ describe("In-page path — declining the client-audio confirm releases the lock"
 		expect((await getState()).kind).toBe("idle");
 	});
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// F2 — cross-session contamination: a recorder from an EARLIER session must not
+// write into the CURRENT recording. This is the defect that produced the owner's
+// unplayable 2026-07-23 recording: result.mp4 came back as two fMP4 streams
+// interleaved (sequences 19..31 woven with 1..13) because RECORDER_CHUNK carries
+// no recording identity, so the SW appends whatever arrives to whatever upload is
+// live. See docs/HANDOFF_2026-07-23_broken-recording.md.
+// ────────────────────────────────────────────────────────────────────────────
+describe("F2 — a stale recorder's messages must not touch the live recording", () => {
+	/** The CURRENT recording, started by recorder session B. */
+	function liveRecordingOwnedBy(sessionId: string) {
+		return {
+			...liveMeetingRecording(),
+			videoId: "vid-current",
+			uploadId: "upload-current",
+			recorderSessionId: sessionId,
+		};
+	}
+
+	it("drops a chunk stamped with a DIFFERENT session than the live recording", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		const before = await getState();
+		const bytesBefore = before.kind === "recording" ? before.totalBytes : -1;
+
+		// The previous session's MediaRecorder is still alive and emits.
+		const STALE = 4096;
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(STALE)),
+			index: 0,
+			mime: "video/webm",
+			sessionId: "sess-A",
+		});
+
+		const after = await getState();
+		expect(after.kind).toBe("recording");
+		if (after.kind === "recording") {
+			expect(after.videoId).toBe("vid-current");
+			// The stale bytes must NOT have been appended.
+			expect(after.totalBytes).toBe(bytesBefore);
+		}
+	});
+
+	it("still accepts a chunk stamped with the LIVE session", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		const LIVE = 2048;
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(LIVE)),
+			index: 0,
+			mime: "video/webm",
+			sessionId: "sess-B",
+		});
+
+		const after = await getState();
+		if (after.kind === "recording") {
+			expect(after.totalBytes).toBe(MIN_PART_SIZE + LIVE);
+		} else {
+			throw new Error(`expected recording, got ${after.kind}`);
+		}
+	});
+
+	it("drops an UNSTAMPED chunk while the live recording has a session id (strict-drop)", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		await sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(4096)),
+			index: 0,
+			mime: "video/webm",
+		});
+
+		const after = await getState();
+		if (after.kind === "recording") {
+			expect(after.totalBytes).toBe(MIN_PART_SIZE);
+		} else {
+			throw new Error(`expected recording, got ${after.kind}`);
+		}
+	});
+
+	it("does NOT finalize the live recording on a stale RECORDER_STOPPED", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		await sendMessage(captured, {
+			type: "RECORDER_STOPPED",
+			sessionId: "sess-A",
+		});
+
+		// Still recording — the old recorder's stop must not end the new one.
+		expect((await getState()).kind).toBe("recording");
+	});
+
+	// Fable's review falsified the first draft's leniency: internal callers
+	// (tabs.onRemoved, crash resume) call finalizeRecording() DIRECTLY and never
+	// reach this message case, so honouring an UNSTAMPED message-borne stop
+	// protected nobody — while a leftover recorder tab whose own state had been
+	// cleared could send one and cut the live recording short.
+	it("does NOT finalize the live recording on an UNSTAMPED RECORDER_STOPPED", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		await sendMessage(captured, { type: "RECORDER_STOPPED" });
+
+		expect((await getState()).kind).toBe("recording");
+	});
+
+	it("does NOT tear down the live recording on an UNSTAMPED RECORDER_ERROR", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		await sendMessage(captured, {
+			type: "RECORDER_ERROR",
+			error: "MediaRecorder error",
+		});
+
+		expect((await getState()).kind).toBe("recording");
+	});
+
+	it("does NOT tear down the live recording on a stale RECORDER_ERROR", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState(liveRecordingOwnedBy("sess-B"));
+
+		await sendMessage(captured, {
+			type: "RECORDER_ERROR",
+			error: "MediaRecorder error",
+			sessionId: "sess-A",
+		});
+
+		expect((await getState()).kind).toBe("recording");
+	});
+});

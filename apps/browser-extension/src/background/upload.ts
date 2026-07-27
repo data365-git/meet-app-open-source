@@ -829,13 +829,43 @@ export async function finishLocalDiscardTraces(videoId: string): Promise<void> {
 	await purgeQueuedWorkForVideo(videoId);
 }
 
+/** (F2) True when `expected` does not own the recording described by `state`.
+ *
+ * The comparison MUST be made against the very state object the caller then acts
+ * on — never against a separate earlier read. CANCEL and RECORDER_STARTED write
+ * state OUTSIDE enqueueRecorder (see the R7 note further down), so a check made
+ * before the job's own getState() is time-of-check/time-of-use: session A passes,
+ * B becomes live, and A's bytes land in B. That is exactly how the 2026-07-23
+ * recording ended up as two interleaved fMP4 streams.
+ *
+ * STRICT: once a recording carries an id, an UNSTAMPED message is a mismatch too.
+ * Accept-if-absent would re-open the same hole for any sender left unstamped, and
+ * the failure mode of strictness is loud (that path's chunks all drop, tests catch
+ * it) while the failure mode of leniency is silent corruption discovered only when
+ * an owner's recording will not play.
+ */
+export function isForeignRecorderSession(
+	live: { recorderSessionId?: string },
+	expected: string | undefined,
+): boolean {
+	if (!live.recorderSessionId) return false; // pre-F2 state: nothing to compare
+	return expected !== live.recorderSessionId;
+}
+
 export async function handleChunk(
 	chunk: ArrayBuffer,
 	_index: number,
 	_mime: string,
-): Promise<void> {
+	expectedSessionId?: string,
+): Promise<"accepted" | "stale"> {
 	const state = await getState();
-	if (state.kind !== "recording") return;
+	if (state.kind !== "recording") return "stale";
+	if (isForeignRecorderSession(state, expectedSessionId)) {
+		console.warn(
+			`[upload] dropped a chunk from a stale recorder session (${expectedSessionId ?? "unstamped"}); live=${state.recorderSessionId}`,
+		);
+		return "stale";
+	}
 
 	await restorePendingBufferIfNeeded(state.uploadId);
 
@@ -855,8 +885,21 @@ export async function handleChunk(
 
 	if (fullParts.length === 0) {
 		await maybePersistPendingBuffer(state.uploadId);
-		await setState({ ...state, totalBytes: newTotalBytes });
-		return;
+		// (R7/F2) Re-read before writing, exactly as the part-upload loop below
+		// does. `state` was read before two awaits, and CANCEL/RECORDER_STARTED
+		// write outside this queue — spreading a stale snapshot here would
+		// RESURRECT a finished recording (id and all) over the live one, after
+		// which the live recorder's own chunks would strict-drop as foreign.
+		const freshState = await getState();
+		if (
+			freshState.kind !== "recording" ||
+			freshState.videoId !== state.videoId ||
+			freshState.uploadId !== state.uploadId
+		) {
+			return "stale";
+		}
+		await setState({ ...freshState, totalBytes: newTotalBytes });
+		return "accepted";
 	}
 
 	inMemoryBuffer = remainder;
@@ -907,7 +950,7 @@ export async function handleChunk(
 				freshState.videoId !== state.videoId ||
 				freshState.uploadId !== state.uploadId
 			) {
-				return;
+				return "accepted";
 			}
 
 			await setState({
@@ -946,6 +989,7 @@ export async function handleChunk(
 
 		partNumber += 1;
 	}
+	return "accepted";
 }
 
 export async function finalizeUpload(

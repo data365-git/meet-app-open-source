@@ -12,6 +12,7 @@ import {
 	handleChunk,
 	hasPendingDiscard,
 	initializeUpload,
+	isForeignRecorderSession,
 	isRetryAlarm,
 	resumeInterruptedFinishing,
 	retryPendingUploads,
@@ -459,10 +460,38 @@ function enqueueRecorder<T>(fn: () => Promise<T>): Promise<T> {
 	return run;
 }
 
-/** Shared finalization logic called from RECORDER_STOPPED and the tabs.onRemoved handler. */
-async function finalizeRecording(): Promise<void> {
+/** (F2) Told to a recorder whose messages no longer own the live recording, so it
+ * can stop itself instead of running on invisibly — an orphan that is merely
+ * ignored keeps the mic/screen-share indicator lit and burns battery forever. */
+const STALE_SESSION_REPLY = { ok: false, reason: "stale-session" as const };
+
+/** Shared finalization logic called from RECORDER_STOPPED and the tabs.onRemoved handler.
+ *
+ * `expectedSessionId` is the recorder session claiming the stop. A stop from an
+ * EARLIER session must not finalize the recording that is live now; the check is
+ * made against this function's own state read for the reason given in
+ * isForeignRecorderSession. Internal callers (tabs.onRemoved, crash resume) pass
+ * nothing and are always honoured — they act on behalf of the live recording. */
+async function finalizeRecording(
+	expectedSessionId?: string,
+	fromMessage = false,
+): Promise<"finalized" | "stale"> {
 	const state = await getState();
-	if (state.kind !== "recording") return;
+	if (state.kind !== "recording") return "stale";
+	// (F2) A stop that arrived as a MESSAGE must prove it owns this recording —
+	// including when it carries NO id at all. An earlier draft only checked when an
+	// id was present, on the theory that internal callers need the lenient branch;
+	// an independent review falsified that: tabs.onRemoved and the crash-resume
+	// path call finalizeRecording() DIRECTLY (sw.ts 681/1042/1908/1926/1964) and
+	// never touch the message case, so leniency protected nobody and left a real
+	// hole — a stale recorder tab whose own state had already been cleared could
+	// send an unstamped stop and cut the CURRENT recording short mid-stream.
+	if (fromMessage && isForeignRecorderSession(state, expectedSessionId)) {
+		console.warn(
+			`[sw] ignored RECORDER_STOPPED from a stale recorder session (${expectedSessionId}); live=${state.recorderSessionId}`,
+		);
+		return "stale";
+	}
 	const videoId = state.videoId;
 	const uploadId = state.uploadId;
 	const parts = state.parts;
@@ -492,6 +521,7 @@ async function finalizeRecording(): Promise<void> {
 	updateBadge(nextState);
 	await closeOffscreenDocument().catch(() => {});
 	await finalizeUpload(durationInSecs);
+	return "finalized";
 }
 
 async function handleMessage(
@@ -1362,6 +1392,11 @@ async function handleMessage(
 				contentRecorderTabId,
 				sourceTabId,
 				meetingRequired,
+				// (F2) The recorder mints this and echoes it on every later message;
+				// anything that does not match is a leftover from an EARLIER session
+				// and must never touch this upload. Absent only when an older,
+				// unstamped build is the sender.
+				recorderSessionId: getString(msg, "sessionId"),
 			};
 			await setState(nextState);
 			// A new recording starts clean: no stop is "in flight" yet, and any
@@ -1378,31 +1413,59 @@ async function handleMessage(
 			const raw = msg.chunk as number[] | undefined;
 			const index = getNumber(msg, "index") ?? 0;
 			const mime = getString(msg, "mime") ?? "video/webm";
+			const sessionId = getString(msg, "sessionId");
 			if (raw && Array.isArray(raw) && raw.length > 0) {
-				await enqueueRecorder(() =>
-					handleChunk(new Uint8Array(raw).buffer, index, mime),
+				// (F2) The ownership check lives INSIDE handleChunk, against the very
+				// state it then appends to — checking out here would be
+				// time-of-check/time-of-use, because CANCEL and RECORDER_STARTED write
+				// state outside this queue (see upload.ts R7).
+				const outcome = await enqueueRecorder(() =>
+					handleChunk(new Uint8Array(raw).buffer, index, mime, sessionId),
 				);
+				if (outcome === "stale") return STALE_SESSION_REPLY;
 			}
 			return { ok: true };
 		}
 
 		// ── Offscreen: recorder stopped ───────────────────────────────────
 		case "RECORDER_STOPPED": {
-			await enqueueRecorder(() => finalizeRecording());
+			const stopped = await enqueueRecorder(() =>
+				finalizeRecording(getString(msg, "sessionId"), true),
+			);
+			if (stopped === "stale") return STALE_SESSION_REPLY;
 			return { ok: true };
 		}
 
 		// ── Offscreen: recorder error ─────────────────────────────────────
 		case "RECORDER_ERROR": {
 			const error = getString(msg, "error") ?? "Unknown recorder error";
+			const errorSessionId = getString(msg, "sessionId");
 
-			await enqueueRecorder(async () => {
+			const errOutcome = await enqueueRecorder(async () => {
 				// (P1.1 / M2) Route the WHOLE handler through enqueueRecorder: this
 				// mutates state and (via finalizeUpload) the retry queue, and
 				// handleChunk's loop bails on kind !== "recording" mid-part-upload
 				// — an un-serialized error write here could drop parts that were
 				// still being uploaded.
 				const stateBefore = await getState();
+				// (F2) A stale recorder's error is the most destructive of the three
+				// stray messages: below it flips state to "error", runs a salvage
+				// finalizeUpload and closes the offscreen document — i.e. it would
+				// tear down a recording that is alive and well. Checked against this
+				// job's own state read, inside the queue.
+				// Same strictness as RECORDER_STOPPED above, for the same falsified
+				// reason: an UNSTAMPED error message counts as foreign once the live
+				// recording carries an id. Internal error paths do not come through
+				// here, so nothing legitimate is refused.
+				if (
+					stateBefore.kind === "recording" &&
+					isForeignRecorderSession(stateBefore, errorSessionId)
+				) {
+					console.warn(
+						`[sw] ignored RECORDER_ERROR from a stale recorder session (${errorSessionId}); live=${stateBefore.recorderSessionId}`,
+					);
+					return "stale" as const;
+				}
 				const wasRecording = stateBefore.kind === "recording";
 				const previousVideoId = wasRecording
 					? stateBefore.videoId
@@ -1477,6 +1540,7 @@ async function handleMessage(
 				});
 			});
 
+			if (errOutcome === "stale") return STALE_SESSION_REPLY;
 			return { ok: true };
 		}
 
