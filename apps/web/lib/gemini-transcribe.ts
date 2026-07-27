@@ -656,6 +656,7 @@ export async function transcribeWithGemini(
 	// Transcribe one chunk with retry. A single transient "fetch failed" / rate
 	// limit shouldn't discard the segment; a permanently-failed one degrades to
 	// a small placeholder so the rest of the transcript survives.
+	const MAX_CHUNK_ATTEMPTS = 5;
 	const transcribeChunk = async (chunk: {
 		bytes: Uint8Array;
 		startSec: number;
@@ -664,46 +665,70 @@ export async function transcribeWithGemini(
 			CHUNK_SEC,
 			effectiveDuration - chunk.startSec,
 		);
-		let r: Awaited<ReturnType<typeof runGeminiTranscription>> | null = null;
-		for (let attempt = 1; attempt <= 3; attempt++) {
-			try {
-				// Bump the temperature on retries to break a repetition loop (the
-				// deterministic low-temp call would otherwise re-loop identically).
-				const temp = attempt === 1 ? 0.1 : 0.6;
-				const candidate = await runGeminiTranscription(
-					chunk.bytes,
-					"audio/mpeg",
-					apiKey,
-					temp,
-				);
-				r = candidate;
-				// Accept a clean result; keep a degenerate one only as a last resort
-				// (collapseRepeatedCues will strip its spam).
-				if (!isDegenerateRaw(candidate.rawText) || attempt === 3) break;
-				console.warn(
-					`[gemini-transcribe] chunk@${chunk.startSec}s degenerate output (attempt ${attempt}/3), retrying at higher temperature`,
-				);
-			} catch (err) {
-				console.error(
-					`[gemini-transcribe] chunk@${chunk.startSec}s attempt ${attempt}/3 failed: ${err instanceof Error ? err.message : String(err)}`,
-				);
-				if (attempt < 3) {
-					await new Promise((res) => setTimeout(res, 2000 * attempt));
+		// Outer guard: a chunk must NEVER throw. A thrown chunk would reject the
+		// batch's Promise.all and abort the entire loop mid-way (stopping
+		// transcription after N chunks). On any unexpected error we fall through to
+		// a placeholder so the remaining chunks still run.
+		try {
+			let r: Awaited<ReturnType<typeof runGeminiTranscription>> | null = null;
+			for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt++) {
+				try {
+					// Bump the temperature on retries to break a repetition loop (the
+					// deterministic low-temp call would otherwise re-loop identically).
+					const temp = attempt === 1 ? 0.1 : 0.6;
+					const candidate = await runGeminiTranscription(
+						chunk.bytes,
+						"audio/mpeg",
+						apiKey,
+						temp,
+					);
+					r = candidate;
+					// Accept a clean result; keep a degenerate one only as a last resort
+					// (collapseRepeatedCues will strip its spam).
+					if (
+						!isDegenerateRaw(candidate.rawText) ||
+						attempt === MAX_CHUNK_ATTEMPTS
+					)
+						break;
+					console.warn(
+						`[gemini-transcribe] chunk@${chunk.startSec}s degenerate output (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS}), retrying at higher temperature`,
+					);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					const isQuota =
+						/quota|rate.?limit|429|RESOURCE_EXHAUSTED|high demand|overloaded|503|500/i.test(
+							msg,
+						);
+					console.error(
+						`[gemini-transcribe] chunk@${chunk.startSec}s attempt ${attempt}/${MAX_CHUNK_ATTEMPTS} failed${isQuota ? " (quota/rate-limit)" : ""}: ${msg}`,
+					);
+					if (attempt < MAX_CHUNK_ATTEMPTS) {
+						// Rate/quota limits need a longer wait for the per-minute window
+						// to reset — otherwise every later chunk fails in a burst and the
+						// tail of a long audio comes back empty.
+						const backoff = isQuota ? 20000 * attempt : 2500 * attempt;
+						await new Promise((res) => setTimeout(res, backoff));
+					}
 				}
 			}
-		}
-		if (r) {
-			console.log(
-				`[gemini-transcribe] chunk@${chunk.startSec}s finishReason=${r.finishReason} in=${r.inputTokens} out=${r.outputTokens} chars=${r.rawText.length}`,
+			if (r) {
+				console.log(
+					`[gemini-transcribe] chunk@${chunk.startSec}s finishReason=${r.finishReason} in=${r.inputTokens} out=${r.outputTokens} chars=${r.rawText.length}`,
+				);
+				const chunkVtt = toVtt(r.rawText, chunkDuration);
+				return {
+					startSec: chunk.startSec,
+					body: stripVttHeader(offsetVtt(chunkVtt, chunk.startSec)),
+					ok: true,
+					inputTokens: r.inputTokens,
+					outputTokens: r.outputTokens,
+				};
+			}
+		} catch (unexpected) {
+			console.error(
+				`[gemini-transcribe] chunk@${chunk.startSec}s unexpected error, using placeholder:`,
+				unexpected,
 			);
-			const chunkVtt = toVtt(r.rawText, chunkDuration);
-			return {
-				startSec: chunk.startSec,
-				body: stripVttHeader(offsetVtt(chunkVtt, chunk.startSec)),
-				ok: true,
-				inputTokens: r.inputTokens,
-				outputTokens: r.outputTokens,
-			};
 		}
 		const start = formatVttTimestamp(chunk.startSec);
 		const end = formatVttTimestamp(chunk.startSec + 1);

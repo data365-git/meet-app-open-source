@@ -458,8 +458,16 @@ async function transcribeAudio(
 					}
 
 					// Cooperative cancellation checkpoint: if the owner clicked
-					// "Bekor qilish", stop making further Gemini calls.
-					if (await isCancelRequested(context.videoId)) {
+					// "Bekor qilish", stop making further Gemini calls. A transient DB
+					// error while checking must NOT abort transcription — only a
+					// confirmed cancellation stops the run.
+					let cancelled = false;
+					try {
+						cancelled = await isCancelRequested(context.videoId);
+					} catch (err) {
+						console.error("[transcribe] cancel-check failed (ignoring):", err);
+					}
+					if (cancelled) {
 						throw new TranscriptionCancelledError();
 					}
 				},
