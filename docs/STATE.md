@@ -16,6 +16,15 @@ One-paragraph version: the upload SUCCEEDS (22 MB really is in R2), but `result.
 
 **▶ NEXT STEP:** write the regression test FIRST (feed the SW an interleaved two-id chunk stream, assert only the live id's bytes land — must go RED), then stamp all three senders + the SW handlers with the recording id. Blast radius and the exact line list are in the handoff §6.
 
+### 🌙 2026-07-27 night — FIX IN PROGRESS (owner asleep, authorized "muammo bo'lmasin, fablega/codexga tekshirtir")
+- **Handoff evidence re-verified independently before trusting it** (it was 4 days old): `sw.ts:1377` (CHUNK) and `:1390` (STOPPED) really do no identity check; all three senders really post only `{index, mime, ts}`; `sw.ts:1248` really blocks only a second `RECORDER_STARTED` *registration*. Confirmed, not assumed.
+- **Handoff work COMMITTED (`e1ec42b`)** — it had sat UNTRACKED for 4 days ("git is the backup" was not holding for the single most load-bearing analysis in the project).
+- **SECOND defect found while tracing, NOT in the handoff — must ship in the same change:** in all three senders the `finishStop`/`ondataavailable`/`onerror` closures read the **module-level mutable `state`** instead of their own session (`inpage-recorder.ts:560-585`, same shape in `offscreen/recorder.ts:248-275`, `recorder-page.ts:762-790`). A late `onstop` from an OLD recorder therefore runs `cleanup(state)`/`state = null` against the **CURRENT** recording. SW-side id filtering cannot fix this — it is client-side state. An id-stamp alone would leave the stale recorder running (mic/share indicator lit, chunks rejected forever).
+- **PLAN written:** [`docs/plans/2026-07-27-recorder-session-id-fix.md`](plans/2026-07-27-recorder-session-id-fix.md) — session-id on all 4 message types + SW drops-and-logs mismatches, PLUS client-side ownership checks and explicit orphan teardown. Regression test FIRST (interleaved two-session chunk stream → only the live session's bytes land). Blast radius mapped by grep: **18 send sites** across 3 senders, 4 SW handlers, 5 test files. Open question in the plan: strict-drop vs accept an UNSTAMPED message while the live recording has an id.
+- **Plan under INDEPENDENT review by BOTH Fable and Codex** (owner un-retired Codex for today: "codex bor faqat bugun undan ham foydalan" — two different model families = uncorrelated blind spots, which was the documented value of Codex). Build starts only after their verdicts are folded in.
+- **NOT built yet. Nothing deployed. Deploy stays owner-gated** — never at night, and the extension needs v0.5.4 → v0.5.5 + repackaged zips.
+- Deliberately NOT bundled: the misleading `upload.ts:1017` "Recording was too short" copy (it measures durable BYTES) — real user-facing lie, separate lower-risk change.
+
 **⛔ WAITING ON THE OWNER (asked 2026-07-23, unanswered):** may I repair the stored file — rebuild `result.mp4` from the good fragments so the existing share link plays? It overwrites his own data, so it does not proceed without his word; keep the original as `result.broken.mp4` first.
 
 ---
