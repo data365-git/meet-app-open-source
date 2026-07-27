@@ -3,7 +3,23 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-22 pm — prepared for /clear; read THIS first)
+## ▶▶ RESUME HERE (2026-07-23 — NEW BLOCKER found; read this, then the handoff doc)
+
+**The owner installed v0.5.4 and recorded — and the recording came back BROKEN. Root cause is found and proven; the fix is designed but NOT written.**
+Full evidence + reproduction + the exact fix plan: **[`docs/HANDOFF_2026-07-23_broken-recording.md`](HANDOFF_2026-07-23_broken-recording.md)** — read it before touching anything.
+
+One-paragraph version: the upload SUCCEEDS (22 MB really is in R2), but `result.mp4` is **two fMP4 streams interleaved** — fragment sequences `19…31` and `1…13` alternating, with the single `ftyp`+`moov` sitting 532 KB into the file instead of at the front. A browser cannot parse it (`MediaError.code 4`), so the share page shows "Could not load a playable video source" over a cap that otherwise looks normal (duration 1:23). The extension's other symptom — the modal **"Recording was too short — no video was captured"** — is the same failure wearing a misleading label (`upload.ts:1017` measures durable BYTES but the copy says duration).
+
+**Root cause (confirmed in code):** `RECORDER_CHUNK` at [`sw.ts:1377`](../apps/browser-extension/src/background/sw.ts) carries **no recording/upload/session id** — `index` restarts at 0 per recorder — so the SW appends whatever arrives to whatever upload is live. A MediaRecorder still running from an EARLIER session (its media timeline is ~7.6 min in) wrote its fragments straight into the new recording. The `sw.ts:1248` guard only refuses a second `RECORDER_STARTED`; it does nothing about an already-running recorder's chunks. `RECORDER_STOPPED` has the same hole.
+
+**Good news, proven not assumed:** the owner's actual recording is intact. Rebuilding `init + frags 1…13` from the same bytes yields a **playable 75.5 s / 1920×1080** file.
+
+**▶ NEXT STEP:** write the regression test FIRST (feed the SW an interleaved two-id chunk stream, assert only the live id's bytes land — must go RED), then stamp all three senders + the SW handlers with the recording id. Blast radius and the exact line list are in the handoff §6.
+
+**⛔ WAITING ON THE OWNER (asked 2026-07-23, unanswered):** may I repair the stored file — rebuild `result.mp4` from the good fragments so the existing share link plays? It overwrites his own data, so it does not proceed without his word; keep the original as `result.broken.mp4` first.
+
+---
+## RESUME (2026-07-22 pm — previous session; superseded above but still accurate for what shipped)
 **GOAL:** finish Ustoz + hand to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless + AI results good + no money waste, confirmed by the owner's real 2-person Meet test.
 
 **✅ DONE + DEPLOYED + LIVE-VERIFIED this session (prod = `518cbd5`, `/api/health` ok):**
@@ -17,7 +33,8 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 **▶ NEXT STEP (a fresh session starts here):** deploy is DONE + verified (above) — the ball is now with the **owner**: install v0.5.4 and run the real 2-person Meet test (OWNER TODO below). That fresh LOUD recording is the single gate that unblocks the last machine-doable phases: **Flow T timestamp** (free path, ~10s→target) + **Flow N model-eval**, each run ONCE within the **$2** budget, + the fresh-recording-persistence check (Fable's E6b condition). Nothing more a machine can do until that recording exists. (RUNBOOK §3a to re-check/re-trigger; deployment `d129io6v6b64q8yalv93nn1r`.)
 
-**⛔ OWNER TODO (the ONE physical gate, ~10 min):** install v0.5.4 (data365.duckdns.org/dashboard/extension → download → chrome://extensions → remove old → Load unpacked → must read **0.5.4**) → real 2-person Meet → **"Record now"** → **Entire Screen + tick Share system audio** → talk 2 min → Stop → **record AGAIN on the same call** → BOTH recordings under Meetings must contain the other person's voice; the 2nd must NOT show "audio not captured". If wrong → tell me. This fresh LOUD recording ALSO unblocks: free timestamp (Flow T) + model eval (Flow N) within the **$2** budget + the reconcile-persistence check.
+**⛔ OWNER TODO — PARTLY DONE 2026-07-23 (since 2026-07-22), now BLOCKED BY THE CORRUPTION BUG above.** He installed v0.5.4 and recorded; the recording came back unplayable, so the 2-person Meet verdict could not be reached. Do NOT re-ask him for this test until the chunk-id fix ships — a re-test on the broken build would fail for a reason that has nothing to do with what it is meant to prove. Original wording kept below for the exact steps:
+**(original) install v0.5.4 (data365.duckdns.org/dashboard/extension → download → chrome://extensions → remove old → Load unpacked → must read **0.5.4**) → real 2-person Meet → **"Record now"** → **Entire Screen + tick Share system audio** → talk 2 min → Stop → **record AGAIN on the same call** → BOTH recordings under Meetings must contain the other person's voice; the 2nd must NOT show "audio not captured". If wrong → tell me. This fresh LOUD recording ALSO unblocks: free timestamp (Flow T) + model eval (Flow N) within the **$2** budget + the reconcile-persistence check.
 
 **🌙 2026-07-22 night (autonomous, owner resting — "do all useful machine-work, no risky midnight deploy"):**
 - ✅ **`docs/OWNER_QA_SCRIPT.md` refreshed for v0.5.4** — version 0.5.0→0.5.4, exact English UI strings the owner will now see (extension is English-only), and a NEW ⭐⭐ step 2 that tests the exact bug fixed this session: record, stop, **record AGAIN on the same call**, both must carry the remote voice + the 2nd must NOT show "audio wasn't captured". This is the frictionless script for tomorrow's gating test.
