@@ -1,5 +1,6 @@
 "use client";
 
+import { Clock, LayoutGrid, ListChecks, Users } from "lucide-react";
 import { formatTimeMinutes } from "../utils/transcript-utils";
 
 interface SummaryPanelProps {
@@ -10,6 +11,11 @@ interface SummaryPanelProps {
 			topics?: { title: string; body: string }[];
 			nextSteps?: string[];
 			chapters?: { startSec: number; title: string; body: string }[];
+			refinedTranscript?: {
+				intro?: {
+					participants?: string[];
+				};
+			};
 		};
 		speakerCount?: number;
 	};
@@ -30,8 +36,53 @@ export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
 		);
 	}
 
+	// Participants: prefer an explicit speakerCount prop (as passed by some
+	// callers), falling back to the refined-transcript intro's participant
+	// list — same source/priority as v2's ShareVideo-level derivation.
+	const participantsCount =
+		data.speakerCount ?? aiSummary.refinedTranscript?.intro?.participants?.length;
+
+	const stats: { icon: React.ReactNode; num: string; label: string }[] = [
+		{
+			icon: <Clock className="size-4" />,
+			num: data.duration ? formatTimeMinutes(data.duration) : "—",
+			label: "Duration",
+		},
+		{
+			icon: <Users className="size-4" />,
+			num: participantsCount !== undefined ? String(participantsCount) : "—",
+			label: "Participants",
+		},
+		{
+			icon: <LayoutGrid className="size-4" />,
+			num: String(topics.length),
+			label: "Topics",
+		},
+		{
+			icon: <ListChecks className="size-4" />,
+			num: String(nextSteps.length),
+			label: "Next steps",
+		},
+	];
+
 	return (
 		<div className="flex flex-col gap-5">
+			{/* Stat strip */}
+			<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+				{stats.map((s) => (
+					<div
+						key={s.label}
+						className="rounded-xl border border-gray-200 bg-white p-3"
+					>
+						<div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+							{s.icon}
+						</div>
+						<div className="text-xl font-semibold text-gray-900">{s.num}</div>
+						<div className="text-xs text-gray-500">{s.label}</div>
+					</div>
+				))}
+			</div>
+
 			{/* Header */}
 			<div className="flex items-center gap-2">
 				<h2 className="text-base font-semibold text-gray-900">Summary</h2>

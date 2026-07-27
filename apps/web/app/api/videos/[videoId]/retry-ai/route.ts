@@ -9,7 +9,7 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-ai">,
 ) {
 	try {
@@ -22,6 +22,11 @@ export async function POST(
 		if (!videoId) {
 			return Response.json({ error: "Video ID is required" }, { status: 400 });
 		}
+
+		// force=1: the owner explicitly (re)generates from the share-page strip.
+		// It bypasses the "already generated / in progress" guard by clearing the
+		// prior AI metadata so a fresh generation can run.
+		const force = new URL(request.url).searchParams.get("force") === "1";
 
 		const videoQuery = await db()
 			.select()
@@ -51,6 +56,7 @@ export async function POST(
 		const metadata = (video.metadata as VideoMetadata) || {};
 
 		const canRetry =
+			force ||
 			!metadata.aiGenerationStatus ||
 			metadata.aiGenerationStatus === "ERROR" ||
 			metadata.aiGenerationStatus === "SKIPPED";
@@ -64,6 +70,23 @@ export async function POST(
 				},
 				{ status: 400 },
 			);
+		}
+
+		// Regeneration: clear prior AI output so the workflow's "already generated"
+		// guard passes and a fresh summary is produced.
+		if (force) {
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						summary: undefined,
+						chapters: undefined,
+						aiSummary: undefined,
+						aiGenerationStatus: undefined,
+					},
+				})
+				.where(eq(videos.id, videoId));
 		}
 
 		const videoOwnerQuery = await db()

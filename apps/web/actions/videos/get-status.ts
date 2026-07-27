@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
+import type { PipelineProgress, VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
@@ -19,7 +19,8 @@ type TranscriptionStatus =
 	| "COMPLETE"
 	| "ERROR"
 	| "SKIPPED"
-	| "NO_AUDIO";
+	| "NO_AUDIO"
+	| "CANCELLED";
 
 type AiGenerationStatus =
 	| "QUEUED"
@@ -36,6 +37,8 @@ export interface VideoStatusResult {
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
 	transcriptionProgress: number | null;
+	pipelineProgress?: PipelineProgress;
+	transcriptionError?: string;
 	error?: string;
 }
 
@@ -96,7 +99,9 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
-			transcriptionProgress: metadata.transcriptionProgress ?? null,
+				transcriptionProgress: metadata.transcriptionProgress ?? null,
+				pipelineProgress: metadata.pipelineProgress,
+				transcriptionError: metadata.transcriptionError,
 			};
 		}
 
@@ -115,6 +120,8 @@ export async function getVideoStatus(
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
 			transcriptionProgress: metadata.transcriptionProgress ?? null,
+			pipelineProgress: metadata.pipelineProgress,
+			transcriptionError: metadata.transcriptionError,
 			error: "Transcription failed",
 		};
 	}
@@ -132,5 +139,8 @@ export async function getVideoStatus(
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,
+		transcriptionProgress: metadata.transcriptionProgress ?? null,
+		pipelineProgress: metadata.pipelineProgress,
+		transcriptionError: metadata.transcriptionError,
 	};
 }

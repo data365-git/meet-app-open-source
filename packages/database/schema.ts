@@ -372,7 +372,7 @@ export const videos = mysqlTable(
 			defaultPlaybackSpeed?: number;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
-			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
+			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO" | "CANCELLED"
 		>(),
 		source: json("source")
 			.$type<
@@ -381,6 +381,7 @@ export const videos = mysqlTable(
 				| { type: "desktopMP4" }
 				| { type: "desktopSegments" }
 				| { type: "webMP4" }
+				| { type: "webAudio" }
 				| {
 						type: "extensionWeb";
 						context: "meeting" | "instruction";

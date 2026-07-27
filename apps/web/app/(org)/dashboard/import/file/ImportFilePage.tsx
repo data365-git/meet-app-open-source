@@ -31,6 +31,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(
 		buildEnv.NEXT_PUBLIC_IS_CAP ? !user?.isPro : false,
 	);
+	const [uploadKind, setUploadKind] = useState<"video" | "audio">("video");
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 
@@ -60,11 +61,16 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file) return;
-		const maxSize = 500 * 1024 * 1024;
-		if (file.size > maxSize) {
+		if (uploadKind === "audio") {
+			// Audio fast-path: skip the trim modal, upload immediately.
 			void processFile(file);
 		} else {
-			setPendingFile(file);
+			const maxSize = 500 * 1024 * 1024;
+			if (file.size > maxSize) {
+				void processFile(file);
+			} else {
+				setPendingFile(file);
+			}
 		}
 		if (inputRef.current) inputRef.current.value = "";
 	};
@@ -75,6 +81,19 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			setIsDragOver(false);
 			const file = e.dataTransfer.files[0];
 			if (!file) return;
+
+			if (uploadKind === "audio") {
+				const isAudioFile =
+					file.type.startsWith("audio/") ||
+					/\.(mp3|m4a|wav|ogg|opus|flac|aac)$/i.test(file.name);
+				if (!isAudioFile) {
+					toast.error("Please drop an audio file.");
+					return;
+				}
+				// Audio fast-path: skip the trim modal, upload immediately.
+				void processFile(file);
+				return;
+			}
 
 			const isMedia =
 				file.type.startsWith("video/") ||
@@ -91,7 +110,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				setPendingFile(file);
 			}
 		},
-		[processFile],
+		[processFile, uploadKind],
 	);
 
 	const handleBrowseClick = () => {
@@ -138,6 +157,31 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				</p>
 			</div>
 
+			<div className="inline-flex items-center gap-1 p-1 rounded-lg bg-gray-3 mb-6 self-start">
+				<button
+					type="button"
+					onClick={() => setUploadKind("video")}
+					className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+						uploadKind === "video"
+							? "bg-gray-12 text-gray-1 shadow-sm"
+							: "text-gray-10 hover:text-gray-12"
+					}`}
+				>
+					Video
+				</button>
+				<button
+					type="button"
+					onClick={() => setUploadKind("audio")}
+					className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+						uploadKind === "audio"
+							? "bg-gray-12 text-gray-1 shadow-sm"
+							: "text-gray-10 hover:text-gray-12"
+					}`}
+				>
+					Audio
+				</button>
+			</div>
+
 			<button
 				type="button"
 				disabled={isUploading}
@@ -182,10 +226,14 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 						</span>
 						<span className="flex flex-col items-center gap-1">
 							<span className="text-sm font-medium text-gray-12">
-								Drag and drop your video or audio here
+								{uploadKind === "audio"
+									? "Drag and drop your audio here"
+									: "Drag and drop your video here"}
 							</span>
 							<span className="text-xs text-gray-10">
-								MP4, MOV, MKV, WebM, MP3, M4A, WAV up to any size
+								{uploadKind === "audio"
+									? "Audio files: MP3, M4A, WAV, OGG, OPUS, FLAC, AAC"
+									: "MP4, MOV, MKV, WebM up to any size"}
 							</span>
 						</span>
 						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
@@ -198,7 +246,11 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			<input
 				ref={inputRef}
 				type="file"
-				accept="video/*,audio/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.mp3,.MP3,.m4a,.M4A,.wav,.WAV,.aac,.AAC,.ogg,.OGG"
+				accept={
+					uploadKind === "audio"
+						? "audio/*,.mp3,.m4a,.wav,.aac,.ogg,.opus,.flac"
+						: "video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
+				}
 				onChange={handleFileChange}
 				className="hidden"
 			/>

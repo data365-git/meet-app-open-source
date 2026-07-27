@@ -21,9 +21,10 @@ import type { VideoData } from "../types";
 import { AIChatPopup } from "./AIChatPopup";
 import { AIFab } from "./AIFab";
 import { BelowVideoTabs } from "./BelowVideoTabs";
-import { GenerateAiButton } from "./GenerateAiButton";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
+import { CapAudioPlayer } from "./CapAudioPlayer";
 import { CapVideoPlayer } from "./CapVideoPlayer";
+import { GenerateStrip } from "./GenerateStrip";
 import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
@@ -353,6 +354,7 @@ export const ShareVideo = forwardRef<
 				? `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=raw-preview`
 				: undefined;
 		const enableCrossOrigin = true;
+		const isWebAudio = data.source.type === "webAudio";
 
 		return (
 			<>
@@ -390,6 +392,14 @@ export const ShareVideo = forwardRef<
 						</div>
 					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
+					) : isWebAudio ? (
+						<CapAudioPlayer
+							videoSrc={rawFallbackSrc ?? videoSrc}
+							videoRef={videoRef}
+							duration={data.duration}
+							chapters={data.metadata?.aiSummary?.chapters ?? []}
+							title={data.name}
+						/>
 					) : (
 						<CapVideoPlayer
 							videoId={data.id}
@@ -506,17 +516,19 @@ export const ShareVideo = forwardRef<
 					onOpenChange={setUpgradeModalOpen}
 				/>
 
+				{Boolean(canRetryProcessing) && (
+					<GenerateStrip
+						videoId={data.id}
+						transcriptionStatus={data.transcriptionStatus ?? undefined}
+						aiGenerationStatus={aiGenerationStatus ?? undefined}
+						hasAiContent={Boolean(
+							data.metadata?.aiSummary || data.metadata?.summary,
+						)}
+					/>
+				)}
+
 				<div className="mt-4">
 					<BelowVideoTabs
-						headerAction={
-							<GenerateAiButton
-								videoId={data.id}
-								isOwner={Boolean(canRetryProcessing)}
-								transcriptionStatus={data.transcriptionStatus}
-								aiGenerationStatus={aiGenerationStatus}
-								transcriptionProgress={transcriptionProgress}
-							/>
-						}
 						summary={
 							<SummaryPanel
 								data={{

@@ -18,6 +18,10 @@ import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { z } from "zod";
+import {
+	beginAnalyzePhase,
+	completeAnalyzePhase,
+} from "@/lib/pipeline-progress";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -132,31 +136,42 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 
 	const videoData = await validateAndSetProcessing(videoId);
 
+	// Flip the pipeline into the analyze phase (drives the share-page strip).
+	await beginAnalyzePhase(videoId);
+
 	const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
 	if (!transcript) {
 		await markSkipped(videoId, videoData.metadata);
+		await completeAnalyzePhase(videoId, "error");
 		return {
 			success: true,
 			message: "Transcript empty or too short - skipped",
 		};
 	}
 
-	const result = await generateWithAi(
-		transcript,
-		videoData.aiGenerationLanguage,
-	);
-
-	if (result._usage) {
-		await recordSummaryUsage(
-			videoData.video.orgId,
-			userId,
-			videoId,
-			result._usage,
+	try {
+		const result = await generateWithAi(
+			transcript,
+			videoData.aiGenerationLanguage,
 		);
+
+		if (result._usage) {
+			await recordSummaryUsage(
+				videoData.video.orgId,
+				userId,
+				videoId,
+				result._usage,
+			);
+		}
+
+		await saveResults(videoId, videoData, result);
+	} catch (error) {
+		await completeAnalyzePhase(videoId, "error");
+		throw error;
 	}
 
-	await saveResults(videoId, videoData, result);
+	await completeAnalyzePhase(videoId, "done");
 
 	return { success: true, message: "AI generation completed successfully" };
 }

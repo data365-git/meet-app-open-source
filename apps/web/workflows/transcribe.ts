@@ -26,6 +26,12 @@ import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
 import { EMBED_MODEL, embedChunksWithUsage } from "@/lib/gemini-embed";
 import { transcribeWithGemini } from "@/lib/gemini-transcribe";
 import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	initPipelineProgress,
+	isCancelRequested,
+	patchPipelinePhase,
+	TranscriptionCancelledError,
+} from "@/lib/pipeline-progress";
 import { runPromise } from "@/lib/server";
 import { chunkTranscript } from "@/lib/transcript-chunk";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -58,6 +64,11 @@ export async function transcribeVideoWorkflow(
 		return { success: true, message: "Transcription disabled - skipped" };
 	}
 
+	// Seed the 4-phase pipeline progress (audio → transcribe → index → analyze).
+	// Audio-source uploads have no video→audio extraction, so audio starts done.
+	const isAudioSource = videoData.video.source?.type === "webAudio";
+	await initPipelineProgress(videoId, isAudioSource);
+
 	try {
 		const audioUrl = await extractAudio(videoId, userId, videoData.video);
 
@@ -69,6 +80,20 @@ export async function transcribeVideoWorkflow(
 			};
 		}
 
+		// Audio extraction done → move into the transcribe phase.
+		await patchPipelinePhase(
+			videoId,
+			"audio",
+			{ status: "done", completedAt: new Date().toISOString() },
+			{ makeCurrent: false },
+		);
+		await patchPipelinePhase(
+			videoId,
+			"transcribe",
+			{ status: "active", startedAt: new Date().toISOString() },
+			{ makeCurrent: true },
+		);
+
 		const [transcription] = await Promise.all([
 			transcribeAudio(
 				audioUrl,
@@ -77,6 +102,14 @@ export async function transcribeVideoWorkflow(
 				{ userId, orgId: videoData.orgId, videoId },
 			),
 		]);
+
+		await patchPipelinePhase(videoId, "transcribe", {
+			status: "done",
+			completedAt: new Date().toISOString(),
+			activeUnitIndex: undefined,
+			activeUnitStartedAt: undefined,
+			activeUnitLabel: undefined,
+		});
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
 
@@ -87,7 +120,12 @@ export async function transcribeVideoWorkflow(
 			{ userId, orgId: videoData.orgId },
 		);
 	} catch (error) {
-		await markError(videoId);
+		if (error instanceof TranscriptionCancelledError) {
+			await markCancelled(videoId);
+			await cleanupTempAudio(videoId, userId, videoData.video);
+			return { success: true, message: "Transcription cancelled" };
+		}
+		await markError(videoId, error);
 		await cleanupTempAudio(videoId, userId, videoData.video);
 		throw error;
 	}
@@ -173,12 +211,34 @@ async function markNoAudio(videoId: string): Promise<void> {
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function markError(videoId: string): Promise<void> {
+async function markError(videoId: string, error?: unknown): Promise<void> {
+	"use step";
+
+	const message =
+		error instanceof Error ? error.message : error ? String(error) : undefined;
+
+	await db()
+		.update(videos)
+		.set({
+			transcriptionStatus: "ERROR",
+			...(message
+				? {
+						metadata: sql`JSON_SET(COALESCE(${videos.metadata}, '{}'), '$.transcriptionError', ${message})`,
+					}
+				: {}),
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
+async function markCancelled(videoId: string): Promise<void> {
 	"use step";
 
 	await db()
 		.update(videos)
-		.set({ transcriptionStatus: "ERROR" })
+		.set({
+			transcriptionStatus: "CANCELLED",
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, '{}'), '$.cancelRequested', false)`,
+		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
@@ -336,6 +396,12 @@ async function transcribeAudio(
 
 	const resolvedApiKey = apiKey;
 
+	// State carried across progress callbacks to build a per-chunk wall-clock
+	// history (unitTimesMs) so the strip can compute a counting-down ETA.
+	const unitTimesMs: number[] = [];
+	let lastDone = 0;
+	let lastProgressAt = Date.now();
+
 	const result = await withCostGuard({
 		orgId: context.orgId,
 		userId: context.userId,
@@ -347,19 +413,52 @@ async function transcribeAudio(
 				apiKey: resolvedApiKey,
 				audioDurationSec: videoDuration ?? undefined,
 				onProgress: async (done, total) => {
+					const now = Date.now();
+					const newlyDone = done - lastDone;
+					if (newlyDone > 0) {
+						const perUnit = (now - lastProgressAt) / newlyDone;
+						for (let k = 0; k < newlyDone; k++) {
+							unitTimesMs.push(Math.round(perUnit));
+						}
+					}
+					lastDone = done;
+					lastProgressAt = now;
+
+					const isDone = total > 0 && done >= total;
 					const pct = Math.min(
 						99,
 						Math.round((done / Math.max(1, total)) * 100),
 					);
 					try {
-						await db()
-							.update(videos)
-							.set({
-								metadata: sql`JSON_SET(COALESCE(${videos.metadata}, '{}'), '$.transcriptionProgress', ${pct})`,
-							})
-							.where(eq(videos.id, context.videoId as Video.VideoId));
+						await patchPipelinePhase(
+							context.videoId,
+							"transcribe",
+							{
+								status: isDone ? "done" : "active",
+								done,
+								total,
+								unitTimesMs: [...unitTimesMs],
+								activeUnitIndex: isDone ? undefined : done,
+								activeUnitStartedAt: isDone
+									? undefined
+									: new Date(now).toISOString(),
+								activeUnitLabel: isDone
+									? undefined
+									: "Gemini'ga yuborilmoqda…",
+								...(isDone
+									? { completedAt: new Date(now).toISOString() }
+									: {}),
+							},
+							{ makeCurrent: true, transcriptionProgress: pct },
+						);
 					} catch (err) {
 						console.error("[transcribe] progress update failed:", err);
+					}
+
+					// Cooperative cancellation checkpoint: if the owner clicked
+					// "Bekor qilish", stop making further Gemini calls.
+					if (await isCancelRequested(context.videoId)) {
+						throw new TranscriptionCancelledError();
 					}
 				},
 			});
@@ -406,6 +505,21 @@ async function chunkEmbedAndStore(
 ): Promise<void> {
 	"use step";
 
+	// Index phase begins (RAG embeddings for AI chat). Best-effort: any failure
+	// still marks the phase done so the pipeline visually advances to analyze.
+	await patchPipelinePhase(
+		videoId,
+		"index",
+		{ status: "active", startedAt: new Date().toISOString() },
+		{ makeCurrent: true },
+	);
+
+	const markIndexDone = () =>
+		patchPipelinePhase(videoId, "index", {
+			status: "done",
+			completedAt: new Date().toISOString(),
+		});
+
 	try {
 		let apiKey: string | undefined;
 
@@ -427,12 +541,14 @@ async function chunkEmbedAndStore(
 			console.warn(
 				"[transcribe] No Gemini API key available for embeddings, skipping RAG indexing",
 			);
+			await markIndexDone();
 			return;
 		}
 
 		const chunks = chunkTranscript(vttContent);
 		if (chunks.length === 0) {
 			console.log(`[transcribe] No chunks produced for video ${videoId}`);
+			await markIndexDone();
 			return;
 		}
 
@@ -474,11 +590,13 @@ async function chunkEmbedAndStore(
 		console.log(
 			`[transcribe] Stored ${rows.length} transcript chunks for video ${videoId}`,
 		);
+		await markIndexDone();
 	} catch (error) {
 		console.error(
 			`[transcribe] RAG indexing failed for video ${videoId}, transcription still COMPLETE:`,
 			error,
 		);
+		await markIndexDone();
 	}
 }
 
