@@ -1,4 +1,4 @@
-# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish (v0.5.4)
+# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish (v0.5.6)
 
 Sana: 2026-07-22 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutbukdagi Chrome**
 
@@ -10,7 +10,7 @@ Sana: 2026-07-22 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutb
 ## Buni nega siz qilyapsiz
 
 Men (Claude) mashina qila oladigan hamma tekshiruvni qildim: testlar, kod tekshiruvi,
-qurish, prod'ga chiqarish (v0.5.4 tirik). Lekin bitta narsani hech qanday test isbotlay olmaydi:
+qurish, prod'ga chiqarish (v0.5.6 tirik). Lekin bitta narsani hech qanday test isbotlay olmaydi:
 
 > **Haqiqiy Meet'da suhbatdoshingizning ovozi yozuvda eshitiladimi — va bitta qo'ng'iroqda
 > IKKINCHI marta yozganda ham eshitiladimi?**
@@ -33,8 +33,8 @@ yozilganini ayting.
 4. Eski "data365 Recorder" ni **Remove** qiling (eskisi qolsa, ikkitasi urishadi).
 5. **Load unpacked** bosing → yangi chiqargan papkani tanlang.
 
-✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.4** turibdi, qizil xato
-yo'q. Versiya **0.5.4** bo'lishi SHART — 0.5.3 yoki undan pasti bo'lsa eski kodni sinayapsiz.
+✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.6** turibdi, qizil xato
+yo'q. Versiya **0.5.6** bo'lishi SHART — 0.5.5 yoki undan pasti bo'lsa eski kodni sinayapsiz.
 ❌ **Xato bo'lsa:** qizil "Errors" tugmasi chiqadi. Bosing, matnini menga yuboring.
 
 ---
@@ -97,6 +97,30 @@ davomiyligi noto'g'ri bo'lsa · ovoz umuman yo'q bo'lsa.
 ❌ **Yiqildi:** biror yozuvda faqat o'z ovozingiz eshitilsa, suhbatdoshniki yo'q bo'lsa ·
    yoki 2-yozuvda **"...audio wasn't captured"** chiqib, keyin uning ovozi yozuvda bo'lmasa.
    Bu — deploy qilib bo'lmaydigan holat, chunki mahsulotning butun ma'nosi shu.
+
+---
+
+## 2b-qadam — ⭐⭐ YANGI: yozuv ketayotganda Meet oynalarini ochish (2 daqiqa)
+
+_Nega: 2026-07-28 da egasi topgan xato — yozuv ketayotganda **"Add people"** oynasi
+ochilsa, yozuv to'xtab qolar edi. Yozuv yangi bo'lsa **"Upload failed — Recording was
+too short"** chiqardi; bir daqiqadan keyin bo'lsa jimgina to'xtardi. v0.5.6 shuni
+tuzatadi, shuning uchun bu qadam endi majburiy._
+
+1. Meet'da yozuvni boshlang (1-qadamdagidek).
+2. **30 soniya** kuting — pill (yashil chizimcha) vaqtni sanayotganini ko'ring.
+3. Meet'ning **"Add people"** oynasini oching va uni **kamida 10 soniya ochiq
+   ushlab turing**, keyin yoping.
+4. Yana 30 soniya gapirib turing → **"Stop"**.
+
+✅ **Ko'rishingiz kerak:** oyna ochilganda ham pill sanashda **davom etadi** · hech
+   qanday xato oynasi chiqmaydi · Stop bosgach yozuv Meetings ro'yxatida to'liq
+   (~1 daqiqa) ko'rinadi va ochilganda o'ynaydi.
+❌ **Yiqildi:** oyna ochilishi bilan (yoki bir necha soniyadan keyin) yozuv to'xtasa,
+   yoki "too short" xatosi chiqsa. **Bunda `opera://extensions` (yoki
+   `chrome://extensions`) → "service worker" → Console rasmini oling** — u yerda
+   `[sw] ... Meet call ended` deb yozilgan bo'lsa, sabab boshqa yo'l ekan, menga
+   ayting.
 
 ---
 
