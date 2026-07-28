@@ -98,9 +98,32 @@ recorded file — a machine verdict, not an opinion):
 | **Security headers (live)** | ✅ CSP `frame-ancestors 'self'` · HSTS · `nosniff` · `SAMEORIGIN` · `strict-origin-when-cross-origin` · a restrictive Permissions-Policy. HSTS `max-age=86400` is deliberately short (documented cert-lapse safety on self-hosted duckdns), not an oversight. |
 | **M-DEL — delete-account really erases** | ⛔ NOT RUN. It needs a disposable account, and creating accounts / entering passwords is outside what I may do even with the owner's approval. Code-verified + Fable-approved only — this one is genuinely an owner task. |
 
+## Performance + client-compatibility pass
+
+| check | result |
+|---|---|
+| Live page timings | `/login` **0.99 s**, share page **1.60 s**, gzip on, HTML 68–100 KB. Fine for an internal tool; not optimised, not a blocker. |
+| Mobile layout (375 px) | ✅ **No horizontal overflow** (`scrollWidth 375 = viewport 375`) on the share page. |
+| Share page structure | ✅ Renders title, owner, Share/Download, full player controls, tabs, comments — verified through the accessibility tree. |
+
+**⚠️ ONE REAL RISK, worth the owner's phone: the recordings are VP9-in-MP4.** The stored object begins
+`ftyp … isomiso6iso2vp09` — a well-formed MP4 whose video codec is **VP9**. Chrome plays it; **Safari
+and iOS generally do not.** If anyone on the team watches on an iPhone, they may get a blank player
+even though the file is perfectly intact. This is a codec fact read off the bytes, not a guess —
+but whether a given iPhone plays it is exactly the sort of thing only a real device settles.
+
+**Two things I explicitly did NOT report as defects, having checked them:**
+- The player showed *"Could not load a playable video source"* in the automation pane — but the pane
+  was not compositing (`window.innerWidth === 0`), so a `<video>` element never mounts there. The
+  same object's bytes are a valid MP4. Calling that a product bug would have been a false alarm of
+  exactly the kind that has cost this project time before.
+- All 26 videos have `jobStatus = NULL`, which looked like "optimization never runs". It is a **dead
+  column**: nothing in the codebase writes it (it is legacy from upstream Cap's MediaConvert path).
+  The "Optimizing video" badge is likewise hard-disabled (`false &&`, owner's 2026-07-14 decision).
+
 ## Still to do
 
-- **9-layer `qa-harden` sweep** (perf INP/LCP/CLS, a11y, offline/SW lifecycle, rollback drill, visual regression, usability friction) — security layers partly covered already.
+- **Deeper `qa-harden` layers** still unrun: real INP/LCP/CLS field metrics, a full a11y audit, an offline/SW-lifecycle pass, and a live rollback drill (deliberately not rehearsed against production).
 - **Handover pass** — can a fresh person deploy AND roll back from the RUNBOOK alone; is STATE truthful.
 - **M-DEL** — owner task (see above).
 - **v0.5.6** — the mic-missing warning is committed but deliberately NOT packaged or deployed yet: the
