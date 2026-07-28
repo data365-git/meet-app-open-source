@@ -32,6 +32,7 @@ All live on the **`main`** branch. **This is not a detail: GitHub only runs sche
 | `uptime-alert` | every 15 min | Pings the site from outside. Alerts if it's down. |
 | `recover-cron` | every 30 min | Restarts AI jobs that got stuck. |
 | `reconcile-cron` | nightly 21:00 UTC | **Finds recordings whose file went missing or whose upload stalled.** The lost-recording detector. |
+| `purge-trash-cron` | nightly 21:30 UTC | Permanently deletes videos trashed more than 7 days ago — the other half of the Trash "kept for 7 days" promise. |
 | `db-backup` | nightly 22:00 UTC | ⚠️ **NOT the real backup — see §2a.** Points at a database that no longer exists. |
 | `db-restore-check` | Mondays 05:00 UTC | **Actually restores the newest backup** into a throwaway database and proves the data is there. Also fails if the newest backup is >3 days old. |
 
@@ -188,7 +189,17 @@ To know which commit is live now: Coolify shows the commit on the deployment. Cr
 > live production with a different, older database. Match the `capdb-` prefix and
 > check the date before you run anything.
 
-**Steps** (needs the R2 keys and the database URL — both in your password manager / `docs/DEPLOY_SECRETS.md`, which is deliberately *not* in git):
+**Steps** (needs the R2 keys and the database URL).
+
+> ⚠️ **Do NOT go looking in `docs/DEPLOY_SECRETS.md` for the database URL.** That file is
+> **Railway-era (2026-06-21), written before the move to Coolify/Contabo**, and it lists
+> `DATABASE_URL` under *"Still to fill in"* — i.e. the one value you need most, mid-incident with
+> production down, is the one it does not have. The live `DATABASE_URL` for the Coolify MySQL is in
+> the **password manager** only. (The file is correctly gitignored and has never been committed —
+> verified 2026-07-28 — so the secrets in it are not in git history; they are simply the WRONG,
+> older ones.) If you only need to run SQL, you do not need the URL at all: use the container
+> directly, as §1's check command does:
+> `ssh … 'docker exec -i fot1zbunh8jld7l4k67h2zp4 sh -c "mysql -umysql -p\$MYSQL_PASSWORD capdb"' < your.sql`
 
 ```bash
 # 1. See what backups exist (newest at the bottom). Expect capdb-* files.
@@ -211,7 +222,7 @@ VPS** — either inside the MySQL container (`docker exec -i <mysql-container> m
 
 5. Check `https://data365.duckdns.org/api/health` → `db:"ok"`, then log in and confirm your recordings are listed.
 
-**The exact same sequence, done safely and automatically, is `.github/workflows/db-restore-check.yml`** — read it if you want to see the steps proven working.
+**The exact same sequence, done safely and automatically, is `.github/workflows/db-restore-check.yml`** — read it if you want to see the steps proven working. ⚠️ **That file exists only on `main`**, not on `qa-fixes` (the branch the product runs from and the one you are probably checked out on), so `git show main:.github/workflows/db-restore-check.yml` or view it on GitHub.
 
 > **Recordings themselves are NOT backed up.** This restores the *database* (who owns what, transcripts, summaries). The video files live as a **single copy** in R2 with no versioning and no second copy — a deleted recording is gone permanently. That is a known, deliberate owner decision (2026-07-16), not an oversight.
 
@@ -224,7 +235,7 @@ VPS** — either inside the MySQL container (`docker exec -i <mysql-container> m
 | Secret | Where it actually lives | How to change it |
 |---|---|---|
 | **Admin password** | The **database** (`users.passwordHash`) | Log in as admin → **Dashboard → Admin → Access** → find your row → **Reset**. This also logs out all old sessions — which is the point. ⚠️ `INITIAL_ADMIN_PASSWORD` in the server env does **nothing** now; it was only used once when the app was first created. |
-| **R2 keys** (`CAP_AWS_*`) | Coolify env vars **and** GitHub secrets (the backup uses them) | Cloudflare → R2 → API tokens → create new → update **both** Coolify (restart app) **and** GitHub → Settings → Secrets → Actions. Delete the old token last, after `/api/health` says `storage:"ok"`. |
+| **R2 keys** (`CAP_AWS_*`) | Coolify env vars. **No GitHub secret is named `CAP_AWS_*`** — the GitHub side uses `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ENDPOINT` / `R2_BACKUP_BUCKET`, and those feed only the Monday restore-check. The REAL nightly backup (`deploy/server/backup-db.sh`) reads `CAP_AWS_*` live from the app container, so it self-heals on rotation with no GitHub change. | Cloudflare → R2 → API tokens → create new → update Coolify (restart app); update the four `R2_*` GitHub secrets only if you want the Monday restore-check to keep passing. Delete the old token last, after `/api/health` says `storage:"ok"`. |
 | **Gemini keys** | Coolify env vars | Google AI Studio → new key → Coolify → restart. |
 | **`CRON_SECRET`** | Coolify env **and** GitHub secrets — must be the **same value in both** | Change both, or the scheduled jobs start failing. |
 | **`DATABASE_ENCRYPTION_KEY`** | Coolify env | 🔴 **Do not change this.** Encrypted columns become permanently unreadable without the original. |
