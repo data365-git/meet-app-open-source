@@ -87,8 +87,11 @@ One-paragraph version: the upload SUCCEEDS (22 MB really is in R2), but `result.
 Not started, deliberately — it begins only after production-ready. Recorded now so it is not a surprise, with the five things that decide whether it is easy or painful:
 1. **Does the domain change?** The extension has `data365.duckdns.org` baked in. A new domain = rebuild the extension AND every team member reinstalls. Ask the owner before the move, not after.
 2. **Cost shape flips.** Contabo is a flat monthly fee; Railway bills by usage, and this app does ffmpeg + long transcription work. Estimate before committing — this could be cheaper OR several times dearer.
-3. **DB migration.** MySQL dump → restore (the backup path is tested, RUNBOOK §5 — note the historical trap: that section once named the wrong dump file).
-4. **The recordings do NOT move** — they live in Cloudflare R2, independent of the host. Genuinely good news, and the biggest risk that is already absent.
+3. ~~DB migration~~ — **NOT NEEDED (owner 2026-07-28: "eski datalar kerak emas… noldan new start"). The Railway deployment starts EMPTY: no dump, no restore, no old videos.** This deletes the single riskiest step of the move. What it adds instead, both owner decisions, neither actioned:
+   - **The client needs their OWN Cloudflare R2 credentials/bucket.** Reusing the current ones would have a "fresh start" writing into the existing bucket, mixing two clients' recordings — the opposite of what a fresh start means.
+   - **What happens to the OLD deployment** (data365 + its 25 videos)? Kept, or shut down and erased? Destructive and irreversible, so it waits for an explicit instruction; nothing will be deleted on assumption.
+   - Fresh start also means a new admin account + organization created once on the new host (~5 min, `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD`).
+4. **The recordings do NOT move** — they live in Cloudflare R2, independent of the host. With the fresh-start decision this stops being a migration concern at all and becomes purely a "give the client their own bucket" setup step.
 5. **RUNBOOK must be rewritten** — today's deploy/rollback procedure is Coolify-specific, and the handover promise is that a fresh person can deploy and roll back.
 
 ## 🎯 ACTIVE GOAL (2026-07-22) — FINISH the project and HAND IT OVER to the internal IT team.
