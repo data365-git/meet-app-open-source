@@ -56,6 +56,26 @@ every stateful surface (recording, upload, AI job, cron, session) the audit asks
 second time, while the first is still finishing?* That question, not more test count, is what would
 have caught the interleaved recording.
 
+## 3b. Deploy-risk finding to carry into the rollout (Fable, final review, 2026-07-28)
+
+Verdict on the recorder fix: **SHIP** — no defect found that can corrupt, truncate or lose a
+recording, leak media hardware, or refuse a legitimate start/stop. Three residuals, all below the
+bar and recorded so nobody re-derives them:
+- **R1 (upgrade window only):** a recording persisted by the OLD build has no `recorderSessionId`, so
+  for that ONE recording the lenient branch applies. In practice an extension update restarts the
+  service worker and kills the recorder anyway. Self-heals after one recording.
+- **R2 (convention-dependent):** during OFFSCREEN arming, `armedTabId` is `undefined`, so any no-tab
+  sender passes the gate. No reachable exploit today (the loser paths are forced quiet), but a future
+  no-tab error sender would re-open it.
+- **R3 (asymmetry, not a hole):** `RECORDER_STOPPED` has an edge-only retired check while
+  `RECORDER_ERROR` also re-checks in-queue; the queued `finalizeRecording` re-read covers it.
+
+**Rollout rule that follows from the risk shape:** if a check is wrong in a way review missed, the
+failure mode is now *drop-and-log* (a recording that uploads nothing, loudly, in the SW console) —
+never *mix-and-corrupt* as before. So: **one 2-minute smoke recording immediately after rollout,
+before telling the team to use it.** Rollback = reinstall v0.5.4; the state change is one additive
+optional field, nothing is migrated, server and API untouched.
+
 ## 4. Reporting
 
 One report at `docs/qa/run-2026-07-28/REPORT.md`: per-gate PASS/FAIL, the command or artefact that
