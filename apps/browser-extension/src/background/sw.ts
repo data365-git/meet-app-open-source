@@ -2077,6 +2077,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // a fresh "Record this meeting?" nudge whose click is refused with "a recording
 // is already in progress", and everything after the reload unrecorded.
 // Finalize instead — the first half is uploaded and the owner can start again.
+//
+// ⚠️ `status:"loading"` is NOT proof of a reload. Chromium fires it for
+// SAME-DOCUMENT history navigations too, and Google Meet pushes a history entry
+// for its in-call dialogs (that is why the back button closes "Add people").
+// Opening Add people therefore killed a live recording — observed by the owner
+// 2026-07-28 on a real call, twice: once seconds in (the upload then failed with
+// "Recording was too short", 1200 durable bytes = an mp4 header and nothing
+// else) and once a minute in (saved, but the recording stopped). So the signal
+// must be CONFIRMED before acting: ask the tab whether its in-page recorder is
+// still running. A real reload destroys that document, so nothing answers (or
+// the freshly-injected content script answers "not recording"); a dialog leaves
+// it recording. The recheck delay exists because the OLD document can still be
+// alive for a moment after "loading" fires — by then a real reload is gone.
+const RELOAD_CONFIRM_DELAY_MS = 1500;
+
+async function inPageRecorderStillRecording(tabId: number): Promise<boolean> {
+	try {
+		const reply = await Promise.race([
+			chrome.tabs.sendMessage(tabId, { type: "IS_INPAGE_RECORDING" }),
+			new Promise((resolve) =>
+				setTimeout(() => resolve(undefined), RELOAD_CONFIRM_DELAY_MS),
+			),
+		]);
+		return (reply as { recording?: boolean } | undefined)?.recording === true;
+	} catch {
+		// No receiving end = the document is gone. That IS the reload case.
+		return false;
+	}
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 	if (changeInfo.status !== "loading") return;
 	void (async () => {
@@ -2085,6 +2115,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 			state.kind === "recording" &&
 			state.contentRecorderTabId === tabId
 		) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, RELOAD_CONFIRM_DELAY_MS),
+			);
+			if (await inPageRecorderStillRecording(tabId)) {
+				console.warn(
+					`[sw] tab ${tabId} reported "loading" but its in-page recorder is still running — same-document navigation (a Meet dialog), not a reload. Recording kept.`,
+				);
+				return;
+			}
+			// Re-read: the recording may have been stopped normally while we waited.
+			const stillLive = await getState();
+			if (
+				stillLive.kind !== "recording" ||
+				stillLive.contentRecorderTabId !== tabId
+			) {
+				return;
+			}
 			intentionalStop = true;
 			await enqueueRecorder(() => finalizeRecording()).catch(() => {});
 			chrome.notifications.create("meet-tab-reloaded", {

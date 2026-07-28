@@ -2950,6 +2950,10 @@ describe("In-page path — a reloaded Meet tab must not strand the recording", (
 		// tabs.onRemoved both stayed silent, leaving the SW "recording" forever
 		// with everything after the reload unrecorded.
 		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
+		// The listener now CONFIRMS the reload before finalizing (it waits, then
+		// asks the tab whether its in-page recorder is still running). A dead
+		// document — this fake chrome answers `undefined` — is the reload case.
+		await new Promise((r) => setTimeout(r, 2200));
 		await flushAsync(10);
 
 		const finalState = await getState();
@@ -2957,6 +2961,52 @@ describe("In-page path — a reloaded Meet tab must not strand the recording", (
 		expect(completeCalls).toBe(1);
 		// And the owner is told, rather than silently losing the second half.
 		expect(notifications.some((n) => n.id === "meet-tab-reloaded")).toBe(true);
+	});
+
+	// Regression (owner, real Meet call, 2026-07-28): opening Meet's "Add people"
+	// dialog killed the live recording. Meet pushes a history entry for its
+	// in-call dialogs, and Chromium reports same-document history navigations as
+	// status:"loading" — indistinguishable from F5 at this listener. Seconds into
+	// a call that meant "Recording was too short" (1200 durable bytes = an mp4
+	// header); a minute in it silently stopped a good recording. The tab must be
+	// ASKED before its recording is ended.
+	it("keeps recording when the tab is a live in-page recorder (Meet dialog, not a reload)", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		const probes: unknown[] = [];
+		chrome.tabs.sendMessage = (async (_tabId: number, msg: unknown) => {
+			probes.push(msg);
+			return { recording: true };
+		}) as unknown as typeof chrome.tabs.sendMessage;
+
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 42,
+			contentRecorderTabId: 42,
+			videoId: "vid-dialog",
+			uploadId: "upload-dialog",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			throw new Error(`Unhandled fetch in test: ${input.toString()}`);
+		});
+
+		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
+		await new Promise((r) => setTimeout(r, 2200));
+		await flushAsync(10);
+
+		expect(probes).toEqual([{ type: "IS_INPAGE_RECORDING" }]);
+		expect((await getState()).kind).toBe("recording");
 	});
 
 	it("ignores an unrelated tab reloading", async () => {

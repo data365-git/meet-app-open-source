@@ -1075,6 +1075,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 		handleStateChange(message.state as StateChangedMessage["state"]);
 		return;
 	}
+	// Liveness probe. The SW asks this before treating a tab "loading" event as a
+	// reload: Meet's in-call dialogs (Add people, chat) are same-document history
+	// navigations that look identical to a reload from the SW's side, and acting
+	// on them killed live recordings. A reloaded document cannot answer this at
+	// all; a dialog leaves the recorder running and answers `true`. Always
+	// answers — an unconditional reply is the point, "false" is a real answer.
+	if (message.type === "IS_INPAGE_RECORDING") {
+		sendResponse({ recording: isInPageRecording() });
+		return;
+	}
 	// Capture controls for the IN-PAGE path. The SW routes these to this tab via
 	// the arming record's contentRecorderTabId. Ack CONDITIONALLY — answering
 	// when this tab owns no capture would tell sendControlWithRetry the command
