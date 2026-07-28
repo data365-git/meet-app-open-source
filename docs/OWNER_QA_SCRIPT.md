@@ -1,4 +1,4 @@
-# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish (v0.5.6)
+# Egasi uchun tekshiruv qo'llanmasi — meeting yozib olish (v0.5.7)
 
 Sana: 2026-07-22 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutbukdagi Chrome**
 
@@ -10,7 +10,7 @@ Sana: 2026-07-22 · Kim uchun: loyiha egasi (dasturchi emas) · Qayerda: **noutb
 ## Buni nega siz qilyapsiz
 
 Men (Claude) mashina qila oladigan hamma tekshiruvni qildim: testlar, kod tekshiruvi,
-qurish, prod'ga chiqarish (v0.5.6 tirik). Lekin bitta narsani hech qanday test isbotlay olmaydi:
+qurish, prod'ga chiqarish (v0.5.7 tirik). Lekin bitta narsani hech qanday test isbotlay olmaydi:
 
 > **Haqiqiy Meet'da suhbatdoshingizning ovozi yozuvda eshitiladimi — va bitta qo'ng'iroqda
 > IKKINCHI marta yozganda ham eshitiladimi?**
@@ -33,8 +33,8 @@ yozilganini ayting.
 4. Eski "data365 Recorder" ni **Remove** qiling (eskisi qolsa, ikkitasi urishadi).
 5. **Load unpacked** bosing → yangi chiqargan papkani tanlang.
 
-✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.6** turibdi, qizil xato
-yo'q. Versiya **0.5.6** bo'lishi SHART — 0.5.5 yoki undan pasti bo'lsa eski kodni sinayapsiz.
+✅ **Ko'rishingiz kerak:** ro'yxatda **data365 Recorder 0.5.7** turibdi, qizil xato
+yo'q. Versiya **0.5.7** bo'lishi SHART — 0.5.6 yoki undan pasti bo'lsa eski kodni sinayapsiz.
 ❌ **Xato bo'lsa:** qizil "Errors" tugmasi chiqadi. Bosing, matnini menga yuboring.
 
 ---
@@ -62,6 +62,12 @@ Meet sahifasining o'zida karta chiqadi — extension belgisini bosish shart emas
 **oxirigacha o'ynaydi** va **o'z ovozingiz eshitiladi**. Davomiyligi ~3 daqiqa.
 ❌ **Xato bo'lsa:** yozuv umuman chiqmasa · ochilmasa · yarmida to'xtasa ·
 davomiyligi noto'g'ri bo'lsa · ovoz umuman yo'q bo'lsa.
+
+> **Yolg'iz yozayotganda 2 daqiqadan keyin sariq yozuv chiqishi mumkin:**
+> *"No sound has come through the call for 2 minutes…"*. Bu **xato emas** —
+> qo'ng'iroqda gapiradigan odam yo'q, shuning uchun ovoz ham yo'q. Yozuvingiz
+> saqlanaveradi. (v0.5.7 gacha bu yozuv "suhbatdosh ovozi kelmayapti" der edi —
+> yolg'on ogohlantirish edi, shuning uchun matni to'g'rilandi.)
 
 ---
 
@@ -104,7 +110,7 @@ davomiyligi noto'g'ri bo'lsa · ovoz umuman yo'q bo'lsa.
 
 _Nega: 2026-07-28 da egasi topgan xato — yozuv ketayotganda **"Add people"** oynasi
 ochilsa, yozuv to'xtab qolar edi. Yozuv yangi bo'lsa **"Upload failed — Recording was
-too short"** chiqardi; bir daqiqadan keyin bo'lsa jimgina to'xtardi. v0.5.6 shuni
+too short"** chiqardi; bir daqiqadan keyin bo'lsa jimgina to'xtardi. v0.5.7 shuni
 tuzatadi, shuning uchun bu qadam endi majburiy._
 
 1. Meet'da yozuvni boshlang (1-qadamdagidek).
