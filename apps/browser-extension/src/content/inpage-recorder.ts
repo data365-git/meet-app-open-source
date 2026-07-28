@@ -100,8 +100,17 @@ const SURFACE_NOT_MONITOR_MSG =
 const NO_CLIENT_AUDIO_MSG =
 	"The other person's audio wasn't captured — recording cancelled. Try again with Ctrl+Shift+9.";
 
+// This fires on SILENCE, which it cannot tell apart from "nobody else is in the
+// call yet" — so it must not assert a failure. The old wording did, and the
+// owner hit it while alone in a Meet (2026-07-28): it read as "the other
+// person's voice is not being recorded", which for a team of non-engineers is
+// worse than no warning at all — it teaches them to distrust recordings that
+// are in fact fine. Counting participants from Meet's DOM was considered and
+// rejected: the People badge showed "2" while he was alone, because his own
+// screen share counts as a participant. So the message states what is actually
+// observed (no sound for two minutes) and makes the action conditional.
 const SILENCE_WARN_MSG =
-	"⚠️ The other person's audio isn't coming through — check that the Meet tab is open and unmuted.";
+	"⚠️ No sound has come through the call for 2 minutes. If someone is speaking, open the Meet tab and check it isn't muted — if you are alone or nobody is talking, ignore this.";
 
 // How long the mix may stay completely silent on the PAGE-AUDIO side before we
 // warn. Deliberately long: a meeting is legitimately silent for minutes at a
