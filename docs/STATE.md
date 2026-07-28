@@ -3,7 +3,25 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-28 pm — prepared for /clear)
+## ▶▶ RESUME HERE (2026-07-28 night — NEW BUG FOUND ON A REAL CALL, FIXED, AWAITING DEPLOY)
+
+**GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live.
+
+**⚡ THE OWNER RAN THE GATE TEST AND FOUND A REAL DEFECT — v0.5.5 loses recordings when a Meet in-call dialog opens.**
+He installed v0.5.5 (in **Opera**, not Chrome — a variable nothing had tested), started an in-page recording on a real Meet call, and opened **"Add people"**. Twice:
+- seconds in → **"Upload failed — Recording was too short"**, SW logged `[upload] Recording too small (1200 durable bytes)` (= an mp4 header and nothing after it);
+- a minute in → the recording **silently stopped** and saved (no error, no notification he saw).
+
+**CAUSE (found in code, not guessed):** the in-page reload guard (`sw.ts`, the `tabs.onUpdated` listener) finalized the recording on `status:"loading"`. Chromium reports **same-document history navigations** that way too, and Meet pushes a history entry for its in-call dialogs (that is why the back button closes "Add people"). A dialog was therefore indistinguishable from F5 at that listener. The guard itself is not new — it predates v0.5.5; the corruption fix is unrelated and stands.
+
+**FIX COMMITTED `abcff39` (v0.5.6), NOT DEPLOYED — deploy is owner-gated.** The signal is now CONFIRMED before acting: wait 1500 ms, then ask the tab whether its in-page recorder is still running (new `IS_INPAGE_RECORDING` probe, answered in `meet-detect.ts`). A real reload destroys that document so nothing answers and the guard still fires; a dialog leaves the recorder running and the recording is kept. State is re-read after the wait so a normal stop in between is not double-finalized.
+**Measured (script-computed):** new test **RED without the sw.ts hunk → GREEN with it**; extension suite **146/146** (145 baseline + 1); root typecheck **exit 0**; sources have no whitespace churn (107 = 107 with `-w`); manifest bumped **0.5.5 → 0.5.6**, dist rebuilt, both zips repackaged and verified to CONTAIN the probe in `background.js` AND `content.js`. v0.5.6 also releases the previously-held **mic-missing warning**.
+
+**▶ NEXT STEP:** fold in the independent review of `abcff39` (running at the time of writing), then ask the owner to deploy v0.5.6 and re-run the Add-people repro — that repro is now the acceptance test.
+**Open question worth one line to the owner:** he is using **Opera**. Everything shipped was built and tested for Chrome. If anything else behaves oddly, re-test the same flow in Chrome before assuming a code defect.
+
+---
+## (history) RESUME 2026-07-28 pm — prepared for /clear
 
 **GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **After that:** migrate to the client's Railway on a FRESH START (no data), see the goal block below.
 
