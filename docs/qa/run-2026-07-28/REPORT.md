@@ -26,6 +26,17 @@ Plan: [`docs/plans/2026-07-28-production-ready-audit.md`](../../plans/2026-07-28
 | EOL/CRLF churn | ✅ none | `git diff --shortstat` vs `-w` |
 | Extension packaged | ✅ v0.5.5, both zips identical, and verified to CONTAIN this round's markers (`start-in-flight`, `retired while queued`) — written AND wired | `unzip -p … background.js \| grep` |
 
+## Deploy — v0.5.5 IS LIVE (owner approved, 2026-07-28)
+
+| check | result |
+|---|---|
+| Prod container image | ✅ `f43c7d3` (was `16a93d8`), landed ~19 min after trigger |
+| `/api/health` | ✅ `db:ok`, `storage:ok` |
+| Served `365-extension.zip` | ✅ **v0.5.5**, and the fix is **inside the served bundle** (`stale-session` present in its `background.js`) — what the team downloads actually contains it |
+| Anon surfaces `/login /signup /terms /privacy` | ✅ all 200 |
+| CORS — extension upload preflight | ✅ `OPTIONS` from a `chrome-extension://` origin → **204 with ACAO + ACAC + methods + headers**, so the upload path the recorder depends on is intact |
+| CORS — evil origin preflight | ✅ 204 with **no `Access-Control-Allow-Origin`** → the browser blocks it (the lone ACAC is the known non-exploitable E2b backlog item) |
+
 ## Cost pass — DONE (read-only, prod DB)
 
 | question | answer | evidence |

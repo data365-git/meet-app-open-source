@@ -3,7 +3,16 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-23 — NEW BLOCKER found; read this, then the handoff doc)
+## ▶▶ RESUME HERE (2026-07-28 — the recorder bug is FIXED and DEPLOYED; the owner's Meet test is the gate)
+
+**v0.5.5 IS LIVE on prod** (image `f43c7d3`, `/api/health` ok, served zip = 0.5.5 with the fix verified INSIDE the bundle). The 2026-07-23 interleaved-recording corruption is fixed, plus 13 defects raised across four independent review rounds (Fable + Codex), plus two authorization leaks found by a static sweep. Full evidence: [`docs/qa/run-2026-07-28/REPORT.md`](qa/run-2026-07-28/REPORT.md).
+
+**⛔ THE GATE (owner-physical, nothing else can substitute):** install **v0.5.5** → real 2-person Meet → record, Stop, **record AGAIN on the same call** → both recordings must play AND contain the other person's voice. Script: [`docs/OWNER_QA_SCRIPT.md`](OWNER_QA_SCRIPT.md).
+
+**▶ NEXT (machine work, in order):** finish the re-audit per [`docs/plans/2026-07-28-production-ready-audit.md`](plans/2026-07-28-production-ready-audit.md) — the live pass with the three prod-write fixtures the owner APPROVED on 2026-07-28 (disposable user for M-DEL, a `public=0` video for E10, a password video for E11), the concurrency pass (every stateful surface exercised TWICE — the gap that let the corruption bug through), then the static/qa-harden sweep and the handover pass.
+
+---
+## (history) RESUME 2026-07-23 — the blocker, now fixed
 
 **The owner installed v0.5.4 and recorded — and the recording came back BROKEN. Root cause is found and proven; the fix is designed but NOT written.**
 Full evidence + reproduction + the exact fix plan: **[`docs/HANDOFF_2026-07-23_broken-recording.md`](HANDOFF_2026-07-23_broken-recording.md)** — read it before touching anything.
