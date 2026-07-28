@@ -83,6 +83,14 @@ One-paragraph version: the upload SUCCEEDS (22 MB really is in R2), but `result.
 
 ---
 
+## 🎯 GOAL AFTER THIS ONE (owner, 2026-07-28): once production-ready, MIGRATE the project to the CLIENT's own **Railway** server.
+Not started, deliberately — it begins only after production-ready. Recorded now so it is not a surprise, with the five things that decide whether it is easy or painful:
+1. **Does the domain change?** The extension has `data365.duckdns.org` baked in. A new domain = rebuild the extension AND every team member reinstalls. Ask the owner before the move, not after.
+2. **Cost shape flips.** Contabo is a flat monthly fee; Railway bills by usage, and this app does ffmpeg + long transcription work. Estimate before committing — this could be cheaper OR several times dearer.
+3. **DB migration.** MySQL dump → restore (the backup path is tested, RUNBOOK §5 — note the historical trap: that section once named the wrong dump file).
+4. **The recordings do NOT move** — they live in Cloudflare R2, independent of the host. Genuinely good news, and the biggest risk that is already absent.
+5. **RUNBOOK must be rewritten** — today's deploy/rollback procedure is Coolify-specific, and the handover promise is that a fresh person can deploy and roll back.
+
 ## 🎯 ACTIVE GOAL (2026-07-22) — FINISH the project and HAND IT OVER to the internal IT team.
 **Owner ran /grill-with-docs and CONFIRMED the plan, then said: "cleardan keyin men aytgan tartibda ishlab bu loyihani yakunlaymiz."** So a fresh session RESUMES the handover finish-plan.
 **▶ READ FIRST + RESUME FROM: `docs/plans/2026-07-22-handover-to-team-plan.md`** — it holds the agreed decisions (H1–H4) and the 6-phase order. Do NOT re-grill; the decisions are settled.
