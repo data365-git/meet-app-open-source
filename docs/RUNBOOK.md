@@ -132,6 +132,34 @@ Other Coolify uuids for this install: server `rk444s72653kw66hvv8jozaf` · proje
 
 If the deploy produced something broken, go to §4.
 
+### The deploy "finished" but prod still runs the OLD image — read this before you re-debug
+
+A failed build looks like nothing happening: Coolify removes the new version and
+the old container keeps serving, so `/api/health` is green and the site is fine
+while your change is simply not there. **Prod is safe; do not panic-fix.** Ask
+the deployment itself what happened (the API's list endpoint returns `[]` once
+the queue drains — you need the uuid the deploy call gave you):
+
+```bash
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+  'CT=$(cat /root/.ct); curl -s -H "Authorization: Bearer $CT" \
+     http://localhost:8000/api/v1/deployments/<deployment_uuid>'
+```
+
+`"status":"failed"` is the answer; the `logs` field holds the build output as
+JSON entries.
+
+**The failure this build actually hits (seen 2026-07-28):** `next build` dies
+with `Last few GCs … allocation failure` at about **1874 / 2074 MB** and
+`Command failed with signal "SIGABRT"`. That ceiling is **Node's own default
+heap** (~2 GB on this 8 GB host) — the Dockerfile sets no `NODE_OPTIONS`, and
+it already switched to webpack instead of turbopack "for lower memory usage"
+(line 65). The host was NOT short of memory at the time: 5.1 GB free, no swap.
+So the build passes or fails on the margin, and the same commit can do both —
+one deploy succeeded an hour before this one failed. **First action: just
+re-trigger it.** If it fails repeatedly, raise the ceiling in the builder stage
+(`ENV NODE_OPTIONS=--max-old-space-size=4096`) rather than hunting the code.
+
 ---
 
 ## 3b. Look inside the production database (read-only, no client needed)
