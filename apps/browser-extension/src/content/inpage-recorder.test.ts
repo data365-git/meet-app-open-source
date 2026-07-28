@@ -4,6 +4,7 @@ import {
 	type InPageState,
 	attachPageAudio,
 	detachAllPageAudio,
+	SILENCE_WARN_MSG,
 	pruneDeadTaps,
 } from "./inpage-recorder";
 
@@ -195,5 +196,33 @@ describe("pruneDeadTaps", () => {
 		expect(pruneDeadTaps(s)).toBe(1);
 		expect(s.taps.size).toBe(1);
 		expect(s.taps.has(staying as unknown as HTMLMediaElement)).toBe(true);
+	});
+});
+
+// ── The silence warning must not claim something it cannot see ───────────────
+//
+// The watchdog fires after two minutes with no page audio. It CANNOT tell
+// "nobody is speaking / I am alone in the call" from "the tap is broken", so
+// any wording that asserts the second is a lie in the first case. The owner hit
+// exactly that on 2026-07-28, alone in a Meet: the old copy told him the other
+// person's audio was not coming through, and his objection was that his IT team
+// would then distrust recordings that are perfectly fine. On the product's core
+// promise, a false alarm costs more than no alarm.
+//
+// This pins the CLAIM, not the phrasing: reword freely, but the message may not
+// state as fact that the remote audio is failing, and it must keep telling the
+// owner what to do if someone really is speaking.
+describe("silence warning wording", () => {
+	it("reports observed silence instead of asserting the other person is unheard", () => {
+		const msg = SILENCE_WARN_MSG.toLowerCase();
+
+		// The defect: asserting a failure the watchdog cannot distinguish.
+		expect(msg).not.toContain("isn't coming through");
+		expect(msg).not.toContain("is not coming through");
+		expect(msg).not.toContain("wasn't captured");
+
+		// What it may say: the observation, plus a conditional action.
+		expect(msg).toContain("no sound");
+		expect(msg).toContain("if");
 	});
 });

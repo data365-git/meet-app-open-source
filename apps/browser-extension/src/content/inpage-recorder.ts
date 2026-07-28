@@ -109,7 +109,7 @@ const NO_CLIENT_AUDIO_MSG =
 // rejected: the People badge showed "2" while he was alone, because his own
 // screen share counts as a participant. So the message states what is actually
 // observed (no sound for two minutes) and makes the action conditional.
-const SILENCE_WARN_MSG =
+export const SILENCE_WARN_MSG =
 	"⚠️ No sound has come through the call for 2 minutes. If someone is speaking, open the Meet tab and check it isn't muted — if you are alone or nobody is talking, ignore this.";
 
 // How long the mix may stay completely silent on the PAGE-AUDIO side before we
