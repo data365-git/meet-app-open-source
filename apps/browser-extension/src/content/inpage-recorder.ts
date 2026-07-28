@@ -745,12 +745,25 @@ export async function startInPageRecording(
 
 		recorder.start(200);
 		host.onRecordingStarted();
+		// The mic is deliberately best-effort with an 8s deadline, so a denied or
+		// unanswered permission prompt can never hang the start. But it used to be
+		// SILENT: the recording ran without the owner's OWN voice and reported an
+		// ordinary success — a partial failure presented as a win, which is the one
+		// thing this product must not do. Ranked below the remote-voice notes: those
+		// concern the other participants, which matter more.
+		const micWanted = ready?.micEnabled !== false;
+		const micMissing = micWanted && !micStream;
 		if (usingSystemAudioForClient) {
 			// NOT a warning: the remote voices ARE being recorded, via system audio.
 			host.note("The other person's audio is being recorded via system audio.", false);
 		} else if (clientAudioWaived) {
 			host.note(
 				"⚠️ Recording without the other person's audio. Stop and re-record with 'Share system audio' enabled.",
+				true,
+			);
+		} else if (micMissing) {
+			host.note(
+				"⚠️ Your microphone isn't being recorded — permission was denied or not answered. The other person's audio is still captured.",
 				true,
 			);
 		}

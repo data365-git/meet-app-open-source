@@ -57,6 +57,45 @@ The 07-23 broken one began with a `moof` (its `ftyp` sat 532 KB in). So:
 - A recording made on v0.5.4 the day before this fix played fine, and its transcript + summary cost a
   normal single-pass $0.46.
 
+## Recording path — the owner's #1 requirement, hammered
+
+**Real-browser proofs on the deployed build** (headed Chromium, a fake Meet page, tone measured in the
+recorded file — a machine verdict, not an opinion):
+
+| proof | result |
+|---|---|
+| `PROOF_SECOND` — record, stop, **record AGAIN on the same call** (the exact bug that hit the owner) | ✅ **PASS** — recording #1 **−23.9 dB**, recording #2 **−23.9 dB** (threshold −50). The remote voice is on BOTH. |
+| `PROOF_SWAP` — Meet swaps its media elements mid-call (the 2026-07-20 silent-tap trap) | ✅ **PASS** — 4 segments, **0 silent**, steady ≈−16.7 dB across all of them |
+
+**Failure-mode sweep (8 modes traced through the real code, independent agent, then spot-verified):**
+
+| # | mode | verdict |
+|---|---|---|
+| 1 | Meet tab reloaded mid-recording | ⚠️ DEGRADED (full-screen path only) |
+| 2 | Network drops and returns before Stop | ✅ SAFE — chunks queue durably, retry alarm drains them |
+| 3 | Chrome's own "Stop sharing" bar | ✅ SAFE — identical to the app's Stop |
+| 4 | Pause → Resume → Stop | ✅ SAFE — pause only persists if the recorder acked |
+| 5 | Service worker evicted mid-recording | ✅ SAFE — persisted state + buffer restore; ~2 s tail at risk |
+| 6 | Mic denied / prompt unanswered | ⚠️ was DEGRADED → **FIXED this run** |
+| 7 | Remote participant joins AFTER start | ✅ SAFE — re-tap within ~1 s |
+| 8 | Call ends while still recording | ✅ SAFE — auto-stop + finalize, or ask on the full-screen path |
+
+- **Mode 6 FIXED:** the mic is best-effort with an 8 s deadline (so a permission prompt can never hang
+  the start) — but a denied/unanswered mic used to produce a recording missing the OWNER'S OWN voice
+  and report ordinary success. It now says so on screen. A partial failure must never look like a win.
+- **Mode 1, honest limitation, NOT fixed:** on the FULL-SCREEN path only, reloading the Meet tab loses
+  the remote voice for the remainder; a banner + notification already warn, but no re-attach is
+  attempted. The owner's actual flow is the in-page "Record now" path, which auto-saves the first half
+  and tells the user to start again. Fixing it means re-minting a tabCapture streamId after the reload,
+  which can fail if the activeTab grant died — a separate, testable change, not a quiet patch.
+
+## Live security pass (prod, owner-approved writes — all reverted)
+
+| test | result |
+|---|---|
+| **E10 — private video vs a stranger** | ✅ PASS. With `public=0`: the media endpoint returns **401** (video cannot be fetched) and the page shows *"This video is restricted"* with a login/password gate. The real title did **not** leak (actual name `data365 Meeting – qxs-wgzz-tzy`; the page rendered only a generic string). Video **restored to `public=1`** and re-verified. |
+| **M-DEL — delete-account really erases** | ⛔ NOT RUN. It needs a disposable account, and creating accounts / entering passwords is outside what I may do even with the owner's approval. Code-verified + Fable-approved only — this one is genuinely an owner task. |
+
 ## Still to do (nothing below is claimed as done)
 
 - Codex final verdict → fold in any blocker.
