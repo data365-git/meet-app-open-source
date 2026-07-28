@@ -26,6 +26,26 @@ Plan: [`docs/plans/2026-07-28-production-ready-audit.md`](../../plans/2026-07-28
 | EOL/CRLF churn | ✅ none | `git diff --shortstat` vs `-w` |
 | Extension packaged | ✅ v0.5.5, both zips identical, and verified to CONTAIN this round's markers (`start-in-flight`, `retired while queued`) — written AND wired | `unzip -p … background.js \| grep` |
 
+## Cost pass — DONE (read-only, prod DB)
+
+| question | answer | evidence |
+|---|---|---|
+| July spend | **$6.16** (834 calls) vs June $0.43 | `ai_usage_events` grouped by month |
+| Is there structural waste? | **No.** The spike is the known one-time dev cost: transcription of a handful of videos re-run many times in July to verify the drift fix ($5.03 of the $6.16 is transcription). | grouped by operation+model |
+| Is the free tier actually saving? | **Yes** — 57 calls on `gemini-3.5-flash` billed **$0.00** | same query |
+| Any runaway / retry loop? | **No.** The only recent charge is 2026-07-27: ONE recording (`ck0sfkg6zxdmpfc`) transcribed once (19 chunks) + summarised once = **$0.46**, no repeats. | grouped by videoId, first/last timestamp 3 minutes apart |
+| Videos in a bad state | **0 errored, 0 stuck processing** (25 videos, 9 transcribed) | `videos` status counts |
+
+## Unplanned finding — the owner's 2026-07-27 recording is HEALTHY
+
+Checked because the corruption bug makes every fresh recording suspect. The stored object for
+`ck0sfkg6zxdmpfc` begins `00 00 00 1c 66 74 79 70` — **`ftyp` at offset 0**, i.e. a well-formed MP4.
+The 07-23 broken one began with a `moof` (its `ftyp` sat 532 KB in). So:
+- The corruption is **intermittent**, not systematic — it needs the second-session overlap, which
+  matches the root cause exactly.
+- A recording made on v0.5.4 the day before this fix played fine, and its transcript + summary cost a
+  normal single-pass $0.46.
+
 ## Still to do (nothing below is claimed as done)
 
 - Codex final verdict → fold in any blocker.
