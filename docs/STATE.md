@@ -21,7 +21,9 @@ He installed v0.5.5 (in **Opera**, not Chrome — a variable nothing had tested)
 
 **⚠️ ONE CAUSE NOT YET RULED OUT (reviewer finding 3):** a SECOND path can end an in-page recording — `meet-detect.ts` `isInMeeting()` stops seeing a "Leave call" control for 5 s → `MEET_CALL_ENDED` → `STOP_CAPTURE` (age-gated at 10 s, so it cannot explain the seconds-in failure, but it fits the minute-in one). Deliberately NOT patched blind: that path is now NAMED in the service-worker log, so the next live test tells the two causes apart in one glance instead of costing another owner round-trip.
 
-**▶ NEXT STEP:** ask the owner to deploy v0.5.6, then re-run the Add-people repro **with the dialog held open >5 s** — that repro is the acceptance test, and it also discriminates finding 3.
+**✅ DEPLOYED + LIVE-VERIFIED (owner said "ha chiqar", 2026-07-28 ~21:43).** Coolify deployment `nyirnyce3c262hy63dt39lzo`. Prod app image = **`3029cd7`** (was `f43c7d3`), `/api/health` → `db:ok storage:ok`, the served zip is **0.5.6** and its `background.js` CONTAINS the fix (checked inside the artifact, not by its existence). Re-verified a second time at ~22:06.
+
+**▶ NEXT STEP — the ball is with the OWNER:** install v0.5.6 and run the Add-people repro **with the dialog held open >10 s** ([`docs/OWNER_QA_SCRIPT.md`](OWNER_QA_SCRIPT.md) step 2b, written for exactly this). Pass = the pill keeps counting, no error card, the recording plays in full. If it still stops, his console screenshot discriminates: a `[sw] ... reported the Meet call ended` line means reviewer finding 3 (the `isInMeeting()` "Leave call" heuristic) is the real cause and that path needs the same confirm-before-acting treatment. Nothing else is machine-doable on this stream until he reports.
 **Open question worth one line to the owner:** he is using **Opera**. Everything shipped was built and tested for Chrome. If anything else behaves oddly, re-test the same flow in Chrome before assuming a code defect.
 
 ---
