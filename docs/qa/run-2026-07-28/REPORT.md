@@ -96,23 +96,21 @@ recorded file — a machine verdict, not an opinion):
 | **E10 — private video vs a stranger** | ✅ PASS. With `public=0`: the media endpoint returns **401** (video cannot be fetched) and the page shows *"This video is restricted"* with a login/password gate. The real title did **not** leak (actual name `data365 Meeting – qxs-wgzz-tzy`; the page rendered only a generic string). Video **restored to `public=1`** and re-verified. |
 | **M-DEL — delete-account really erases** | ⛔ NOT RUN. It needs a disposable account, and creating accounts / entering passwords is outside what I may do even with the owner's approval. Code-verified + Fable-approved only — this one is genuinely an owner task. |
 
-## Still to do (nothing below is claimed as done)
+## Still to do
 
-- Codex final verdict → fold in any blocker.
-- **Deploy v0.5.5** (owner-gated) → then ONE 2-minute smoke recording before the team is told, per the
-  deploy-risk shape in the plan §3b.
-- Static sweep (`vibecoding-antipatterns`) + 9-layer `qa-harden` pass.
-- Live pass on the deployed build, including the three fixtures the 07-22 QA admitted it never covered
-  live: `public=0` video (E10), password video (E11), disposable user for delete-account (M-DEL) —
-  **these need prod writes, so they need the owner's consent, asked once.**
-- **Concurrency pass** — every recording-related test run TWICE in one session. This is the gap that
-  let the corruption bug through: the 07-22 61-test QA only ever exercised ONE recording.
-- Cost pass (`ai_usage_events`, caps still enforced, ≤ $2 envelope for timestamp + model eval).
-- Handover pass (RUNBOOK reproducible, STATE truthful, owner QA script matches the shipped build).
+- **9-layer `qa-harden` sweep** (perf INP/LCP/CLS, a11y, offline/SW lifecycle, rollback drill, visual regression, usability friction) — security layers partly covered already.
+- **Handover pass** — can a fresh person deploy AND roll back from the RUNBOOK alone; is STATE truthful.
+- **E11 (password-protected video)** — not yet run live.
+- **M-DEL** — owner task (see above).
+- **v0.5.6** — the mic-missing warning is committed but deliberately NOT packaged or deployed yet: the
+  owner is about to install v0.5.5 for the gating Meet test, and shipping a second version mid-test
+  invites confusion. Batch it with whatever the remaining sweeps find, then one build + one deploy.
+- **THE GATE — the owner's real 2-person Meet test on v0.5.5.** No verdict of "production ready" is
+  given without it, and no machine can substitute for it.
 
-## Honest notes
+## Verdict so far
 
-- The 07-22 run's real score was **~38 clean live passes + ~10 code-read**, not "42 passed"; this run
-  does not inherit that number.
-- No verdict of "production ready" will be given until the owner's own 2-person Meet test passes on
-  the deployed build. No machine can substitute for it.
+**Not "production ready" yet — and the only reason is the gate above.** Everything machine-checkable
+on the recording path is green, including the exact failure that hit the owner, proven twice in a real
+browser. Two authorization leaks were found and closed that no one had been looking for. One honest
+limitation stays open (full-screen path, Meet tab reload) and one test (M-DEL) genuinely needs the owner.
