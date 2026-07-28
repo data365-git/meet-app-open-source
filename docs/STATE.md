@@ -5,6 +5,8 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 ---
 ## ▶▶ RESUME HERE (2026-07-28 pm — prepared for /clear)
 
+- [ ] LAUNCH_BLOCKER USTOZ1 OWNER_PHYSICAL | data365.duckdns.org/dashboard/extension dan v0.5.4 ni yuklang, chrome://extensions da eskisini o'chirib "Load unpacked" qiling, so'ng 2 kishilik Meet da yozib ko'ring | PASS=yozuvda ikkinchi odamning ovozi ham eshitiladi (since 2026-07-21)
+
 **GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **After that:** migrate to the client's Railway on a FRESH START (no data), see the goal block below.
 
 **WHERE WE ARE: the recorder corruption bug is FIXED and v0.5.5 is LIVE on prod** (image `f43c7d3`, health ok, and the zip the site serves is v0.5.5 with the fix verified INSIDE it — re-verified byte-level 2026-07-28 pm). Everything machine-checkable is green. **NOT yet "production ready"** — and the only reasons are three owner-physical checks.
