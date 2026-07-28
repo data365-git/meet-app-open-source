@@ -116,6 +116,25 @@ async function restorePendingBufferIfNeeded(uploadId: string): Promise<void> {
 	const stored = result[pendingBufferKey(uploadId)] as string | undefined;
 	if (!stored) return;
 
+	// (F2c) The storage read above is an await, and `inMemoryBuffer` is global. A
+	// CANCEL plus the start of a NEW recording during that await would make this
+	// line paste the OLD upload's bytes into the new recording's buffer — the
+	// caller's identity re-check then correctly drops the incoming chunk, but the
+	// restored bytes are already sitting there and the next legitimate chunk
+	// appends straight onto them. Re-verify that this upload is still the live one
+	// before writing, and that nothing else refilled the buffer meanwhile.
+	const stateNow = await getState();
+	const liveUploadId =
+		stateNow.kind === "recording" || stateNow.kind === "uploading"
+			? stateNow.uploadId
+			: undefined;
+	if (liveUploadId !== uploadId || inMemoryBuffer.length > 0) {
+		console.warn(
+			`[upload] skipped restoring the pending buffer for ${uploadId}: it is no longer the live upload`,
+		);
+		return;
+	}
+
 	inMemoryBuffer = base64ToBytes(stored);
 	lastPersistedForUploadId = uploadId;
 	lastPersistAt = Date.now();
@@ -869,10 +888,28 @@ export async function handleChunk(
 
 	await restorePendingBufferIfNeeded(state.uploadId);
 
+	// (F2b) RE-CHECK IMMEDIATELY BEFORE THE WRITE. The check above happened before
+	// an await, and `inMemoryBuffer` is module-global: a CANCEL + start of a new
+	// recording during that await swaps the buffer underneath us, and appending
+	// here would put THIS session's bytes into the NEW recording's buffer. Bailing
+	// after the fact is not enough — by then the bytes are already mixed in, which
+	// is the whole failure mode this change exists to prevent.
+	const stateAtWrite = await getState();
+	if (
+		stateAtWrite.kind !== "recording" ||
+		stateAtWrite.uploadId !== state.uploadId ||
+		isForeignRecorderSession(stateAtWrite, expectedSessionId)
+	) {
+		console.warn(
+			`[upload] dropped a chunk whose recording changed while its buffer was being restored (session ${expectedSessionId ?? "unstamped"})`,
+		);
+		return "stale";
+	}
+
 	const data = new Uint8Array(chunk);
 	appendToBuffer(data);
 
-	const newTotalBytes = state.totalBytes + data.length;
+	const newTotalBytes = stateAtWrite.totalBytes + data.length;
 
 	// Slice off every fixed-MIN_PART_SIZE part the buffer now contains, keeping
 	// only the (< MIN_PART_SIZE) remainder — R2 requires all non-trailing parts

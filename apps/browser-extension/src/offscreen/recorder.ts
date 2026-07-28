@@ -153,6 +153,20 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 	// one is still acquiring media (state is null throughout that window, so the
 	// guard above cannot see the overlap).
 	const mySessionId = newSessionId();
+	// (F2b) This attempt's own hardware, tracked at function scope so a failure or
+	// a lost race can always release it — even when the module `state` belongs to
+	// another session and must not be touched.
+	let ownDisplayStream: MediaStream | null = null;
+	let ownMicStream: MediaStream | null = null;
+	let ownAudioCtx: AudioContext | null = null;
+	const releaseOwnMedia = (): void => {
+		if (ownDisplayStream) for (const t of ownDisplayStream.getTracks()) t.stop();
+		if (ownMicStream) for (const t of ownMicStream.getTracks()) t.stop();
+		ownAudioCtx?.close().catch(() => {});
+		ownDisplayStream = null;
+		ownMicStream = null;
+		ownAudioCtx = null;
+	};
 
 	try {
 		if (!msg.streamId) throw new Error("streamId required for tab capture");
@@ -190,6 +204,7 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		// the user already muted from Chrome's tab strip hands back a track that
 		// EXISTS but is `muted`, and since no `mute` transition ever fires, the
 		// watchdog wired below would never trip either.
+		ownDisplayStream = displayStream;
 		const startStatus = tabAudioStatus(displayStream.getAudioTracks()[0]);
 		if (startStatus !== "live") {
 			for (const t of displayStream.getTracks()) t.stop();
@@ -216,7 +231,9 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			}
 		}
 
+		ownMicStream = micStream;
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
+		ownAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
 
 		if (displayStream.getAudioTracks().length > 0) {
@@ -333,9 +350,19 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		const videoTracks = displayStream.getVideoTracks();
 		if (videoTracks.length > 0) {
 			videoTracks[0].onended = () => {
-				if (state && state.recorder.state !== "inactive") {
-					state.recorder.stop();
+				// (F2b) Only OUR capture ending may stop OUR recorder. Reading the
+				// global state let a superseded attempt's dying track stop the
+				// recording that replaced it.
+				if (state && state.sessionId === mySessionId) {
+					if (state.recorder.state !== "inactive") state.recorder.stop();
+					return;
 				}
+				if (recorder.state !== "inactive") {
+					try {
+						recorder.stop();
+					} catch {}
+				}
+				for (const t of displayStream.getTracks()) t.stop();
 			};
 		}
 
@@ -420,19 +447,36 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
+			// (F2c) A refusal that names a reason is not OUR failure to report: the
+			// winner of a start race (or the live recording) must not be torn down by
+			// an error message from the attempt that lost. Bow out quietly.
+			const quiet =
+				(startResp as { reason?: string } | undefined)?.reason ===
+					"start-in-flight" ||
+				(startResp as { reason?: string } | undefined)?.reason ===
+					"stale-session";
 			// (F2) Only tear down the module state if it is still OURS. Two
 			// overlapping START_CAPTUREs are possible because `state` stays null
 			// while media is being acquired, so the loser must never clean up the
 			// winner's capture — that would orphan a recording the SW believes live.
+			// (F2b) But this attempt's OWN hardware must be released either way —
+			// skipping cleanup because the state belongs to someone else used to leak
+			// our tracks and AudioContext, leaving the capture indicator lit.
 			if (state && state.sessionId === mySessionId) {
 				cleanup(state);
 				state = null;
+			} else {
+				releaseOwnMedia();
 			}
-			sendMsg({
-				type: "RECORDER_ERROR",
-				error: startResp?.error ?? "Couldn't start the upload session.",
-				sessionId: mySessionId,
-			});
+			if (!quiet) {
+				sendMsg({
+					type: "RECORDER_ERROR",
+					error: startResp?.error ?? "Couldn't start the upload session.",
+					sessionId: mySessionId,
+				});
+			} else {
+				console.warn("[offscreen] start refused:", startResp?.error);
+			}
 			return;
 		}
 
@@ -446,6 +490,8 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		if (state && state.sessionId === mySessionId) {
 			cleanup(state);
 			state = null;
+		} else {
+			releaseOwnMedia();
 		}
 	}
 }
@@ -455,10 +501,11 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
 
 	if (msg.type === "START_CAPTURE") {
 		startCapture(msg).catch((err) => {
-			sendMsg({
-				type: "RECORDER_ERROR",
-				error: err instanceof Error ? err.message : String(err),
-			});
+			// (F2b) Do NOT send an unstamped RECORDER_ERROR here: startCapture owns
+			// the only session id in play and already reports its own failures with
+			// it. An unstamped error from this wrapper could only ever be judged
+			// without an owner, which is precisely what the identity work removes.
+			console.error("[offscreen] startCapture failed:", err);
 		});
 		sendResponse({ ok: true });
 		return;

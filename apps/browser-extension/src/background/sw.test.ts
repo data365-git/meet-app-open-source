@@ -1177,6 +1177,7 @@ describe("Guaranteed client audio survives a cleared arming record", () => {
 			captured,
 			{
 				type: "RECORDER_STARTED",
+				sessionId: "sess-test-m8",
 				mime: "video/webm",
 				hasVideo: true,
 				hasAudio: true,
@@ -1266,6 +1267,7 @@ describe("Wave 0 — meeting filing: initializeUpload gets meetingRequired, not 
 			captured,
 			{
 				type: "RECORDER_STARTED",
+				sessionId: "sess-test-m9",
 				mime: "video/webm",
 				hasVideo: true,
 				hasAudio: true,
@@ -1324,7 +1326,7 @@ describe("Wave 0 — meeting filing: initializeUpload gets meetingRequired, not 
 
 		const resp = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm", hasVideo: true, hasAudio: true },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-1", mime: "video/webm", hasVideo: true, hasAudio: true },
 			{ tab: { id: 1 }, url: "chrome-extension://fake/recorder.html" },
 		)) as { ok: boolean };
 		expect(resp.ok).toBe(true);
@@ -1452,7 +1454,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 		// so this is one ordinary click, not an exotic state.
 		const resp = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-2", mime: "video/webm" },
 			{ tab: { id: 7 }, url: "chrome-extension://fake/recorder.html" },
 		)) as { ok: boolean };
 
@@ -1478,7 +1480,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 
 		await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-3", mime: "video/webm" },
 			{ tab: { id: 7 }, url: "chrome-extension://fake/recorder.html" },
 		);
 
@@ -1519,7 +1521,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 
 		const resp = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-4", mime: "video/webm" },
 			OFFSCREEN_SENDER,
 		)) as { ok: boolean };
 
@@ -1553,7 +1555,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 		// "arming", not "recording".
 		const owner = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-5", mime: "video/webm" },
 			{ tab: { id: 5 }, url: "chrome-extension://fake/recorder.html" },
 		)) as { ok: boolean; error?: string };
 		expect(owner.ok).toBe(false);
@@ -1564,7 +1566,7 @@ describe("F1 — RECORDER_STARTED must not overwrite a live recording", () => {
 		// sender-dependent.
 		const stranger = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-6", mime: "video/webm" },
 			{ tab: { id: 6 }, url: "chrome-extension://fake/recorder.html" },
 		)) as { ok: boolean };
 		expect(stranger.ok).toBe(false);
@@ -2595,7 +2597,7 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		// from "complete" (not in-progress).
 		const startResp = (await sendMessage(
 			captured,
-			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			{ type: "RECORDER_STARTED", sessionId: "sess-test-7", mime: "video/webm" },
 			OFFSCREEN_SENDER,
 		)) as { ok?: boolean };
 		expect(startResp.ok).toBe(true);
@@ -2622,6 +2624,9 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 			chunk: Array.from(new Uint8Array(4096)),
 			index: 0,
 			mime: "video/webm",
+			// (F2) B's own session — an unstamped chunk is now strict-dropped, so
+			// leaving this off would prove nothing about B being alive.
+			sessionId: "sess-test-7",
 		});
 		const after = await getState();
 		expect(after.kind).toBe("recording");
@@ -3137,6 +3142,47 @@ describe("F2 — a stale recorder's messages must not touch the live recording",
 		});
 
 		expect((await getState()).kind).toBe("recording");
+	});
+
+	// (F2b) Defects found by the independent Codex review of the first fix.
+	it("REFUSES a RECORDER_STARTED that carries no sessionId", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		await setState({ kind: "arming", mode: "meeting", meetingId: "meet-x" });
+
+		const resp = (await sendMessage(
+			captured,
+			{ type: "RECORDER_STARTED", mime: "video/webm" },
+			OFFSCREEN_SENDER,
+		)) as { ok?: boolean };
+
+		// Accepting it would create a recording with no owner, after which every
+		// session's messages would be waved through and the interleaving bug is back.
+		expect(resp.ok).toBe(false);
+		expect((await getState()).kind).toBe("arming");
+	});
+
+	it("ignores a RETIRED session's error even while a new recording is ARMING", async () => {
+		const { captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+		// A is live, then A stops -> A is retired.
+		await setState(liveRecordingOwnedBy("sess-A"));
+		await sendMessage(captured, {
+			type: "RECORDER_STOPPED",
+			sessionId: "sess-A",
+		});
+		// A new attempt is now arming; there is NO live id to compare against.
+		await setState({ kind: "arming", mode: "meeting", meetingId: "meet-y" });
+
+		await sendMessage(captured, {
+			type: "RECORDER_ERROR",
+			error: "MediaRecorder error",
+			sessionId: "sess-A",
+		});
+
+		// The arming attempt must survive: this is the hole the retired-session
+		// list exists to close.
+		expect((await getState()).kind).toBe("arming");
 	});
 
 	it("does NOT tear down the live recording on a stale RECORDER_ERROR", async () => {

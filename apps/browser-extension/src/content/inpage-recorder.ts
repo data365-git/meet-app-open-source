@@ -372,6 +372,15 @@ export async function startInPageRecording(
 		host.onFailed();
 		return;
 	}
+	// (F2b) Minted FIRST, before any await and before the first callback is wired,
+	// so every callback belonging to THIS attempt can tell whether the module still
+	// belongs to it. Wiring a callback that reads the global `state` is how an old
+	// attempt ends up stopping the CURRENT recording.
+	const mySessionId = newSessionId();
+	// (F2b) Function-scope so the catch can close it even when the throw happened
+	// before the session object existed.
+	let openedAudioCtx: AudioContext | null = null;
+	let openedMicStream: MediaStream | null = null;
 	intentionalStop = false;
 	clientAudioWaived = false;
 
@@ -429,7 +438,15 @@ export async function startInPageRecording(
 	// before its modal for the same reason.
 	const videoTrack = displayStream.getVideoTracks()[0];
 	videoTrack.onended = () => {
-		if (state) stopInPageRecording();
+		// Only OUR recording may be stopped by OUR track ending. Without this an
+		// attempt that was superseded stops whatever is recording now.
+		if (state && state.sessionId === mySessionId) {
+			stopInPageRecording();
+			return;
+		}
+		// Not ours (or nothing live): release this attempt's own capture so the
+		// screen-share indicator does not stay lit.
+		for (const t of displayStream.getTracks()) t.stop();
 	};
 
 	let pending: InPageState | null = null;
@@ -451,12 +468,14 @@ export async function startInPageRecording(
 			return;
 		}
 
-		const micStream = await getOptionalMicStream(
+		const micStream: MediaStream | null = await getOptionalMicStream(
 			ready.micEnabled !== false,
 			ready.micDeviceId ?? "",
 		);
 
+		openedMicStream = micStream;
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
+		openedAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
 		const pageGain = audioCtx.createGain();
 		// The remote voices arrive attenuated relative to the local mic — same
@@ -467,7 +486,7 @@ export async function startInPageRecording(
 		analyser.fftSize = 2048;
 
 		pending = {
-			sessionId: newSessionId(),
+			sessionId: mySessionId,
 			recorder: undefined as unknown as MediaRecorder, // set below
 			audioCtx,
 			dest,
@@ -572,7 +591,6 @@ export async function startInPageRecording(
 		// tearing down a healthy session. `mine` is captured once and compared
 		// before anything shared is touched.
 		const mine = pending;
-		const mySessionId = mine.sessionId;
 		/** True while this session is still the one the module owns. */
 		const isMine = () => state === mine;
 		/** Release THIS session's hardware even though it no longer owns the module
@@ -659,6 +677,8 @@ export async function startInPageRecording(
 		})) as { ok?: boolean; error?: string } | undefined;
 
 		if (!startResp?.ok) {
+			// (F2c) No RECORDER_ERROR is sent on this path — it only notes to the
+			// host — so a refused start here cannot tear down the winner.
 			cleanup(pending);
 			pending = null;
 			host.note(
@@ -729,17 +749,30 @@ export async function startInPageRecording(
 			);
 		}
 	} catch (err) {
-		// (F2) Only tear down the module state if the failing attempt is still the
-		// one that owns it — a start that lost a race must clean up ITSELF, never
-		// the recording that won.
-		const failed = pending ?? state;
-		cleanup(failed);
+		// (F2b) Clean up ONLY this attempt. An earlier draft used `pending ?? state`,
+		// which is exactly wrong: once this attempt had handed its object over (or
+		// been superseded), `state` is the OTHER session — so the failing attempt
+		// tore down the live recording and reported the error under ITS id, which
+		// the SW then accepted as genuine. Review caught it; this is the fix.
+		const mineNow =
+			pending ?? (state && state.sessionId === mySessionId ? state : null);
+		if (mineNow) {
+			cleanup(mineNow);
+			if (state === mineNow) state = null;
+		} else {
+			// Nothing was constructed yet — still release everything this attempt had
+			// already opened. Stopping only the display stream left the mic live and
+			// the AudioContext open when the throw happened between the two.
+			for (const t of displayStream.getTracks()) t.stop();
+			if (openedMicStream)
+				for (const t of openedMicStream.getTracks()) t.stop();
+			openedAudioCtx?.close().catch(() => {});
+		}
 		pending = null;
-		if (failed === state) state = null;
 		sendMsg({
 			type: "RECORDER_ERROR",
 			error: err instanceof Error ? err.message : String(err),
-			sessionId: failed?.sessionId,
+			sessionId: mySessionId,
 		});
 		host.note(
 			`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}`,

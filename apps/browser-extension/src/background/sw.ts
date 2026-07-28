@@ -465,6 +465,36 @@ function enqueueRecorder<T>(fn: () => Promise<T>): Promise<T> {
  * ignored keeps the mic/screen-share indicator lit and burns battery forever. */
 const STALE_SESSION_REPLY = { ok: false, reason: "stale-session" as const };
 
+/** (F2b) Recorder sessions that are definitively over.
+ *
+ * The live recording's own id answers "is this message from the current
+ * recording?" only while a recording IS live. It cannot answer during `arming`,
+ * and that gap is exploitable: an old session's RECORDER_ERROR arriving while a
+ * NEW recording is arming has no id to be compared against, so it used to flip
+ * the new attempt to "error" and close its offscreen document. Remembering the
+ * ids we have retired closes it, because the message can be judged on its own.
+ *
+ * Bounded so a long-lived worker cannot grow it without limit; retirement is
+ * newest-first, and forgetting the oldest ids is safe — those recorders are long
+ * dead. Not persisted: if the worker restarts, the recorder contexts that could
+ * have sent stale messages are gone with it. */
+/** (F2b) Set synchronously for the duration of a RECORDER_STARTED registration
+ * so a second start cannot interleave with the first one's awaits. */
+let recorderStartInFlight = false;
+
+const RETIRED_SESSION_LIMIT = 20;
+const retiredSessions: string[] = [];
+
+function retireSession(sessionId: string | undefined): void {
+	if (!sessionId || retiredSessions.includes(sessionId)) return;
+	retiredSessions.push(sessionId);
+	if (retiredSessions.length > RETIRED_SESSION_LIMIT) retiredSessions.shift();
+}
+
+function isRetiredSession(sessionId: string | undefined): boolean {
+	return sessionId !== undefined && retiredSessions.includes(sessionId);
+}
+
 /** Shared finalization logic called from RECORDER_STOPPED and the tabs.onRemoved handler.
  *
  * `expectedSessionId` is the recorder session claiming the stop. A stop from an
@@ -492,6 +522,9 @@ async function finalizeRecording(
 		);
 		return "stale";
 	}
+	// This recording is over: nothing from its recorder may act again, in any
+	// state that follows (including the next attempt's "arming").
+	retireSession(state.recorderSessionId);
 	const videoId = state.videoId;
 	const uploadId = state.uploadId;
 	const parts = state.parts;
@@ -844,6 +877,10 @@ async function handleMessage(
 			// tab-audio-loss watchdog.
 			intentionalStop = true;
 			const cancelState = await getState();
+			// (F2b) The cancelled recording's recorder must never act again.
+			if (cancelState.kind === "recording") {
+				retireSession(cancelState.recorderSessionId);
+			}
 			const cancelTabId =
 				cancelState.kind === "recording" && cancelState.mode === "instruction"
 					? cancelState.recorderTabId
@@ -1237,6 +1274,36 @@ async function handleMessage(
 		// ── Offscreen: recorder started ───────────────────────────────────
 		case "RECORDER_STARTED": {
 			const mime = getString(msg, "mime") ?? "video/webm";
+			const startSessionId = getString(msg, "sessionId");
+			// (F2b) REQUIRE the id. Without it the recording below would be created
+			// with no owner, and isForeignRecorderSession — which can only be lenient
+			// when there is nothing to compare against — would then wave through every
+			// message from every session, re-opening the interleaving bug completely.
+			// All three recorder paths stamp this; refusing loudly beats accepting a
+			// recording that silently cannot be protected.
+			if (!startSessionId) {
+				return { ok: false, error: "RECORDER_STARTED requires a sessionId" };
+			}
+			if (isRetiredSession(startSessionId)) return STALE_SESSION_REPLY;
+			// (F2b) ATOMIC REGISTRATION. The guard below reads state, then awaits
+			// initializeUpload (a network round-trip) before writing it back, so two
+			// starts arriving together BOTH passed the guard and BOTH minted an
+			// upload — the later setState won and the other upload plus its recorder
+			// were orphaned. This flag is set synchronously before any await, so on a
+			// single-threaded runtime the second start cannot slip through the gap.
+			if (recorderStartInFlight) {
+				// `reason` lets the losing sender clean up QUIETLY. If it reported this
+				// as a RECORDER_ERROR instead, that error would arrive while the WINNER
+				// is still arming and tear its offscreen document down — the refusal
+				// would cause the very failure it exists to prevent.
+				return {
+					ok: false,
+					reason: "start-in-flight" as const,
+					error: "A recording start is already in progress.",
+				};
+			}
+			recorderStartInFlight = true;
+			try {
 			const state = await getState();
 			// (F1) This is the ONE message that WRITES the recording state, yet it
 			// was the only start path with no in-progress guard (START_INSTRUCTION
@@ -1396,8 +1463,11 @@ async function handleMessage(
 				// anything that does not match is a leftover from an EARLIER session
 				// and must never touch this upload. Absent only when an older,
 				// unstamped build is the sender.
-				recorderSessionId: getString(msg, "sessionId"),
+				recorderSessionId: startSessionId,
 			};
+			// Any recording this one supersedes is over — retire it so its recorder
+			// cannot act during, or after, this start.
+			if (state.kind === "recording") retireSession(state.recorderSessionId);
 			await setState(nextState);
 			// A new recording starts clean: no stop is "in flight" yet, and any
 			// prior tab-audio-degraded notification no longer applies.
@@ -1406,6 +1476,9 @@ async function handleMessage(
 			startKeepAlive();
 			updateBadge(nextState);
 			return { ok: true };
+			} finally {
+				recorderStartInFlight = false;
+			}
 		}
 
 		// ── Offscreen: data chunk ─────────────────────────────────────────
@@ -1414,6 +1487,9 @@ async function handleMessage(
 			const index = getNumber(msg, "index") ?? 0;
 			const mime = getString(msg, "mime") ?? "video/webm";
 			const sessionId = getString(msg, "sessionId");
+			// (F2b) A retired session is refused whatever the current state is —
+			// including "arming", where there is no live id to compare against.
+			if (isRetiredSession(sessionId)) return STALE_SESSION_REPLY;
 			if (raw && Array.isArray(raw) && raw.length > 0) {
 				// (F2) The ownership check lives INSIDE handleChunk, against the very
 				// state it then appends to — checking out here would be
@@ -1429,8 +1505,10 @@ async function handleMessage(
 
 		// ── Offscreen: recorder stopped ───────────────────────────────────
 		case "RECORDER_STOPPED": {
+			const stopSessionId = getString(msg, "sessionId");
+			if (isRetiredSession(stopSessionId)) return STALE_SESSION_REPLY;
 			const stopped = await enqueueRecorder(() =>
-				finalizeRecording(getString(msg, "sessionId"), true),
+				finalizeRecording(stopSessionId, true),
 			);
 			if (stopped === "stale") return STALE_SESSION_REPLY;
 			return { ok: true };
@@ -1440,6 +1518,11 @@ async function handleMessage(
 		case "RECORDER_ERROR": {
 			const error = getString(msg, "error") ?? "Unknown recorder error";
 			const errorSessionId = getString(msg, "sessionId");
+			// (F2b) THE arming hole: with no recording live there is no id to compare
+			// against, so a dead session's error used to flip a NEW attempt that was
+			// still arming into "error" and close its offscreen document. Judging the
+			// message by its own retired id needs no live state at all.
+			if (isRetiredSession(errorSessionId)) return STALE_SESSION_REPLY;
 
 			const errOutcome = await enqueueRecorder(async () => {
 				// (P1.1 / M2) Route the WHOLE handler through enqueueRecorder: this
@@ -1448,6 +1531,15 @@ async function handleMessage(
 				// — an un-serialized error write here could drop parts that were
 				// still being uploaded.
 				const stateBefore = await getState();
+				// (F2c) RE-CHECK retirement in the queue, not only at the handler edge:
+				// this job can sit behind a slow chunk while a CANCEL retires its
+				// session, and by the time it runs the edge verdict is out of date.
+				if (isRetiredSession(errorSessionId)) {
+					console.warn(
+						`[sw] ignored RECORDER_ERROR from a session retired while queued (${errorSessionId})`,
+					);
+					return "stale" as const;
+				}
 				// (F2) A stale recorder's error is the most destructive of the three
 				// stray messages: below it flips state to "error", runs a salvage
 				// finalizeUpload and closes the offscreen document — i.e. it would
@@ -1465,6 +1557,30 @@ async function handleMessage(
 						`[sw] ignored RECORDER_ERROR from a stale recorder session (${errorSessionId}); live=${stateBefore.recorderSessionId}`,
 					);
 					return "stale" as const;
+				}
+				// (F2c) THE ARMING WINDOW. A session that was never admitted is never
+				// retired, so the retired-list cannot judge it — and while a NEW attempt
+				// is arming there is no live id either. Left open, a stray recorder's
+				// error flips the arming attempt to "error" and closes the offscreen
+				// document it is still acquiring media into. During arming the only
+				// legitimate error comes from the CONTEXT THAT ARMED IT, so identify the
+				// sender instead: the recorder page by its tab id, the offscreen document
+				// by having no tab at all (matching the ownership convention used by
+				// RECORDER_STARTED above).
+				if (stateBefore.kind === "arming") {
+					const senderTabId = _sender.tab?.id;
+					const armedTabId =
+						stateBefore.recorderTabId ?? stateBefore.contentRecorderTabId;
+					if (senderTabId !== armedTabId) {
+						console.warn(
+							`[sw] ignored RECORDER_ERROR from a foreign sender while arming (session ${errorSessionId ?? "unstamped"})`,
+						);
+						return "stale" as const;
+					}
+				}
+				// Accepted as genuine: this recording is over, so retire its session.
+				if (stateBefore.kind === "recording") {
+					retireSession(stateBefore.recorderSessionId);
 				}
 				const wasRecording = stateBefore.kind === "recording";
 				const previousVideoId = wasRecording

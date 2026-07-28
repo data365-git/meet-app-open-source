@@ -528,6 +528,22 @@ async function startRecording(): Promise<void> {
 	// carries one identity, even if a second start races this one while it is
 	// still acquiring media.
 	const mySessionId = newSessionId();
+	// (F2b) This attempt's own hardware, tracked at function scope so a failure or
+	// a lost race can always release it without touching another session's state.
+	let ownDisplayStream: MediaStream | null = null;
+	let ownMicStream: MediaStream | null = null;
+	let ownTabAudioStream: MediaStream | null = null;
+	let ownAudioCtx: AudioContext | null = null;
+	const releaseOwnMedia = (): void => {
+		if (ownDisplayStream) for (const t of ownDisplayStream.getTracks()) t.stop();
+		if (ownMicStream) for (const t of ownMicStream.getTracks()) t.stop();
+		if (ownTabAudioStream) for (const t of ownTabAudioStream.getTracks()) t.stop();
+		ownAudioCtx?.close().catch(() => {});
+		ownDisplayStream = null;
+		ownMicStream = null;
+		ownTabAudioStream = null;
+		ownAudioCtx = null;
+	};
 	setIdleMsg("", false);
 	const startBtn = $("btn-start") as HTMLButtonElement | null;
 	if (startBtn) startBtn.disabled = true;
@@ -568,6 +584,11 @@ async function startRecording(): Promise<void> {
 		if (startBtn) startBtn.disabled = false;
 		return;
 	}
+	// (F2b) Tracked from the moment it exists, so EVERY later failure path can
+	// release it. Assigning only just before `state = {...}` (as an earlier draft
+	// did) left the common failures — mic timeout, tab-audio acquire, AudioContext,
+	// MediaRecorder construction — releasing nothing at all.
+	ownDisplayStream = displayStream;
 
 	// SURFACE GATE (meeting mode only). Re-ask ONLY when the resolved track is
 	// affirmatively a tab or window; allow everything else. Gated on
@@ -689,7 +710,10 @@ async function startRecording(): Promise<void> {
 			if (!ok) return;
 		}
 
+		ownMicStream = micStream;
+		ownTabAudioStream = tabAudioStream;
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
+		ownAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
 
 		// System/display audio and tab audio are the SAME meeting sound when both
@@ -850,9 +874,19 @@ async function startRecording(): Promise<void> {
 		const videoTracks = displayStream.getVideoTracks();
 		if (videoTracks.length > 0) {
 			videoTracks[0].onended = () => {
-				if (state && state.recorder.state !== "inactive") {
-					state.recorder.stop();
+				// (F2b) Only OUR capture ending may stop OUR recorder. Reading the
+				// global state let a superseded attempt's dying track stop the
+				// recording that replaced it.
+				if (state && state.sessionId === mySessionId) {
+					if (state.recorder.state !== "inactive") state.recorder.stop();
+					return;
 				}
+				if (recorder.state !== "inactive") {
+					try {
+						recorder.stop();
+					} catch {}
+				}
+				for (const t of displayStream.getTracks()) t.stop();
 			};
 		}
 
@@ -946,9 +980,14 @@ async function startRecording(): Promise<void> {
 		}
 		startTimer();
 	} catch (err) {
-		if (state) {
+		// (F2b) Tear down only OUR session; a lost race must not clean up the
+		// recording that won. Either way this attempt's own hardware is released,
+		// or its tracks and AudioContext leak with the capture indicator lit.
+		if (state && state.sessionId === mySessionId) {
 			cleanup(state);
 			state = null;
+		} else {
+			releaseOwnMedia();
 		}
 		sendMsg({
 			type: "RECORDER_ERROR",
