@@ -94,13 +94,14 @@ recorded file — a machine verdict, not an opinion):
 | test | result |
 |---|---|
 | **E10 — private video vs a stranger** | ✅ PASS. With `public=0`: the media endpoint returns **401** (video cannot be fetched) and the page shows *"This video is restricted"* with a login/password gate. The real title did **not** leak (actual name `data365 Meeting – qxs-wgzz-tzy`; the page rendered only a generic string). Video **restored to `public=1`** and re-verified. |
+| **E11 — password-protected video vs a stranger** | ✅ PASS. With a password set: the page becomes *"data365: Password Protected Video"* and the media endpoint returns **403**. Password storage is hashed with a 10-attempts-per-5-minutes rate limit (`actions/videos/password.ts`), so the gate is not brute-forceable. Video **restored** (`password NULL`, `public=1`) and re-verified in the DB. |
+| **Security headers (live)** | ✅ CSP `frame-ancestors 'self'` · HSTS · `nosniff` · `SAMEORIGIN` · `strict-origin-when-cross-origin` · a restrictive Permissions-Policy. HSTS `max-age=86400` is deliberately short (documented cert-lapse safety on self-hosted duckdns), not an oversight. |
 | **M-DEL — delete-account really erases** | ⛔ NOT RUN. It needs a disposable account, and creating accounts / entering passwords is outside what I may do even with the owner's approval. Code-verified + Fable-approved only — this one is genuinely an owner task. |
 
 ## Still to do
 
 - **9-layer `qa-harden` sweep** (perf INP/LCP/CLS, a11y, offline/SW lifecycle, rollback drill, visual regression, usability friction) — security layers partly covered already.
 - **Handover pass** — can a fresh person deploy AND roll back from the RUNBOOK alone; is STATE truthful.
-- **E11 (password-protected video)** — not yet run live.
 - **M-DEL** — owner task (see above).
 - **v0.5.6** — the mic-missing warning is committed but deliberately NOT packaged or deployed yet: the
   owner is about to install v0.5.5 for the gating Meet test, and shipping a second version mid-test
