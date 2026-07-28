@@ -2911,7 +2911,7 @@ describe("MEDIUM — pause/resume state follows the recorder, not the intent", (
 
 describe("In-page path — a reloaded Meet tab must not strand the recording", () => {
 	it("finalizes when the recording's own content tab starts loading again", async () => {
-		const { captured, notifications } = await freshSw();
+		const { chrome, captured, notifications } = await freshSw();
 		const { setState, getState } = await import("./state");
 
 		// Live in-page recording: the MediaRecorder lives in tab 42 (the Meet page).
@@ -2949,11 +2949,17 @@ describe("In-page path — a reloaded Meet tab must not strand the recording", (
 		// change — which is precisely why the pre-existing url-based watcher and
 		// tabs.onRemoved both stayed silent, leaving the SW "recording" forever
 		// with everything after the reload unrecorded.
+		// A destroyed document has no receiving end, so chrome REJECTS the probe —
+		// that rejection is the only real proof of a reload, and the listener now
+		// requires it before finalizing.
+		chrome.tabs.sendMessage = (async () => {
+			throw new Error("Could not establish connection.");
+		}) as unknown as typeof chrome.tabs.sendMessage;
+
+		vi.useFakeTimers();
 		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
-		// The listener now CONFIRMS the reload before finalizing (it waits, then
-		// asks the tab whether its in-page recorder is still running). A dead
-		// document — this fake chrome answers `undefined` — is the reload case.
-		await new Promise((r) => setTimeout(r, 2200));
+		await vi.advanceTimersByTimeAsync(15000);
+		vi.useRealTimers();
 		await flushAsync(10);
 
 		const finalState = await getState();
@@ -3001,12 +3007,115 @@ describe("In-page path — a reloaded Meet tab must not strand the recording", (
 			throw new Error(`Unhandled fetch in test: ${input.toString()}`);
 		});
 
+		vi.useFakeTimers();
 		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
-		await new Promise((r) => setTimeout(r, 2200));
+		await vi.advanceTimersByTimeAsync(15000);
+		vi.useRealTimers();
 		await flushAsync(10);
 
-		expect(probes).toEqual([{ type: "IS_INPAGE_RECORDING" }]);
+		expect(probes.length).toBeGreaterThan(0);
+		expect(probes[0]).toEqual({ type: "IS_INPAGE_RECORDING" });
 		expect((await getState()).kind).toBe("recording");
+	});
+
+	// Review finding 1 (2026-07-28): a Meet call renders on a busy main thread, so
+	// the content script can answer LATE. A one-shot probe read that silence as
+	// "gone" and finalized a live recording — the shipped bug, recurring under
+	// exactly the load it happens under. Silence must never end a recording.
+	it("keeps recording when the probe times out (busy tab), never treating silence as a reload", async () => {
+		const { chrome, captured } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		// Never answers, never rejects: the tab is alive but too busy to reply.
+		chrome.tabs.sendMessage = (() =>
+			new Promise(() => {})) as unknown as typeof chrome.tabs.sendMessage;
+
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 42,
+			contentRecorderTabId: 42,
+			videoId: "vid-busy",
+			uploadId: "upload-busy",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			throw new Error(`Unhandled fetch in test: ${input.toString()}`);
+		});
+
+		vi.useFakeTimers();
+		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
+		await vi.advanceTimersByTimeAsync(30000);
+		vi.useRealTimers();
+		await flushAsync(10);
+
+		expect((await getState()).kind).toBe("recording");
+	});
+
+	// Review finding 2 (2026-07-28): on a slow reload the OLD document is still
+	// alive when the first probe lands and answers "recording:true". One answer is
+	// therefore not proof of a dialog — the guard must keep asking, or a genuine
+	// reload strands the recording in "recording" forever, which is the exact bug
+	// this guard exists for.
+	it("still finalizes a SLOW reload whose old document answers 'recording' once before dying", async () => {
+		const { chrome, captured, notifications } = await freshSw();
+		const { setState, getState } = await import("./state");
+
+		let probeCount = 0;
+		chrome.tabs.sendMessage = (async () => {
+			probeCount += 1;
+			if (probeCount === 1) return { recording: true }; // old document, still alive
+			throw new Error("Could not establish connection."); // navigation committed
+		}) as unknown as typeof chrome.tabs.sendMessage;
+
+		await setState({
+			kind: "recording",
+			mode: "meeting",
+			meetingId: "abc-defg-hij",
+			tabId: 42,
+			contentRecorderTabId: 42,
+			videoId: "vid-slow-reload",
+			uploadId: "upload-slow-reload",
+			startedAt: Date.now(),
+			parts: [{ PartNumber: 1, ETag: '"e1"' }],
+			nextPartNumber: 2,
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			mime: "video/webm",
+			paused: false,
+		});
+
+		let completeCalls = 0;
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/api/upload/multipart/complete")) {
+				completeCalls += 1;
+				return jsonResponse({ success: true, fileKey: "file" });
+			}
+			if (url.includes("/api/upload/recording-complete")) {
+				return jsonResponse({});
+			}
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		vi.useFakeTimers();
+		for (const fn of captured.tabUpdated) fn(42, { status: "loading" });
+		await vi.advanceTimersByTimeAsync(15000);
+		vi.useRealTimers();
+		await flushAsync(10);
+
+		expect(probeCount).toBeGreaterThan(1);
+		expect((await getState()).kind).not.toBe("recording");
+		expect(completeCalls).toBe(1);
+		expect(notifications.some((n) => n.id === "meet-tab-reloaded")).toBe(true);
 	});
 
 	it("ignores an unrelated tab reloading", async () => {

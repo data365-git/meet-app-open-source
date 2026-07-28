@@ -1062,6 +1062,14 @@ async function handleMessage(
 			) {
 				// Deliberate stop — see the STOP case for why this guards the
 				// tab-audio-loss watchdog.
+				// Named in the log on purpose: this is the OTHER way an in-page
+				// recording can end without the owner pressing Stop (the content
+				// script stopped seeing a "Leave call" control for 5s). When a
+				// recording ends unexpectedly, this line is what tells the two
+				// causes apart in one glance at the service-worker console.
+				console.warn(
+					`[sw] stopping the recording because the content script reported the Meet call ended (meeting ${meetingId}).`,
+				);
 				intentionalStop = true;
 				let autoStopDelivered: boolean;
 				if (state.contentRecorderTabId !== undefined) {
@@ -2090,20 +2098,40 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // the freshly-injected content script answers "not recording"); a dialog leaves
 // it recording. The recheck delay exists because the OLD document can still be
 // alive for a moment after "loading" fires — by then a real reload is gone.
-const RELOAD_CONFIRM_DELAY_MS = 1500;
+// An independent review (2026-07-28) falsified a one-shot probe in both
+// directions, so the probe is polled and its THREE outcomes are kept apart:
+//   • "gone"      — sendMessage rejected (no receiving end: the document is
+//                   destroyed) or a freshly-injected content script answered
+//                   `recording:false`. This is the only real proof of a reload.
+//   • "recording" — the document answered: still recording. A dialog.
+//   • "unknown"   — no answer in time. A Meet call renders on a busy main
+//                   thread, so a slow reply must NEVER be read as "gone" — that
+//                   would kill a live recording under exactly the load the
+//                   original bug happens under.
+// A slow reload can still answer "recording" from the OLD document for a moment
+// after "loading" fires, so one "recording" answer is not proof either: poll
+// until something is definite. Only an all-inconclusive run keeps the recording
+// — stranding is recoverable by pressing Stop; a killed meeting is not.
+const RELOAD_PROBE_TIMEOUT_MS = 1500;
+const RELOAD_PROBE_INTERVAL_MS = 2500;
+const RELOAD_PROBE_ATTEMPTS = 4;
 
-async function inPageRecorderStillRecording(tabId: number): Promise<boolean> {
+async function probeInPageRecorder(
+	tabId: number,
+): Promise<"recording" | "gone" | "unknown"> {
 	try {
 		const reply = await Promise.race([
 			chrome.tabs.sendMessage(tabId, { type: "IS_INPAGE_RECORDING" }),
 			new Promise((resolve) =>
-				setTimeout(() => resolve(undefined), RELOAD_CONFIRM_DELAY_MS),
+				setTimeout(() => resolve("__timeout__"), RELOAD_PROBE_TIMEOUT_MS),
 			),
 		]);
-		return (reply as { recording?: boolean } | undefined)?.recording === true;
+		if (reply === "__timeout__" || reply === undefined) return "unknown";
+		return (reply as { recording?: boolean }).recording === true
+			? "recording"
+			: "gone";
 	} catch {
-		// No receiving end = the document is gone. That IS the reload case.
-		return false;
+		return "gone";
 	}
 }
 
@@ -2115,16 +2143,29 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 			state.kind === "recording" &&
 			state.contentRecorderTabId === tabId
 		) {
-			await new Promise((resolve) =>
-				setTimeout(resolve, RELOAD_CONFIRM_DELAY_MS),
-			);
-			if (await inPageRecorderStillRecording(tabId)) {
+			let verdict: "recording" | "gone" | "unknown" = "unknown";
+			for (let attempt = 0; attempt < RELOAD_PROBE_ATTEMPTS; attempt++) {
+				await new Promise((resolve) =>
+					setTimeout(resolve, RELOAD_PROBE_INTERVAL_MS),
+				);
+				// A normal Stop while we poll ends this: nothing to decide any more.
+				const now = await getState();
+				if (
+					now.kind !== "recording" ||
+					now.contentRecorderTabId !== tabId
+				) {
+					return;
+				}
+				verdict = await probeInPageRecorder(tabId);
+				if (verdict === "gone") break;
+			}
+			if (verdict !== "gone") {
 				console.warn(
-					`[sw] tab ${tabId} reported "loading" but its in-page recorder is still running — same-document navigation (a Meet dialog), not a reload. Recording kept.`,
+					`[sw] tab ${tabId} reported "loading" but its in-page recorder never proved gone (last probe: ${verdict}) — treating it as a same-document navigation (a Meet dialog). Recording kept.`,
 				);
 				return;
 			}
-			// Re-read: the recording may have been stopped normally while we waited.
+			// Re-read: the recording may have been stopped normally while we polled.
 			const stillLive = await getState();
 			if (
 				stillLive.kind !== "recording" ||
