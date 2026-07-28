@@ -105,6 +105,11 @@ interface RecordingState {
 }
 
 let state: RecordingState | null = null;
+/** (F2d) See offscreen/recorder.ts — one start attempt per context. The Start
+ * button is disabled while a start runs, but a second START_INSTRUCTION message
+ * (or a re-entrant call) is not covered by that, and `state` is null for the
+ * whole picker + media-acquisition window. */
+let startInFlight = false;
 let startedAt = 0;
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let lastShareUrl = "";
@@ -524,6 +529,12 @@ async function resolveClientAudioGap(
 // ── Start recording (called from a user gesture) ────────────────────────────
 
 async function startRecording(): Promise<void> {
+	if (startInFlight) {
+		console.warn("[recorder] start ignored: a start is already running");
+		return;
+	}
+	startInFlight = true;
+	try {
 	// (F2) Minted BEFORE any await so every callback and message of this attempt
 	// carries one identity, even if a second start races this one while it is
 	// still acquiring media.
@@ -1000,6 +1011,9 @@ async function startRecording(): Promise<void> {
 		);
 		showView("view-idle");
 		if (startBtn) startBtn.disabled = false;
+	}
+	} finally {
+		startInFlight = false;
 	}
 }
 

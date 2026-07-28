@@ -86,6 +86,10 @@ export interface InPageState {
 }
 
 let state: InPageState | null = null;
+/** (F2d) See offscreen/recorder.ts — one start attempt per context. `state` is
+ * null for the whole picker + media-acquisition window, so it cannot stop a
+ * second "Record now" click from starting a parallel attempt in this same tab. */
+let startInFlight = false;
 let intentionalStop = false;
 let clientAudioWaived = false;
 
@@ -367,11 +371,13 @@ export async function startInPageRecording(
 	meetingId: string | null,
 	host: InPageRecorderHost,
 ): Promise<void> {
-	if (state) {
+	if (state || startInFlight) {
 		host.note("A recording is already in progress.", true);
 		host.onFailed();
 		return;
 	}
+	startInFlight = true;
+	try {
 	// (F2b) Minted FIRST, before any await and before the first callback is wired,
 	// so every callback belonging to THIS attempt can tell whether the module still
 	// belongs to it. Wiring a callback that reads the global `state` is how an old
@@ -779,5 +785,8 @@ export async function startInPageRecording(
 			true,
 		);
 		host.onFailed();
+	}
+	} finally {
+		startInFlight = false;
 	}
 }

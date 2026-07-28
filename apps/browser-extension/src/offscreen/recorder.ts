@@ -65,6 +65,12 @@ interface RecordingState {
 }
 
 let state: RecordingState | null = null;
+/** (F2d) True from the first line of startCapture until it settles. There is ONE
+ * offscreen document, so two overlapping START_CAPTUREs would both acquire media
+ * inside it and race to register — the losing attempt then strands or replaces
+ * the winner's recording. `state` cannot express this: it stays null for the
+ * whole media-acquisition window, which is exactly when the overlap happens. */
+let startInFlight = false;
 
 // getUserMedia does not resolve while Chrome's mic permission prompt is open —
 // it waits for the human. This document is INVISIBLE (offscreen, no UI, no
@@ -144,6 +150,12 @@ function cleanup(s: RecordingState): void {
 }
 
 async function startCapture(msg: StartCaptureMsg): Promise<void> {
+	if (startInFlight) {
+		console.warn("[offscreen] START_CAPTURE ignored: a start is already running");
+		return;
+	}
+	startInFlight = true;
+	try {
 	if (state) {
 		cleanup(state);
 		state = null;
@@ -493,6 +505,9 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		} else {
 			releaseOwnMedia();
 		}
+	}
+	} finally {
+		startInFlight = false;
 	}
 }
 
