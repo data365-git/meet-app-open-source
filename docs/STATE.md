@@ -3,13 +3,27 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-28 — the recorder bug is FIXED and DEPLOYED; the owner's Meet test is the gate)
+## ▶▶ RESUME HERE (2026-07-28 pm — prepared for /clear)
 
-**v0.5.5 IS LIVE on prod** (image `f43c7d3`, `/api/health` ok, served zip = 0.5.5 with the fix verified INSIDE the bundle). The 2026-07-23 interleaved-recording corruption is fixed, plus 13 defects raised across four independent review rounds (Fable + Codex), plus two authorization leaks found by a static sweep. Full evidence: [`docs/qa/run-2026-07-28/REPORT.md`](qa/run-2026-07-28/REPORT.md).
+**GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **After that:** migrate to the client's Railway on a FRESH START (no data), see the goal block below.
 
-**⛔ THE GATE (owner-physical, nothing else can substitute):** install **v0.5.5** → real 2-person Meet → record, Stop, **record AGAIN on the same call** → both recordings must play AND contain the other person's voice. Script: [`docs/OWNER_QA_SCRIPT.md`](OWNER_QA_SCRIPT.md).
+**WHERE WE ARE: the recorder corruption bug is FIXED and v0.5.5 is LIVE on prod** (image `f43c7d3`, health ok, and the zip the site serves is v0.5.5 with the fix verified INSIDE it — re-verified byte-level 2026-07-28 pm). Everything machine-checkable is green. **NOT yet "production ready"** — and the only reasons are three owner-physical checks.
 
-**▶ NEXT (machine work, in order):** finish the re-audit per [`docs/plans/2026-07-28-production-ready-audit.md`](plans/2026-07-28-production-ready-audit.md) — the live pass with the three prod-write fixtures the owner APPROVED on 2026-07-28 (disposable user for M-DEL, a `public=0` video for E10, a password video for E11), the concurrency pass (every stateful surface exercised TWICE — the gap that let the corruption bug through), then the static/qa-harden sweep and the handover pass.
+**⛔ THE THREE THINGS THAT ARE LEFT — ALL OWNER-ONLY. Do NOT re-do machine work; ASK HIM for these:**
+1. **THE GATE — 2-person Meet test on v0.5.5** (script: [`docs/OWNER_QA_SCRIPT.md`](OWNER_QA_SCRIPT.md)): install → record → Stop → **record AGAIN on the same call** → both must play AND carry the other person's voice. He said he was about to do this.
+2. **Open ONE recording on an iPhone.** New finding: the stored files are **VP9-in-MP4** (`ftyp … iso2vp09`) — Chrome plays it, Safari/iOS often does not. If it fails there, the team's phone viewing is broken and it needs a transcode decision.
+3. **Delete-account live test (M-DEL)** — needs a disposable account; creating accounts / entering passwords is outside what I may do, so this one is genuinely his.
+
+**▶ NEXT MACHINE WORK (only after his answers):**
+- If the Meet test passes → package + deploy **v0.5.6**, which is ALREADY COMMITTED but deliberately NOT shipped: the mic-missing warning (a denied mic used to record without HIS voice and report plain success). Held back so he would not install two versions mid-test.
+- If iPhone fails → decide on a transcode/optimize path (the `jobStatus` column is DEAD legacy, nothing writes it; raw playback is what everyone gets today).
+- Remaining unrun audit layers, all non-blocking: real INP/LCP/CLS metrics, full a11y, offline/SW lifecycle, a live rollback drill.
+
+**FULL AUDIT EVIDENCE (read before claiming anything):** [`docs/qa/run-2026-07-28/REPORT.md`](qa/run-2026-07-28/REPORT.md) — gates, deploy checks, real-browser recording proofs, the 8-mode failure sweep, the live security pass, the cost pass, and (deliberately) the two things that looked like defects and were NOT.
+
+**What was fixed on 2026-07-28, so it is not re-litigated:** the cross-session recording corruption (13 defects across four independent Fable+Codex review rounds, all closed) · **two authorization leaks** (any signed-in user could read another organization's video ids — `get-organization-videos.ts`, `get-space-videos.ts`, both now membership-guarded with RED→GREEN tests) · the silent mic-missing case · **four misleading RUNBOOK errors**, the worst of which sent an operator to a stale Railway-era secrets file for a `DATABASE_URL` it does not contain, mid-incident.
+
+**Tree state:** branch `qa-fixes`, HEAD `33501c3`, everything committed and pushed, 0 ahead of origin.
 
 ---
 ## (history) RESUME 2026-07-23 — the blocker, now fixed
