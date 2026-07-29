@@ -3,9 +3,15 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-28 night — NEW BUG FOUND ON A REAL CALL, FIXED, AWAITING DEPLOY)
+## ▶▶ RESUME HERE (2026-07-29 evening)
 
-**GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live.
+**GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **Then: migrate to the client's Railway WITH the existing videos (owner reversed fresh-start 2026-07-29).**
+
+**🏁 THE MAIN GATE PASSED (owner, 2026-07-29 evening, on v0.5.7):** he recorded a real ~2:47 Meet — **the client's voice IS in the recording**; he re-tested with entire-screen share + his second phone as the client, that voice recorded too. LAUNCH_BLOCKER USTOZ1 closed (8 days open). **The product is in REAL USE:** the team recorded three real meetings today (48 / 33 / 25 min — "Bunyod & Aman agency deal", "Jahon School CRM", "Bitrix24"), all transcribed COMPLETE.
+**His fresh test video `9btpw8ce39f88a4` verified server-side:** upload complete in R2, optimized, `hasAudio=true` (ffmpeg), transcription PROCESSING in cheap/Batch mode at the time of writing — same path the three COMPLETE meetings took, so nothing to fix; **when it flips COMPLETE, glance at transcript + summary quality (that is the O8 "AI results on a fresh recording" criterion).**
+
+**⛔ STILL OWNER-ONLY (2 left):** (1) open ONE recording on an **iPhone** (VP9-in-MP4 risk); (2) **M-DEL** delete-account live test (disposable account).
+**⏳ OWNER DECISIONS PENDING (asked 2026-07-29 via one-tap batch):** Railway migration — domain stays or changes · whose R2 bucket holds the videos · fate of the old data365 deployment.
 
 **⚡ THE OWNER RAN THE GATE TEST AND FOUND A REAL DEFECT — v0.5.5 loses recordings when a Meet in-call dialog opens.**
 He installed v0.5.5 (in **Opera**, not Chrome — a variable nothing had tested), started an in-page recording on a real Meet call, and opened **"Add people"**. Twice:
