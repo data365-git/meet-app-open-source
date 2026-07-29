@@ -17,6 +17,8 @@ const H = vi.hoisted(() => ({
 	getObjectThrows: false,
 	getObject: vi.fn((_k: string) => {}),
 	putObject: vi.fn((_k: string, _b: string, _o: unknown) => {}),
+	rescaleChunkVtt: vi.fn((_v: string, _s: number) => {}),
+	mergeBatchChunkIntoPartial: vi.fn((_p: string, _b: string, _s: number) => {}),
 	// spies
 	cancelBatch: vi.fn(async (_n: string, _k: string) => {}),
 	deleteBatchFile: vi.fn(async (_n: string, _k: string) => {}),
@@ -76,9 +78,26 @@ vi.mock("next/server", () => ({
 		}),
 	},
 }));
+vi.mock("@/lib/gemini-transcribe", () => ({
+	// Clock parity (2026-07-29): the collector must rescale a collected Batch
+	// chunk exactly as the Standard path does before merging. The spy returns a
+	// MARKER so the merge assertion proves the RESCALED text (not the raw batch
+	// text) is what gets merged.
+	rescaleChunkVtt: (vtt: string, speechSpanSec: number) => {
+		H.rescaleChunkVtt(vtt, speechSpanSec);
+		return {
+			vtt: `RESCALED:${vtt}`,
+			factor: 1.25,
+			applied: true,
+			reason: undefined,
+		};
+	},
+}));
 vi.mock("@/lib/batch-merge", () => ({
-	mergeBatchChunkIntoPartial: (_p: string, _b: string, _s: number) =>
-		"WEBVTT\n\nMERGED",
+	mergeBatchChunkIntoPartial: (_p: string, _b: string, _s: number) => {
+		H.mergeBatchChunkIntoPartial(_p, _b, _s);
+		return "WEBVTT\n\nMERGED";
+	},
 	removeBatchJob: (
 		jobs: Array<{ batchName: string }> | undefined,
 		name: string,
@@ -130,6 +149,10 @@ const JOB = {
 	fileName: "files/a",
 	startSec: 900,
 	durationSec: 900,
+	// The rescale anchor captured at submit (clock parity, 2026-07-29). Set
+	// BELOW durationSec so the assertions can tell the two apart: the collector
+	// must prefer this anchor and fall back to durationSec only on old jobs.
+	speechSpanSec: 780,
 	submittedAt: "t1",
 };
 
@@ -259,6 +282,16 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 			"WEBVTT\n\nMERGED",
 			expect.objectContaining({ contentType: "text/vtt" }),
 		);
+		// CLOCK PARITY (2026-07-29): the collected chunk is rescaled with the
+		// job's persisted anchor, and the RESCALED text — not the raw batch
+		// text — is what reaches the merge. Before this, Batch chunks carried
+		// Gemini's raw clock while Standard chunks were rescaled.
+		expect(H.rescaleChunkVtt).toHaveBeenCalledWith("WEBVTT\n\nCHUNK", 780);
+		expect(H.mergeBatchChunkIntoPartial).toHaveBeenCalledWith(
+			expect.any(String),
+			"RESCALED:WEBVTT\n\nCHUNK",
+			900,
+		);
 		// Batch-rate usage recorded.
 		expect(H.insertUsage).toHaveBeenCalledTimes(1);
 		// All jobs resolved → re-kick the cheap workflow from the fuller checkpoint.
@@ -271,6 +304,24 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 		);
 		expect(body.succeeded).toBe(1);
 		expect(body.retried).toBe(1);
+	});
+
+	it("clock-parity fallback: a pre-field job (no speechSpanSec) rescales with durationSec", async () => {
+		const { speechSpanSec: _omit, ...oldJob } = JOB;
+		H.currentMetadata = { aiMode: "cheap", aiBatchJobs: [oldJob] };
+		H.candidates = [{ video: videoWith(H.currentMetadata) }];
+		H.collectBatchResult.mockResolvedValue({
+			status: "succeeded",
+			transcriptVtt: "WEBVTT\n\nCHUNK",
+			inputTokens: 100,
+			outputTokens: 40,
+			audioInTokens: 30,
+		});
+
+		const res = await GET(authedRequest());
+		await bodyOf(res);
+
+		expect(H.rescaleChunkVtt).toHaveBeenCalledWith("WEBVTT\n\nCHUNK", 900);
 	});
 
 	it("treats a MISSING partial as an empty base and still merges + writes", async () => {

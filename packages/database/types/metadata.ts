@@ -101,6 +101,13 @@ export interface VideoMetadata {
 		fileName: string;
 		startSec: number;
 		durationSec: number;
+		/** Rescale anchor captured at submit — same value the Standard path feeds
+		 * rescaleChunkVtt. Without it a collected Batch chunk was merged with
+		 * Gemini's RAW clock while Standard chunks were rescaled, leaving two
+		 * different clocks in one recording (found by an independent review,
+		 * verified 2026-07-29). Optional: jobs submitted before this field exist
+		 * without it — the collector falls back to durationSec. */
+		speechSpanSec?: number;
 		submittedAt: string;
 	}>;
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";

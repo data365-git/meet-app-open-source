@@ -9,6 +9,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { NextResponse } from "next/server";
 import { mergeBatchChunkIntoPartial, removeBatchJob } from "@/lib/batch-merge";
+import { rescaleChunkVtt } from "@/lib/gemini-transcribe";
 import {
 	type CollectBatchResult,
 	cancelBatch,
@@ -148,9 +149,25 @@ export async function GET(request: Request) {
 						.pipe(runPromise);
 					partialVtt = Option.isNone(content) ? "WEBVTT\n\n" : content.value;
 
+					// CLOCK PARITY with the Standard path (independent review finding,
+					// verified 2026-07-29): Standard chunks are rescaled before merge;
+					// Batch chunks were merged with Gemini's RAW clock, leaving two
+					// different clocks in one recording. Apply the SAME rescale with
+					// the anchor captured at submit; pre-field jobs fall back to the
+					// chunk duration — the Standard path's own fallback anchor.
+					const speechSpanSec = job.speechSpanSec ?? job.durationSec ?? 0;
+					const rescaled = rescaleChunkVtt(
+						result.transcriptVtt,
+						speechSpanSec,
+					);
+					console.log(
+						rescaled.applied
+							? `[poll-batch-jobs] chunk@${job.startSec}s cue-rescale x${rescaled.factor.toFixed(3)} (speech span ${speechSpanSec.toFixed(0)}s) for video=${video.id}`
+							: `[poll-batch-jobs] chunk@${job.startSec}s cue-rescale SKIPPED (${rescaled.reason}) for video=${video.id}`,
+					);
 					const merged = mergeBatchChunkIntoPartial(
 						partialVtt,
-						result.transcriptVtt,
+						rescaled.vtt,
 						job.startSec,
 					);
 					await bucket

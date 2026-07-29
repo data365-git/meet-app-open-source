@@ -891,7 +891,12 @@ export async function transcribeAudio(
  * submit itself fails, it does nothing and the patient free retry stays live.
  */
 async function submitCheapChunkBatch(
-	chunk: { url: string; startSec: number; durationSec: number | null },
+	chunk: {
+		url: string;
+		startSec: number;
+		durationSec: number | null;
+		speechEndSec?: number;
+	},
 	videoId: string,
 	knownSpeakers: string[],
 ): Promise<void> {
@@ -939,6 +944,15 @@ async function submitCheapChunkBatch(
 						fileName: submitted.fileName,
 						startSec: chunk.startSec,
 						durationSec: chunk.durationSec ?? 0,
+						// The SAME anchor formula the Standard path feeds
+						// rescaleChunkVtt — captured now because the collector has no
+						// access to the silence analysis later. Without it, collected
+						// Batch chunks merged with Gemini's raw clock while Standard
+						// chunks were rescaled: two clocks in one recording.
+						speechSpanSec:
+							chunk.speechEndSec != null
+								? chunk.speechEndSec - chunk.startSec
+								: (chunk.durationSec ?? 0),
 						submittedAt: new Date().toISOString(),
 					},
 				],
