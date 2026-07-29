@@ -29,6 +29,12 @@ import {
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { withDeadline } from "@/lib/deadline";
 import {
+	acceptAnchors,
+	parseVttCues,
+	selectProbeCandidates,
+	warpVtt,
+} from "@/lib/vtt-probe-warp";
+import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
 	enhanceAudioFromUrl,
@@ -192,11 +198,23 @@ export async function transcribeVideoWorkflow(
 			totalDurationSec: audio.totalDurationSec,
 		});
 
-		await saveTranscription(
+		// Ladder step ④ (Gemini-only maximum): probe-anchored piecewise warp.
+		// Runs LAST so gap-filled cues are warped too; any failure inside keeps
+		// the unwarped transcript — a polish step must never break transcription.
+		const warped = await probeWarpTranscription(
 			videoId,
 			userId,
 			videoData.video,
 			gapFill.transcription,
+			audio.totalDurationSec,
+			{ userId, orgId: videoData.orgId, videoId },
+		);
+
+		await saveTranscription(
+			videoId,
+			userId,
+			videoData.video,
+			warped,
 			gapFill.remainingGaps,
 			audio.totalDurationSec == null,
 		);
@@ -1470,6 +1488,186 @@ interface GapSpanAudio {
 	durationSec: number;
 	gapStartSec: number;
 	gapEndSec: number;
+}
+
+// ── Ladder step ④: probe-anchored piecewise warp ────────────────────────────
+// Known-text localization (independent-review design, 2026-07-29): pick a few
+// HIGH-INFORMATION cues, cut a narrow audio window around each cue's CLAIMED
+// time, and ask Gemini where that exact passage begins inside the window. The
+// accepted anchors drive a monotone piecewise warp of the whole VTT (pure math
+// in lib/vtt-probe-warp.ts, where every anchor-hygiene rule is unit-pinned).
+// Only long recordings qualify — short ones are single-chunk and already
+// re-anchored at 0.
+const PROBE_WARP_MIN_DURATION_SEC = 8 * 60;
+const PROBE_WARP_MAX_PROBES = 8;
+/** Seconds of audio BEFORE and AFTER the claimed time in each probe window —
+ * must comfortably cover the residual drift (measured max ~11s after step ①,
+ * ~30s before it; pre-field/batch paths can still carry more). */
+const PROBE_WARP_HALF_WINDOW_SEC = 25;
+const PROBE_WARP_MODEL = "gemini-3-flash-preview";
+
+async function probeWarpTranscription(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+	mergedVtt: string,
+	totalDurationSec: number | null,
+	context: { userId: string; orgId: string; videoId: string },
+): Promise<string> {
+	"use step";
+
+	if (totalDurationSec == null || totalDurationSec < PROBE_WARP_MIN_DURATION_SEC) {
+		return mergedVtt;
+	}
+	const apiKey = serverEnv().GEMINI_API_KEY;
+	if (!apiKey) return mergedVtt;
+
+	try {
+		const cues = parseVttCues(mergedVtt);
+		const candidates = selectProbeCandidates(
+			cues,
+			PROBE_WARP_MAX_PROBES,
+			Math.max(90, totalDurationSec / 12),
+		);
+		if (candidates.length < 3) {
+			console.log(
+				`[transcribe] probe-warp: only ${candidates.length} usable candidates for ${videoId}, skipping`,
+			);
+			return mergedVtt;
+		}
+
+		const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
+		const rawAnchors: Array<{ claimedSec: number; actualSec: number }> = [];
+
+		for (const candidate of candidates) {
+			const windowStart = Math.max(
+				0,
+				candidate.cue.start - PROBE_WARP_HALF_WINDOW_SEC,
+			);
+			const windowDur = Math.min(
+				PROBE_WARP_HALF_WINDOW_SEC * 2,
+				totalDurationSec - windowStart,
+			);
+			if (windowDur < 10) continue;
+			// One failed probe must not kill the pass — and its anchor is simply
+			// not added, which the acceptance gate already tolerates.
+			try {
+				const extracted = await extractAudioSpanFromUrl(
+					videoUrl,
+					windowStart,
+					windowDur,
+				);
+				let audioB64: string;
+				try {
+					audioB64 = (await fs.readFile(extracted.filePath)).toString("base64");
+				} finally {
+					await extracted.cleanup();
+				}
+				const offset = await withCostGuard({
+					orgId: context.orgId,
+					userId: context.userId,
+					videoId: context.videoId,
+					operation: "transcription",
+					model: PROBE_WARP_MODEL,
+					fn: async () => {
+						const res = await fetch(
+							`https://generativelanguage.googleapis.com/v1beta/models/${PROBE_WARP_MODEL}:generateContent?key=${apiKey}`,
+							{
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({
+									contents: [
+										{
+											parts: [
+												{
+													text:
+														`A passage is spoken somewhere in the attached audio clip (Uzbek, may mix Russian/English):\n"${candidate.probeText}"\n` +
+														`Reply with ONLY the offset in seconds from the START of the clip where this passage BEGINS, as a plain number with one decimal (example: 12.5). ` +
+														`If the passage is not clearly audible in the clip, reply exactly: ABSTAIN`,
+												},
+												{
+													inlineData: {
+														mimeType: "audio/mpeg",
+														data: audioB64,
+													},
+												},
+											],
+										},
+									],
+									generationConfig: { temperature: 0 },
+								}),
+							},
+						);
+						const data = (await res.json()) as {
+							candidates?: Array<{
+								content?: { parts?: Array<{ text?: string }> };
+							}>;
+							usageMetadata?: {
+								promptTokenCount?: number;
+								candidatesTokenCount?: number;
+								promptTokensDetails?: Array<{
+									modality?: string;
+									tokenCount?: number;
+								}>;
+							};
+							error?: { message?: string };
+						};
+						if (!res.ok) {
+							throw new Error(
+								`probe-warp Gemini ${res.status}: ${data.error?.message ?? "?"}`,
+							);
+						}
+						const text =
+							data.candidates?.[0]?.content?.parts
+								?.map((p) => p.text ?? "")
+								.join(" ")
+								.trim() ?? "";
+						return {
+							value: text,
+							inputTokens: data.usageMetadata?.promptTokenCount ?? 0,
+							outputTokens: data.usageMetadata?.candidatesTokenCount ?? 0,
+							audioInTokens:
+								data.usageMetadata?.promptTokensDetails?.find(
+									(d) => d.modality === "AUDIO",
+								)?.tokenCount ?? 0,
+							modelUsed: PROBE_WARP_MODEL,
+						};
+					},
+				});
+				const reply = String(offset.value ?? "").trim();
+				const num = Number.parseFloat(reply);
+				if (
+					!reply.toUpperCase().includes("ABSTAIN") &&
+					Number.isFinite(num) &&
+					num >= 0 &&
+					num <= windowDur
+				) {
+					rawAnchors.push({
+						claimedSec: candidate.cue.start,
+						actualSec: windowStart + num,
+					});
+				}
+			} catch (error) {
+				console.warn(
+					`[transcribe] probe-warp probe@${candidate.cue.start.toFixed(0)}s failed for ${videoId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+
+		const anchors = acceptAnchors(rawAnchors);
+		const result = warpVtt(mergedVtt, anchors, totalDurationSec);
+		console.log(
+			result.applied
+				? `[transcribe] probe-warp: ${anchors.length}/${candidates.length} anchors accepted, median shift ${result.medianShiftSec.toFixed(1)}s for ${videoId}`
+				: `[transcribe] probe-warp: not applied for ${videoId} (${rawAnchors.length} raw anchors, ${anchors.length} accepted)`,
+		);
+		return result.vtt;
+	} catch (error) {
+		console.warn(
+			`[transcribe] probe-warp pass failed for ${videoId}; keeping unwarped transcript: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return mergedVtt;
+	}
 }
 
 async function extractGapSpanAudio(
