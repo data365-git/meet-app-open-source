@@ -3,7 +3,21 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-29 evening)
+## ▶▶ RESUME HERE (2026-07-29 night — the AI-quality batch is BUILT and deploying)
+
+**OWNER DIRECTIVE (verbatim intent): "gemini o'zi bilan erishish mumkin bo'lgan eng kichik farq aniqlikka chiqmaguncha to'xtama" + "hammasini men aytishim shartmi — eng yaxshi holatga keltir".** Standing GO on the whole AI-quality push: no more per-step asks; each step still proven by measurement.
+
+**✅ BUILT + COMMITTED `f2a39cc` (deploying at the time of writing, Coolify `arty4lt98h8zvjgkl9whdvup`):**
+1. **Cycling-degeneration guard** — the fabrication fix. The old guard needed ONE line >12×; the real failure cycled THREE lines ~6× each. New rule (thresholds from the same night's clean-vs-broken measurements): from the first line reaching its 3rd occurrence, if the remainder is ≥6 content lines / ≥70% repeats / ≥2 distinct lines → cut, keep the clean prefix. RED→GREEN on a fixture shaped like the owner's real broken VTT; the clean spread-out-backchannel shape is pinned untouched. **Markdown strip was DISCARDED on evidence** — `**bold**` on borrowed terms is a deliberate prompt feature (prompt tests pin it); do not re-add.
+2. **Free-model CHAIN** — verified live that the free key's per-model quotas are separate (3.5-flash 429 while 3-flash-preview 200). Both transcription and summary now try [gemini-3.5-flash, gemini-3-flash-preview] on the FREE key before paid; cheap mode parks only if EVERY free model quota-fails. Tests updated to the new contract (11/11 + 8/8).
+3. **3-min chunks** (ladder step ① — July's ready-to-apply plan). Suite 1189 pass, typecheck 0.
+
+**▶ IMMEDIATELY AFTER THE DEPLOY LANDS (recipe verified against code, do in order):**
+1. Back up `25s3fqp7e7vc5p0/hcjeyee20t4fvvp/transcription.vtt` → `transcription.vtt.bak-6min` in R2 (inside the app container).
+2. Re-kick that video: `UPDATE videos SET transcriptionStatus='PROCESSING', updatedAt=NOW()-INTERVAL 30 MINUTE WHERE id='hcjeyee20t4fvvp'` → then curl the recover cron from inside the container with its `CRON_SECRET` (present, verified). Metadata is clean (no autoRecoverAttempts, no batch jobs — checked), partial is deleted on COMPLETE (code-verified `transcription-partial.vtt` cleanup), so the re-kick re-transcribes from scratch through the NEW code.
+3. Wait for COMPLETE → run the drift probe again (script recreatable from STATE; 8 probes) → compare vs baseline **8.7s median / 29.6s max**; keep if gain > 2×SE, else REVERT the chunk constants.
+4. Same re-kick for the owner's 2:47 test video `9btpw8ce39f88a4` → its transcript must come out clean-prefix-only (no cycle) and its transcription cost must drop ~10× (was 77,018 micros).
+5. Expect most of these re-runs to bill ~$0 — the free chain's second model was verified live with headroom.
 
 **GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **Then: migrate to the client's Railway WITH the existing videos (owner reversed fresh-start 2026-07-29).**
 
