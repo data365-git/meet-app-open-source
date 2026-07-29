@@ -12,7 +12,19 @@ _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 2. **Free-model CHAIN** — verified live that the free key's per-model quotas are separate (3.5-flash 429 while 3-flash-preview 200). Both transcription and summary now try [gemini-3.5-flash, gemini-3-flash-preview] on the FREE key before paid; cheap mode parks only if EVERY free model quota-fails. Tests updated to the new contract (11/11 + 8/8).
 3. **3-min chunks** (ladder step ① — July's ready-to-apply plan). Suite 1189 pass, typecheck 0.
 
-**▶ IMMEDIATELY AFTER THE DEPLOY LANDS (recipe verified against code, do in order):**
+**✅ DEPLOYED (`f2a39cc` live, health ok) + LIVE PROOF ON THE OWNER'S TEST VIDEO (2026-07-29 ~21:50):** re-ran `9btpw8ce39f88a4` through the new code — the cycling guard **FIRED in production** (`RUNAWAY repetition detected … kept clean prefix`), the stored transcript went from an ~80%-duplicate loop to 10 clean cues (dup 20%, loop tail gone, honest gaps where the video is quiet), and the transcription billed **$0** — the free chain's second model carried it (was 77,018 micros this afternoon). Old garbage VTT kept as `transcription.vtt.bak-looped`. Codex consultation folded into [`docs/plans/2026-07-29-timestamp-ladder-v2.md`](plans/2026-07-29-timestamp-ladder-v2.md): its `audioTimestamp` lead was **falsified live** (Developer-API rejects the field, Vertex-only — do not re-try); its Batch clock-parity bug was **verified in code** (batch merge skips `rescaleChunkVtt`) and is the next build; warp4 production port demoted to an offline experiment (composition falsified). Parity-fix seam identified: `ExtractedAudioChunk.speechEndSec` is the rescale anchor — persist it at Batch submit, rescale at collect before merge.
+
+**📏 LADDER STEP ① RE-MEASURED (same rig, same 8 probe positions, 25-min meeting `hcjeyee20t4fvvp`, 2026-07-29 ~22:00) — KEPT:**
+| metric | 6-min chunks | 3-min chunks |
+|---|---|---|
+| mean drift | +5.1s | **+0.7s** |
+| median abs | 8.7s | **6.2s** |
+| max abs | **29.6s** | **11.0s** |
+| stderr | 4.9s | 2.4s |
+The owner's complaint metric ("30s on a half-hour video") collapsed 29.6→11.0; mean bias ~0. Median gain (2.5s) alone is within noise, but the max collapse + bias removal justify KEEP. Honest caveat (Codex): the same deploy changed the model mix and the guard, so this is indicative, not a clean A/B. Old VTT kept as `transcription.vtt.bak-6min`.
+**▶ LADDER CONTINUES NEXT SESSION (owner's standing "to'xtama" directive — do NOT re-ask, just continue):** ③ Batch clock-parity fix (seam pinned above) → ④ known-text localization warp per the v2 plan → re-measure each with the same rig; stop at plateau. Target per Codex: median 3–5s is realistically reachable; 1–3s only via a Vertex migration (owner decision, parked).
+
+**(historical) THE POST-DEPLOY RECIPE (already executed for both videos above):**
 1. Back up `25s3fqp7e7vc5p0/hcjeyee20t4fvvp/transcription.vtt` → `transcription.vtt.bak-6min` in R2 (inside the app container).
 2. Re-kick that video: `UPDATE videos SET transcriptionStatus='PROCESSING', updatedAt=NOW()-INTERVAL 30 MINUTE WHERE id='hcjeyee20t4fvvp'` → then curl the recover cron from inside the container with its `CRON_SECRET` (present, verified). Metadata is clean (no autoRecoverAttempts, no batch jobs — checked), partial is deleted on COMPLETE (code-verified `transcription-partial.vtt` cleanup), so the re-kick re-transcribes from scratch through the NEW code.
 3. Wait for COMPLETE → run the drift probe again (script recreatable from STATE; 8 probes) → compare vs baseline **8.7s median / 29.6s max**; keep if gain > 2×SE, else REVERT the chunk constants.
