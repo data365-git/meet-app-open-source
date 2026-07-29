@@ -46,8 +46,12 @@ are recorded here so they survive.
 ## The ladder now (each step measured, keep only if gain > 2×SE)
 
 ① 3-min chunks — SHIPPED tonight (`f2a39cc`), re-measure pending deploy.
-② `audioTimestamp` + pinned-model A/B — one video, one model, no fallback chain; compare with
-   the same rig. CHEAP; do first.
+② ~~`audioTimestamp` + pinned-model A/B~~ — **FALSIFIED live 2026-07-29 21:15**: the Gemini
+   Developer API (generativelanguage.googleapis.com) answers `400 Unknown name "audioTimestamp"
+   at 'generation_config'` (control call without the flag: 200). The field is Vertex-AI-only.
+   Do NOT re-try on this API. The one door it leaves open: a Vertex migration (separate GCP
+   project/billing/auth) MIGHT unlock the 1–3s tier — that is an owner-level cost/infra decision,
+   parked, not a code task.
 ③ Batch clock-parity fix — correctness regardless of measurement; smaller in practice now that
    the free chain rescues more chunks into the Standard path, but it must die.
 ④ Known-text localization warp (redesigned ③) — abstaining anchors + piecewise monotone warp.
