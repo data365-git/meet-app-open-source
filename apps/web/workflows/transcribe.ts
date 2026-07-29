@@ -96,6 +96,17 @@ export interface ExtractedAudio {
 // gemini-3.5-flash is free-of-charge on a billing-off project and higher quality
 // than the paid default; on any failure the paid path takes over.
 const FREE_TRANSCRIBE_MODEL = "gemini-3.5-flash";
+// (2026-07-29) The free key's per-MODEL daily quotas are separate — verified
+// live: gemini-3.5-flash answered 429 (quota spent by the morning's meetings)
+// while gemini-3-flash-preview on the SAME free key answered 200. Chaining a
+// second free model before the paid fallback roughly doubles the free headroom;
+// transcribeWithGemini's own model loop advances past a 429 (transient, not
+// permanent), so the chain needs no new plumbing. Order matters: 3.5 first —
+// it is the model the free tier is sized around.
+const FREE_TRANSCRIBE_MODELS = [
+	FREE_TRANSCRIBE_MODEL,
+	"gemini-3-flash-preview",
+] as const;
 
 // Tez (fast) free-probe deadline for one transcription chunk (Files API
 // upload + activation + generation). Fast mode makes exactly ONE free attempt
@@ -112,8 +123,13 @@ const FREE_TRANSCRIBE_PROBE_MS = 30_000;
 // to Gemini is unchanged (chunks don't overlap), so cost is ~flat — only the
 // per-call prompt repeats. Threshold sits just above the chunk size so mid-length
 // audios (which were previously one un-reset chunk) also get split.
-const LONG_AUDIO_CHUNK_DURATION_SEC = 6 * 60;
-const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 8 * 60;
+// 2026-07-29: 6min → 3min (ladder step ① of the owner's "Gemini-only maximum
+// accuracy" directive). Measured baseline on real meetings with 6-min chunks:
+// median |drift| 5.7s/8.7s, max 11.7s/29.6s (48-min / 25-min). Halving the span
+// halves the room the curvature has to accumulate. REVERT to 6*60 if the same
+// rig shows no real improvement (rig noise ±5s — a <2×SE change is not a result).
+const LONG_AUDIO_CHUNK_DURATION_SEC = 3 * 60;
+const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 4 * 60;
 const ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR = 220_000;
 
 export async function transcribeVideoWorkflow(
@@ -803,7 +819,7 @@ export async function transcribeAudio(
 								apiKey: freeKey,
 								audioDurationSec: audioDurationSec ?? undefined,
 								knownSpeakers,
-								models: [FREE_TRANSCRIBE_MODEL],
+								models: FREE_TRANSCRIBE_MODELS,
 								...(isFast ? { maxAttempts: 1, signal } : {}),
 							});
 						const res = isFast

@@ -84,7 +84,13 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
 		const geminiOpt = H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt;
 		expect(geminiOpt.apiKey).toBe("free-key");
-		expect(geminiOpt.models).toEqual(["gemini-3.5-flash"]);
+		// (2026-07-29) The free attempt now carries a CHAIN of free models —
+		// their daily quotas are separate (verified live), so the second model
+		// doubles the free headroom before any paid fallback.
+		expect(geminiOpt.models).toEqual([
+			"gemini-3.5-flash",
+			"gemini-3-flash-preview",
+		]);
 		const guardOpt = H.withCostGuard.mock.calls[0]?.[0] as GuardOpt;
 		expect(guardOpt.free).toBe(true);
 		expect(guardOpt.model).toBe("gemini-3.5-flash");

@@ -688,21 +688,69 @@ export function stripRunawayRepetition(text: string): {
 			worst = t;
 		}
 	}
-	if (!worst || worstN <= 12) return { text, runaway: false };
-	// Cut at the 3rd occurrence of the runaway line: keep a little context, drop
-	// the loop. Downstream coverage/gap-fill handles the resulting short chunk.
-	let seen = 0;
-	let cutIdx = lines.length;
-	for (let i = 0; i < lines.length; i++) {
-		if (lines[i]?.trim() === worst) {
-			seen++;
-			if (seen === 3) {
-				cutIdx = i;
-				break;
+	if (worst && worstN > 12) {
+		// Cut at the 3rd occurrence of the runaway line: keep a little context,
+		// drop the loop. Downstream coverage/gap-fill handles the short chunk.
+		let seen = 0;
+		let cutIdx = lines.length;
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i]?.trim() === worst) {
+				seen++;
+				if (seen === 3) {
+					cutIdx = i;
+					break;
+				}
 			}
 		}
+		return { text: lines.slice(0, cutIdx).join("\n"), runaway: true };
 	}
-	return { text: lines.slice(0, cutIdx).join("\n"), runaway: true };
+
+	// (2026-07-29) CYCLING degeneration — the shape the single-line rule missed
+	// on a real recording: Gemini looped THREE sentences in rotation for a
+	// sparse 2:47 video ("Hozir mana bu yerda test-lar ketyapti…" ×6 etc.), so
+	// no single line ever reached 12 and the whole fabricated transcript was
+	// stored, the summary was built on it, and the inflated output tokens made
+	// that tiny video cost 10× its second call. Rule, thresholds taken from the
+	// same night's measurements (three real meetings: dup 1–5%, backchannel
+	// "Mhm" repeats spread out; the broken one: a tail that is ~100% repeats of
+	// ≥2 distinct lines): from the first line that reaches its 3rd occurrence,
+	// if the REMAINDER is ≥6 content lines, ≥70% of them are repeats of
+	// already-seen lines, and the repeating set has ≥2 distinct lines (a CYCLE,
+	// not one habitual phrase — one phrase ≤12× stays protected, see the test
+	// pinning that), the loop has started: cut there, keep the clean prefix.
+	const contentAt = (i: number): string | null => {
+		const t = lines[i]?.trim() ?? "";
+		return t.length > 8 && !t.includes("-->") ? t : null;
+	};
+	const seenCounts = new Map<string, number>();
+	for (let i = 0; i < lines.length; i++) {
+		const t = contentAt(i);
+		if (!t) continue;
+		const n = (seenCounts.get(t) ?? 0) + 1;
+		seenCounts.set(t, n);
+		if (n !== 3) continue;
+		// Candidate loop start — judge the remainder from here.
+		const before = new Set(seenCounts.keys());
+		let rest = 0;
+		let repeats = 0;
+		const repeatedDistinct = new Set<string>();
+		const restSeen = new Set<string>();
+		for (let j = i; j < lines.length; j++) {
+			const rt = contentAt(j);
+			if (!rt) continue;
+			rest++;
+			if (before.has(rt) || restSeen.has(rt)) {
+				repeats++;
+				repeatedDistinct.add(rt);
+			}
+			restSeen.add(rt);
+		}
+		if (rest >= 6 && repeats / rest >= 0.7 && repeatedDistinct.size >= 2) {
+			return { text: lines.slice(0, i).join("\n"), runaway: true };
+		}
+	}
+
+	return { text, runaway: false };
 }
 
 /** Sleep `ms`, waking immediately (and rejecting) if `signal` aborts — so a

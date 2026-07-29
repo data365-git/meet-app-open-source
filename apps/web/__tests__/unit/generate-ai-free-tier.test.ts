@@ -144,76 +144,124 @@ describe("callAiApi free-tier-first", () => {
 		expect((H.withCostGuard.mock.calls[0]?.[0] as GuardOpt).free).toBe(true);
 	});
 
-	it("free key set + malformed free JSON: records free usage, falls back to paid, accumulates tokens", async () => {
+	// (2026-07-29) The free tier is now a CHAIN of two models on the free key —
+	// verified live that their daily quotas are separate. A single free failure
+	// therefore tries the second free model before any paid call.
+	it("free key set + malformed free JSON: SECOND free model rescues at $0, accumulates tokens", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
 		});
 		H.fetch
 			.mockResolvedValueOnce(geminiOk('{"bad":', 11, 7))
+			.mockResolvedValueOnce(geminiOk('{"free2":true}', 20, 8));
+
+		const out = await callAiApi("prompt", {}, CTX);
+
+		expect(out.content).toBe('{"free2":true}');
+		expect(out.model).toBe("gemini-3-flash-preview");
+		expect(H.fetch).toHaveBeenCalledTimes(2);
+		expect(fetchUrl(0)).toContain("key=free-key");
+		expect(fetchUrl(1)).toContain("key=free-key");
+		expect(fetchUrl(1)).toContain("/models/gemini-3-flash-preview:generateContent");
+		expect((H.withCostGuard.mock.calls[0]?.[0] as GuardOpt).free).toBe(true);
+		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBe(true);
+	});
+
+	it("both free models fail: falls back to paid, accumulates free tokens", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		H.fetch
+			.mockResolvedValueOnce(geminiOk('{"bad":', 11, 7))
+			.mockResolvedValueOnce(geminiOk('{"also bad":', 9, 3))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 
 		const out = await callAiApi("prompt", {}, CTX);
 
 		expect(out.content).toBe('{"paid":true}');
 		expect(out.model).toBe("gemini-3-flash-preview");
-		expect(out.inputTokens).toBe(31);
-		expect(out.outputTokens).toBe(15);
-		expect(H.fetch).toHaveBeenCalledTimes(2);
+		expect(out.inputTokens).toBe(11 + 9 + 20);
+		expect(out.outputTokens).toBe(7 + 3 + 8);
+		expect(H.fetch).toHaveBeenCalledTimes(3);
 		expect(fetchUrl(0)).toContain("key=free-key");
-		expect(fetchUrl(1)).toContain("key=paid-key");
-		expect((H.withCostGuard.mock.calls[0]?.[0] as GuardOpt).free).toBe(true);
-		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBeFalsy();
+		expect(fetchUrl(1)).toContain("key=free-key");
+		expect(fetchUrl(2)).toContain("key=paid-key");
+		expect((H.withCostGuard.mock.calls[2]?.[0] as GuardOpt).free).toBeFalsy();
 	});
 
-	it("fast mode + free HTTP 429: falls back to the paid model chain", async () => {
+	it("fast mode + first free model 429: second FREE model rescues before any paid call", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
 		});
 		H.fetch
 			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"))
-			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+			.mockResolvedValueOnce(geminiOk('{"free2":true}', 20, 8));
 
 		const out = await callAiApi("prompt", {}, CTX);
 
-		expect(out.content).toBe('{"paid":true}');
+		expect(out.content).toBe('{"free2":true}');
 		expect(out.model).toBe("gemini-3-flash-preview");
 		expect(H.fetch).toHaveBeenCalledTimes(2);
 		expect(fetchUrl(0)).toContain("/models/gemini-3.5-flash:generateContent");
+		expect(fetchUrl(0)).toContain("key=free-key");
 		expect(fetchUrl(1)).toContain("/models/gemini-3-flash-preview:generateContent");
+		expect(fetchUrl(1)).toContain("key=free-key");
 	});
 
-	it("cheap mode + free HTTP 429: throws instead of falling back to paid", async () => {
+	it("cheap mode + BOTH free models 429: throws instead of falling back to paid", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
 		});
-		H.fetch.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"));
+		H.fetch
+			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"));
 
 		await expect(callAiApi("prompt", {}, CHEAP_CTX)).rejects.toMatchObject({
 			name: "AiQuotaWaitError",
 		});
 
-		expect(H.fetch).toHaveBeenCalledTimes(1);
+		expect(H.fetch).toHaveBeenCalledTimes(2);
 		expect(fetchUrl(0)).toContain("/models/gemini-3.5-flash:generateContent");
+		expect(fetchUrl(1)).toContain("/models/gemini-3-flash-preview:generateContent");
 	});
 
-	it("cheap mode + non-quota free error: falls back to paid", async () => {
+	it("cheap mode + one quota error and one real error: falls back to paid (no park)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		H.fetch
+			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(geminiOk('{"bad":', 9, 3))
+			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+
+		const out = await callAiApi("prompt", {}, CHEAP_CTX);
+
+		expect(out.content).toBe('{"paid":true}');
+		expect(H.fetch).toHaveBeenCalledTimes(3);
+		expect(fetchUrl(2)).toContain("key=paid-key");
+	});
+
+	it("cheap mode + non-quota errors on BOTH free models: falls back to paid", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
 		});
 		H.fetch
 			.mockResolvedValueOnce(geminiOk('{"bad":', 11, 7))
+			.mockResolvedValueOnce(geminiOk('{"still bad":', 4, 2))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 
 		const out = await callAiApi("prompt", {}, CHEAP_CTX);
 
 		expect(out.content).toBe('{"paid":true}');
 		expect(out.model).toBe("gemini-3-flash-preview");
-		expect(H.fetch).toHaveBeenCalledTimes(2);
-		expect(fetchUrl(1)).toContain("key=paid-key");
+		expect(H.fetch).toHaveBeenCalledTimes(3);
+		expect(fetchUrl(2)).toContain("key=paid-key");
 	});
 
 	it("fast free probe threads an abort signal into the free call; cheap does not", async () => {

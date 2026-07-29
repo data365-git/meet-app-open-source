@@ -865,6 +865,14 @@ const GEMINI_SUMMARY_MODELS = [
 ] as const;
 const GEMINI_SUMMARY_MODEL = GEMINI_SUMMARY_MODELS[0];
 const FREE_SUMMARY_MODEL = "gemini-3.5-flash";
+// (2026-07-29) Same finding as transcription: the free key's per-MODEL daily
+// quotas are separate (verified live — 3.5-flash 429 while 3-flash-preview 200
+// on the SAME free key), so a second free model before the paid fallback
+// roughly doubles the free headroom. 3.5 first: it is the free tier's model.
+const FREE_SUMMARY_MODELS = [
+	FREE_SUMMARY_MODEL,
+	"gemini-3-flash-preview",
+] as const;
 
 // Tez (fast) free-probe deadline for one summary/refine text call. Fast mode
 // makes exactly ONE free attempt (no backoff) under this deadline, then falls to
@@ -908,53 +916,75 @@ export async function callAiApi(
 	let freeOutputTokens = 0;
 
 	if (freeKey) {
-		try {
-			// Tez: one bounded free attempt (no backoff) under a real deadline that
-			// aborts the in-flight fetch. Arzon: patient — default retries, no
-			// deadline (the recover cron handles the quota wait).
-			const isFast = context.aiSpeedMode !== "cheap";
-			const freeResult = isFast
-				? await withDeadline(FREE_SUMMARY_PROBE_MS, (signal) =>
-						callAiApiWithModel(
-							FREE_SUMMARY_MODEL,
-							prompt,
-							json,
-							freeKey,
-							context,
-							{
-								free: true,
-								maxAttempts: 1,
-								signal,
-							},
-						),
-					)
-				: await callAiApiWithModel(
-						FREE_SUMMARY_MODEL,
+		// Tez: the whole free CHAIN shares one bounded probe deadline (a quota 429
+		// answers instantly, so trying the second model still fits); the abort
+		// signal stops the chain, never letting a hung call spill past the budget.
+		// Arzon: patient — default retries per model, no deadline (the recover
+		// cron handles the quota wait). The chain parks (AiQuotaWaitError) only
+		// when EVERY free model failed for quota — if one merely errored, paid is
+		// the right fallback, and if one succeeded there is nothing to park.
+		const isFast = context.aiSpeedMode !== "cheap";
+		const freeErrors: unknown[] = [];
+		const tryFreeChain = async (
+			signal?: AbortSignal,
+		): Promise<AiApiResult | null> => {
+			for (const model of FREE_SUMMARY_MODELS) {
+				if (signal?.aborted) {
+					throw signal.reason ?? new Error("free probe deadline hit");
+				}
+				try {
+					const freeResult = await callAiApiWithModel(
+						model,
 						prompt,
 						json,
 						freeKey,
 						context,
 						{
 							free: true,
+							...(isFast ? { maxAttempts: 1 as const, signal } : {}),
 						},
 					);
-			freeInputTokens = freeResult.inputTokens;
-			freeOutputTokens = freeResult.outputTokens;
-			assertFreeAiResultUsable(freeResult, json);
-			return {
-				content: freeResult.content,
-				model: FREE_SUMMARY_MODEL,
-				inputTokens: freeResult.inputTokens,
-				outputTokens: freeResult.outputTokens,
-			};
-		} catch (error) {
-			if (context.aiSpeedMode === "cheap" && isQuotaLikeAiError(error)) {
+					freeInputTokens += freeResult.inputTokens;
+					freeOutputTokens += freeResult.outputTokens;
+					assertFreeAiResultUsable(freeResult, json);
+					return {
+						content: freeResult.content,
+						model,
+						inputTokens: freeResult.inputTokens,
+						outputTokens: freeResult.outputTokens,
+					};
+				} catch (error) {
+					// Deadline abort mid-call: stop the chain, the paid path takes over.
+					if (signal?.aborted) throw error;
+					freeErrors.push(error);
+					console.warn(
+						`[generate-ai] free-tier (${model}) attempt failed for video=${context.videoId}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			return null;
+		};
+		try {
+			const freeResult = isFast
+				? await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain)
+				: await tryFreeChain();
+			if (freeResult) return freeResult;
+			if (
+				context.aiSpeedMode === "cheap" &&
+				freeErrors.length > 0 &&
+				freeErrors.every((e) => isQuotaLikeAiError(e))
+			) {
 				throw new AiQuotaWaitError(
 					`Free-tier summary quota exhausted for video=${context.videoId}`,
 				);
 			}
 			console.warn(
-				`[generate-ai] free-tier (${FREE_SUMMARY_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
+				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
+			);
+		} catch (error) {
+			if (error instanceof AiQuotaWaitError) throw error;
+			console.warn(
+				`[generate-ai] free-tier probe ended (${error instanceof Error ? error.message : String(error)}) for video=${context.videoId}, falling back to paid`,
 			);
 		}
 	}
