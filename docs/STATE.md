@@ -549,3 +549,22 @@ Why it was moved (2026-07-20): STATE.md had grown to **416 KB / 1895 lines** —
 Record the DURATION next to the result. A gate that suddenly runs far faster than the work it claims to do has stopped doing it, and a time is falsifiable where "exit 0" is not.
 
 Same class, runtime half: `apps/web/.next/standalone/apps/web/lib/audio-extract.ts` still holds the OLD `-pipe:1`. Harmless because the Docker build recompiles from source (proven: the deployed image is new AND the served `/theme-script.js` contains the fix), but never treat a local `.next` output as evidence of what production runs.
+
+---
+## ▶ NEXT STEP (written 2026-08-04 00:40, after the LAST commit of the night)
+
+**Tree state:** branch `qa-fixes`, everything committed and pushed. **15 commits tonight** (`b7b4038..5e824fc`). Prod is live on `eeada87` and was verified by opening it.
+
+**The ONE thing still open:** the 2-hour recording soak, attempt 2, started **00:19**, log at `apps/browser-extension/e2e-audio-proof/soak-2h.log`.
+- Attempt 1 died at **83 parts / ~28 min** with `Target page, context or browser has been closed` — a clean upload stream right up to the close, no error, no OOM. Kept as `soak-attempt1-died-at-83parts.log`.
+- **The decision rule, so the next session does not re-derive it:** if attempt 2 passes ~28 minutes / ~83 parts, attempt 1 was ENVIRONMENTAL (laptop sleep or the process reaped) and the recorder is not implicated. If it dies near the same mark again, that is a REAL signal and the first suspect is `inpage-recorder.ts:648` — `recorder.start(200)` means ~36,000 awaited round-trips over 2h, each JSON-serializing raw bytes.
+- Read the RAW duration number, not the harness's OK/WRONG: the running process loaded the OLD loose window (the tightened 0.97-1.05x soak window applies only to runs started after `a2e86cf`).
+- **Do not start a dev server on port 3001 while it runs** — the harness's mock binds 3001, a dev server silently steals the traffic, and the run dies with `createVideo failed 401`. That killed the very first attempt.
+
+**Landed after the previous board entry (what the stop-gate caught me not writing down):**
+- `5e824fc` — removed the three orphaned font-size i18n keys, and deleted `apps/web/.next/standalone`, which still held the PRE-FIX component and the old `-pipe:1`. After that, the only `-pipe:1` left in source sits inside the test assertions that exist to keep it away. Suite 1216 green after the edit.
+- `d4f7393` — the typecheck-is-a-no-op finding and the `--force` rule (gate-hygiene section above).
+
+**Goalkeeper halted TWICE, both times `contract-incomplete`, and was right both times** — first that a check would have failed CORRECT code and driven the loop to break it, then that the typecheck gate checked nothing and several checks were comment-matchable. Its verdict on the corrected contract: every item already passes, so it is a **regression gate, not a build contract**. Nothing is waiting on it.
+
+**Owner duty outstanding:** open the live site on a dark-mode phone and confirm it comes up dark on FIRST paint — the one thing the rig cannot prove, because the Browser pane applies its dark emulation after the beforeInteractive script runs.
