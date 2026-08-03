@@ -49,7 +49,19 @@ const SWAP_TEST = process.env.PROOF_SWAP === "1";
 // different Blink captureStream() path that cannot reproduce this at all.
 // See docs/plans/2026-07-22-remote-voice-2nd-recording-bug.md §6.2.
 const SECOND_TEST = process.env.PROOF_SECOND === "1";
-const RECORD_MS = SWAP_TEST ? 18_000 : SECOND_TEST ? 8_000 : 10_000;
+// PROOF_MINUTES overrides the recording length so this harness can be used as a
+// LONG-DURATION soak test (the 2-hour question) without editing the file:
+//   PROOF_MINUTES=120 node run-proof-inpage.mjs
+// Default behaviour is unchanged when the env var is absent.
+const PROOF_MINUTES = Number(process.env.PROOF_MINUTES) || 0;
+const RECORD_MS =
+	PROOF_MINUTES > 0
+		? PROOF_MINUTES * 60_000
+		: SWAP_TEST
+			? 18_000
+			: SECOND_TEST
+				? 8_000
+				: 10_000;
 const SERVE_PORT = 8443;
 const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
 
@@ -366,8 +378,20 @@ async function main() {
 			`filing=${cv.extensionContext === "meeting" && cv.meetingId === "abc-defg-hij" ? "OK" : `WRONG(${cv.extensionContext},${cv.meetingId})`}`,
 		);
 		const dur = manifest.completeMultipart?.durationInSecs;
+		// Scale the window to the ACTUAL recording length. This used to be a
+		// hardcoded 5..60s, which meant a perfectly good long run (e.g. the
+		// 2-hour soak via PROOF_MINUTES) reported WRONG and the harness lied
+		// about the product. Keeps the original LOOSE intent ("plausible, not
+		// zero, not absurd") but scaled, so tightening this can never turn a
+		// previously-passing short run red: floor at half the target, ceiling
+		// at 1.5x + 30s. At the old 10s target that is 5..45s, i.e. the old
+		// 5..60s window; at 120 minutes it is 60..210 minutes.
+		const targetSec = RECORD_MS / 1000;
+		const minSec = Math.max(1, targetSec * 0.5);
+		const maxSec = targetSec * 1.5 + 30;
+		const durOk = typeof dur === "number" && dur >= minSec && dur <= maxSec;
 		claims.push(
-			`duration=${typeof dur === "number" && dur >= 5 && dur <= 60 ? `OK(${dur}s)` : `WRONG(${dur})`}`,
+			`duration=${durOk ? `OK(${dur}s of ~${targetSec}s)` : `WRONG(${dur}, expected ~${targetSec}s)`}`,
 		);
 
 		const analyze = spawnSync(
