@@ -12,6 +12,14 @@ module.exports = (__app, _options) => {
 	}
 
 	const config = {
+		// The whole design system already switches on the `dark` CLASS that
+		// public/theme-script.js puts on <body> (radix tokens ship as
+		// `.dark, .dark-theme`, and globals.css keys `.dark` / `body.dark`).
+		// Tailwind was left at its default `media`, so every `dark:` utility
+		// followed the OS instead — meaning the app's own theme toggle could
+		// change the token surfaces but NOT any `dark:` class. That mismatch
+		// is what leaves a white card sitting on a dark page. Aligning the two.
+		darkMode: "class",
 		content: [
 			`../../apps/*/pages/**/*.{js,ts,jsx,tsx,mdx}`,
 			`../../apps/*/components/**/*.{js,ts,jsx,tsx,mdx}`,

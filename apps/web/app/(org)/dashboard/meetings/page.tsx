@@ -140,6 +140,12 @@ export default async function MeetingsPage(props: {
       and(
         eq(videos.ownerId, userId),
         eq(organizations.id, user.activeOrganizationId),
+        // Must mirror the list query below, which excludes foldered meetings
+        // (they are reached through their folder card). Without this the count
+        // includes meetings the list never renders: move every meeting into a
+        // folder and the page reports a non-zero count, skips the empty state,
+        // and paginates over nothing.
+        isNull(videos.folderId),
         isNull(organizations.tombstoneAt),
         isNull(videos.deletedAt),
         sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb'`,

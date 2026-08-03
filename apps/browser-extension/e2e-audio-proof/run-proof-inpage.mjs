@@ -381,14 +381,21 @@ async function main() {
 		// Scale the window to the ACTUAL recording length. This used to be a
 		// hardcoded 5..60s, which meant a perfectly good long run (e.g. the
 		// 2-hour soak via PROOF_MINUTES) reported WRONG and the harness lied
-		// about the product. Keeps the original LOOSE intent ("plausible, not
-		// zero, not absurd") but scaled, so tightening this can never turn a
-		// previously-passing short run red: floor at half the target, ceiling
-		// at 1.5x + 30s. At the old 10s target that is 5..45s, i.e. the old
-		// 5..60s window; at 120 minutes it is 60..210 minutes.
+		// about the product.
+		// A SOAK run (PROOF_MINUTES set) is measuring survival, so its whole
+		// point is that the recording did not die early — a 0.5x floor would
+		// let a 2-hour run that stopped at 60 minutes report OK, which is the
+		// same class of lie in the other direction. Soaks therefore get a tight
+		// window; the short default modes keep the original loose "plausible,
+		// not zero, not absurd" intent (the 10s default lands in 5..45s, close
+		// to the old fixed 5..60s — note the ceiling IS slightly stricter, so a
+		// freak 50s short run would now report WRONG).
 		const targetSec = RECORD_MS / 1000;
-		const minSec = Math.max(1, targetSec * 0.5);
-		const maxSec = targetSec * 1.5 + 30;
+		const isSoak = PROOF_MINUTES > 0;
+		const minSec = isSoak
+			? targetSec * 0.97
+			: Math.max(1, targetSec * 0.5);
+		const maxSec = isSoak ? targetSec * 1.05 : targetSec * 1.5 + 30;
 		const durOk = typeof dur === "number" && dur >= minSec && dur <= maxSec;
 		claims.push(
 			`duration=${durOk ? `OK(${dur}s of ~${targetSec}s)` : `WRONG(${dur}, expected ~${targetSec}s)`}`,
