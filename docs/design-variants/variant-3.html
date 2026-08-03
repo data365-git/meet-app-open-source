@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variant 3 — Ikki ustun</title>
+<style>
+  :root{
+    --bg:#f7f7f8; --surface:#ffffff; --border:#e4e4e7; --text:#18181b; --text-dim:#71717a;
+    --accent:#2563eb; --accent-fg:#ffffff; --radius:14px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#121214; --surface:#1c1c1f; --border:#2c2c31; --text:#f4f4f5; --text-dim:#a1a1aa; --accent:#3b82f6; --accent-fg:#0b1220; }
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  .titlebar{background:#111827;color:#fbbf24;font-size:13px;padding:8px 16px;text-align:center;}
+  .titlebar b{color:#fff;}
+  .header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);}
+  .back{width:32px;height:32px;border-radius:999px;border:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:14px;flex-shrink:0;}
+  .htitle{font-size:16px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .hbtn{border:1px solid var(--border);background:var(--surface);color:var(--text-dim);border-radius:999px;padding:7px 14px;font-size:13px;cursor:pointer;}
+  .hbtn.primary{background:var(--accent);color:var(--accent-fg);border:none;font-weight:600;}
+
+  .layout{display:flex;flex-direction:column;max-width:1200px;margin:0 auto;}
+  @media (min-width:900px){ .layout{flex-direction:row;align-items:flex-start;} }
+
+  .left{padding:18px;flex:1.4;min-width:0;}
+  @media (min-width:900px){ .left{position:sticky;top:0;} }
+  .video{aspect-ratio:16/9;border-radius:var(--radius);background:repeating-linear-gradient(135deg,#27272a,#27272a 10px,#1f1f22 10px,#1f1f22 20px);position:relative;margin-bottom:12px;}
+  @media (prefers-color-scheme: light){ .video{background:repeating-linear-gradient(135deg,#d4d4d8,#d4d4d8 10px,#e4e4e7 10px,#e4e4e7 20px);} }
+  .playbtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:999px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;font-size:20px;color:#111;}
+  .meta{display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:12.5px;margin-bottom:14px;}
+  .avatar{width:20px;height:20px;border-radius:999px;background:linear-gradient(135deg,#a1a1aa,#71717a);flex-shrink:0;}
+  .statcard{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:13px;display:flex;justify-content:space-between;margin-bottom:8px;color:var(--text-dim);}
+  .statcard b{color:var(--text);}
+  .askbar{display:flex;gap:8px;margin-top:10px;}
+  .askbar input{flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13.5px;}
+  .askbar button{padding:0 14px;border-radius:10px;border:none;background:var(--accent);color:var(--accent-fg);font-weight:600;cursor:pointer;font-size:13px;}
+
+  .right{flex:1;min-width:0;padding:18px;border-left:1px solid var(--border);}
+  @media (max-width:899px){ .right{border-left:none;border-top:1px solid var(--border);} }
+
+  .section{margin-bottom:22px;}
+  .section h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:0 0 10px;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;}
+  .section p{margin:0;line-height:1.6;font-size:14.5px;}
+  .tasklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .tasklist li{display:flex;align-items:flex-start;gap:8px;font-size:14.5px;line-height:1.5;}
+  .tasklist input{margin-top:3px;}
+  .transcript-line{margin-bottom:8px;font-size:13.5px;line-height:1.5;}
+  .transcript-line b{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums;}
+  .comment{display:flex;gap:8px;margin-bottom:12px;}
+  .comment .avatar{width:22px;height:22px;}
+  .comment-body{background:var(--bg);border-radius:10px;padding:8px 10px;font-size:13.5px;flex:1;}
+  .comment-body .who{font-size:12px;color:var(--text-dim);margin-bottom:2px;}
+
+  .footnote{text-align:center;color:var(--text-dim);font-size:12px;padding:20px;}
+</style>
+</head>
+<body>
+<div class="titlebar">Variant 3 — <b>ikki ustun, bitta oqim</b>: video chapda qotgan, o'ngda barcha bo'limlar (xulosa/vazifalar/transkript/matn/izohlar) bitta ustunda ketma-ket — tab bosish shart emas, suriladi.</div>
+
+<div class="header">
+  <div class="back">&#8592;</div>
+  <div class="htitle">Haftalik jamoa yig'ilishi — 28-iyul</div>
+  <button class="hbtn">Yuklab olish</button>
+  <button class="hbtn primary">Ulashish</button>
+</div>
+
+<div class="layout">
+  <div class="left">
+    <div class="video"><div class="playbtn">&#9654;</div></div>
+    <div class="meta"><div class="avatar"></div><span>Aziz Karimov · 3 kun oldin</span></div>
+    <div class="statcard"><span>Ko'rishlar</span><b>24</b></div>
+    <div class="statcard"><span>Izohlar</span><b>3</b></div>
+    <div class="statcard"><span>Reaksiyalar</span><b>👍 5</b></div>
+    <div class="statcard"><span>Tahlilni ko'rish</span><b>&#8594;</b></div>
+    <div class="statcard"><span>AI tahlil narxi (egasi)</span><b>0.02 $</b></div>
+    <div class="askbar">
+      <input type="text" placeholder="Meeting AI'dan savol bering...">
+      <button>Yubor</button>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="section">
+      <h2>Xulosa</h2>
+      <p>Jamoa Q3 mahsulot rejasini ko'rib chiqdi. Yangi onboarding oqimi ustuvorlashtirildi, dizayn bo'limi 2 haftada prototip taqdim etadi. Byudjet masalasi keyingi yig'ilishga qoldirildi.</p>
+    </div>
+    <div class="section">
+      <h2>Vazifalar · 4</h2>
+      <ul class="tasklist">
+        <li><input type="checkbox" checked> Onboarding prototipini tayyorlash — Nodira, 5-avgustgacha</li>
+        <li><input type="checkbox"> Byudjet hisobotini yangilash — Aziz</li>
+        <li><input type="checkbox"> Mijozlar bilan intervyu rejalashtirish — Dilnoza</li>
+        <li><input type="checkbox"> Keyingi yig'ilish kun tartibini yuborish — Aziz</li>
+      </ul>
+    </div>
+    <div class="section">
+      <h2>Transkript</h2>
+      <div class="transcript-line"><b>00:12</b>Aziz: Boshlaymiz, bugungi kun tartibi uchta band...</div>
+      <div class="transcript-line"><b>02:41</b>Nodira: Dizayn tomondan aytadigan bo'lsam...</div>
+      <div class="transcript-line"><b>07:03</b>Dilnoza: Mijozlar bilan gaplashganimda...</div>
+    </div>
+    <div class="section">
+      <h2>Matn</h2>
+      <p>Yig'ilish uch bosqichda o'tdi: reja ko'rib chiqildi, dizayn taqdimoti bo'ldi, vazifalar taqsimlandi. To'liq tozalangan matn shu yerda ko'rinadi.</p>
+    </div>
+    <div class="section">
+      <h2>Izohlar</h2>
+      <div class="comment"><div class="avatar"></div><div class="comment-body"><div class="who">Dilnoza</div>Byudjet bo'yicha qo'shimcha ma'lumot kerak.</div></div>
+      <div class="comment"><div class="avatar"></div><div class="comment-body"><div class="who">Nodira</div>Prototipni ertaga ko'rsataman.</div></div>
+      <input type="text" placeholder="Izoh qoldirish..." style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13.5px;">
+    </div>
+  </div>
+</div>
+
+<p class="footnote">Bu — statik namuna (mockup). Haqiqiy sahifa emas.</p>
+</body>
+</html>
