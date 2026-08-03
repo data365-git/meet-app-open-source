@@ -3,7 +3,32 @@
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
 ---
-## ▶▶ RESUME HERE (2026-07-30 — AI-quality push COMPLETE + measured; ladder closed honestly)
+## ▶▶ RESUME HERE (2026-08-03 night — five commits, four owner-found defects fixed, three questions answered with numbers)
+
+**GOAL (unchanged):** finish Ustoz + hand it to the internal IT team, then migrate to the client's Railway WITH the existing videos.
+
+**SHIPPED TONIGHT (`f6f2906` · `73c3a6c` · `ea4fa17` · `36e7da6` · `bc19ef9`, all pushed).** Suite 1216 green, typecheck 0, no CRLF churn. **Deploy of `36e7da6` was TRIGGERED (Coolify `vhyrs44jonsfa31iq2w2nmj5`) and had NOT landed at the time of writing — prod was still serving `146651e`. VERIFY THIS FIRST on resume: `docker ps` image tag vs `git rev-parse`, then walk the changed screens.** A failed Coolify build is invisible from outside (green health, working site, change simply absent) — RUNBOOK §3a.
+1. **replace-with-audio was dead for every video** — `"-pipe:1"` (leading dash) made the stdout target an unknown ffmpeg option; found in the prod container log, not guessed. Fixed at BOTH sites (the twin `convertWavToMp3` was never reported by the diagnosing agent). **The existing test asserted the BUG** (`toContain("-pipe:1")`), which is why a green suite hid a 100%-broken feature. Failed SAFE — no video was ever destroyed.
+2. **Account deletion looked like it failed while actually succeeding** — the owner ran M-DEL on his REAL work account, saw nothing happen, pressed again and got a raw "Not authenticated". Server-verified: account erased, TEAM org intact, **0 orphan videos**. Now signs out to `/login?deleted=1` with a banner, locks the confirm, localizes the raw error.
+3. **Meetings had no folders** — and its query hardcoded `isNull(folderId)`, so a foldered meeting vanished with no way back. Folders now render as in Caps; drag-and-drop works unchanged; Caps byte-identical.
+4. **Text painted over text with many comments** — root cause is `globals.css` `* { min-width:0; min-height:0 }` erasing flex minimums. Fixed at the two reported surfaces only; **the global rule is deliberately untouched (whole-app blast radius) and is still live, so this failure mode can recur elsewhere.** The AI-chat A/A font toggle was removed per the owner.
+5. **Dark mode on the share page** — cause was `theme-script.js` hardcoding `"light"` when no cookie exists; it now falls back to `prefers-color-scheme`, and a Light/Dark item sits in the existing "..." menu. **Known limit: that menu is owner-gated, so anonymous viewers get auto-detection only.** Pinned by a RED→GREEN test that runs the real shipped script.
+6. **Housekeeping** — 108 untracked files → 6. Raw agent dumps ignored because one held a **cleartext admin password**; the old rotated password was redacted out of four documents before tracking.
+7. **Harness** — `PROOF_MINUTES=120` now sets the soak length, and the duration assertion scales instead of a hardcoded 5..60s that would have reported a perfect 2-hour run as FAIL.
+
+**THE THREE QUESTIONS, ANSWERED WITH NUMBERS (2026-08-03):**
+- **Vertex AI — NOT worth it.** Per-token price is IDENTICAL to the Developer API for the models we use; the difference is that **Vertex has no recurring free tier**, and most of our re-runs are free today, so the ~$7.16/mo bill would likely become ~$20-35/mo, plus GCP/IAM setup. It does genuinely unlock `audioTimestamp` (the 1-3s tier the Developer API rejects). Owner decision, but the recommendation is no.
+- **2-hour recording — UNPROVEN, and the top risk is named.** Longest ever proven is 48 min. Biggest risk: `inpage-recorder.ts` fires `ondataavailable` every 200 ms and does an awaited round-trip per chunk → **~36,000 messages over 2h**, each JSON-serializing raw bytes; never exercised past ~14,400. Also unproven: MV3 service-worker survival across 2h, and the cumulative ~1 MB tail-loss window per SW eviction (`upload.ts:52-60`). Multipart part count is fine (~560 of 10,000). **Free test is now runnable:** `PROOF_MINUTES=120 node run-proof-inpage.mjs` from `apps/browser-extension/e2e-audio-proof` after `pnpm build` — fake Meet page, synthetic tone, mock server, no AI spend; babysit 60 s then walk away.
+- **Storage/compression — the real problem is NOT the encoder settings.** Compressed videos land at **0.7-1.24 MB/min** (H.264 CRF 28, 720p cap, 96k audio) but **3 of 7 measured videos never got compressed at all** and are served raw at **8.5-9.9 MB/min**, two of them ALSO duplicated under `source/original.mp4`. So a 2h meeting is ~120 MB compressed vs ~1.1 GB raw. At 6.6 GB free: ~55 compressed 2h meetings vs ~6 raw ones. **Fix the videos that skip compression before touching CRF** — CRF is the one knob that actually threatens shared-screen text legibility.
+
+**⚠️ CODEX IS DOWN as a reviewer (verified 2026-08-03):** `codex exec` rejects both the configured `gpt-5.6-sol` and `gpt-5.1-codex` with *"not supported when using Codex with a ChatGPT account"*. Cross-family review is unavailable until the model in `~/.codex/config.toml` is changed to one the account supports. Do not assume Codex is available.
+
+**⚠️ GOALKEEPER CANNOT LAUNCH here:** every invocation fails with *"script contains control characters"* from the permission layer (a harness/config fault, not the contract). A ready done-contract for this work exists at the session scratchpad `ustoz-goalkeeper-contract.json`.
+
+**STILL OPEN:** the deploy verification above · an independent Fable review of the five commits was in flight · the owner's standing directive that the whole app must be **understandable at a glance** — that is a separate design pass, not a fix, and has not been started.
+
+---
+## (history) RESUME 2026-07-30 — AI-quality push COMPLETE + measured; ladder closed honestly
 
 **GOAL:** finish Ustoz + hand it to the internal IT team. "Done" = recording (incl. the OTHER person's voice) flawless · AI results good · no money waste · proven live. **Then: migrate to the client's Railway WITH the existing videos (owner reversed fresh-start 2026-07-29).**
 
