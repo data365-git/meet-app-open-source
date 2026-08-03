@@ -61,9 +61,6 @@
     "chipDecisionsQuery": "What key decisions were made?",
     "tldr": "TL;DR",
     "you": "You",
-    "textSize": "Text size",
-    "textSmaller": "Smaller text",
-    "textLarger": "Larger text",
     "close": "Close",
     "send": "Send",
     "errorGeneric": "Something went wrong. Please try again."
