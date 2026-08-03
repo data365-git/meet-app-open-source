@@ -1,0 +1,18 @@
+=== K1: /generate ===
+HTTP 403
+{"error":"ai_access_required"}
+=== K1: /continue-paid ===
+HTTP 403
+{"error":"ai_access_required"}
+=== K1: /retry-ai ===
+HTTP 403
+{"error":"ai_access_required"}
+=== K1: /api/video/ai/translate ===
+HTTP 403
+{"error":"ai_access_required"}
+=== K1b: /retry-transcription as NON-OWNER member (no confirm) ===
+HTTP 403
+{"error":"Unauthorized"}
+=== K2: /retry-transcription as VIDEO OWNER (admin session), NO confirm body ===
+HTTP 409
+{"error":"This video already has a transcript. Pass confirm to re-run (this costs money)."}

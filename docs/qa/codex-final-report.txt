@@ -1,0 +1,31 @@
+Done. I changed only the requested bug areas.
+
+Files changed:
+- `apps/web/app/api/videos/[videoId]/retry-transcription/route.ts`
+- `apps/web/app/api/video/ai/chat/route.ts`
+- `packages/web-backend/src/Videos/VideosPolicy.ts`
+- `apps/web/actions/videos/get-og-image.tsx`
+- `packages/web-backend/src/ImageUploads/index.ts`
+- `apps/web/components/VideoThumbnail.tsx`
+- `apps/web/app/(org)/dashboard/caps/components/Folder.tsx`
+- `apps/web/app/(org)/dashboard/caps/components/CapCard/CapCard.tsx`
+- `apps/web/app/(org)/dashboard/settings/account/components/ApiKeysSection.tsx`
+
+What changed:
+- Retry transcription now deletes old `transcriptChunks` first.
+- AI chat now sends only the latest 20 messages to Gemini.
+- Missing video in `VideosPolicy.canView` now denies access.
+- OG image generation now hides real preview for private or password-protected videos.
+- Image uploads now allow only `png/jpeg/webp/gif/avif`; SVG is rejected.
+- Thumbnail placeholder gradient is deterministic from `videoId`, no `Math.random()`.
+- Folder drag-drop moves call `router.refresh()` after success.
+- Broken analytics dropdown route fixed to `/dashboard/analytics?capId=...`.
+- Gemini key removal now requires confirmation.
+
+Skipped:
+- `F025` rate limit edit was skipped because it is already fixed in this checkout: the chat route already has a local fixed-window limiter, keyed by `videoId:ip`, returning HTTP `429`. I did still change the same file for `F031`.
+
+Typecheck:
+- First PowerShell `pnpm` shim was blocked by execution policy.
+- Re-ran as `pnpm.cmd typecheck`.
+- Result: passed. It ran `next typegen && tsc -b` successfully.

@@ -1,0 +1,4 @@
+data: {"error":"Transcript index is not ready because the transcript is missing or empty."}
+
+data: [DONE]
+

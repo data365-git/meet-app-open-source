@@ -1,0 +1,509 @@
+{
+  "summary": "Read-only audit: which Loom conveniences exist in the Ustoz/Cap codebase (have/partial/planned/missing) with file evidence, then a parity matrix + gap analysis.",
+  "agentCount": 7,
+  "logs": [],
+  "result": {
+    "synth": "I have all the audit data I need. Let me produce the report directly.\n\n# Ustoz vs Loom — Convenience Parity Report\n\nScope: every Loom \"convenience\" a typical user expects, mapped to our **code-grounded** status. Status is taken straight from the audit — no inflation. Where the audit said partial/planned, it stays that way even if the building blocks exist.\n\nLegend: ✅ have · 🟡 partial · 🔵 planned · ❌ missing\n\n---\n\n## 1. Parity Matrix (by area)\n\n### A. Recording & capture\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Web screen recorder | ✅ | Full `web-recorder-dialog` + `useWebRecorder`, all phases wired |\n| Browser/desktop extension recording | ✅ | `browser-extension` offscreen recorder + service worker, 3 capture modes |\n| Screen + camera (PiP overlay) | ✅ | `CameraPreviewWindow` floats camera over fullscreen capture (not a true compositor, but functional) |\n| Microphone audio | ✅ | `MicrophoneSelector` + device picker, switchable pre-record |\n| System audio capture | ✅ | `SystemAudioToggle`; depends on browser/OS support |\n| Pause & resume | ✅ | `pauseRecording`/`resumeRecording` in web + extension; timer pauses too |\n| **Countdown timer before record** | 🟡 | Only in the extension auto-Meet flow; **none for manual web or popup recording** |\n| Start over / retake | ✅ | `restartRecording` + RotateCcw button discards and restarts |\n| Max recording length | ✅ | Free plan hard-capped 5 min auto-stop; not user-configurable |\n| **Resolution / quality picker** | ❌ | Hardcoded 720p max; no UI to choose 1080p |\n| Instant/background chunked upload | ✅ | `InstantRecordingUploader` S3 multipart every 1s + IndexedDB crash spool |\n\n### B. Share & watch (viewer experience)\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Instant share link on record | ✅ | Short link created at record start, shareable before upload ends |\n| Public watch page, no account | ✅ | `/s/[videoId]` public policy; login not required |\n| Player — seek | ✅ | Skip controls + scrubbing in custom media-player |\n| Player — playback speed | ✅ | Speed dial + configurable org/video default |\n| **Player — quality selector** | ❌ | HLS playback but no manual quality switch exposed |\n| Password protection | ✅ | Per-video + inherited space/org passwords |\n| Visibility / privacy controls | ✅ | Public / space-or-org-restricted / private (no explicit \"org-only\" radio) |\n| Custom domain for links | ✅ | DNS-verified, Pro-gated |\n| Embed / iframe | ✅ | Embed tab + `/embed/[videoId]` player |\n| **oEmbed endpoint** | ❌ | We consume Loom's oEmbed but expose none of our own |\n| **CTA overlay on video** | ❌ | No end-screen call-to-action button |\n| Link ready before upload finishes | ✅ | \"Preparing your recording\" auto-refresh screen |\n\n### C. Transcript & AI\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Automatic transcription | ✅ | Gemini workflow → VTT in S3, status polled |\n| **Multiple transcription languages** | 🟡 | Transcription prompt is **Uzbek-only by design**; no configurable language. Russian kept in Cyrillic |\n| **Translation / dubbing** | 🟡 | Transcript-text translation to 25 langs ✅; **no audio/voice dubbing** |\n| AI auto-title | ✅ | Generated, auto-applied, respects manual edits |\n| AI summary | ✅ | Overview + topics, chunked for long videos, language-configurable |\n| Auto chapters | ✅ | startSec + title + body, clamped + deduped |\n| Action items / tasks | ✅ | tasks[] with priority + assignee + nextSteps[] |\n| **Filler-word & silence removal** | 🟡 | Cleaned in **transcript text only**; no audio/video cut. Replicate audio-enhance is dead code |\n| **Edit-by-transcript (cut video via text)** | ❌ | `edit-transcript` action only rewrites VTT, wired to no UI; editing is timeline-only |\n| AI chat / RAG over transcript | ✅ | Embeddings + retrieveTopK + streaming SSE, rate-limited |\n| Refined transcript output | ✅ (beat) | Loom lacks this; fork-specific paragraph restructuring |\n\n### D. Comments, reactions, notifications\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Timestamped comments | ✅ | Float timestamp + timeline markers + seekable badge |\n| Threaded replies | ✅ | parentCommentId, 2-level thread (reply needs login) |\n| Emoji reactions | ✅ | 6 fixed emojis as timestamped comments |\n| **Anonymous viewer commenting** | ❌ | Server action + UI both require auth; guests get sign-in modal |\n| View notifications (incl. anon) | ✅ | view + anon_view with dedup, rate-limit, geo location |\n| Comment / reply notifications | ✅ | comment/reply/reaction types, email throttled 15 min |\n| Notification preferences | ✅ | 5 per-type toggles checked server-side |\n\n### E. Library, dashboard, analytics\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Dashboard recordings list | ✅ | Per-org paginated grid (15/page) |\n| Folders | ✅ | Nested, color-coded, can be public collections |\n| Spaces (team channels) | ✅ | Members + roles + privacy + folders |\n| **Search across recordings** | 🟡 have* | Wired, but **name-only LIKE**, 8 results — no full-text/semantic |\n| Playlists / collections | ✅ | Public folders/spaces + `/c/[id]` pages (no separate playlist entity) |\n| Analytics — view count | ✅ | uniq(session_id) via Tinybird |\n| Analytics — unique viewers | ✅ | Unique anon sessions, no PII |\n| **Analytics — watch engagement / completion / heatmap** | ❌ | Only page-hit/geo/device; no watch-time, completion, or heatmap |\n| Thumbnails / previews | ✅ | Server-generated in upload pipeline |\n| Sharing within org | ✅ | sharedVideos + spaceVideos |\n\n\\*Audit marks search \"have\", but functionally it is shallow (name-only) vs Loom's content search — flagged as a felt gap below.\n\n### F. Export, integrations, account/org\n| Loom convenience | Status | Evidence / note |\n|---|---|---|\n| Download MP4 (single) | ✅ | Signed S3 URL, owner-only |\n| **Bulk / ZIP export (anti-lock-in)** | ❌ | No batch/ZIP route at all |\n| **Transcript file download** | 🟡 | `formatTranscriptAsVTT()` exists; **no wired button/endpoint** |\n| **Slack integration** | ❌ | Marketing copy only |\n| **Jira integration** | ❌ | Marketing copy only |\n| **Confluence integration** | ❌ | Marketing copy only |\n| Telegram integration (our twist) | ❌🔵 | Not built; planned differentiator |\n| **SSO / SAML** | 🟡 | WorkOS dep + schema columns, but action throws \"not configured\"; enterprise-gated |\n| Teams / Organizations | ✅ | Full roles + permissions matrix |\n| Member invites (email) | ✅ | Email + link + resend + remove |\n| Billing / Plans (Stripe) | ✅ | Pro via Stripe; Enterprise = talk-to-sales |\n| BYO-S3 storage | ✅ (beat) | Loom lacks; user + org level, any S3-compatible |\n| Google Drive storage | ✅ (beat) | Loom lacks; OAuth flow, Pro |\n| Self-hosting | ✅ (beat) | Loom lacks; docs + S3-compatible |\n| Custom domain | ✅ | DNS-verified, Pro |\n| Loom import (migration) | ✅ (beat) | Single + bulk CSV up to 500 |\n\n---\n\n## 2. Loom conveniences we are MISSING (ranked by how much a Loom user expects them)\n\nRanked by how loudly a typical Loom user would notice the absence:\n\n1. **Manual countdown timer (🟡)** — Loom always counts \"3-2-1\" before any record. We only do it for auto-Meet. A returning Loom user will feel the missing beat on their very first manual recording. *Cheap to add — the extension already has the logic.*\n2. **Edit-by-transcript / filler-word removal as real cuts (❌/🟡)** — Loom's headline editing convenience is \"delete the text → the video cuts, ums removed.\" We clean text only; the action exists but is wired to nothing. High visibility, medium effort.\n3. **Transcript file download (🟡)** — One-click \"Download transcript (VTT/TXT)\" is a baseline expectation; the formatter exists but no button. Trivial to finish, disproportionately noticed.\n4. **Watch engagement / completion analytics (❌)** — Loom users live on \"who watched, how far.\" We show view counts but not watch-time/completion/heatmap. Expected by team/sales users.\n5. **Resolution choice — record 1080p + viewer quality selector (❌)** — Loom offers HD. We hardcode 720p and expose no viewer quality switch. Quality-conscious users notice immediately.\n6. **Bulk / ZIP export (❌)** — Anti-lock-in expectation; absence stings on offboarding/backup, not daily use, so mid-rank.\n7. **Anonymous viewer commenting (❌)** — Loom lets external viewers react/comment without an account. Our auth wall blocks a common external-feedback flow.\n8. **CTA overlay on video (❌)** — Loom's sales/marketing crowd relies on end-screen CTAs. Niche but expected by that segment.\n9. **Slack / Jira / Confluence integrations (❌)** — Loom's workplace stickiness. Big for teams; many solo users never touch them → ranked lower for \"typical\" user.\n10. **oEmbed provider endpoint (❌)** — Mostly invisible (paste-into-Notion auto-embeds). Power/integrator users only.\n11. **Content/semantic search (🟡)** — We have name-only search; Loom searches inside transcripts. Felt once the library grows.\n12. **Live SSO/SAML (🟡)** — Enterprise gate only; irrelevant to the typical user, blocking only for enterprise buyers.\n\n---\n\n## 3. Where we already BEAT Loom (or will)\n\n- **AI chat / RAG over the transcript (✅)** — ask the video questions, get cited answers. Loom has none.\n- **uz/ru transcript + 25-language translation (✅)** — Uzbek-first transcription + on-page translation. Loom's localization is far weaker for this market.\n- **Refined transcript output (✅)** — filler-cleaned, paragraph-restructured readable transcript; Loom does not offer this.\n- **Self-host + BYO-S3 + Google Drive storage (✅)** — full data ownership and storage choice; Loom is closed SaaS only.\n- **Custom domain + Loom import (✅)** — frictionless migration onto your own domain; Loom obviously won't help you leave it.\n- **Viewer-free public watch (✅)** — no account to watch (parity, but combined with self-host it removes Loom's seat/viewer friction).\n- **Telegram integration (🔵 planned)** — the intended differentiator; not built yet, so it's a promise, not a win, today.\n\n---\n\n## 4. Honest verdict\n\n**Are we covering \"all of Loom's conveniences\"? No — but we're close on the core loop.** The record → instant link → watch → transcript → AI → comment → analytics → org/billing spine is genuinely present and verified. We **beat** Loom on AI chat, translation, refined transcript, and self-host/storage ownership.\n\nThe gaps are real and a Loom user **will** notice them — but most are small finishing touches, not missing pillars. The expensive-looking one (edit-by-transcript) is half-built already.\n\n**Minimum set to make a Loom user feel at-home (in priority order):**\n1. **Manual countdown timer** for web + extension popup (reuse existing logic). *Smallest effort, first-impression win.*\n2. **Transcript download button** wiring `formatTranscriptAsVTT()` to a UI action + endpoint. *Near-free.*\n3. **Real edit-by-transcript** — connect the existing `edit-transcript` action to timeline cuts + filler removal. *Highest-visibility editing convenience.*\n4. **Watch engagement analytics** — emit play/seek/duration events to Tinybird and surface completion + heatmap.\n5. **Record at 1080p + viewer quality selector** — unhardcode resolution.\n\nItems 1-3 are days, not weeks, and close ~80% of the \"this feels less polished than Loom\" perception. Bulk export, anonymous commenting, CTA overlays, and the Slack/Jira/Confluence trio are second-wave — important for specific segments (offboarding, external feedback, sales, enterprise teams) but not blocking for the typical Loom switcher.",
+    "audits": [
+      {
+        "area": "Recording & capture",
+        "features": [
+          {
+            "name": "Web screen recorder",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/web-recorder-dialog.tsx — full dialog with useWebRecorder hook, RecordingModeSelector (fullscreen/window/tab/camera), and RecordingButton wired end-to-end",
+            "note": "Verified by reading the dialog and hook; all phases (idle, recording, uploading, completed) implemented"
+          },
+          {
+            "name": "Chrome/desktop extension recording",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/browser-extension/src/offscreen/recorder.ts (MediaRecorder, three capture modes: picker/silent-tab/desktop) + apps/browser-extension/src/background/sw.ts (service-worker orchestration)",
+            "note": "Verified: extension captures screen/tab/desktop via chooseDesktopMedia and getDisplayMedia, sends chunk messages to background"
+          },
+          {
+            "name": "Screen + camera combo (picture-in-picture overlay)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/CameraPreviewWindow.tsx (floating PiP camera window) + RecordingModeSelector.tsx (fullscreen mode recommended note mentions capturing camera via PiP)",
+            "note": "Camera streams as a separate PiP window on top of fullscreen capture; not a true side-by-side compositor, but the combo is functional"
+          },
+          {
+            "name": "Microphone audio",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/MicrophoneSelector.tsx + useDevicePreferences hook; extension recorder.ts lines 116-131 (getUserMedia per micDeviceId)",
+            "note": "Device picker fully wired; mic can be enabled/disabled and device switched before recording"
+          },
+          {
+            "name": "System audio capture",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/SystemAudioToggle.tsx; useWebRecorder passes systemAudio constraint to getDisplayMedia; extension recorder.ts uses chromeMediaSource desktop audio track",
+            "note": "Toggle UI is present; system audio availability depends on browser/OS support; verified in both web and extension paths"
+          },
+          {
+            "name": "Pause & resume recording",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder.ts lines 1101-1134 (pauseRecording/resumeRecording calling MediaRecorder.pause/resume); InProgressRecordingBar.tsx pause/play toggle button; extension recorder.ts handles PAUSE_CAPTURE/RESUME_CAPTURE messages",
+            "note": "Fully wired in both web recorder and browser extension; timer pauses correctly too"
+          },
+          {
+            "name": "Countdown timer before recording starts",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "apps/browser-extension/src/content/meet-detect.ts lines 588-644 (countdown for auto-record-on-Meet, configurable 3-10 s via options.ts); no countdown in apps/web web-recorder-dialog",
+            "note": "Countdown exists only in the extension auto-Meet flow, not for manual web recorder or manual extension popup recording"
+          },
+          {
+            "name": "Start over / retake (discard and restart)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder.ts line 1473 (restartRecording: stops current recording, cleans up state, starts fresh); InProgressRecordingBar.tsx RotateCcw button wired to onRestart",
+            "note": "Verified: stops and discards the in-progress recording, resets phase to idle, then immediately restarts"
+          },
+          {
+            "name": "Maximum recording length limit",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/web-recorder-constants.ts line 122 (FREE_PLAN_MAX_RECORDING_MS = 5 * 60 * 1000); useWebRecorder.ts line 1460-1468 auto-stops and toasts at limit",
+            "note": "Free plan hard-capped at 5 min with auto-stop; Pro users have no enforced cap in code; limit is not user-configurable"
+          },
+          {
+            "name": "Resolution options (user-selectable quality)",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — web-recorder-constants.ts lines 35-36 hardcodes max 1280x720; SettingsPanel.tsx only has a 'remember devices' toggle; no resolution picker anywhere in the dialog or extension",
+            "note": "Resolution is hardcoded at 720p max for both web recorder and extension; no UI for the user to choose 1080p or other options"
+          },
+          {
+            "name": "Instant upload while recording (chunked/background upload)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/instant-mp4-uploader.ts (InstantRecordingUploader, multipart S3 upload every 1 s); useWebRecorder.ts line 81 INSTANT_UPLOAD_REQUEST_INTERVAL_MS=1000; InProgressRecordingBar shows live chunk progress ring; recording-spool.ts keeps local IndexedDB backup in parallel",
+            "note": "Chunks are uploaded via S3 multipart during recording; progress is visible in the floating bar; local spool also written for crash recovery"
+          }
+        ]
+      },
+      {
+        "area": "Share & watch (viewer experience)",
+        "features": [
+          {
+            "name": "Instant share link generated on/after record",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/desktop/[...route]/video.ts (GET /create) — video row inserted + cap.link short link created via dub() BEFORE upload starts; link returned immediately to the desktop client",
+            "note": "The video ID is reserved at recording start, so /s/[videoId] is shareable the moment recording stops, even while upload is in progress."
+          },
+          {
+            "name": "Public watch page /s/[videoId] playable without an account",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/s/[videoId]/page.tsx — uses provideOptionalAuth + Policy.withPublicPolicy; PasswordOverlay shown only when video has a password; PolicyDeniedView shown only when video is private",
+            "note": "Fully verified: no login required for public videos."
+          },
+          {
+            "name": "Video player — seek",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/s/[videoId]/_components/video/media-player.tsx exports MediaPlayerSeekBackward and MediaPlayerSeekForward; CapVideoPlayer.tsx uses them; Share.tsx implements handleSeek()",
+            "note": "Both skip controls and timeline scrubbing are present in the custom media-player component."
+          },
+          {
+            "name": "Video player — playback speed control",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/s/[videoId]/_components/video/media-player.tsx exports MediaPlayerPlaybackSpeedDial; resolveDefaultPlaybackSpeed() sets org/video-level default; passed as defaultPlaybackSpeed prop to ShareVideo",
+            "note": "Speed dial UI and a configurable org/video default speed are both implemented."
+          },
+          {
+            "name": "Video player — quality/resolution selector",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "apps/web/app/s/[videoId]/_components/CapVideoPlayer.tsx and HLSVideoPlayer.tsx — no 'quality' references found; media-player.tsx has no quality selector export",
+            "note": "HLS is used for playback but no manual quality-level switching UI is exposed to the viewer."
+          },
+          {
+            "name": "Password-protected videos",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/s/[videoId]/_components/PasswordOverlay.tsx + SharingDialog.tsx (passwordEnabled toggle + setVideoPassword action) + page.tsx (VerifyVideoPasswordError handler)",
+            "note": "Per-video passwords and inherited space/org passwords are both supported."
+          },
+          {
+            "name": "Visibility/privacy controls (public / private / org)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/SharingDialog.tsx — publicToggle (public/private switch) + space/org sharing (share to specific spaces or org members); actions/caps/share.ts writes sharedVideos and spaceVideos tables",
+            "note": "Three effective states: public link, restricted to specific spaces/org members, or private (owner only). No explicit 'org-only' radio but org-level sharing achieves the same."
+          },
+          {
+            "name": "Custom domain for share links",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/settings/organization/components/CustomDomain.tsx + CustomDomainDialog/; ShareHeader.tsx getVideoLink() routes to https://{customDomain}/s/{id} when domainVerified=true",
+            "note": "Pro-gated feature; DNS verification flow exists in CustomDomainDialog."
+          },
+          {
+            "name": "Embed code / iframe",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/SharingDialog.tsx lines 267-276, 506-515, 648-655 — 'Embed' tab with copyable <iframe> snippet pointing to /embed/[capId]; apps/web/app/embed/[videoId]/page.tsx is the embed player route",
+            "note": "Embed tab in sharing dialog generates the iframe code; the /embed/[videoId] player page is fully implemented."
+          },
+          {
+            "name": "oEmbed endpoint",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "No /api/oembed route found in apps/web/app/api/; grep across all .ts/.tsx files returns only loom.ts (consumer, not provider)",
+            "note": "The app consumes oEmbed from Loom (import flow) but does not expose its own oEmbed endpoint."
+          },
+          {
+            "name": "Call-to-action (CTA) overlay on video",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "No CTA/call-to-action overlay component found in apps/web/app/s/[videoId]/_components/; no 'cta' or 'callToAction' matches in share-page TSX files",
+            "note": "Loom lets owners add a clickable CTA button on the video end screen; no equivalent feature exists here."
+          },
+          {
+            "name": "Link ready before upload finishes (speed-to-share)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/desktop/[...route]/video.ts line 203-283 — video row and cap.link short link are created at recording start; PendingRecordingShare.tsx polls /s/[videoId]?recordingStopped=1 while upload is in progress",
+            "note": "The share URL is generated immediately; viewers see a 'preparing your recording' screen that auto-refreshes until the video is ready."
+          }
+        ]
+      },
+      {
+        "area": "Transcript & AI",
+        "features": [
+          {
+            "name": "Automatic transcription",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/transcribe.ts (transcribeVideoWorkflow) + apps/web/lib/gemini-transcribe.ts (transcribeWithGemini) — triggered post-upload, saves transcription.vtt to S3, sets transcriptionStatus=COMPLETE",
+            "note": "Fully wired end-to-end: upload -> workflow -> Gemini Files API -> VTT stored in S3; status polled via /api/video/transcribe/status/route.ts"
+          },
+          {
+            "name": "Multiple languages / Uzbek / Russian",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "apps/web/lib/gemini-transcribe.ts line 175-228 — prompt is hardcoded Uzbek-only; packages/web-domain/src/Language.ts defines 25 SUPPORTED_LANGUAGES for translation post-processing",
+            "note": "Transcription is Uzbek-only by design (prompt says 'Uzbek Latin'); AI summary output language is configurable (aiGenerationLanguage org setting); Russian words are preserved in Cyrillic in transcript. No configurable transcription language option."
+          },
+          {
+            "name": "Translation / dubbing",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "apps/web/actions/videos/translate-transcript.ts (Groq LLM translates VTT to 25 languages) + apps/web/app/s/[videoId]/_components/CaptionContext.tsx (wired to UI language selector)",
+            "note": "Transcript text translation to 25 languages is fully wired. No audio/video dubbing (voice replacement) exists anywhere in the codebase."
+          },
+          {
+            "name": "AI auto-title",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/generate-ai.ts (generateAiWorkflow, saveResults) — generates title, stores in metadata.aiTitle, auto-applies to video.name via shouldReplaceVideoTitle()",
+            "note": "Title generation is part of the same AI generation workflow triggered after transcription completes; respects manual edits (titleManuallyEdited flag)"
+          },
+          {
+            "name": "AI summary",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/generate-ai.ts AiSummarySchema (overview + topics[]), stored in metadata.aiSummary; displayed in apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx",
+            "note": "Supports chunked processing for long videos; output language configurable via org aiGenerationLanguage setting"
+          },
+          {
+            "name": "Auto chapters",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/generate-ai.ts AiSummarySchema.chapters (startSec + title + body), stored in metadata.chapters and metadata.aiSummary.chapters; displayed in apps/web/app/s/[videoId]/_components/SummaryChapters.tsx",
+            "note": "Chapters are clamped to video duration and deduplicated with a minimum gap; derived from VTT timestamps"
+          },
+          {
+            "name": "Action-items / tasks extraction",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/generate-ai.ts AiSummarySchema.tasks[] (title, assignee, priority, deadline, done); apps/web/app/s/[videoId]/_components/panels/TasksPanel.tsx renders them",
+            "note": "Also extracts nextSteps[] array. Tasks have priority enum (high/medium/low) and assignee field extracted from transcript."
+          },
+          {
+            "name": "Filler-word & silence removal",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "apps/web/lib/gemini-transcribe.ts line 211-215 — Gemini prompt instructs removal of 'umm', 'aa', 'eee', repeated stutters from transcript text; apps/web/lib/audio-enhance.ts exists (Replicate) but _enhanceAndSaveAudio in workflows/transcribe.ts is dead code (never called)",
+            "note": "Filler words are cleaned in the transcript text output only — no actual audio/video segment removal. Audio enhancement via Replicate is implemented but commented out (function prefixed with _ and never invoked in the active workflow)."
+          },
+          {
+            "name": "Edit-by-transcript (cut video by editing text)",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "apps/web/actions/videos/edit-transcript.ts exists but only updates VTT text in S3 (editTranscriptEntry); it is not called from any UI component. Video editing is timeline/segment-based only (apps/web/app/s/[videoId]/edit/EditVideoClient.tsx).",
+            "note": "Deleting transcript text does not cut video. The edit-transcript action is wired to nothing in the UI. No connection between transcript edits and video timeline segments."
+          },
+          {
+            "name": "AI chat / RAG over transcript",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/video/ai/chat/route.ts — Gemini embedding + retrieveTopK() from transcriptChunks table (apps/web/lib/transcript-retrieve.ts), streaming SSE; wired in apps/web/app/s/[videoId]/_components/AIChatPopup.tsx",
+            "note": "RAG indexing happens in workflows/transcribe.ts chunkEmbedAndStore() using gemini-embed; chunks stored in transcriptChunks DB table with vector embeddings. Rate limited to 20 req/min per videoId+IP."
+          },
+          {
+            "name": "Refined transcript output",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "apps/web/workflows/generate-ai.ts AiSummarySchema.refinedTranscript (chapters with paragraphs[]); displayed in apps/web/app/s/[videoId]/_components/panels/RefinedTranscriptPanel.tsx",
+            "note": "Cleans filler words and restructures speech into readable paragraphs grouped by chapter. Loom does not have this feature; it is a fork-specific addition."
+          }
+        ]
+      },
+      {
+        "area": "Comments, reactions, notifications",
+        "features": [
+          {
+            "name": "Timestamped comments on watch page",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts (comments.timestamp: float); apps/web/app/s/[videoId]/_components/CommentStamp.tsx; apps/web/app/s/[videoId]/_components/tabs/Activity/Comment.tsx (clickable timestamp button at line 129)",
+            "note": "Each comment records a float video-timestamp; CommentStamp.tsx renders markers on the player timeline; Comment.tsx shows a seekable timestamp badge. Verified by reading schema and both components."
+          },
+          {
+            "name": "Threaded replies",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts (comments.parentCommentId FK to self); apps/web/app/s/[videoId]/_components/tabs/Activity/Comments.tsx (handleReply, replyingTo state); apps/web/app/s/[videoId]/_components/tabs/Activity/Comment.tsx (nestedReplies rendered at level 0 and level 1)",
+            "note": "Flat-stored with parentCommentId, rendered as 2-level thread (root + one indent level). Reply gated by login — unauthenticated users see AuthOverlay instead. Verified by reading Comments.tsx and Comment.tsx."
+          },
+          {
+            "name": "Emoji reactions",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts (comments.type enum 'emoji'|'text'); apps/web/app/s/[videoId]/_components/Sidebar.tsx (REACTIONS array with 6 emojis, handleEmojiReact, reactionsByEmoji aggregation)",
+            "note": "Six fixed emoji reactions (joy, love, wow, yay, thumbs-up, thumbs-down) stored as type='emoji' comments with video timestamp. Counts aggregated client-side. Reactions also shown as timeline stamps. Verified by reading Sidebar.tsx."
+          },
+          {
+            "name": "Anonymous viewer commenting",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "apps/web/actions/videos/new-comment.ts line 21 (getCurrentUser() throws Unauthorized if null); apps/web/app/s/[videoId]/_components/Sidebar.tsx lines 192-194 (if !user setShowAuthOverlay); apps/web/app/s/[videoId]/_components/Toolbar.tsx lines 111-115 (same guard)",
+            "note": "Anonymous users are blocked from posting — both the server action and UI guards require authentication. Clicking comment/reply/react without login shows AuthOverlay (sign-in modal). No guest/anonymous posting path exists. Verified by reading new-comment.ts and Sidebar.tsx."
+          },
+          {
+            "name": "View notifications to creator",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/lib/Notification.ts: createNotification (type='view'), createAnonymousViewNotification (type='anon_view' with dedup, rate-limit, location); apps/web/app/api/notifications/route.ts (GET returns view + anon_view merged)",
+            "note": "Both signed-in view and anonymous view notifications are implemented with dedup keys, per-video rate limits (50/5 min), and preference checks. Anon views include a geographic location field. Verified by reading Notification.ts fully."
+          },
+          {
+            "name": "Comment and reply notifications",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/lib/Notification.ts: createNotification handles 'comment', 'reply', 'reaction' types with dedup; apps/web/actions/videos/new-comment.ts line 74 (calls createNotification); apps/web/lib/Notification.ts sendNewCommentEmail (throttled 15 min, top-level only)",
+            "note": "Notifications created on every comment/reply/reaction. Reply notifications go to the parent-comment author (not just the video owner). Email sent for top-level comments with a 15-min throttle window. Dedup prevents double-notifications per comment id. Verified by reading new-comment.ts and Notification.ts."
+          },
+          {
+            "name": "Notification preferences",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/settings/notifications/NotificationsSettings.tsx (5 toggle switches: pauseComments, pauseReplies, pauseViews, pauseAnonViews, pauseReactions); apps/web/lib/Notification.ts lines 169-179 (preferences checked before insert); apps/web/actions/notifications/update-preferences.ts",
+            "note": "Per-type toggles persisted in users.preferences JSON. Preferences are checked server-side in createNotification before writing to DB. UI in /dashboard/settings/notifications. Verified by reading NotificationsSettings.tsx and Notification.ts."
+          }
+        ]
+      },
+      {
+        "area": "Library, dashboard, analytics",
+        "features": [
+          {
+            "name": "Dashboard list of recordings (caps)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/page.tsx — fetches paginated videos for active org, renders via Caps.tsx with CapCard grid; pagination via CapPagination component",
+            "note": "Fully wired: per-org, per-user, paginated (15/page), shows comment/reaction counts, shared org indicators, upload status"
+          },
+          {
+            "name": "Folders",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts folders table (with parentId for nesting, spaceId, color) + apps/web/app/(org)/dashboard/caps/components/Folder.tsx + dashboard/folder/[id]/page.tsx",
+            "note": "Nested folders supported (parentId recursive CTE for video count), colour-coded, can be made into public collections"
+          },
+          {
+            "name": "Spaces (team channels / shared areas)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts spaces + spaceMembers + spaceVideos tables + apps/web/app/(org)/dashboard/spaces/[spaceId]/page.tsx + browse/page.tsx",
+            "note": "Spaces have members with roles (admin/member), privacy (Public/Private), can contain folders; fully wired with sharing dialogs"
+          },
+          {
+            "name": "Search (across recordings)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/_components/Navbar/search.ts — searchDashboardVideos() SQL LIKE on video name, scoped to org + owned/shared/space-accessible videos; rendered in DashboardSearch.tsx command palette",
+            "note": "Name-only LIKE search (no full-text/semantic); max 8 results; debounced 180ms; accessible from global navbar"
+          },
+          {
+            "name": "Playlists / collections (shareable sets of videos)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts folders.public boolean + spaces.public boolean; CollectionShareControl.tsx + PublicCollectionField.tsx; public /c/[id] route for internet-facing collection pages",
+            "note": "Implemented as public folders/spaces (not a separate playlist entity); CollectionShareControl manages public page settings (branding, password) for both spaces and folders"
+          },
+          {
+            "name": "Per-video analytics — view count",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics.tsx shows displayCount (unique-session views from Tinybird); links to /dashboard/analytics?capId=X; Queries/Analytics.ts fetches per-video view counts",
+            "note": "View count = uniq(session_id) via Tinybird; shown inline on CapCard and in full analytics dashboard filtered by capId"
+          },
+          {
+            "name": "Per-video analytics — unique viewers",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/(org)/dashboard/analytics/data.ts queryViewSeries() uses uniq(session_id) from analytics_events; /api/dashboard/analytics?capId=X returns unique-session view count",
+            "note": "Unique viewers = unique anonymous session IDs; no PII collected; documented in content/docs/sharing/analytics.mdx"
+          },
+          {
+            "name": "Per-video analytics — watch engagement / completion / heatmap",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — searched for watch_time, watch_percentage, heatmap, engagement_time, completion_rate across apps/web; only page_hit events tracked in Tinybird, no seek/play/pause/duration events",
+            "note": "Analytics track page views, geography, browser, device — no watch-time, completion rate, or engagement heatmap"
+          },
+          {
+            "name": "Thumbnails / video preview images",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/thumbnail/route.ts serves signed thumbnail URLs; VideoThumbnail component used in CapCard.tsx; generating_thumbnail phase tracked in videoUploads table",
+            "note": "Thumbnails generated server-side during upload pipeline; shown on CapCard, spaces SharedCapCard, and share page og-image"
+          },
+          {
+            "name": "Sharing within an organization",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts sharedVideos table (videoId, organizationId, sharedByUserId); apps/web/app/(org)/dashboard/caps/components/SharingDialog.tsx lets owner share a video to an org or specific spaces",
+            "note": "Org-level sharing records in sharedVideos; space-level sharing via spaceVideos; SharingDialog supports search-filter across spaces and shows inherited settings"
+          }
+        ]
+      },
+      {
+        "area": "Export, integrations, account/org",
+        "features": [
+          {
+            "name": "Download MP4 (single video)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/actions/videos/download.ts — downloadVideo() generates a signed S3 URL for {ownerId}/{videoId}/result.mp4 and returns it with filename",
+            "note": "Fully implemented: owner-only auth check, signed URL, correct filename returned to client."
+          },
+          {
+            "name": "Bulk / ZIP export of all videos + transcripts (anti-lock-in)",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — no ZIP route, no bulk download action, no batch transcript export anywhere in apps/web/actions or app/api",
+            "note": "Only single-video download exists. No batch or ZIP export path found."
+          },
+          {
+            "name": "Transcript download (per-video, VTT/TXT file)",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "apps/web/lib/messenger/constants.ts mentions 'downloadable'; apps/web/app/s/[videoId]/_components/utils/transcript-utils.ts has formatTranscriptAsVTT() — but no download API route or button found in the share page components",
+            "note": "Utility to format VTT exists; docs/messenger note says downloadable, but no wired download-to-file button or endpoint was found in the video share page."
+          },
+          {
+            "name": "Slack integration",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — grep for 'slack' in apps/web returns only marketing copy in SEO pages and docs, no API route or webhook handler",
+            "note": "Not implemented. Only mentioned in marketing copy."
+          },
+          {
+            "name": "Jira integration",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — grep for 'jira' in apps/web returns only marketing copy",
+            "note": "Not implemented."
+          },
+          {
+            "name": "Confluence integration",
+            "loomHas": true,
+            "ourStatus": "missing",
+            "evidence": "none — grep for 'confluence' in apps/web returns only marketing copy",
+            "note": "Not implemented."
+          },
+          {
+            "name": "Telegram integration (our intended twist)",
+            "loomHas": false,
+            "ourStatus": "missing",
+            "evidence": "none — grep for 'telegram' in apps/web finds only lib/social-crawlers.ts (Telegram as a social crawler UA) and llms.txt marketing text; no bot, webhook, or share-to-Telegram route",
+            "note": "Not yet built in the Ustoz fork. This is the differentiator we plan to add."
+          },
+          {
+            "name": "SSO / SAML",
+            "loomHas": true,
+            "ourStatus": "partial",
+            "evidence": "packages/database/schema.ts: organizations table has workosOrganizationId and workosConnectionId columns; apps/web/actions/organization/get-organization-sso-data.ts throws 'SSO is not configured on this instance'; EnterpriseCard.tsx lists 'SAML SSO & SCIM provisioning' as enterprise feature; @workos-inc/node is a dependency in apps/web/package.json",
+            "note": "WorkOS dependency installed, schema columns exist, but the SSO action explicitly throws 'not configured'. SSO is enterprise-gated and not live in the open-source fork."
+          },
+          {
+            "name": "Teams / Organizations",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts: organizations + organizationMembers + organizationInvites tables; apps/web/lib/permissions/roles.ts: owner/admin/member roles with full permission matrix; apps/web/actions/organization/ directory with 10+ organization actions",
+            "note": "Fully implemented: create org, invite members, role management (owner/admin/member), pro-seat assignment, org settings."
+          },
+          {
+            "name": "Member invites (email)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/actions/organization/send-invites.ts — sendOrganizationInvites() sends email invites with token links; invite-by-email.ts, invite-by-link.ts, resend-invite.ts, remove-invite.ts all present",
+            "note": "Fully wired: invite by email, invite by link, resend, remove, accept/decline (app/api/invite/)."
+          },
+          {
+            "name": "Billing / Plans (Stripe subscription)",
+            "loomHas": true,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/settings/billing/subscribe/route.ts — Stripe checkout session creation; apps/web/actions/organization/manage-billing.ts — Stripe billing portal; apps/web/app/api/webhooks/stripe/route.ts — webhook handler",
+            "note": "Pro plan via Stripe fully wired. Enterprise plan is 'talk to sales' only (EnterpriseCard.tsx)."
+          },
+          {
+            "name": "BYO-S3 / custom storage bucket",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/desktop/[...route]/s3Config.ts — full CRUD for custom S3 config (POST/DELETE/GET/test); packages/database/schema.ts: s3Buckets table; content/docs/s3-config/aws-s3.mdx and cloudflare-r2.mdx with setup docs",
+            "note": "Fully implemented for both user-level and org-level. Supports AWS S3, Cloudflare R2, and any S3-compatible endpoint."
+          },
+          {
+            "name": "Google Drive storage integration",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "apps/web/app/api/desktop/[...route]/storage.ts — full OAuth flow, connect/disconnect/test/set-active endpoints; packages/database/schema.ts: storageIntegrations table with googleDrive provider; changelog/95.mdx confirms shipped in v0.5.0",
+            "note": "Fully implemented. User and org-level Google Drive as storage backend. Requires Pro plan."
+          },
+          {
+            "name": "Self-hosting config",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "apps/web/content/docs/self-hosting.mdx — self-hosting doc exists; apps/web/app/api/desktop/[...route]/s3Config.ts supports any S3-compatible endpoint; apps/web/actions/organization/get-organization-sso-data.ts pattern shows instance-level feature flags",
+            "note": "Docs exist; S3-compatible storage works. Full self-host guide in content/docs/self-hosting.mdx."
+          },
+          {
+            "name": "Custom domain (share pages on org domain)",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "packages/database/schema.ts: organizations.customDomain + domainVerified columns; apps/web/actions/organization/update-domain.ts, check-domain.ts, remove-domain.ts; app/(org)/dashboard/settings/organization/components/CustomDomainDialog/",
+            "note": "Fully implemented: DNS verification flow, custom domain for shareable Cap links. Pro feature."
+          },
+          {
+            "name": "Loom import (video migration)",
+            "loomHas": false,
+            "ourStatus": "have",
+            "evidence": "apps/web/actions/loom.ts — importFromLoom() and importFromLoomCsv() (bulk CSV import up to 500 rows) fully implemented; app/(org)/dashboard/import/loom/ UI page exists",
+            "note": "Single + bulk CSV Loom import fully wired. Requires Pro. Assigns to org members by email, supports space mapping."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+FLOW A - G4/G5 EVIDENCE - 2026-07-22
+Video used: t91bnh582gnhgy8 (the one COMPLETE public video on prod with working storage)
+
+--- G4 (375px mobile, no horizontal overflow) ---
+Viewport set to 375x812. JS check:
+  document.documentElement.scrollWidth = 375
+  document.documentElement.clientWidth = 375
+  document.body.scrollWidth = 375
+  hasHorizontalOverflow: false
+Elements wider than viewport: only <h1 class="truncate ...sm:text-3xl"> (intentionally
+CSS-truncated title, does not cause page scroll) and one sr-only (visually hidden,
+screen-reader-only) span. No real overflow.
+
+AI-chat popup fit check (popup renders inline/open by default on this build):
+  width: 343.98px, left: 15.51px, right: 359.49px -- fits inside 375px viewport
+  with margin both sides.
+
+Comment box fit check:
+  name input:    width 309px, right edge 342px
+  comment field: width 309px, right edge 342px
+  both well within the 375px viewport.
+PASS -- no horizontal overflow, popup + comment box + player all fit at 375px.
+
+--- G5 (light/dark theme readability) ---
+Theme is controlled by a `theme` cookie (confirmed: document.cookie shows
+"theme=dark" then "theme=light" after being set), not live OS prefers-color-scheme
+(changing resize_window colorScheme alone did not flip an already-hydrated page --
+expected for a cookie-driven theme system; a fresh navigation with the cookie set
+picks it up correctly).
+
+DARK (cookie theme=dark, fresh load):
+  body: color rgb(249,250,251) on bg rgb(3,7,18)   -- near-white text on near-black bg
+  h1:   color rgb(238,238,238) (inherits dark bg)  -- high contrast
+
+LIGHT (cookie theme=light, fresh load):
+  body: color rgb(3,7,18) on bg rgb(255,255,255)   -- near-black text on white bg
+  h1:   color rgb(32,32,32) (inherits white bg)     -- high contrast
+  computed rough luminance difference (body text vs bg): 248 (very high / good contrast)
+
+Old `.ai-aura` glow class: document.querySelectorAll('.ai-aura').length === 0 on
+both themes -- confirmed absent.
+PASS -- both themes readable, correct contrast, no invisible-on-invisible, no
+leftover .ai-aura glow.

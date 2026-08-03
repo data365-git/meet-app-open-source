@@ -1,0 +1,77 @@
+=== E4: /dashboard logged out ===
+HTTP/1.1 307 Temporary Redirect
+Alt-Svc: h3=":443"; ma=2592000
+Cache-Control: no-store, must-revalidate
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/html; charset=utf-8
+Date: Wed, 22 Jul 2026 10:00:56 GMT
+Link: </_next/static/media/028c0d39d2e8f589-s.p.woff2>; rel=preload; as="font"; crossorigin=""; type="font/woff2"
+Location: /login
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+X-Powered-By: Next.js
+Transfer-Encoding: chunked
+
+
+=== E4: /some/random/path logged out ===
+HTTP/1.1 307 Temporary Redirect
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 10:00:57 GMT
+Location: /login
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+--- random path body (first 40 lines) ---
+/login
+--- extra probes to characterize the behavior ---
+/xyz123nonexistent          -> 307 -> https://data365.duckdns.org/login
+/foo/bar/baz/qux             -> 307 -> https://data365.duckdns.org/login
+/s (no trailing slash/id)    -> 307 -> https://data365.duckdns.org/login
+/api/nonexistent-route-xyz   -> 404 (correct clean 404, no redirect)
+
+=== ROOT CAUSE (code read) ===
+apps/web/proxy.ts (this repo's middleware, matcher = everything except
+api/_next/static/_next/image/favicon/robots/sitemap/any-file-with-a-dot):
+
+  if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
+    if (!(path.startsWith("/s/") || path.startsWith("/c/") ||
+          path.startsWith("/embed/") || path.startsWith("/extension/") ||
+          path.startsWith("/middleware") || path.startsWith("/dashboard") ||
+          path.startsWith("/onboarding") || path.startsWith("/api") ||
+          path.startsWith("/login") || path.startsWith("/signup") ||
+          path.startsWith("/invite") || path.startsWith("/self-hosting") ||
+          path.startsWith("/download") || path.startsWith("/terms") ||
+          path.startsWith("/privacy") || path.startsWith("/verify-otp"))
+        && process.env.NODE_ENV !== "development")
+      return NextResponse.redirect(new URL("/login", url.origin));
+    else return NextResponse.next();
+  }
+
+This self-hosted build (data365, NEXT_PUBLIC_IS_CAP != "true") redirects ANY
+path that isn't a recognized top-level app section straight to /login,
+BEFORE Next.js page routing ever runs -- so app/not-found.tsx (which DOES
+exist and renders a proper "404 / Kechirasiz, bu sahifa topilmadi" page) is
+effectively unreachable for ordinary page paths on this deployment: a truly
+nonexistent URL and a protected URL are indistinguishable to the visitor,
+both just bounce to /login.
+
+STATUS: flag (should, not blocker). This is intentional, deliberate code
+(not a crash/500/leak) and IS what the plan confirms for /dashboard
+(307->login is correct/expected there). But it deviates from the plan's own
+EXPECTED bar for E4 ("a clean 404/not-found for TRULY UNKNOWN" paths) -- a
+mistyped URL or a dead link silently bounces a visitor to the login screen
+with no explanation, which reads as "you got logged out" rather than "that
+page doesn't exist." Not a security issue (no data leak, no 500) and not
+something that blocks core-readiness (recording/AI-results/no-waste), so
+rated "should" for the team's backlog: either special-case genuinely-unknown
+paths to render not-found.tsx, or accept the current behavior as intentional
+and update the plan's own expectation to match reality.

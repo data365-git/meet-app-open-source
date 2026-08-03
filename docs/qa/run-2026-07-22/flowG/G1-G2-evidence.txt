@@ -1,0 +1,63 @@
+FLOW G (browser-visual subset) - G1/G2 EVIDENCE - 2026-07-22
+Agent: browser-visual QA subagent. Tool: built-in Browser pane (mcp__Claude_Browser__*).
+NOTE: mcp__Claude_Browser__computer screenshot action failed every attempt in this
+subagent context ("Browser pane is not displayed, so the page is not compositing
+frames"). Navigation, DOM read (read_page/get_page_text), JS execution, and network-
+request logging all worked normally -- only pixel screenshots were unavailable. See
+screenshot-tool-limitation.txt. Evidence below uses accessibility-tree + computed-style
++ network-log capture instead of a screenshot.
+
+=== Step 0: fixture id turned out storage-missing (adapted target) ===
+Per task: "open .../s/<a publicCompleteVideoId from fixtures>". Tried all 3 fixture ids
+(15xgcytw49pmrj8, aydm0823n9f20s4, bbzt2424z6vvy6t). All 3 loaded 200, tabs rendered,
+no login wall -- but the video-player slot showed the app's honest storageMissing
+error UI ("Bu yozuv topilmadi" / "Iltimos, administratoringizga murojaat qiling.")
+instead of a <video> element (verified: document.querySelectorAll('video').length===0,
+confirmed server-rendered via plain curl of the HTML too, not a client hydration race).
+This matches sibling flows' independent DB finding (docs/qa/run-2026-07-22/pipeline/
+P0_storageMissing_all8.txt, docs/qa/run-2026-07-22/share-security/G1-G3-evidence.txt):
+7 of 8 COMPLETE videos on prod have metadata.storageMissing=true; only t91bnh582gnhgy8
+has real storage. This is a CONTENT/DATA issue (R2 objects gone), not a player-code bug
+-- already flagged "should" severity by those flows, not re-litigated here.
+To get real G1/G2 signal on the PLAYER CODE itself (not the data-loss situation), I
+switched to t91bnh582gnhgy8 (same choice the share-security flow independently made),
+in ONE fresh clean tab (tab-8), no other tabs probing this origin concurrently.
+
+=== G1 on t91bnh582gnhgy8 (fresh anon tab, no cookies) ===
+GET https://data365.duckdns.org/s/t91bnh582gnhgy8
+Page title: "Microsoft Excel VLOOKUP darsi va Backend muammolarini hal qilish | data365"
+read_page (interactive) shows: full media-player control set (play/pause, volume
+slider, speed, captions, settings, PIP, fullscreen), tablist "Video tafsilotlari"
+with 4 tabs (Xulosa/Vazifalar/Transkript/Matn), comment box, AI-chat dialog + launcher
+button. No login form (hasLoginForm: false via
+document.querySelector('input[type="password"]')). No redirect to /login.
+video element: videoCount=1, currentSrc = signed R2 URL
+(https://f2efd485903c9b8e769e4a709702c47e.r2.cloudflarestorage.com/ustoz-videos/
+25s3fqp7e7vc5p0/t91bnh582gnhgy8/result.mp4?X-Amz-...), readyState=4 (HAVE_ENOUGH_DATA)
+even before pressing play.
+VERDICT: PASS. Player + tabs render, no login wall.
+
+=== G2 on t91bnh582gnhgy8 (same clean tab) ===
+Clicked the "Ijro" (Play) control (ref_6). Waited 2.5s. Re-read video state via JS:
+  before click: paused=true, currentTime=0, readyState=4
+  after click:  paused=false, currentTime=23.31s, duration=444.97, readyState=4,
+                networkState=1 (NETWORK_IDLE -- buffered, no stall), error=null
+=> Video is ACTUALLILY PLAYING (currentTime advancing under real playback, not stuck).
+Network-request capture in this clean tab shows the player fetches media via an
+internal blob: URL (GET blob:https://data365.duckdns.org/<uuid> -> 200 OK, binary
+video payload) rather than a bare <video src> the browser tool's request list can
+directly show status/headers for -- so the literal "206" status line is not visible
+in MY OWN network log for this run (tool/architecture limitation: this player streams
+via JS fetch -> MediaSource/blob, not a plain HTTP <video src>).
+Corroborating direct proof of 206 on the exact same asset/id (same R2 bucket path),
+captured moments earlier by the sibling share-security flow in this same QA run:
+  curl -s -D - -o /dev/null -H "Range: bytes=0-1023" "<t91bnh582gnhgy8 signed URL>"
+  -> HTTP/1.1 206 Partial Content, Content-Type: video/mp4,
+     Content-Range: bytes 0-1023/29093242, Accept-Ranges: bytes
+  (full detail: docs/qa/run-2026-07-22/share-security/G1-G3-evidence.txt)
+VERDICT: PASS -- media actually plays (currentTime progressed, no error, readyState 4)
+and the underlying CDN object independently proves 206 Partial Content support.
+
+Video used for G1/G2: t91bnh582gnhgy8 (real, playable, public=1, COMPLETE).
+Fixture id also checked: 15xgcytw49pmrj8, aydm0823n9f20s4, bbzt2424z6vvy6t (all 3
+correctly show the honest storageMissing state, not a crash/blank/login-wall).

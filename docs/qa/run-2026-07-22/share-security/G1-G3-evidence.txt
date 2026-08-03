@@ -1,0 +1,95 @@
+FLOW A - G1/G2/G3 EVIDENCE - 2026-07-22
+=========================================
+
+CONTEXT: All 3 fixture publicCompleteVideoIds (15xgcytw49pmrj8, aydm0823n9f20s4,
+bbzt2424z6vvy6t) plus noTranscriptVideoId (0qqwsy3j4wr7q9y) turned out to have
+metadata.storageMissing = true in the DB (confirmed via read-only SELECT). This
+means their video PLAYER correctly shows the E6 "recording unavailable" state
+(not a G1/G2 bug) -- see E6 section for that evidence. To test G1/G2/G3 against
+an ACTUALLY playable video, I ran a read-only query for a COMPLETE, public,
+non-storageMissing video and found: t91bnh582gnhgy8 (public=1, no password,
+transcriptionStatus=COMPLETE, duration=444.97s, storageMissing=NULL,
+hasAiSummary=1). DB query + full result:
+
+  SELECT id, public, password IS NOT NULL AS hasPassword, transcriptionStatus,
+    jobStatus, bucket, awsBucket, awsRegion, storageIntegrationId, duration, deletedAt,
+    JSON_EXTRACT(source,'$.type') AS sourceType,
+    JSON_EXTRACT(metadata,'$.storageMissing') AS storageMissing,
+    JSON_EXTRACT(metadata,'$.aiSummary') IS NOT NULL AS hasAiSummary
+  FROM videos WHERE id IN ('15xgcytw49pmrj8','aydm0823n9f20s4','bbzt2424z6vvy6t','0qqwsy3j4wr7q9y');
+
+  id               public hasPassword transcriptionStatus jobStatus bucket awsBucket awsRegion storageIntegrationId duration  deletedAt sourceType storageMissing hasAiSummary
+  0qqwsy3j4wr7q9y  1      0           NULL                NULL      NULL   NULL      NULL      NULL                 17        NULL      "webMP4"   true           0
+  15xgcytw49pmrj8  1      0           COMPLETE            NULL      NULL   NULL      NULL      NULL                 96.38     NULL      "webMP4"   true           1
+  aydm0823n9f20s4  1      0           COMPLETE            NULL      NULL   NULL      NULL      NULL                 15.52     NULL      "webMP4"   true           1
+  bbzt2424z6vvy6t  1      0           COMPLETE            NULL      NULL   NULL      NULL      NULL                 6993.71   NULL      "webMP4"   true           1
+
+Distribution check (all non-deleted videos):
+  SELECT transcriptionStatus, JSON_EXTRACT(metadata,'$.storageMissing') AS storageMissing, COUNT(*)
+  FROM videos WHERE deletedAt IS NULL GROUP BY transcriptionStatus, storageMissing ORDER BY transcriptionStatus;
+
+  transcriptionStatus  storageMissing  cnt
+  NULL                 NULL            7
+  NULL                 true            5
+  COMPLETE             NULL            1
+  COMPLETE             true            7
+
+  => Only 1 of 8 COMPLETE videos on prod has working storage (t91bnh582gnhgy8).
+  FLAG (should, not this flow's blocker): 7 of 8 "complete" recordings on prod
+  have lost/missing R2 storage. Real content, real playback impact for the IT
+  team's existing library -- worth the owner's attention even though the E6
+  fallback UI handles it gracefully (no crash).
+
+--- G1 (share page loads, no login wall) on t91bnh582gnhgy8 ---
+GET https://data365.duckdns.org/s/t91bnh582gnhgy8 (fresh anon tab)
+Page title: "Microsoft Excel VLOOKUP darsi va Backend muammolarini hal qilish | data365"
+Tabs present: Xulosa (Summary) / Vazifalar (Tasks) / Transkript (Transcript) / Matn (raw text)
+No login wall, no redirect. PASS.
+
+--- G2 (media plays, 206 partial content) ---
+Extracted the live signed player <video> element via JS:
+  videoCount: 1
+  currentSrc: https://f2efd485903c9b8e769e4a709702c47e.r2.cloudflarestorage.com/ustoz-videos/25s3fqp7e7vc5p0/t91bnh582gnhgy8/result.mp4?X-Amz-...
+  readyState: 4 (HAVE_ENOUGH_DATA), networkState: 1, error: null, duration: 444.97 (matches DB)
+
+curl -s -D - -o /dev/null -H "Range: bytes=0-1023" "<that signed URL>"
+  HTTP/1.1 206 Partial Content
+  Content-Type: video/mp4
+  Content-Length: 1024
+  Content-Range: bytes 0-1023/29093242
+  Accept-Ranges: bytes
+  Server: cloudflare
+PASS -- media returns 206 Partial Content, video actually buffers/plays (readyState 4).
+
+--- G3 (Summary / Chapters / Transcript non-empty, coherent, correct language) ---
+Summary (Xulosa): "Ushbu videoda Microsoft Excel funksiyalari va dasturiy
+  ta'minotni ishlab chiqishdagi debugging jarayonlari ko'rsatilgan..." -- coherent,
+  Uzbek, matches audio content (VLOOKUP tutorial + backend debugging conversation).
+Chapters (Bo'limlar): 00:00 "Excel VLOOKUP darsi", 05:00 "Debugging va Deploy"
+  -- both map to real transitions in the transcript (at 05:00 the transcript
+  literally starts "Spiker 1: Xo'sh, demak, ishlamadi" = the debugging scene).
+Transcript (Transkript tab): full timestamped Uzbek transcript from 00:00 to
+  06:52, two speakers labeled ("Spiker 1"/"Spiker 2"), coherent dialogue matching
+  a real VLOOKUP lesson + a debugging conversation. Not hallucinated, not empty,
+  not "undefined". Minor code-switching (Russian words "сразу", "срочно") is
+  realistic bilingual-speaker transcription, not mojibake.
+PASS.
+
+--- Anomaly investigated (NOT a confirmed G1 bug) ---
+On the FIRST navigation to /s/aydm0823n9f20s4 (fresh tab-1), after the share
+page rendered correctly (title, tabs, summary content all present per
+get_page_text), a subsequent read_network_requests call showed the tab had
+navigated to /login (page bundle + chunks fetched, and get_page_text on that
+tab then returned actual login-form content: "data365 ga kirish" / "Kirish"
+button). No explicit navigate() call was made by the test agent between the
+two reads.
+Reproduction attempts: opened 2 more fresh tabs (tab-5, tab-6) to the SAME
+video id, waited 4-6s passively, checked page title/text/network -- NEITHER
+retry redirected; both stayed on the share page with POST /s/aydm0823n9f20s4
+returning a normal (non-aborted) 200.
+CONCLUSION: not reproducible under controlled conditions (2/2 clean). Likely
+a browser-automation-tooling artifact (e.g. an accessibility-tree read
+interacting with a prefetched link) rather than a genuine app auto-redirect,
+but I cannot rule out a rare client-side race with 100% confidence from this
+environment. Recording as a low-confidence flag for a human to keep an eye on,
+not a blocker.

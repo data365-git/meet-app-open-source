@@ -1,0 +1,33 @@
+FLOW E - E5 EVIDENCE - 2026-07-22 (nonexistent share id)
+
+GET https://data365.duckdns.org/s/nonexistentid00
+HTTP/1.1 200 OK  (matches plan's own pre-noted observation: "Live 2026-07-22
+this returns HTTP 200")
+Headers: no X-Frame-Options/CSP on /s/ (expected -- next.config.mjs
+excludes s/ from the frame-ancestors rule so /s/ pages stay embeddable, see
+next.config.mjs:155 negative lookahead `(?!embed/|s/|c/|login)`).
+
+BODY (both raw curl SSR HTML and live-browser rendered DOM, confirmed
+identical):
+  Title: "data365: Kirishi cheklangan video"
+  Visible text: "data365 / Bu video maxfiy / Bu video sizniki bo'lsa,
+    ulashish sozlamalarini boshqarish uchun tizimga kiring."
+  (= "This video is private" / "If this video is yours, sign in to manage
+  sharing settings.")
+No console errors. No broken player, no crash, no raw stack, no infinite
+spinner.
+
+ANALYSIS: the SAME generic "Bu video maxfiy" (this video is private) message
+is shown for `nonexistentid00` (an id that does not exist in the DB at all)
+as the plan expects for a genuinely-private video (E10) -- this is a
+deliberate anti-enumeration design: a visitor cannot distinguish "no such
+id" from "a real id you're not allowed to see" by response content, which is
+good practice against ID-guessing/probing. (This also gives strong
+circumstantial confidence for E10's code path, which fixtures could not
+exercise live -- see E10-evidence.txt.)
+
+STATUS: PASS -- body shows a proper, calm not-found/restricted UI, not a
+broken/empty player. One pre-existing nit (already flagged by the plan
+itself, not new): HTTP status is 200 rather than 404 for a resource that
+does not exist, which is a minor REST/SEO correctness nit, not a security or
+UX defect (severity: nit).

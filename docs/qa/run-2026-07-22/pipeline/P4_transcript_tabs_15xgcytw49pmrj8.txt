@@ -1,0 +1,28 @@
+Video: 15xgcytw49pmrj8 (share page https://data365.duckdns.org/s/15xgcytw49pmrj8)
+Read via Browser pane accessibility tree + get_page_text, 2026-07-22.
+
+=== Tab "Transkript" (raw ASR transcript, exportable TXT/SRT/copy) ===
+00:00 Assalomu alaykum, do'stlar. Demak, biz hozir
+00:01 Mana shu.
+00:04 qomusiy lik bo'yicha
+00:08 darslar o'tmoqchimiz. Shu bo'yicha savollarga javob beramiz, ozgina
+00:12 aniqliklar kiritib ketamiz. Endi men insholarni o'qiganinglarni hisobga olib,
+00:17 ko'p tushuntirmagan edim, qisqagina yozgandim.
+00:22 Qo'shimcha yana ozgina ma'lumot beraman, bu kerak deb tushundim.
+00:26 Xo'p, demak, nima, qomusiy lik nima o'zi?
+... (continues, fine-grained ~4-8s segments, coherent Uzbek, no mojibake) ...
+
+=== Tab "Matn" (AI-refined chaptered transcript) ===
+00:00 Kirish va dars maqsadi
+  "Assalomu alaykum, do'stlar. Hozir qomusiy lik bo'yicha darslar o'tish, shu bo'yicha
+   savollarga javob berish va ozgina aniqliklar kiritib ketish rejalashtirilmoqda."
+  "Insholarni o'qilganini hisobga olib, oldin ko'p tushuntirilmagan va qisqagina
+   yozilgan edi. Endi esa bu mavzu kerak deb tushunilgani uchun qo'shimcha yana
+   ozgina ma'lumot beriladi."
+00:26 Qomusiylik tushunchasi va mental modellar
+  "Qomusiylik nima o'zi degan savolga javob beradigan bo'lsak, ..."
+
+RESULT: Both raw and AI-refined transcript non-empty, correct language (uz),
+readable, no mojibake/garbled script. Refined chapter titles/timestamps
+(00:00 "Kirish va dars maqsadi", 00:26 "Qomusiylik tushunchasi va mental modellar")
+exactly match aiSummary.chapters from DB/HTML payload (startSec 0 and 26).

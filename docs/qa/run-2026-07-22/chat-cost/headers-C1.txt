@@ -1,0 +1,15 @@
+HTTP/1.1 200 OK
+Alt-Svc: h3=":443"; ma=2592000
+Cache-Control: no-cache
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/event-stream
+Date: Wed, 22 Jul 2026 09:43:40 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Set-Cookie: ai_chat_cid=8d3359y01wj1xhc; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000; Secure
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+

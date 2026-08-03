@@ -1,0 +1,54 @@
+FLOW A - G7 EVIDENCE - 2026-07-22 (CODE-READ + read-only DB, no live write)
+
+NOTE ON SCOPE: The live-test-plan §0.1.3 lists "G7 guest comment" as one of a
+small set of SANCTIONED QA writes (create a disposable row, delete it in the
+same session). However, my task's explicit HARD RULES for this run are
+stricter and blanket READ-ONLY ("no prod writes... any test that needs a
+write -> verify by code-read + read-only DB check, report status flag").
+Following the stricter instruction I was given: no comment was posted live.
+Verified instead by code-read + a read-only check for historical evidence.
+
+Code read: apps/web/actions/videos/new-comment.ts (newComment server action)
+  - Anonymous (no session) commenters ARE allowed, but MUST supply a
+    guestName; sanitizeGuestName() strips control chars/newlines, trims,
+    clamps to 50 chars; throws "A name is required to comment" if empty
+    after sanitizing (:23-32, :49-52) -- matches the UI's required
+    "Ismingiz" (Your name) field seen on the live share page.
+  - content required, capped at 5000 chars (:65-71).
+  - Independently gates comments vs emoji reactions via
+    effectiveRules.settings.disableComments / disableReactions (:106-112),
+    resolved from video + org + space settings (:97-101).
+  - Critically, gates comment creation behind the SAME view-authorization
+    policy as viewing the video itself: VideosPolicy.canView(videoId) run
+    through provideOptionalAuth (:119-127) -- an anonymous viewer who cannot
+    VIEW a video (private/password/email-restricted) gets
+    "Unauthorized to view this video" and the insert never runs. This means
+    a guest cannot use the comment endpoint as a side-channel to comment on
+    (or probe the existence of) a video they aren't allowed to see -- good,
+    matches the E10/E11 access-control intent.
+  - On success: inserts into `comments` with authorId=NULL, authorName=<the
+    sanitized guest name>, revalidates `/s/<videoId>`.
+
+Client UI confirms an actual (not merely "sign in to comment") anonymous
+comment form is rendered on the share page: "Ismingiz" (name) input +
+"Izoh qoldirish" (leave a comment) textarea + "Izoh" (Comment) submit button,
+observed live on t91bnh582gnhgy8's share page (see G1-G3-evidence.txt tree
+dump) -- so the product's intended behavior for G7 is "guest can comment
+after giving a name", not a sign-in wall, and the code matches that intent.
+
+Read-only DB check for historical evidence the INSERT path actually works
+end-to-end in prod:
+  SELECT id, authorId IS NULL AS isGuest, authorName, type, LEFT(content,40),
+    videoId, createdAt FROM comments WHERE authorId IS NULL ORDER BY
+    createdAt DESC LIMIT 10;
+  -> 0 rows returned. No guest (authorId IS NULL) comment has ever been
+     successfully written on prod.
+
+STATUS: flag (not pass) -- the code path reads correctly (name required,
+content capped, comments/reactions independently gated, view-policy
+enforced before insert) but there is ZERO live evidence the INSERT actually
+succeeds end-to-end (no historical guest-authored row exists to confirm it).
+A live-write test (post one throwaway guest comment on a QA-owned/public
+test video, confirm it appears in Activity, then DELETE it) would close this
+gap; that write was intentionally NOT performed here per the stricter
+read-only mandate for this run.

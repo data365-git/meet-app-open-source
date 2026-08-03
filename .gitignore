@@ -99,3 +99,8 @@ tmp-qa/
 # wrong host mid-incident once already. Delete them once the migration lands.
 /apps/web/_login-loop-test.mjs
 /apps/web/_probe-dashboard.mjs
+
+# Raw agent prompt/output dumps — scratch, not project history. One of them
+# (_codex-embed310.output) contains a cleartext admin password (since rotated);
+# committing any of these would put a credential in git history permanently.
+/docs/_codex-*

@@ -1,0 +1,17 @@
+=== users ===
+id	email	name	isAdmin	authSessionVersion	activeOrganizationId
+25s3fqp7e7vc5p0	admin@ustoz.uz	Admin	1	1	fjgf6h4p46ym40s
+8p1ka4dp1q2c7gx	mirkomilovabrorwork@gmail.com	abror	1	0	fjgf6h4p46ym40s
+khc8kfjxtw7s7fk	mirkomilovabror7@gmail.com	Abrorbek Mirkomilov	1	0	fjgf6h4p46ym40s
+qa0pool0loop000	qa.pool.loop@data365-test.uz	QA Pool	0	0	NULL
+
+=== organization_members (note: snake_case table name) ===
+id	userId	organizationId	role
+6csdcm791ndh902	25s3fqp7e7vc5p0	fjgf6h4p46ym40s	owner
+enrqwcb2s7ffhwe	8p1ka4dp1q2c7gx	fjgf6h4p46ym40s	admin
+ne711hpsw3mg0rv	khc8kfjxtw7s7fk	fjgf6h4p46ym40s	member
+
+=== A2 target check: organization_members for qa0pool0loop000 (expect ZERO rows) ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+row_count
+0

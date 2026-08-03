@@ -1,0 +1,20 @@
+FLOW G - TOOL LIMITATION NOTE - 2026-07-22
+
+The task asked for a screenshot as evidence for G1/G4/G5. In this subagent run,
+mcp__Claude_Browser__computer{action:"screenshot"} failed on every attempt (multiple
+tabs, multiple viewport sizes, after explicit waits), always with:
+  "Screenshot timed out after 5s: the Browser pane is not displayed, so the page is
+   not compositing frames. Display the pane and retry."
+
+The Browser pane itself WAS functional and used successfully for everything else:
+navigate, click, resize_window (incl. colorScheme), read_page (accessibility tree),
+get_page_text, read_network_requests, and javascript_tool (DOM/computed-style
+inspection). Only pixel compositing/screenshot capture was unavailable -- likely
+because this subagent session has no attached UI to display the pane to.
+
+Per the task's own fallback instruction ("If the Browser pane is unavailable in this
+context, return one finding status='flag'"), this is recorded as a flag -- but since
+the pane was otherwise fully usable, G1/G2/G4/G5 were still completed with equivalent
+or stronger evidence: DOM state, computed CSS (WCAG contrast math), scrollWidth/
+viewport measurements, and network-request logs, all saved in the sibling evidence
+files in this folder.

@@ -1,0 +1,2 @@
+id	videoId	clientId	dateUtc	requestCount
+37sfrwkh54dyr26	0qqwsy3j4wr7q9y	guest_ip:31.182.175.95	2026-07-22	20

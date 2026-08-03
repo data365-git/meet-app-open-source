@@ -1,0 +1,55 @@
+FLOW E - E9 EVIDENCE - 2026-07-22 (guest quota messaging, code-read)
+
+No video on prod is currently in a quota-exhausted ERROR state (confirmed
+earlier in the SETUP phase: `SELECT id FROM videos WHERE
+transcriptionStatus='ERROR'` -> 0 rows), so this cannot be exercised as a
+live example. Verified by code-read instead.
+
+apps/web/app/s/[videoId]/_components/transcription-error-message.ts:
+  export function transcriptionErrorMessageKey({ transcriptionStatus,
+    transcriptionErrorCode, canGenerate }) {
+    if (transcriptionStatus !== "ERROR") return "aiGenerationError";
+    if (transcriptionErrorCode !== "QUOTA") return "aiTranscriptionFailed";
+    // Public share links reach strangers: only the owner is told the
+    // account is out of money. Everyone else gets the same promise without
+    // the billing fact.
+    return canGenerate
+      ? "aiTranscriptionQuotaFailed"
+      : "aiTranscriptionQuotaFailedPublic";
+  }
+
+Message text (messages/uz.json:555-556, en.json:555-556) confirms the split
+is real, not just a naming difference:
+  aiTranscriptionQuotaFailed (owner/admin, canGenerate=true):
+    uz: "Yozuvingiz saqlangan — hech narsa yo'qolmadi. AI hisobida mablag'
+        tugagani uchun matn yozib olinmadi. Hisob to'ldirilgach, avtomatik
+        qayta urinamiz."
+    en: "...The transcript could not be made because the AI account is out
+        of credits. We retry automatically once it is topped up."
+    -> discloses the billing truth (account out of credits).
+  aiTranscriptionQuotaFailedPublic (everyone else, canGenerate=false):
+    uz: "Yozuv saqlangan. Matn texnik sabab bilan tayyorlanmadi — avtomatik
+        qayta urinamiz."
+    en: "...The transcript could not be made for a technical reason — we
+        retry automatically."
+    -> generic "technical reason", NO mention of money/credits/billing.
+  Both variants reassure the recording itself is safe/not lost.
+
+`canGenerate` is computed server-side in page.tsx (AuthorizedContent,
+:780-814): `if (!canUseAI(user)) return false; if (!userId) return false;`
+-- an anonymous guest has no `user`/`userId` at all, so `canGenerate` is
+ALWAYS false for any anonymous viewer (and also false for a logged-in
+viewer who is neither the video owner nor an org owner/admin) -> always
+routed to the "...Public" calm variant. Rendered in
+GenerateAiPanel.tsx:611-617, which also keeps the "retry" action button
+owner-only ("The RETRY BUTTON stays owner-only -- it spends real Gemini
+money", :609) separately from the message text.
+
+STATUS: flag (code-verified, not live-verified) -- the audience-correct
+message split exists, is data-driven (not just a naming coincidence -- the
+uz/en copy genuinely differs in whether billing is mentioned), and
+`canGenerate` is provably false for any anonymous guest. No live
+quota-exhausted video exists on prod today to see this rendered end-to-end;
+recommend closing with a live check next time a real quota-exhausted video
+occurs naturally (do not force one -- that would require deliberately
+draining the AI budget, out of scope for a $2-budget read-only pass).

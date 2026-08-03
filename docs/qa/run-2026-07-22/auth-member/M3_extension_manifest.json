@@ -1,0 +1,61 @@
+{
+	"manifest_version": 3,
+	"name": "data365 Recorder",
+	"version": "0.5.3",
+	"description": "Record your screen and share instantly with data365.",
+	"action": {
+		"default_popup": "popup.html",
+		"default_icon": {
+			"16": "icons/icon-16.png",
+			"48": "icons/icon-48.png",
+			"128": "icons/icon-128.png"
+		}
+	},
+	"options_ui": {
+		"page": "options.html",
+		"open_in_tab": true
+	},
+	"commands": {
+		"start-meeting-recording": {
+			"suggested_key": { "default": "Ctrl+Shift+9" },
+			"description": "Start meeting recording on the current Meet tab"
+		}
+	},
+	"background": {
+		"service_worker": "background.js",
+		"type": "module"
+	},
+	"permissions": [
+		"storage",
+		"unlimitedStorage",
+		"alarms",
+		"scripting",
+		"activeTab",
+		"tabs",
+		"offscreen",
+		"notifications",
+		"tabCapture",
+		"identity"
+	],
+	"host_permissions": ["https://*/*", "http://localhost:3001/*"],
+	"content_scripts": [
+		{
+			"matches": ["https://meet.google.com/*"],
+			"js": ["content.js"],
+			"run_at": "document_idle"
+		}
+	],
+	"web_accessible_resources": [
+		{
+			"resources": ["sounds/*", "icons/*"],
+			"matches": ["https://meet.google.com/*"]
+		}
+	],
+	"externally_connectable": {
+		"matches": [
+			"https://data365.duckdns.org/*",
+			"http://localhost:3000/*",
+			"http://localhost:3001/*"
+		]
+	}
+}

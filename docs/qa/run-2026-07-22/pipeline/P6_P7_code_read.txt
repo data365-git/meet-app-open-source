@@ -1,0 +1,50 @@
+P6/P7 — code-read evidence (no ERROR-status video exists on prod to exercise live)
+
+DB confirmed (see P0_overview_preview_raw.txt / P0 query 2026-07-22):
+  SELECT transcriptionStatus, COUNT(*) FROM videos WHERE deletedAt IS NULL GROUP BY 1;
+  -> NULL:12, COMPLETE:8. Zero ERROR rows. P6's live share-page check is therefore
+  SKIPPED for lack of a subject (matches fixtures.errorVideoId = "").
+
+=== P6 code-read: apps/web/app/s/[videoId]/_components/transcription-error-message.ts ===
+export function transcriptionErrorMessageKey({ transcriptionStatus, transcriptionErrorCode, canGenerate }):
+  if (transcriptionStatus !== "ERROR") return "aiGenerationError";
+  if (transcriptionErrorCode !== "QUOTA") return "aiTranscriptionFailed";
+  return canGenerate ? "aiTranscriptionQuotaFailed" : "aiTranscriptionQuotaFailedPublic";
+
+Matches plan's EXPECTED exactly: owner sees aiTranscriptionQuotaFailed, public viewer sees
+the Public variant, a real FAILED (non-quota) shows aiTranscriptionFailed. Pure function,
+no live network dependency in the decision itself — the only untestable part live is
+that no ERROR row currently exists to render through the share page UI.
+
+=== P7 code-read: apps/web/actions/videos/get-status.ts ===
+VideoStatusResult includes `transcriptionErrorCode?: "QUOTA" | "FAILED"`.
+When video.transcriptionStatus === "ERROR", the action returns
+  transcriptionErrorCode: metadata.transcriptionError?.code
+i.e. it reads the code straight off videos.metadata.transcriptionError.code (DB-backed,
+not derived/guessed). Confirms "DB videos carries it" + "get-status.ts returns
+transcriptionErrorCode" from the plan.
+
+=== P7 code-read: apps/web/app/api/cron/recover-stale-ai-jobs/{route.ts,stale-job-helpers.ts} ===
+- Separate DB query for QUOTA-coded ERROR rows (transcriptionError.code = 'QUOTA'),
+  independent of the generic PROCESSING-stale query, so a quota death does not need a
+  stale timestamp to be found again.
+- isQuotaBlocked(metadata) => metadata.transcriptionError?.code === "QUOTA"
+- shouldRetryQuotaBlocked(): re-kicks only if quotaRetryAttempts < MAX_QUOTA_RETRY_ATTEMPTS (12)
+  AND now >= quotaRetryNextAt. withQuotaRetryScheduled() advances quotaRetryNextAt along a
+  backoff ladder: 30m, 1h, 2h, 4h, 8h, 12h (ceiling, reused after). Comment explicitly reasons
+  about why a flat retry cap would die out before a human tops up credits — self-healing,
+  bounded (12 attempts ~ well over a day), not infinite.
+- FAILED is NOT looped: a transcription only gets marked FAILED after
+  `shouldAutoRetry` (cap MAX_AUTO_RETRY_ATTEMPTS = 2) is exhausted on the generic
+  PROCESSING-stale path; route.ts then writes
+  transcriptionError: { code: "FAILED", message: "Dead after 2 auto-retries" }
+  and fires an ops alert (sendOpsAlert) — terminal, and explicitly NOT re-queried by the
+  QUOTA-only WHERE clause above (comment at route.ts:100-105 states this is deliberate:
+  "these are terminal-ERROR rows ... must NOT apply to them").
+- Unit coverage: __tests__/unit/recover-stale-ai-jobs.test.ts, 213 lines / 13 test cases,
+  exercises this module.
+
+RESULT: QUOTA vs FAILED distinction exists, is DB-backed, and behaves exactly as the
+plan's EXPECTED column describes — QUOTA self-recovers on a bounded backoff, FAILED is
+terminal (not retried forever). Verified by static code read only; no live ERROR video
+exists on prod to exercise the runtime path end-to-end.

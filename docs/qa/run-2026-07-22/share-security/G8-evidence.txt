@@ -1,0 +1,32 @@
+=== G8: POST /api/videos/<id>/generate with NO auth cookie ===
+HTTP/1.1 403 Forbidden
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: application/json
+Date: Wed, 22 Jul 2026 09:58:06 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+--- body ---
+{"error":"Unauthorized"}
+
+=== UI check: no Generate/Analyze/Re-transcribe control visible to guest ===
+All button texts/aria-labels on the t91bnh582gnhgy8 share page (guest, no
+session cookie):
+  https://data365.duckdns.org/s/t91bnh582gnhgy8 | Ulashish | Ulashish |
+  Yuklab olish | Video optimallashtirilmoqda | 1.2x | Ijro | Ovozsiz |
+  Taglavhalarni yoqish | Sozlamalar | Oynali rejimga o'tish |
+  To'liq ekranga o'tish | Xulosa | Vazifalar | Transkript | Matn |
+  Nusxa olish | 00:00 Excel VLOOKUP darsi | 05:00 Debugging va Deploy |
+  Izoh | (emoji reactions) | A | A | Yopish | [00:00] | [00:00] | Yuborish |
+  AI yordamchisini ochish
+No Generate/Analyze/Re-transcribe/Retry button present anywhere.
+
+PASS -- guest sees no paid-AI trigger in the UI, and the API itself returns
+403 {"error":"Unauthorized"} for an unauthenticated POST to
+/api/videos/<id>/generate (no Gemini spend, no 200).

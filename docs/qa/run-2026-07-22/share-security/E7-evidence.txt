@@ -1,0 +1,39 @@
+FLOW E - E7 EVIDENCE - 2026-07-22 (dashboard error boundaries, code-read)
+
+Read all 3 error.tsx twins:
+  apps/web/app/(org)/dashboard/error.tsx           (DashboardError)
+  apps/web/app/(org)/dashboard/caps/error.tsx      (CapsError)
+  apps/web/app/(org)/dashboard/meetings/error.tsx  (MeetingsError)
+
+All three share the identical structural pattern (diffed, only labels/copy
+keys differ):
+  - "use client" component receiving Next.js's {error, reset} error-boundary
+    props.
+  - A stale-deployment detector (isStale/isStaleActionError) that matches
+    "Failed to find Server Action" / "older or newer deployment" in the
+    error message/stack and, if matched, shows a calm localized
+    "redeploying, please wait" message and auto-reloads the page after
+    1.2-1.5s -- so a stale-build server-action mismatch self-heals instead
+    of showing a scary crash.
+  - Otherwise: a localized (next-intl `t(...)`) title + description, an
+    `error.digest` correlation id shown as a safe opaque string (React's own
+    server-error digest, not a stack), and "Try again" / "Go to dashboard"
+    buttons.
+  - CRITICALLY (the B4 fix): raw `error.message` + `error.stack` are only
+    rendered when `process.env.NODE_ENV !== "production"` (error.tsx:56 in
+    the dashboard twin, same guard in caps/meetings twins). On the live prod
+    build (NODE_ENV=production), this branch never executes -- so an
+    end-user hitting a real render error sees ONLY the localized copy + a
+    digest id, never a raw stack trace.
+  - Localization: uses `useTranslations("errorBoundary")` -- copy is pulled
+    from the app's uz/ru message bundles, i.e. NOT English-only (matches the
+    "Localized (next-intl) error UI" requirement).
+
+STATUS: PASS -- all 3 error boundaries are production-safe (no raw stack
+leak) and localized. Not exercised via an actual live-forced client crash in
+this session (forcing one safely without corrupting app state/data was out
+of scope for a read-only security pass); code-read is conclusive here since
+the guard is a simple, unambiguous `NODE_ENV` check with no dynamic/remote
+config that could differ between the read code and the running build (build
+201165f matches the checked-out source, confirmed via image tag ==
+201165f4f04b5b8ec18421c3f2600102145d17a2 on the running container).
