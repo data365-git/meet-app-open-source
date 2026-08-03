@@ -84,3 +84,18 @@ tmp-qa/
 
 # Never commit local secrets worksheets
 /docs/DEPLOY_SECRETS.md
+
+# Session / QA artifacts — regenerable evidence, not project history.
+# The QA *reports* (docs/qa/**/*.md) stay tracked; only the heavy dumps go.
+/scratchpad/
+/work/
+/qa-evidence/
+/autoresearch/
+/docs/qa-screenshots/
+/docs/qa/shots/
+
+# Ad-hoc probe scripts pointing at the DEAD Railway host (capweb-production-*).
+# Kept on disk, out of git: a stale URL in-repo is what sent an operator to the
+# wrong host mid-incident once already. Delete them once the migration lands.
+/apps/web/_login-loop-test.mjs
+/apps/web/_probe-dashboard.mjs

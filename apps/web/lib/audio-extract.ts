@@ -585,7 +585,11 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 		DEFAULT_AUDIO_BITRATE,
 		"-f",
 		"mp3",
-		"-pipe:1",
+		// Output TARGET, not an option — a leading dash makes ffmpeg 8 exit 8
+		// with "Unrecognized option 'pipe:1'". Matches the "pipe:0" input
+		// spelling used below. This typo broke replace-with-audio for every
+		// video (found in prod logs 2026-08-03).
+		"pipe:1",
 	];
 
 	return new Promise((resolve, reject) => {
@@ -633,7 +637,8 @@ export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
 		"64k",
 		"-f",
 		"mp3",
-		"-pipe:1",
+		// Same typo as the twin above — output target takes no leading dash.
+		"pipe:1",
 	];
 
 	return new Promise((resolve, reject) => {

@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
+  folders,
   organizations,
   sharedVideos,
   spaces,
@@ -222,6 +223,33 @@ export default async function MeetingsPage(props: {
     .limit(limit)
     .offset(offset);
 
+  const foldersData = await db()
+    .select({
+      id: folders.id,
+      name: folders.name,
+      color: folders.color,
+      public: folders.public,
+      parentId: folders.parentId,
+      videoCount: sql<number>`(
+        WITH RECURSIVE folder_tree AS (
+          SELECT id FROM folders f0 WHERE f0.id = folders.id
+          UNION ALL
+          SELECT f.id FROM folders f
+          INNER JOIN folder_tree t ON f.parentId = t.id
+        )
+        SELECT COUNT(*) FROM videos WHERE videos.folderId IN (SELECT id FROM folder_tree)
+      )`,
+    })
+    .from(folders)
+    .where(
+      and(
+        eq(folders.organizationId, user.activeOrganizationId),
+        eq(folders.createdById, user.id),
+        isNull(folders.parentId),
+        isNull(folders.spaceId),
+      ),
+    );
+
   const videoIds = videoData.map((video) => video.id);
   const sharedSpacesMap =
     await getSharedSpacesForVideos(videoIds).pipe(runPromise);
@@ -296,6 +324,7 @@ export default async function MeetingsPage(props: {
   return (
     <Meetings
       data={processedVideoData}
+      folders={foldersData}
       count={totalCount}
       analyticsEnabled={Boolean(
         serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,

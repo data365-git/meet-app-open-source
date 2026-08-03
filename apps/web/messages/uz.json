@@ -124,7 +124,9 @@
     "deleteAccountDialogDescription": "Bu hisobingizni va BARCHA videolaringizni butunlay o'chiradi. Tasdiqlash uchun aynan \"{phrase}\" deb yozing. Bu amalni qaytarib bo'lmaydi.",
     "deleteAccountPending": "O'chirilmoqda...",
     "deleteAccountConfirm": "O'chirishni tasdiqlash",
-    "deleteAccountError": "Hisobni o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+    "deleteAccountError": "Hisobni o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+    "deleteAccountSessionEnded": "Sessiyangiz tugadi — hisobingiz allaqachon o'chirilgan bo'lishi mumkin.",
+    "accountDeletedBanner": "Hisobingiz va unga tegishli barcha ma'lumotlar butunlay o'chirildi."
   },
   "generateAi": {
     "confirmTitle": "AI tahlilini boshlash",

@@ -318,7 +318,13 @@ describe("audio-extract", () => {
 			await resultPromise;
 
 			const args = spawnArgs[0]?.args ?? [];
-			expect(args).toContain("-pipe:1");
+			// The output target takes NO leading dash. This assertion used to
+			// read "-pipe:1", which locked the production bug in place: ffmpeg 8
+			// rejected it ("Unrecognized option 'pipe:1'", exit 8) and
+			// replace-with-audio failed for every video while this test stayed
+			// green. The negative assertion is what stops the typo returning.
+			expect(args).toContain("pipe:1");
+			expect(args).not.toContain("-pipe:1");
 		});
 
 		it("returns Buffer instance", async () => {
@@ -352,6 +358,28 @@ describe("audio-extract", () => {
 
 			const result = await resultPromise;
 			expect(result.toString()).toBe("chunk1chunk2");
+		});
+	});
+
+	// convertWavToMp3 is a copy-paste twin of extractAudioToBuffer and carried
+	// the SAME "-pipe:1" typo, which nothing covered. Pinned here so the twin
+	// cannot drift back on its own.
+	describe("convertWavToMp3", () => {
+		it("writes to the pipe output target, with no leading dash", async () => {
+			const { convertWavToMp3 } = await import("@/lib/audio-extract");
+
+			const resultPromise = convertWavToMp3(Buffer.from("wav-bytes"));
+
+			setTimeout(() => {
+				mockProcess.stdout.emit("data", Buffer.from("mp3-data"));
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			await resultPromise;
+
+			const args = spawnArgs[0]?.args ?? [];
+			expect(args).toContain("pipe:1");
+			expect(args).not.toContain("-pipe:1");
 		});
 	});
 });

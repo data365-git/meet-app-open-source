@@ -44,8 +44,15 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 	const breakdownValues = OPERATIONS.map(({ key }) => data.breakdown[key] ?? 0);
 	const allBreakdownZero = breakdownValues.every((v) => v === 0);
 
+	// shrink-0 on the root: globals.css sets `* { min-height: 0 }`, which
+	// removes every flex item's content-based minimum height. When the sticky
+	// sidebar column (ShareVideo, lg:max-h screen) runs out of room - e.g. many
+	// comments - this panel would otherwise be crushed below its text height and
+	// the labels, amounts and savings line paint on top of each other. shrink-0
+	// restores the intrinsic minimum; the column's overflow-y-auto absorbs the
+	// excess.
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex shrink-0 flex-col gap-4">
 			<div className="flex flex-col items-center gap-1 rounded-xl px-6 py-5 text-center shadow-sm" style={{ background: "var(--gray-1)", border: "1px solid var(--gray-4)" }}>
 				<span className="text-xs font-medium" style={{ color: "var(--gray-11)" }}>
 					{t("meetingCost")}

@@ -3,7 +3,6 @@
    - Follows the app theme automatically (light default, dark
      via .ai-popup[data-theme="dark"] or body.dark).
    - No glass / noise / heavy blur — quiet, high-legibility.
-   - Reading size driven by --ai-reading (set from JS).
    Drop-in replacement for the old ai-chat.css.
    Optional: load Atkinson Hyperlegible for max legibility:
    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
@@ -153,7 +152,6 @@ body[data-mini-docked="true"] .ai-fab {
 		0 4px 12px -6px rgba(15, 23, 42, 0.14);
 	--user-bubble: #2f6bef;
 	--radius: 15px;
-	--ai-reading: 16px;
 
 	position: fixed;
 	right: 26px;
@@ -277,48 +275,6 @@ body.dark .ai-popup {
 	animation: aiLive 2s infinite;
 }
 
-/* Text-size control */
-.ai-textsize {
-	display: flex;
-	align-items: center;
-	gap: 3px;
-	padding: 3px;
-	border-radius: 9px;
-	background: var(--surface-2);
-	border: 1px solid var(--line);
-	flex: none;
-}
-.ai-textsize button {
-	width: 26px;
-	height: 26px;
-	border: none;
-	background: transparent;
-	color: var(--txt-2);
-	border-radius: 7px;
-	cursor: pointer;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-family: var(--ai-font-ui);
-	font-weight: 800;
-	line-height: 1;
-	transition: all var(--dur) var(--ease);
-}
-.ai-textsize button:hover:not(:disabled) {
-	background: var(--surface-3);
-	color: var(--txt);
-}
-.ai-textsize button:disabled {
-	opacity: 0.3;
-	cursor: default;
-}
-.ai-textsize button.sm {
-	font-size: 11px;
-}
-.ai-textsize button.lg {
-	font-size: 16px;
-}
-
 .ai-x {
 	width: 30px;
 	height: 30px;
@@ -347,7 +303,8 @@ body.dark .ai-popup {
 	flex-direction: column;
 	gap: 16px;
 	padding: 18px 18px 22px;
-	font-size: var(--ai-reading);
+	/* One fixed, comfortable reading size (owner removed the A/A toggle). */
+	font-size: 16px;
 	scrollbar-width: thin;
 	scrollbar-color: var(--line-2) transparent;
 }
@@ -430,6 +387,12 @@ body.dark .ai-popup {
 	display: flex;
 	gap: 10px;
 	max-width: 100%;
+	/* flex: none — globals.css sets `* { min-height: 0 }`, which removes the
+	   content-based minimum of flex items. Without it, once the message list
+	   overflows .ai-body (column flex, overflow-y: auto), every message is
+	   squeezed below its text height and messages paint over each other
+	   instead of the body scrolling. */
+	flex: none;
 	animation: aiMsgIn var(--dur) var(--ease);
 }
 .ai-msg.user {
@@ -731,10 +694,6 @@ body.dark .ai-popup {
 	}
 	.ai-resize {
 		display: none;
-	}
-	.ai-textsize button {
-		width: 32px;
-		height: 32px;
 	}
 	.ai-send {
 		width: 44px;

@@ -124,7 +124,9 @@
     "deleteAccountDialogDescription": "This permanently erases your account and ALL of your videos and recordings. To confirm, type \"{phrase}\" exactly. This cannot be undone.",
     "deleteAccountPending": "Deleting...",
     "deleteAccountConfirm": "Confirm delete",
-    "deleteAccountError": "Failed to delete account. Please try again."
+    "deleteAccountError": "Failed to delete account. Please try again.",
+    "deleteAccountSessionEnded": "Your session has ended — your account may already have been deleted.",
+    "accountDeletedBanner": "Your account and all its data have been permanently deleted."
   },
   "generateAi": {
     "confirmTitle": "Start AI analysis",

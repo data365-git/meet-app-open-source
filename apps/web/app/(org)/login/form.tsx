@@ -26,9 +26,11 @@ function isSafeRelativePath(path: string) {
 export function LoginForm() {
   const t = useTranslations("auth");
   const tCommon = useTranslations("common");
+  const tSettings = useTranslations("settings");
   const searchParams = useSearchParams();
   const router = useRouter();
   const next = searchParams?.get("next");
+  const deleted = searchParams?.get("deleted") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -103,6 +105,15 @@ export function LoginForm() {
           <LoadingSpinner size={24} themeColors />
           <p className="text-sm text-gray-10">{t("signingIn")}</p>
         </motion.div>
+      )}
+      {deleted && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mx-auto mb-4 w-full max-w-[432px] rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-center text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+        >
+          {tSettings("accountDeletedBanner")}
+        </div>
       )}
       <motion.div
         layout

@@ -44,8 +44,9 @@ function nextMsgId() {
 	return `msg-${crypto.randomUUID()}`;
 }
 
-const READING_STEPS = [14, 16, 19, 22];
-const READING_KEY = "aiChatReading";
+// The A/A reading-size toggle was removed (owner decision, 2026-08-03): one
+// fixed comfortable size lives in ai-chat.css (.ai-body font-size). The old
+// persisted preference is cleaned up in an effect below.
 
 function parseMmSsToSeconds(mmss: string): number {
 	const parts = mmss.split(":");
@@ -357,7 +358,6 @@ export function AIChatPopup({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
-	const [readingIdx, setReadingIdx] = useState(1);
 
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -385,12 +385,12 @@ export function AIChatPopup({
 			? tShare("aiTranscriptNotReady")
 			: t("placeholder");
 
+	// One-time cleanup of the removed reading-size preference.
 	useEffect(() => {
-		const raw = localStorage.getItem(READING_KEY);
-		if (raw === null) return;
-		const stored = Number(raw);
-		if (Number.isInteger(stored) && stored >= 0 && stored < READING_STEPS.length) {
-			setReadingIdx(stored);
+		try {
+			localStorage.removeItem("aiChatReading");
+		} catch {
+			// storage disabled — nothing to clean
 		}
 	}, []);
 
@@ -461,14 +461,6 @@ export function AIChatPopup({
 			// ignore
 		}
 	}, [messages, videoId]);
-
-	const setReading = (dir: number) => {
-		setReadingIdx((prev) => {
-			const next = Math.max(0, Math.min(READING_STEPS.length - 1, prev + dir));
-			localStorage.setItem(READING_KEY, String(next));
-			return next;
-		});
-	};
 
 	const adjustTextarea = () => {
 		const el = textareaRef.current;
@@ -665,7 +657,6 @@ export function AIChatPopup({
 			aria-label={t("title")}
 			aria-hidden={!isOpen}
 			inert={!isOpen}
-			style={{ "--ai-reading": `${READING_STEPS[readingIdx]}px` } as React.CSSProperties}
 		>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: mouse-only resize handle */}
 			<div className="ai-resize" onMouseDown={onResizeMouseDown} />
@@ -684,26 +675,6 @@ export function AIChatPopup({
 								? tShare("aiTranscriptNotReady")
 								: t("subtitle")}
 					</div>
-				</div>
-				<div className="ai-textsize" role="group" aria-label={t("textSize")}>
-					<button
-						type="button"
-						className="sm"
-						onClick={() => setReading(-1)}
-						disabled={readingIdx === 0}
-						aria-label={t("textSmaller")}
-					>
-						A
-					</button>
-					<button
-						type="button"
-						className="lg"
-						onClick={() => setReading(1)}
-						disabled={readingIdx === READING_STEPS.length - 1}
-						aria-label={t("textLarger")}
-					>
-						A
-					</button>
 				</div>
 				<button
 					ref={closeButtonRef}

@@ -24,6 +24,11 @@ import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteAccount } from "@/actions/account/delete-account";
+import {
+	DELETE_CONFIRMATION_PHRASE,
+	resolveDeleteOutcome,
+	shouldDisableConfirm,
+} from "./delete-account-outcome";
 import { updatePreferences } from "@/actions/notifications/update-preferences";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { Locale } from "@/i18n/locales";
@@ -111,15 +116,14 @@ const NotificationPreferences = ({
 	);
 };
 
-// The server verifies this exact literal before erasing anything; the dialog
-// must render it verbatim in every locale so the user can copy it.
-const DELETE_CONFIRMATION_PHRASE = "delete my all data";
-
 const DangerZone = () => {
 	const t = useTranslations("settings");
-	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [confirmPhrase, setConfirmPhrase] = useState("");
+	// Once a delete succeeds (or we learn the account is already gone), the
+	// confirm control must never be able to fire a second deleteAccount call
+	// while signOut()'s navigation is in flight.
+	const [deleteSucceeded, setDeleteSucceeded] = useState(false);
 	const inputId = useId();
 
 	const {
@@ -129,11 +133,17 @@ const DangerZone = () => {
 	} = useMutation({
 		mutationFn: () => deleteAccount(confirmPhrase),
 		onSuccess: (result) => {
-			if (!result.ok) {
-				toast.error(result.error);
+			const outcome = resolveDeleteOutcome(result);
+			if (outcome.kind === "error") {
+				toast.error(outcome.message);
 				return;
 			}
-			router.push("/");
+			setDeleteSucceeded(true);
+			if (outcome.toastKey) toast.error(t(outcome.toastKey));
+			// signOut() clears the NextAuth session cookie AND performs a real
+			// full-page navigation — a soft router.push leaves the user looking
+			// signed-in with no confirmation, which is the defect this fixes.
+			signOut({ callbackUrl: outcome.callbackUrl });
 		},
 		onError: () => {
 			toast.error(t("deleteAccountError"));
@@ -202,7 +212,7 @@ const DangerZone = () => {
 							variant="gray"
 							type="button"
 							onClick={() => handleOpenChange(false)}
-							disabled={isPending}
+							disabled={isPending || deleteSucceeded}
 						>
 							{t("cancel")}
 						</Button>
@@ -211,7 +221,7 @@ const DangerZone = () => {
 							variant="destructive"
 							type="button"
 							spinner={isPending}
-							disabled={confirmPhrase !== DELETE_CONFIRMATION_PHRASE || isPending}
+							disabled={shouldDisableConfirm({ confirmPhrase, isPending, deleteSucceeded })}
 							onClick={() => doDelete()}
 						>
 							{isPending ? t("deleteAccountPending") : t("deleteAccountConfirm")}

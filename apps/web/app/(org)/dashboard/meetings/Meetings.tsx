@@ -1,6 +1,9 @@
 "use client";
 
+import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect, Exit } from "effect";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -11,9 +14,10 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
 import type { VideoData } from "../caps/Caps";
-import { SelectedCapsBar } from "../caps/components";
+import { NewFolderDialog, SelectedCapsBar } from "../caps/components";
 import { CapCard } from "../caps/components/CapCard/CapCard";
 import { CapPagination } from "../caps/components/CapPagination";
+import Folder, { type FolderDataType } from "../caps/components/Folder";
 
 type DateGroupKey = "groupToday" | "groupThisWeek" | "groupEarlier";
 
@@ -40,10 +44,12 @@ export const Meetings = ({
   data,
   count,
   analyticsEnabled,
+  folders,
 }: {
   data: MeetingVideoData[];
   count: number;
   analyticsEnabled: boolean;
+  folders: FolderDataType[];
 }) => {
   const t = useTranslations("library");
   const router = useRouter();
@@ -54,6 +60,7 @@ export const Meetings = ({
   const totalPages = Math.ceil(count / limit);
   const bulkDeleteToastRef = useRef<string | number | undefined>(undefined);
   const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
+  const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -184,7 +191,7 @@ export const Meetings = ({
     };
   }, [selectedCaps, data, deleteCaps]);
 
-  const isEmpty = count === 0;
+  const isEmpty = count === 0 && folders.length === 0;
   const groupedVideos = useMemo(() => {
     return data.reduce(
       (groups, video) => {
@@ -202,6 +209,35 @@ export const Meetings = ({
 
   return (
     <div className="flex relative flex-col w-full h-full">
+      <NewFolderDialog
+        open={openNewFolderDialog}
+        onOpenChange={setOpenNewFolderDialog}
+      />
+      {!isEmpty && (
+        <div className="flex flex-wrap gap-3 items-center mb-10 w-full">
+          <Button
+            size="sm"
+            variant="white"
+            className="flex gap-2 items-center w-fit"
+            onClick={() => setOpenNewFolderDialog(true)}
+          >
+            <FontAwesomeIcon className="size-3" icon={faFolderPlus} />
+            {t("newFolder")}
+          </Button>
+        </div>
+      )}
+      {folders.length > 0 && (
+        <>
+          <div className="flex gap-3 items-center mb-6 w-full">
+            <h1 className="text-2xl font-medium text-gray-12">Folders</h1>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 mb-10">
+            {folders.map((folder) => (
+              <Folder key={folder.id} {...folder} />
+            ))}
+          </div>
+        </>
+      )}
       {isEmpty && (
         <div className="flex flex-col flex-1 justify-center items-center w-full h-full">
           <div className="flex flex-col gap-3 justify-center items-center h-full text-center">
