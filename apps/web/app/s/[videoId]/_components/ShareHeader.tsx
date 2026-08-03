@@ -11,6 +11,7 @@ import {
 	LogoBadge,
 } from "@cap/ui";
 import { formatPlatformDateRelative } from "@cap/utils";
+import Cookies from "js-cookie";
 import type { ViewerSettingKey } from "@cap/web-backend";
 import {
 	faChartSimple,
@@ -29,10 +30,12 @@ import {
 	Globe2,
 	Loader2,
 	MessageCircle,
+	Moon,
 	Pencil,
 	Scissors,
 	Send,
 	Share2,
+	Sun,
 	X,
 } from "lucide-react";
 import Image from "next/image";
@@ -92,6 +95,7 @@ export const ShareHeader = ({
 	canManageSharePageBranding?: boolean;
 }) => {
 	const t = useTranslations("share");
+	const tNav = useTranslations("nav");
 	const user = useCurrentUser();
 	const router = useRouter();
 	const { push, refresh } = router;
@@ -111,6 +115,7 @@ export const ShareHeader = ({
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
 	const [showShareOptions, setShowShareOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
+	const [shareTheme, setShareTheme] = useState<"light" | "dark">("light");
 	const [isHidingBranding, setIsHidingBranding] = useState(false);
 	const [isOpeningBrandingSettings, setIsOpeningBrandingSettings] =
 		useState(false);
@@ -151,6 +156,22 @@ export const ShareHeader = ({
 		document.addEventListener("mousedown", handler);
 		return () => document.removeEventListener("mousedown", handler);
 	}, [showShareOptions]);
+
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		setShareTheme(
+			document.body.classList.contains("dark") ? "dark" : "light",
+		);
+	}, []);
+
+	const handleToggleShareTheme = () => {
+		const nextTheme: "light" | "dark" =
+			shareTheme === "light" ? "dark" : "light";
+		document.body.classList.remove(shareTheme);
+		document.body.classList.add(nextTheme);
+		Cookies.set("theme", nextTheme, { expires: 365 });
+		setShareTheme(nextTheme);
+	};
 
 	const contextData = useDashboardContext();
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
@@ -760,6 +781,16 @@ export const ShareHeader = ({
 										</button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align="end">
+										<DropdownMenuItem onClick={handleToggleShareTheme}>
+											{shareTheme === "light" ? (
+												<Moon className="mr-2 size-3.5 text-gray-12" />
+											) : (
+												<Sun className="mr-2 size-3.5 text-gray-12" />
+											)}
+											{shareTheme === "light"
+												? tNav("toggleDark")
+												: tNav("toggleLight")}
+										</DropdownMenuItem>
 										{canEditVideo && (
 											<DropdownMenuItem onClick={handleEditVideo}>
 												<Scissors className="mr-2 size-3.5 text-gray-12" />

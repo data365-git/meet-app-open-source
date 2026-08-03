@@ -11,8 +11,13 @@
 		pathname.indexOf("/login") === 0 ||
 		pathname.indexOf("/onboarding") === 0 ||
 		pathname.indexOf("/s/") === 0;
+	var systemTheme = () => {
+		return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+			? "dark"
+			: "light";
+	};
 	var applyTheme = () => {
-		document.body.classList.add(cookie || "light");
+		document.body.classList.add(cookie || systemTheme());
 	};
 
 	if (isDashboardPath) {

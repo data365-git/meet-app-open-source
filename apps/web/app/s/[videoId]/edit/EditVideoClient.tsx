@@ -340,7 +340,7 @@ function KeyboardShortcutsPopover() {
 						onClick={() => setOpen(false)}
 						className="fixed inset-0 z-40 cursor-default"
 					/>
-					<div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-gray-5 bg-white p-3 shadow-xl">
+					<div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-gray-5 bg-white p-3 shadow-xl dark:bg-gray-2">
 						<div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
 							Keyboard shortcuts
 						</div>
@@ -1703,7 +1703,7 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 
 	return (
 		<div className="flex min-h-screen flex-col bg-gray-1 text-gray-12">
-			<header className="sticky top-0 z-30 border-b border-gray-4 bg-white/85 backdrop-blur">
+			<header className="sticky top-0 z-30 border-b border-gray-4 bg-white/85 backdrop-blur dark:bg-gray-1/85">
 				<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:h-16 sm:px-5">
 					<button
 						type="button"
@@ -1766,7 +1766,7 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 			</header>
 
 			{isHistoryOpen && (
-				<div className="border-b border-gray-4 bg-white px-3 py-3 sm:px-5">
+				<div className="border-b border-gray-4 bg-white px-3 py-3 sm:px-5 dark:bg-gray-1">
 					<div className="mx-auto w-full max-w-6xl">
 						<div className="mb-2 flex items-center justify-between">
 							<span className="text-[13px] font-semibold text-gray-12">

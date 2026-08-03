@@ -3788,7 +3788,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 			<TooltipContent
 				container={context.portalContainer}
 				sideOffset={tooltipSideOffset}
-				className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-black data-[side=top]:mb-3.5  [&>span]:hidden"
+				className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-black data-[side=top]:mb-3.5 dark:border-gray-6 dark:bg-gray-2 dark:text-gray-12  [&>span]:hidden"
 			>
 				<p>{tooltip}</p>
 				{Array.isArray(shortcut) ? (
@@ -3796,7 +3796,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 						{shortcut.map((shortcutKey) => (
 							<kbd
 								key={shortcutKey}
-								className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-black shadow-xs"
+								className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-black shadow-xs dark:border-gray-6 dark:bg-gray-3 dark:text-gray-12"
 							>
 								<abbr title={shortcutKey} className="no-underline">
 									{shortcutKey}
@@ -3808,7 +3808,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 					shortcut && (
 						<kbd
 							key={shortcut}
-							className="select-none rounded border bg-white px-1.5 py-px font-mono text-[11.2px] text-foreground shadow-xs"
+							className="select-none rounded border bg-white px-1.5 py-px font-mono text-[11.2px] text-foreground shadow-xs dark:border-gray-6 dark:bg-gray-3"
 						>
 							<abbr title={shortcut} className="no-underline">
 								{shortcut}
