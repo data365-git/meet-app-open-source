@@ -41,10 +41,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
-import {
-	type LibraryKind,
-	setVideosLibraryKind,
-} from "@/actions/videos/set-library-kind";
+import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
+import type { LibraryKind } from "@/lib/library-kind";
 import type { FolderDataType } from "./Folder";
 
 const LIBRARY_LABELS: Record<LibraryKind, string> = {

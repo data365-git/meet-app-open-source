@@ -6,6 +6,7 @@ import { organizationMembers, videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { isLibraryKind, type LibraryKind } from "@/lib/library-kind";
 
 /**
  * Move videos between the two dashboard libraries: Recordings and Meetings.
@@ -23,23 +24,12 @@ import { revalidatePath } from "next/cache";
  * additive column and `source` is read-only here.
  */
 
-export const LIBRARY_KINDS = ["recording", "meeting"] as const;
-
-export type LibraryKind = (typeof LIBRARY_KINDS)[number];
-
-export type SetVideosLibraryKindResult =
+type SetVideosLibraryKindResult =
 	| { success: true; movedIds: Video.VideoId[] }
 	| { success: false; error: string };
 
 /** Guard against an unbounded IN (...) list from a hostile caller. */
 const MAX_VIDEOS_PER_MOVE = 500;
-
-function isLibraryKind(value: unknown): value is LibraryKind {
-	return (
-		typeof value === "string" &&
-		(LIBRARY_KINDS as readonly string[]).includes(value)
-	);
-}
 
 /**
  * Move a LIST of videos into `libraryKind`. Single move = a one-element list.
