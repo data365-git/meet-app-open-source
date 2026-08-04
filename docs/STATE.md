@@ -10,7 +10,22 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
 
-### 🔨 IN FLIGHT: the QUALITY PUSH (owner-interviewed 2026-08-04 night)
+### ✅ THE QUALITY PUSH IS BUILT AND MEASURED — NOT YET DEPLOYED (deploy is owner-gated)
+
+**HEAD `5684a48` on `qa-fixes`, tree clean, nothing pushed.** Measured, not asserted: `pnpm exec tsc -b --force` **0** · `next build` **0** · web **1235 passed** · extension **160 passed** · extension repackaged at **0.5.8** and verified INSIDE the served zip (bitrate `8e6`, old `3e6` gone, `echoCancellation: true` on the mic leg and `false` on the tab leg in both `content.js` and `offscreen.js`).
+
+**What landed:** capture 3 → **8 Mbit/s** · server compress keeps **1080p at CRF 21**, audio 96k → **128k @ 48 kHz** (was: forced 720p/CRF 28) · explicit mic constraints (EC/NS/AGC on, 48 kHz, mono) and explicitly UNPROCESSED tab audio in all three recorder paths, from one shared module · a `-3 dBFS` limiter so the 1.8× tab lift cannot clip · Gemini audio upload hoisted out of the retry closure (was re-uploading up to 5×) + a summary runaway guard + a cacheable prompt prefix · additive `videos.libraryKind` column (migration `0038_video_library_kind.sql`) + `setVideosLibraryKind` + a **Move** control in the multi-select bar · the "Recording was too short" lie replaced.
+
+**Quality proof he can look at:** `docs/qa/quality-2026-08-04/before-smalltext-crop.png` vs `after-smalltext-crop.png` — same frame through the old and new production args. I compared them by eye: small text is visibly sharper.
+
+**THREE THINGS THE NEXT SESSION MUST NOT SKIP:**
+1. **The DB migration must run BEFORE the code deploys.** `libraryKind` is additive, but the new queries read it — deploying the code first means every dashboard query hits a missing column.
+2. **A found-by-review defect that the green gates missed, recorded so the lesson survives:** the move action originally exported a plain const from a `"use server"` file. `tsc` and 1235 tests were green; `next build` would have FAILED (Next rule 71011 is a framework rule, not a type rule). Fixed in `5684a48` by moving constants to `lib/library-kind.ts`. **Any done-contract that gates a deploy must include the real `next build`.**
+3. **The 2-person audio test is still the one gate no rig can close** — the tab-audio change is the load-bearing fix for the other participant's voice, and only a human ear on a real Meet can confirm it.
+
+**Deliberately NOT done:** not deployed · the 3 raw videos not yet re-compressed (owner approved D5; do it with the NEW args) · design untouched (cancelled 2026-08-04) · replace-with-audio still needs one throwaway video.
+
+### (context) THE QUALITY PUSH — owner interview, 2026-08-04 night
 
 He gave five work items and answered every decision in two batched rounds. **Spec + decisions: [`docs/plans/2026-08-04-quality-push-spec.md`](plans/2026-08-04-quality-push-spec.md) — read it, do not re-interview him.**
 
