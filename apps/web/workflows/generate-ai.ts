@@ -880,6 +880,54 @@ const FREE_SUMMARY_MODELS = [
 // Initial value per spec §1; measured-p75 tuning is a blocked Phase-A follow-up.
 const FREE_SUMMARY_PROBE_MS = 8_000;
 
+// Output caps for the summary/refine calls (S3.3).
+//
+// The DEFAULT stays the model's full room (65536): the final multi-chunk
+// synthesis grows with the meeting (a ~65-min meeting measured ~8.6k output
+// tokens) and an 8192 cap once TRUNCATED it mid-JSON, wiping summary/chapters/
+// tasks. That regression must not come back.
+//
+// But every call whose INPUT is already bounded cannot legitimately need that
+// much room: a per-chunk summary sees at most MAX_CHARS_PER_CHUNK (24k chars ≈
+// 6k tokens) and a refine sub-slice at most REFINE_SLICE_CHAR_BUDGET (6k chars),
+// and both are compressions of their input. Those calls get the same 24000 cap
+// the transcription path uses (gemini-transcribe.ts TRANSCRIBE_MAX_OUTPUT_TOKENS),
+// which cuts a repetition-loop runaway's billed blast radius ~2.7x while leaving
+// 4x+ headroom for the densest legitimate response.
+export const SUMMARY_MAX_OUTPUT_TOKENS = 65536;
+export const BOUNDED_SUMMARY_MAX_OUTPUT_TOKENS = 24000;
+
+/**
+ * Runaway-repetition guard for the summary/refine path — the same guard the
+ * transcription path applies (stripRunawayRepetition, gemini-transcribe.ts).
+ * A degenerate Gemini response repeats one line (or cycles a few) until it
+ * burns the whole output cap; the transcription path both caps the output and
+ * strips the garbage tail, while the summary path did neither.
+ *
+ * JSON responses are handled carefully instead of blindly: pretty-printed
+ * summary JSON legitimately repeats scaffolding lines (`"done": false,` appears
+ * once per task), and cutting mid-object would turn a GOOD response into a
+ * parse failure — a false alarm that costs a whole retry. So for `json` the
+ * truncation is accepted ONLY when what remains still parses; otherwise the
+ * original content is kept (the caller's parse/retry path owns it) and the
+ * runaway is logged. Text responses (the refine pass) are truncated directly.
+ * Exported for unit testing.
+ */
+export function guardRunawaySummaryContent(
+	content: string,
+	json: boolean,
+): { content: string; runaway: boolean } {
+	const { text, runaway } = stripRunawayRepetition(content);
+	if (!runaway) return { content, runaway: false };
+	if (!json) return { content: text, runaway: true };
+	try {
+		JSON.parse(cleanJsonResponse(text).trim());
+		return { content: text, runaway: true };
+	} catch {
+		return { content, runaway: true };
+	}
+}
+
 interface AiApiResult {
 	content: string;
 	model: string;
@@ -905,10 +953,10 @@ function assertFreeAiResultUsable(
 
 export async function callAiApi(
 	prompt: string,
-	options: { json?: boolean },
+	options: { json?: boolean; maxOutputTokens?: number },
 	context: AiCallContext,
 ): Promise<AiApiResult> {
-	const { json = true } = options;
+	const { json = true, maxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS } = options;
 	const env = serverEnv();
 	const apiKey = env.GEMINI_API_KEY;
 	const freeKey = env.GEMINI_API_KEY_FREE;
@@ -941,6 +989,7 @@ export async function callAiApi(
 						context,
 						{
 							free: true,
+							maxOutputTokens,
 							...(isFast ? { maxAttempts: 1 as const, signal } : {}),
 						},
 					);
@@ -1012,6 +1061,7 @@ export async function callAiApi(
 				json,
 				apiKey,
 				context,
+				{ maxOutputTokens },
 			);
 			if (model !== GEMINI_SUMMARY_MODEL) {
 				console.warn(`[generate-ai] summary fell back to ${model}`);
@@ -1042,8 +1092,14 @@ async function callAiApiWithModel(
 	json: boolean,
 	apiKey: string,
 	context: AiCallContext,
-	options: { free?: boolean; signal?: AbortSignal; maxAttempts?: number } = {},
+	options: {
+		free?: boolean;
+		signal?: AbortSignal;
+		maxAttempts?: number;
+		maxOutputTokens?: number;
+	} = {},
 ): Promise<AiApiModelResult> {
+	const maxOutputTokens = options.maxOutputTokens ?? SUMMARY_MAX_OUTPUT_TOKENS;
 	const result = await withCostGuard({
 		orgId: context.orgId,
 		userId: context.userId,
@@ -1071,9 +1127,12 @@ async function callAiApiWithModel(
 									// JSON.parse then threw and the error was swallowed, so
 									// summary/chapters/tasks came back empty while the (separate)
 									// refined-transcript call survived. Give BOTH calls the model's
-									// full output room (65536). Verified via repro: 8192 -> MAX_TOKENS
-									// + parse fail + 0 chapters/tasks; 65536 -> STOP + 30/30.
-									maxOutputTokens: 65536,
+									// full output room (65536) BY DEFAULT. Verified via repro: 8192 ->
+									// MAX_TOKENS + parse fail + 0 chapters/tasks; 65536 -> STOP +
+									// 30/30. Calls whose input is already bounded pass the smaller
+									// BOUNDED_SUMMARY_MAX_OUTPUT_TOKENS so a runaway cannot bill the
+									// full cap (see the constants above).
+									maxOutputTokens,
 									...(json ? { responseMimeType: "application/json" } : {}),
 									thinkingConfig: { thinkingBudget: 0 },
 								},
@@ -1121,11 +1180,25 @@ async function callAiApiWithModel(
 				);
 			}
 			const emptyResponse = !rawText?.trim();
-			const content = rawText ?? "{}";
 			const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
 			const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
-			return { content, inputTokens, outputTokens, emptyResponse };
+			// Same runaway-repetition guard the transcription path applies, now on
+			// EVERY summary/refine response (free chain and paid chain alike) —
+			// previously only the readable-refine call site was guarded.
+			const guarded = guardRunawaySummaryContent(rawText ?? "{}", json);
+			if (guarded.runaway) {
+				console.warn(
+					`[generate-ai] runaway repetition detected in ${json ? "JSON" : "text"} response (model=${model}, video=${context.videoId}, outputTokens=${outputTokens}, truncated=${guarded.content.length !== (rawText ?? "{}").length})`,
+				);
+			}
+
+			return {
+				content: guarded.content,
+				inputTokens,
+				outputTokens,
+				emptyResponse,
+			};
 		},
 	});
 
@@ -1364,7 +1437,10 @@ async function generateReadableRefined(
 			try {
 				const result = await callAiApi(
 					buildReadableRefinePrompt(transcript),
-					{ json: false },
+					{
+						json: false,
+						maxOutputTokens: BOUNDED_SUMMARY_MAX_OUTPUT_TOKENS,
+					},
 					context,
 				);
 				inputTokens += result.inputTokens;
@@ -1458,7 +1534,12 @@ ${UNTRUSTED_TRANSCRIPT_INSTRUCTION}
 Transcript:
 ${wrapUntrustedTranscript(transcriptWithTimestamps)}`;
 
-	const apiResult = await callAiApi(prompt, {}, context);
+	// Input is one chunk (≤ MAX_CHARS_PER_CHUNK), so the bounded cap applies.
+	const apiResult = await callAiApi(
+		prompt,
+		{ maxOutputTokens: BOUNDED_SUMMARY_MAX_OUTPUT_TOKENS },
+		context,
+	);
 	const parsed = parseAiResponse(apiResult.content);
 
 	// Full cleaned transcripts are useful but expensive because output length is
@@ -1819,7 +1900,12 @@ ${wrapUntrustedTranscript(chunk.text)}`;
 
 			const { parsed, inputTokens, outputTokens, model } =
 				await parseJsonWithRetry(
-					() => callAiApi(chunkPrompt, {}, context),
+					() =>
+						callAiApi(
+							chunkPrompt,
+							{ maxOutputTokens: BOUNDED_SUMMARY_MAX_OUTPUT_TOKENS },
+							context,
+						),
 					`per-chunk summary [${chunk.startTime}-${chunk.endTime}s]`,
 				);
 			totalInputTokens += inputTokens;
