@@ -319,6 +319,17 @@ body.dark .ai-popup {
 }
 
 /* Welcome */
+.ai-welcome {
+	/* Same defect as .ai-msg below, missed the first time because this block is
+	   only present before the first question is asked. globals.css sets
+	   `* { min-height: 0 }`, which strips the content-based minimum from every
+	   flex item, so the welcome shrank below its own text inside .ai-body
+	   (column flex, overflow-y: auto) instead of letting .ai-body scroll.
+	   Measured live on prod 2026-08-04: clientHeight 73 vs scrollHeight 96 —
+	   23px of the greeting was cut off. flex: none restores the intrinsic
+	   height; the body scrolls, which is what it is already set up to do. */
+	flex: none;
+}
 .ai-welcome .wt {
 	font-family: var(--ai-font-ui);
 	font-weight: 800;
