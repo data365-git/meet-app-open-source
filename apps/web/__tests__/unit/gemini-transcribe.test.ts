@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { transcribeWithGemini } from "@/lib/gemini-transcribe";
+import {
+	TRANSCRIPTION_INSTRUCTION_PREFIX,
+	buildTranscriptionParts,
+	transcribeWithGemini,
+} from "@/lib/gemini-transcribe";
 
 // S3.1 — the Files API audio upload must happen exactly ONCE per
 // transcribeWithGemini call, no matter how many times anything downstream is
@@ -221,4 +225,147 @@ describe("transcribeWithGemini — the audio upload is hoisted out of the retrie
 		expect(totalSent).toBeLessThan(AUDIO_BYTES.byteLength * 2);
 		expect(result.transcriptVtt).toContain("salom");
 	}, 20_000);
+});
+
+// ── Cacheable prompt prefix ────────────────────────────────────────────────
+//
+// Gemini's implicit context cache only hits when the START of the request is
+// byte-identical to a previous one. A 60-minute recording is ~20 chunks that all
+// re-send the same ~700-word instruction block, so the block must be the PREFIX
+// (parts[0]) and everything variable — the audio fileData and the per-chunk
+// speaker roster — must come after it. These tests pin the ordering and the
+// byte-identity of that prefix across two different chunks of one recording.
+
+/** Capture the `parts` array that transcribeWithGemini actually puts on the wire
+ * for one chunk, given that chunk's uploaded fileUri and speaker roster. */
+async function capturePartsForChunk(opts: {
+	fileUri: string;
+	knownSpeakers?: string[];
+}): Promise<Array<Record<string, unknown>>> {
+	let sentParts: Array<Record<string, unknown>> = [];
+
+	const fetchMock = vi.fn(
+		async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? "GET";
+
+			if (url === AUDIO_URL) {
+				return new Response(AUDIO_BYTES.buffer.slice(0), { status: 200 });
+			}
+			if (url.includes("/upload/v1beta/files") && method === "POST") {
+				return jsonResponse({}, 200, { "x-goog-upload-url": UPLOAD_URL });
+			}
+			if (url === UPLOAD_URL && method === "PUT") {
+				return jsonResponse({
+					file: {
+						name: `files/${opts.fileUri.slice(-4)}`,
+						uri: opts.fileUri,
+						state: "ACTIVE",
+					},
+				});
+			}
+			if (url.includes(":generateContent")) {
+				const body = JSON.parse(String(init?.body)) as {
+					contents: Array<{ parts: Array<Record<string, unknown>> }>;
+				};
+				sentParts = body.contents[0]?.parts ?? [];
+				return transcriptResponse();
+			}
+			if (method === "DELETE") return new Response(null, { status: 200 });
+			throw new Error(`Unexpected fetch in test: ${method} ${url}`);
+		},
+	);
+	global.fetch = fetchMock as unknown as typeof fetch;
+
+	await transcribeWithGemini(AUDIO_URL, {
+		apiKey: "test-key",
+		audioDurationSec: 5,
+		knownSpeakers: opts.knownSpeakers,
+		maxAttempts: 1,
+	});
+
+	return sentParts;
+}
+
+describe("transcription prompt ordering — byte-identical prefix for implicit caching", () => {
+	const originalFetch = global.fetch;
+
+	afterEach(() => {
+		global.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	it("sends the fixed instruction text as parts[0] and the audio only after it", async () => {
+		const parts = await capturePartsForChunk({
+			fileUri: "https://files.example/chunk-1",
+		});
+
+		expect(parts[0]).toEqual({ text: TRANSCRIPTION_INSTRUCTION_PREFIX });
+		expect(parts[1]).toMatchObject({
+			fileData: { fileUri: "https://files.example/chunk-1" },
+		});
+		// The audio must never precede the cacheable instruction block.
+		const fileDataIndex = parts.findIndex((p) => "fileData" in p);
+		expect(fileDataIndex).toBe(1);
+	}, 20_000);
+
+	it("keeps parts[0].text byte-identical across two chunks with different fileUris and different knownSpeakers", async () => {
+		const chunkA = await capturePartsForChunk({
+			fileUri: "https://files.example/chunk-a",
+		});
+		const chunkB = await capturePartsForChunk({
+			fileUri: "https://files.example/chunk-b",
+			knownSpeakers: ["Zafarbek", "Мирослава"],
+		});
+
+		const prefixA = (chunkA[0] as { text: string }).text;
+		const prefixB = (chunkB[0] as { text: string }).text;
+
+		// Byte-identical, not merely "similar": compare the raw UTF-8 bytes so a
+		// stray whitespace or interpolated value cannot slip through.
+		const bytesA = new TextEncoder().encode(prefixA);
+		const bytesB = new TextEncoder().encode(prefixB);
+		expect(prefixA).toBe(prefixB);
+		expect(Array.from(bytesA)).toEqual(Array.from(bytesB));
+		expect(prefixA).toBe(TRANSCRIPTION_INSTRUCTION_PREFIX);
+
+		// The roster is what differs — and it lands AFTER the audio, never in the
+		// cacheable prefix.
+		// NB: "Alisher" alone is a bad probe — it appears in the fixed prefix as a
+		// voice-tag FORMAT example. The roster's own sentence is the real probe.
+		expect(prefixA).not.toContain("Known speakers identified earlier");
+		expect(prefixB).not.toContain("Known speakers identified earlier");
+		expect(prefixB).not.toContain("Zafarbek");
+		expect(prefixB).not.toContain("Мирослава");
+		const rosterPart = chunkB[2] as { text: string } | undefined;
+		expect(rosterPart?.text).toContain("Zafarbek");
+		expect(rosterPart?.text).toContain("Мирослава");
+		// Chunk A has no roster at all, so it sends only two parts.
+		expect(chunkA).toHaveLength(2);
+		expect(chunkB).toHaveLength(3);
+	}, 20_000);
+
+	it("buildTranscriptionParts is pure and orders instructions before audio", () => {
+		const a = buildTranscriptionParts({
+			mimeType: "audio/mpeg",
+			fileUri: "uri-a",
+		});
+		const b = buildTranscriptionParts({
+			mimeType: "audio/mp4",
+			fileUri: "uri-b",
+			knownSpeakers: ["Sarah"],
+		});
+
+		expect((a[0] as { text: string }).text).toBe(
+			(b[0] as { text: string }).text,
+		);
+		expect(a[1]).toEqual({
+			fileData: { mimeType: "audio/mpeg", fileUri: "uri-a" },
+		});
+		expect(b[1]).toEqual({
+			fileData: { mimeType: "audio/mp4", fileUri: "uri-b" },
+		});
+		expect(a).toHaveLength(2);
+		expect(b).toHaveLength(3);
+	});
 });

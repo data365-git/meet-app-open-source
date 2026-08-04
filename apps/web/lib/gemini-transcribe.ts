@@ -797,14 +797,15 @@ async function pollUntilActive(
 	throw new Error("Gemini file never reached ACTIVE state");
 }
 
-export function buildTranscriptionPrompt(
-	opts: { knownSpeakers?: string[] } = {},
-): string {
-	const rosterBlock =
-		opts.knownSpeakers && opts.knownSpeakers.length > 0
-			? `\n\nKnown speakers identified earlier in this same recording: ${opts.knownSpeakers.join(", ")}.\nThis audio is a LATER segment of that same recording. When a voice clearly belongs to one of these people (they are named, addressed, or obvious from context), use exactly that label with the same spelling. Otherwise use the numbered fallback labels.`
-			: "";
-	return `You are a professional transcription editor for meeting, instruction video, and voice-note recordings.
+/**
+ * The FIXED instruction block — byte-identical for every chunk of every
+ * recording. It is a module-level constant (not built per call) precisely so
+ * that it can be sent as the FIRST prompt part: Gemini's implicit context cache
+ * only hits on a byte-identical PREFIX, and a 60-minute video is ~20 chunks that
+ * all re-send this same ~700-word block. Anything variable (the speaker roster,
+ * the audio itself) MUST come after it — see buildTranscriptionParts.
+ */
+export const TRANSCRIPTION_INSTRUCTION_PREFIX = `You are a professional transcription editor for meeting, instruction video, and voice-note recordings.
 
 Detect the dominant spoken language from the audio (Uzbek, Russian, or English) and transcribe the attached audio/video fully and accurately in that same language, exactly as spoken. Do not translate the recording into another language just because the app UI or these instructions are in English. A Russian recording must produce a Russian transcript, an English recording an English transcript, and an Uzbek recording an Uzbek transcript.
 
@@ -874,8 +875,55 @@ IMPORTANT OUTPUT FORMAT:
 - Do NOT wrap timestamps in markdown brackets like **[HH:MM:SS]**.
 - For multi-speaker cues, use standard WebVTT voice tags with the speaker's name when identified, else the numbered label: <v Alisher>spoken text</v> or <v Spiker 1>spoken text</v>.
 - For one-speaker recordings, write only the spoken text without a speaker label.
-- The bold foreign-word rules still apply inside cue text.${rosterBlock}`;
+- The bold foreign-word rules still apply inside cue text.`;
+
+/**
+ * The VARIABLE tail of the prompt: the cross-chunk speaker roster. Returns ""
+ * when there is nothing to say, so callers can omit the part entirely rather
+ * than send an empty one.
+ */
+export function buildTranscriptionRosterBlock(
+	opts: { knownSpeakers?: string[] } = {},
+): string {
+	if (!opts.knownSpeakers || opts.knownSpeakers.length === 0) return "";
+	return `\n\nKnown speakers identified earlier in this same recording: ${opts.knownSpeakers.join(", ")}.\nThis audio is a LATER segment of that same recording. When a voice clearly belongs to one of these people (they are named, addressed, or obvious from context), use exactly that label with the same spelling. Otherwise use the numbered fallback labels.`;
 }
+
+/** The full prompt as ONE string (prefix + roster). Kept for the batch path and
+ * for callers that cannot send multiple parts. The sync path uses
+ * buildTranscriptionParts instead so the fixed prefix stays cacheable. */
+export function buildTranscriptionPrompt(
+	opts: { knownSpeakers?: string[] } = {},
+): string {
+	return `${TRANSCRIPTION_INSTRUCTION_PREFIX}${buildTranscriptionRosterBlock(opts)}`;
+}
+
+/**
+ * Build the generateContent `parts` array with the cacheable ordering:
+ * fixed instructions FIRST (byte-identical across chunks), then the audio, then
+ * the per-chunk speaker roster. Pure, so the ordering is asserted in tests.
+ */
+export function buildTranscriptionParts(opts: {
+	mimeType: string;
+	fileUri: string;
+	knownSpeakers?: string[];
+}): TranscriptionPart[] {
+	const rosterBlock = buildTranscriptionRosterBlock({
+		knownSpeakers: opts.knownSpeakers,
+	});
+	return [
+		{ text: TRANSCRIPTION_INSTRUCTION_PREFIX },
+		{ fileData: { mimeType: opts.mimeType, fileUri: opts.fileUri } },
+		...(rosterBlock ? [{ text: rosterBlock }] : []),
+	];
+}
+
+// Declared AFTER buildTranscriptionParts on purpose: TS hoists type aliases, and
+// keeping this below the function preserves the source-order invariant that the
+// fixed-instruction text part is the first thing in this module's request shape.
+export type TranscriptionPart =
+	| { text: string }
+	| { fileData: { mimeType: string; fileUri: string } };
 
 export async function transcribeWithGemini(
 	audioUrl: string,
@@ -1095,15 +1143,11 @@ export async function transcribeWithGemini(
 							body: JSON.stringify({
 								contents: [
 									{
-										parts: [
-											{
-												fileData: {
-													mimeType,
-													fileUri,
-												},
-											},
-											{ text: buildTranscriptionPrompt({ knownSpeakers }) },
-										],
+										parts: buildTranscriptionParts({
+											mimeType,
+											fileUri,
+											knownSpeakers,
+										}),
 									},
 								],
 								generationConfig: {
