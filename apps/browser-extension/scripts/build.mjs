@@ -12,11 +12,26 @@ const publicDir = join(rootDir, "public");
 
 const isWatch = process.argv.includes("--watch");
 
+// Env keys forwarded from the build machine into the bundles. Extension pages
+// have no `process`, so anything read through `globalThis.process?.env` would
+// otherwise always fall back to its default. Kept to an explicit allowlist so a
+// stray shell variable can never leak into a packaged extension.
+const FORWARDED_ENV_KEYS = ["EXTENSION_VIDEO_BITS_PER_SECOND"];
+
+const forwardedEnv = Object.fromEntries(
+	FORWARDED_ENV_KEYS.map((key) => [key, process.env[key]]).filter(
+		([, value]) => typeof value === "string" && value.trim() !== "",
+	),
+);
+
 const commonOptions = {
 	bundle: true,
 	target: "chrome120",
 	sourcemap: true,
 	logLevel: "info",
+	banner: {
+		js: `globalThis.process = Object.assign({}, globalThis.process); globalThis.process.env = Object.assign({}, globalThis.process.env, ${JSON.stringify(forwardedEnv)});`,
+	},
 };
 
 const entryPoints = [

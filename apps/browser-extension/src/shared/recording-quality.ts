@@ -11,10 +11,41 @@ export const CAPTURE_MAX_WIDTH = 1920;
 export const CAPTURE_MAX_HEIGHT = 1080;
 export const CAPTURE_MAX_FRAME_RATE = 24; // screen content: sharpness > motion
 
-// ~3 Mbps at 1080p24 for screen content (mostly static, compresses well).
-// Cost of the raise: a 42-min meeting goes from roughly 500 MB to ~1 GB, which
-// is why the server-side compress pass in the finalize pipeline matters.
-export const VIDEO_BITS_PER_SECOND = 3_000_000;
+// Build/runtime env, read through the same shape as shared/config.ts: a plain
+// `process` does not exist inside an extension page, so this stays optional and
+// silently falls back when nothing was injected at build time.
+const extensionEnv = (
+	globalThis as {
+		process?: {
+			env?: Record<string, string | undefined>;
+		};
+	}
+).process?.env;
+
+/** Positive-integer env override, ignoring blank/garbage/non-positive values. */
+function envBitsPerSecond(key: string, fallback: number): number {
+	const raw = extensionEnv?.[key]?.trim();
+	if (!raw) return fallback;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+		return fallback;
+	}
+	return parsed;
+}
+
+// 8 Mbit/s at 1080p24. The capture bitrate is the CEILING of the whole pipeline:
+// no server-side setting can recover detail the encoder never wrote, and screen
+// text/code at 1080p is exactly the content that starves at a lower rate (the
+// previous value was a third of this and left slide text mushy).
+// Cost: ~60 MB/min raw, which is what the server-side re-encode pass in the
+// finalize pipeline exists to bring back down (~3 MB/min at CRF 21).
+// Override for a constrained deploy with EXTENSION_VIDEO_BITS_PER_SECOND.
+const VIDEO_BITRATE_ENV_KEY = "EXTENSION_VIDEO_BITS_PER_SECOND";
+const DEFAULT_VIDEO_BITS_PER_SECOND = 8_000_000;
+export const VIDEO_BITS_PER_SECOND = envBitsPerSecond(
+	VIDEO_BITRATE_ENV_KEY,
+	DEFAULT_VIDEO_BITS_PER_SECOND,
+);
 export const AUDIO_BITS_PER_SECOND = 128_000;
 
 // The remote participants arrive quieter than the local mic. Applied to the
