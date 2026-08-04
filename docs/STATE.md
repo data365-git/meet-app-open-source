@@ -6,9 +6,25 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
-## ▶ NEXT STEP (2026-08-04 evening — read this first)
+## ▶ NEXT STEP (2026-08-04 night — read this first)
 
 **GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
+
+### 🔨 IN FLIGHT: the QUALITY PUSH (owner-interviewed 2026-08-04 night)
+
+He gave five work items and answered every decision in two batched rounds. **Spec + decisions: [`docs/plans/2026-08-04-quality-push-spec.md`](plans/2026-08-04-quality-push-spec.md) — read it, do not re-interview him.**
+
+His five items: (1) video quality FIRST, size second · (2) Gemini is the main cost, no waste · (3) meeting audio Zoom-grade on BOTH legs · (4) move recordings into Meetings, incl. bulk-select · (5) prove upload/import is healthy.
+
+His decisions, settled — **do not re-litigate:** high quality = keep 1080p sharp (~3x size accepted) · mic noise-suppression ON · Gemini free-first then paid (no waiting) · move = manual both directions AND a Move button next to Delete in the multi-select bar · re-compress the 3 raw videos · storage is fine until the migration.
+
+**THE MEASURED FINDING that drove all of it:** quality was lost TWICE and neither loss was visible from the other file — the extension captures 1080p at only **3 Mbit/s**, and then the server unconditionally **downscales every 1080p recording to 720p at CRF 28** (`HIGH_RESOLUTION_MAX_EDGE = 1280`) and drops audio 128k → 96k. On the audio leg, **not one of the three recorder paths sets a single audio constraint** — everything is at Chrome's unstated defaults, and `TAB_AUDIO_GAIN = 1.8` runs with no limiter.
+
+**THE ONE THING THAT MUST NOT BE UNDONE:** the move feature must **never write `videos.source`**. `source.type` drives playback (`api/playlist`), sharing (`ShareVideo`) and editing (`save-edits`) — rewriting it to reclassify a video would make moved videos unplayable. Hence the additive `videos.libraryKind` column. This was checked by grep, not assumed.
+
+**Execution:** a Goalkeeper run (`wf_2c8a50ad-cd1`) is driving the 15-item done-contract at `.goalkeeper-contract-2026-08-04.json` (git-ignored). If it halted, `.goalkeeper/ESCALATION.md` is the system of record. Baseline commit: `c48764b` on `qa-fixes`.
+
+**Still owner-only after this lands:** a real 2-person Meet recording to judge the other participant's voice BY EAR — no rig can close that gate. And replace-with-audio still needs one throwaway video (it destroys the video permanently).
 
 **LIVE NOW:** prod image `7af2cf3`, `/api/health` → `db:ok storage:ok`. Everything below is deployed.
 
