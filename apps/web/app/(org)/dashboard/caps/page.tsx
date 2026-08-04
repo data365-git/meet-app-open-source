@@ -22,6 +22,7 @@ import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { libraryKindRecordingFilter } from "@/lib/dashboard-data";
 import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
@@ -146,7 +147,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
         eq(organizations.id, user.activeOrganizationId),
         isNull(organizations.tombstoneAt),
         isNull(videos.deletedAt),
-        sql`NOT (JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb' AND JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting')`,
+        libraryKindRecordingFilter,
       ),
     );
 
@@ -203,7 +204,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
         isNull(videos.folderId),
         isNull(organizations.tombstoneAt),
         isNull(videos.deletedAt),
-        sql`NOT (JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb' AND JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting')`,
+        libraryKindRecordingFilter,
       ),
     )
     .groupBy(

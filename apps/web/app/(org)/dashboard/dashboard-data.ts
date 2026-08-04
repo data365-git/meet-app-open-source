@@ -15,6 +15,7 @@ import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import { libraryKindRecordingFilter } from "@/lib/dashboard-data";
 import {
 	canManageOrganizationMembers,
 	canManageOrganizationProSeats,
@@ -286,7 +287,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							eq(videos.orgId, activeOrgInfo.id),
 							eq(videos.ownerId, user.id),
 							isNull(videos.deletedAt),
-							sql`NOT (JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb' AND JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting')`,
+							libraryKindRecordingFilter,
 						),
 					);
 

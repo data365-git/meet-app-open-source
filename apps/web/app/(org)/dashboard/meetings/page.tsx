@@ -22,6 +22,7 @@ import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { libraryKindMeetingFilter } from "@/lib/dashboard-data";
 import { runPromise } from "@/lib/server";
 import { Meetings } from "./Meetings";
 
@@ -148,8 +149,7 @@ export default async function MeetingsPage(props: {
         isNull(videos.folderId),
         isNull(organizations.tombstoneAt),
         isNull(videos.deletedAt),
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb'`,
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting'`,
+        libraryKindMeetingFilter,
       ),
     );
 
@@ -206,8 +206,7 @@ export default async function MeetingsPage(props: {
         isNull(videos.folderId),
         isNull(organizations.tombstoneAt),
         isNull(videos.deletedAt),
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb'`,
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting'`,
+        libraryKindMeetingFilter,
       ),
     )
     .groupBy(
