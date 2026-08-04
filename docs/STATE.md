@@ -570,3 +570,15 @@ Same class, runtime half: `apps/web/.next/standalone/apps/web/lib/audio-extract.
 **Owner duty outstanding:** open the live site on a dark-mode phone and confirm it comes up dark on FIRST paint — the one thing the rig cannot prove, because the Browser pane applies its dark emulation after the beforeInteractive script runs.
 
 **⏱ SOAK ATTEMPT 2 — INTERIM RESULT 01:28: the 28-minute failure was ENVIRONMENTAL, not the recorder.** Started 00:19, at 01:28 it is **69 minutes in with 107 parts uploaded, clean, still running**. Attempt 1 died at 83 parts / ~28 min; attempt 2 has now sustained **2.5x past that point** on the same code, which is the separation the decision rule asked for. So the recorder is NOT implicated by attempt 1 — do not spend time on `inpage-recorder.ts:648` on the strength of it. The full 120-minute verdict is still pending (~02:19 plus finalization); read the raw duration from the log's `VERDICT=` line.
+
+## ✅ THE 2-HOUR RECORDING QUESTION IS ANSWERED — SOAK PASSED (2026-08-04 02:19)
+
+`VERDICT=PASS metric=inpage-full-contract filing=OK duration=OK(7193s of ~7200s) tone=OK sustained_ms=7200000` · analyzer `mean_440band_dB=-16.5 max_dB=-1.4 threshold=-50` · **179 multipart parts** · output `out-inpage/recording.bin` = **935,330,355 bytes (0.94 GB)**.
+
+Read as the decision rule demanded — the RAW duration, not the harness's label: **7193 s of a 7200 s target, 7 seconds short over two hours.** The audio tone is present throughout, so this is not merely "a file was produced": the recording carries sound for its whole length, which is the part that matters for a meeting.
+
+**What this proves:** the in-page recorder, the 200 ms chunk cadence (~36,000 messages), the service worker across a 2-hour lifetime, and the multipart upload all survive a full two hours continuously. The ranked risk list's top suspect (`inpage-recorder.ts:648`) is NOT implicated. Attempt 1's death at 28 minutes was environmental, now confirmed by a run that went 4.3x longer on the same code.
+
+**What this does NOT prove, stated so it is not over-claimed:** it ran against the local mock server, not real Cloudflare R2 and not real transcription — so 2-hour *storage* and 2-hour *AI analysis* are still unproven. It also used a synthetic tone rather than speech. And 0.94 GB is the RAW recorder output at ~7.8 MB/min; the server-side compress step is what turns a 2-hour meeting into ~120 MB (measured 11.6:1 earlier tonight), so the storage answer depends on that step actually running — which is exactly the gap where 3 of 7 stored videos were found never to have been compressed.
+
+**Reproduce:** `cd apps/browser-extension/e2e-audio-proof && PROOF_MINUTES=120 node run-proof-inpage.mjs` (after `pnpm build` in the extension). Free — no AI spend, no cloud writes. Do not have a dev server on port 3001.
