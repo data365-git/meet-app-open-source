@@ -629,3 +629,20 @@ Read as the decision rule demanded — the RAW duration, not the harness's label
 **Also answered for him:** Meetings already had day-grouping (Bugun / Shu hafta / Oldinroq), bulk select, delete, sharing, rename and pagination before last night — folders were the ONLY genuine gap and are now in. Search and sort exist in NEITHER section, so there is nothing to "port"; that would be new work.
 
 **PENDING HIS ONE-WORD CONFIRM:** a full-screen toggle for the AI chat popup (proposed: an expand control next to the close button; tap to fill the screen, tap again to return). Not started.
+
+## ✅ FULL LOGGED-IN WALKTHROUGH DONE (2026-08-04 21:20, prod `7af2cf3`)
+
+The owner logged in himself in the Browser pane (he typed the password; I never saw it) and I walked the app from inside. **This closes the "I cannot verify behind login" gap that had been open all night.**
+
+Verified by measurement, dark mode, viewport 1280x620 (the short window that reproduced the original bug):
+- **Meetings folders are LIVE** — the "Yangi papka" button renders and folder cards appear.
+- **Cost panel is no longer crushed** — `scrollHeight === clientHeight`, the exact failure the `shrink-0` fix targeted.
+- **A/A font toggle is GONE**, `.ai-body` fixed at 16px.
+- **Dark mode: 0 white blocks** on every screen visited.
+- **Real visible overlaps: 0** across 57 static text elements.
+
+**A false alarm I caught before reporting it, kept as method:** a naive overlap detector first returned 5 "overlaps". Four were the AI chat popup, which is `position: fixed` at max z-index and floats over the page BY DESIGN; the fifth was a comment scrolled out of its `overflow-y: auto` container — visible height **0**, clipped and invisible. Neither is a defect. Rule: an overlap detector must exclude floating layers and must measure the VISIBLE height inside the scroller, or it manufactures bugs.
+
+**One REAL defect found in that walkthrough and fixed (`7af2cf3`):** the AI chat's welcome block was cut off — `clientHeight 73` vs `scrollHeight 96`, 23px of the greeting not rendered. Same `* { min-height: 0 }` family as `.ai-msg`, missed last night because the welcome only exists BEFORE the first question; there was no `.ai-welcome` rule at all. After deploy, re-measured: **96 / 96, not clipped**.
+
+**STILL NOT VERIFIED — needs the owner's word:** replace-with-audio. It permanently destroys the video, so I will not press it on his data without him naming a video he does not need (or confirming he tested it himself).
