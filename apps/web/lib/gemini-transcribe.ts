@@ -911,67 +911,140 @@ export async function transcribeWithGemini(
 	const mimeType = detectMimeType(audioUrl);
 	const displayName = `cap-audio-${Date.now()}`;
 
-	const uploadUrl = await withGeminiRetry(
-		async () => {
-			const initRes = await fetch(
-				`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
-				{
-					method: "POST",
-					headers: {
-						"X-Goog-Upload-Protocol": "resumable",
-						"X-Goog-Upload-Command": "start",
-						"X-Goog-Upload-Header-Content-Length": String(audioBytes.byteLength),
-						"X-Goog-Upload-Header-Content-Type": mimeType,
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({ file: { display_name: displayName } }),
-					signal,
-				},
-			);
+	// ── Upload the audio ONCE ────────────────────────────────────────────────
+	//
+	// The multi-MB byte transfer is HOISTED OUT of everything that can be
+	// retried. Two memos do it:
+	//   * `uploadedFile` — once the Files API has the audio, every later retry
+	//     (this step, the ACTIVE poll, generateContent, the model-fallback
+	//     chain) reuses that same `fileUri` instead of re-sending the audio.
+	//   * `uploadSessionUrl` — if the byte transfer itself fails transiently
+	//     (429/503 mid-PUT), the retry does NOT blindly re-send the whole file.
+	//     It asks the resumable session what the server already received
+	//     (`X-Goog-Upload-Command: query`) and then either takes the finalized
+	//     file as-is or uploads only the remaining tail.
+	// Before this, a transient failure re-sent the entire chunk's audio on every
+	// one of up to `maxAttempts` attempts — pure bandwidth/latency waste.
+	let uploadSessionUrl: string | undefined;
+	let uploadedFile: GeminiFileResponse["file"] | undefined;
 
-			if (!initRes.ok) {
-				throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
-			}
-
-			const url = initRes.headers.get("x-goog-upload-url");
-			if (!url) {
-				throw new Error("No upload URL from Gemini Files API");
-			}
-			return url;
-		},
-		maxAttempts,
-		signal,
-	);
-
-	const fileData = await withGeminiRetry(
-		async () => {
-			const uploadRes = await fetch(uploadUrl, {
-				method: "PUT",
+	const startUploadSession = async (): Promise<string> => {
+		const initRes = await fetch(
+			`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
+			{
+				method: "POST",
 				headers: {
-					"X-Goog-Upload-Offset": "0",
-					"X-Goog-Upload-Command": "upload, finalize",
-					"Content-Length": String(audioBytes.byteLength),
+					"X-Goog-Upload-Protocol": "resumable",
+					"X-Goog-Upload-Command": "start",
+					"X-Goog-Upload-Header-Content-Length": String(audioBytes.byteLength),
+					"X-Goog-Upload-Header-Content-Type": mimeType,
+					"Content-Type": "application/json",
 				},
-				body: audioBytes,
+				body: JSON.stringify({ file: { display_name: displayName } }),
+				signal,
+			},
+		);
+
+		if (!initRes.ok) {
+			throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
+		}
+
+		const url = initRes.headers.get("x-goog-upload-url");
+		if (!url) {
+			throw new Error("No upload URL from Gemini Files API");
+		}
+		return url;
+	};
+
+	/** Ask an existing resumable session what it already has. Returns the
+	 * finished file when the server already finalized it, otherwise the byte
+	 * offset to resume from — or `dead: true` when the session is unusable and a
+	 * fresh one must be started. Never throws: a failed query just means "start
+	 * over", which is exactly today's behaviour. */
+	const queryUploadSession = async (
+		sessionUrl: string,
+	): Promise<
+		| { file: GeminiFileResponse["file"] }
+		| { resumeFrom: number }
+		| { dead: true }
+	> => {
+		try {
+			const res = await fetch(sessionUrl, {
+				method: "POST",
+				headers: { "X-Goog-Upload-Command": "query" },
 				signal,
 			});
-
-			if (!uploadRes.ok) {
-				throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
+			const status = (res.headers.get("x-goog-upload-status") ?? "").toLowerCase();
+			if (res.ok && status === "final") {
+				const data = (await res.json()) as GeminiFileResponse;
+				const file = data?.file;
+				if (file?.uri && file?.name) return { file };
+				return { dead: true };
 			}
+			if (!res.ok || status === "cancelled") return { dead: true };
+			const received = Number(res.headers.get("x-goog-upload-size-received") ?? "0");
+			if (!Number.isFinite(received) || received < 0 || received > audioBytes.byteLength) {
+				return { dead: true };
+			}
+			return { resumeFrom: received };
+		} catch (err) {
+			if (signal?.aborted) throw err;
+			return { dead: true };
+		}
+	};
 
-			return (await uploadRes.json()) as GeminiFileResponse;
-		},
-		maxAttempts,
-		signal,
-	);
-	const { name: fileName, uri: fileUri, state } = fileData.file;
+	const ensureUploadedFile = async (): Promise<GeminiFileResponse["file"]> => {
+		if (uploadedFile) return uploadedFile;
 
-	if (!fileUri || !fileName) {
-		throw new Error(
-			`Gemini upload response missing file info: ${JSON.stringify(fileData)}`,
-		);
-	}
+		let offset = 0;
+		if (uploadSessionUrl) {
+			const resumed = await queryUploadSession(uploadSessionUrl);
+			if ("file" in resumed) {
+				uploadedFile = resumed.file;
+				return uploadedFile;
+			}
+			if ("dead" in resumed) {
+				uploadSessionUrl = undefined;
+			} else {
+				offset = resumed.resumeFrom;
+			}
+		}
+
+		if (!uploadSessionUrl) {
+			uploadSessionUrl = await startUploadSession();
+			offset = 0;
+		}
+
+		const remaining = audioBytes.subarray(offset);
+		const uploadRes = await fetch(uploadSessionUrl, {
+			method: "PUT",
+			headers: {
+				"X-Goog-Upload-Offset": String(offset),
+				"X-Goog-Upload-Command":
+					remaining.byteLength > 0 ? "upload, finalize" : "finalize",
+				"Content-Length": String(remaining.byteLength),
+			},
+			...(remaining.byteLength > 0 ? { body: remaining } : {}),
+			signal,
+		});
+
+		if (!uploadRes.ok) {
+			throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
+		}
+
+		const data = (await uploadRes.json()) as GeminiFileResponse;
+		const file = data?.file;
+		if (!file?.uri || !file?.name) {
+			throw new Error(
+				`Gemini upload response missing file info: ${JSON.stringify(data)}`,
+			);
+		}
+		uploadedFile = file;
+		return file;
+	};
+
+	const file = await withGeminiRetry(ensureUploadedFile, maxAttempts, signal);
+	const { name: fileName, uri: fileUri, state } = file;
 
 	if (state !== "ACTIVE") {
 		await withGeminiRetry(
