@@ -104,3 +104,11 @@ tmp-qa/
 # (_codex-embed310.output) contains a cleartext admin password (since rotated);
 # committing any of these would put a credential in git history permanently.
 /docs/_codex-*
+
+# Local scratch from the 2026-08-03/04 session: soak timestamp, one-off import
+# and timestamp-experiment scripts. Kept on disk, out of git.
+/apps/browser-extension/e2e-audio-proof/soak-start.txt
+/apps/web/scripts/_qa-import.ts
+/apps/web/scripts/import-real-video.ts
+/apps/web/scripts/scribe-poc/
+/apps/web/scripts/timestamp-ab/

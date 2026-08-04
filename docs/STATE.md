@@ -1,4 +1,29 @@
-# Ustoz (Cap fork) — Project STATE
+# Ustoz (data365) — STATE
+
+## ▶ NEXT STEP (2026-08-04 morning — read this first)
+
+**GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
+
+**LIVE NOW:** prod image `28398c7`, `/api/health` → `db:ok storage:ok`. Everything below is deployed.
+
+**THE ONE THING BLOCKING PROGRESS — three checks only the owner can run** (I cannot log in; entering passwords is not something I may do). Ask him for these three, nothing else:
+1. **Replace-with-audio** on a video he does not need (it destroys the video) → expect no red error, an audio player where the video was, transcript + analysis intact.
+2. **Meetings → New Folder**, then drag a meeting into it → expect the meeting to live inside the folder (before last night it vanished from the list entirely).
+3. **A video with many comments**, browser window made SHORT → expect the cost panel's numbers not to overlap; and in the AI chat his own message fully visible with NO A/A size buttons.
+All three are fixed and RED→GREEN tested; what is missing is a human eye on the actual screen.
+
+**ALREADY LIVE-VERIFIED BY ME (do not re-do):** dark mode now applies on the FIRST paint with no reload (html+body carry `dark`, bg `rgb(3,7,18)`, zero white blocks on the share page, no theme cookie needed) · the deleted-account banner renders on the live login page · the served `theme-script` is inline in `<head>` with Next's deferred loader gone.
+
+**AFTER his three answers, the next real work is one of (his call):**
+- **Migrate to the client's Railway** — everything we need is written in `docs/MIGRATION_REQUIREMENTS.md`; the client must first create a Railway project + its MySQL, a Cloudflare R2 bucket + API token, and a Gemini key. We fill in the other 19 settings.
+- **Re-compress the recordings that skipped compression** — 3 of 7 measured videos are stored raw at 8.5-9.9 MB/min instead of ~1 MB/min. Evidence he already saw: `docs/qa/compress-demo/{before,after}.png`, 11.6:1, text still legible.
+- **AI chat full-screen toggle** — proposed to him, awaiting a one-word confirm, not started.
+
+**Answered with measurements, do not re-litigate:** Vertex AI is NOT worth it (same per-token price but no free tier; ~$7/mo would become ~$20-35) · a 2-hour recording DOES survive (soak PASSED: 7193s of 7200s, audio throughout, 179 parts) · the redesign is CANCELLED, dark mode only.
+
+**Two capabilities are DOWN:** `codex exec` is rejected by the account for every model tried · and remember `pnpm typecheck` is a cached no-op — use `pnpm exec tsc -b --force` whenever the result is meant as proof.
+
+---
 
 _Trigger words: "ustoz", "cap", "cap-v2". Source of truth for resume._
 
