@@ -1634,8 +1634,9 @@ async function handleMessage(
 				}
 
 				if (stateAfter.kind === "error") {
-					// finalizeUpload already set a more specific reason (too short,
-					// retry failed, ...) — keep it rather than overwriting.
+					// finalizeUpload already set a more specific reason (no durable
+					// video data, retry failed, ...) — keep it rather than
+					// overwriting.
 					updateBadge(stateAfter);
 					chrome.notifications.create("recorder-error", {
 						type: "basic",

@@ -277,7 +277,8 @@ function base64DecodedLength(base64: string): number {
  * A part whose PUT failed is persisted whole in chrome.storage.local, so its
  * bytes are exactly as recoverable as an uploaded part's — the viability
  * check in finalizeUpload must count them or it declares a real recording
- * "too short" and strands them (see the comment at the call site).
+ * unviable ("no video data was saved") and strands them (see the comment at
+ * the call site).
  */
 async function queuedPartBytesForUpload(
 	videoId: string,
@@ -1086,7 +1087,7 @@ export async function finalizeUpload(
 	// chrome.storage.local, not just in RAM. Omitting them lost recordings
 	// outright: stop while offline and every full part sits in the retry queue
 	// with uploadedBytes still 0, so a recording whose pending buffer happens to
-	// hold less than MIN_VIABLE_BYTES at stop time was declared "too short" and
+	// hold less than MIN_VIABLE_BYTES at stop time was declared unviable and
 	// flipped to a terminal error. The drain would then upload the queued
 	// megabytes while nothing was left to complete the multipart with — the
 	// meeting was gone despite every byte being safe.
@@ -1102,8 +1103,7 @@ export async function finalizeUpload(
 		);
 		await setState({
 			kind: "error",
-			reason:
-				"Recording was too short — no video was captured. Please record for at least a couple of seconds and try again.",
+			reason: `No video data was saved — only ${durableBytes} bytes were durably stored, far less than a single frame, so there is nothing to publish. This is a capture/upload failure, not a length limit: please check the recording permission for the tab and record again.`,
 			recoverable: true,
 			previousVideoId: videoId,
 		});

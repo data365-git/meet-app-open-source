@@ -468,9 +468,9 @@ describe("P1.1 — RECORDER_ERROR salvage", () => {
 		const finalState = await getState();
 		expect(finalState.kind).toBe("error");
 		if (finalState.kind === "error") {
-			// finalizeUpload's specific "too short" reason must survive, not be
-			// overwritten by the generic RECORDER_ERROR message.
-			expect(finalState.reason).toMatch(/too short/i);
+			// finalizeUpload's specific "no video data was saved" reason must
+			// survive, not be overwritten by the generic RECORDER_ERROR message.
+			expect(finalState.reason).toMatch(/no video data was saved/i);
 		}
 	});
 });
