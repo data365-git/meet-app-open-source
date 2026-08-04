@@ -1,7 +1,22 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import { faFilm, faTrash } from "@fortawesome/free-solid-svg-icons";
+import {
+	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@cap/ui";
+import {
+	faArrowRightArrowLeft,
+	faFilm,
+	faFolder,
+	faTrash,
+	faUsers,
+	faVideo,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -12,23 +27,101 @@ interface SelectedCapsBarProps {
 	setSelectedCaps: (caps: Video.VideoId[]) => void;
 	deleteSelectedCaps: () => void;
 	isDeleting: boolean;
+	/**
+	 * Which library the bar is currently rendered in. The Move menu hides the
+	 * library you are already in, so the only options offered are real moves.
+	 */
+	currentLibrary?: LibraryKind;
+	/** Folders the selection can be moved into. Omitted = no folder options. */
+	folders?: FolderDataType[];
 }
 
-import type { Video } from "@cap/web-domain";
+import type { Folder, Video } from "@cap/web-domain";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
+import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import {
+	type LibraryKind,
+	setVideosLibraryKind,
+} from "@/actions/videos/set-library-kind";
+import type { FolderDataType } from "./Folder";
+
+const LIBRARY_LABELS: Record<LibraryKind, string> = {
+	recording: "Recordings",
+	meeting: "Meetings",
+};
 
 export const SelectedCapsBar = ({
 	selectedCaps,
 	setSelectedCaps,
 	deleteSelectedCaps,
 	isDeleting,
+	currentLibrary,
+	folders,
 }: SelectedCapsBarProps) => {
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [isMoving, setIsMoving] = useState(false);
+	const router = useRouter();
 
 	const handleConfirmDelete = () => {
 		deleteSelectedCaps();
 		setConfirmOpen(false);
 	};
+
+	const ids = selectedCaps as Video.VideoId[];
+	const countLabel = `${selectedCaps.length} cap${
+		selectedCaps.length === 1 ? "" : "s"
+	}`;
+
+	// Moving between libraries only ever writes `libraryKind` — never
+	// `videos.source`, which stays the immutable record of how it was captured.
+	const moveToLibrary = async (libraryKind: LibraryKind) => {
+		if (isMoving || ids.length === 0) return;
+		setIsMoving(true);
+		try {
+			const result = await setVideosLibraryKind(ids, libraryKind);
+			if (!result.success) {
+				toast.error(result.error);
+				return;
+			}
+			toast.success(`Moved ${countLabel} to ${LIBRARY_LABELS[libraryKind]}`);
+			setSelectedCaps([]);
+			router.refresh();
+		} catch (_error) {
+			toast.error("Failed to move the selected caps");
+		} finally {
+			setIsMoving(false);
+		}
+	};
+
+	const moveToFolder = async (folder: FolderDataType) => {
+		if (isMoving || ids.length === 0) return;
+		setIsMoving(true);
+		try {
+			for (const videoId of ids) {
+				await moveVideoToFolder({
+					videoId,
+					folderId: folder.id as Folder.FolderId,
+					spaceId: folder.spaceId ?? null,
+				});
+			}
+			toast.success(`Moved ${countLabel} to ${folder.name}`);
+			setSelectedCaps([]);
+			router.refresh();
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to move to folder",
+			);
+		} finally {
+			setIsMoving(false);
+		}
+	};
+
+	const libraryOptions = (Object.keys(LIBRARY_LABELS) as LibraryKind[]).filter(
+		(kind) => kind !== currentLibrary,
+	);
+	const folderOptions = folders ?? [];
 
 	return (
 		<AnimatePresence>
@@ -65,10 +158,67 @@ export const SelectedCapsBar = ({
 						>
 							Cancel
 						</Button>
+						{(libraryOptions.length > 0 || folderOptions.length > 0) && (
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<Button
+										variant="gray"
+										disabled={isMoving || isDeleting}
+										className="text-sm"
+										size="sm"
+									>
+										<FontAwesomeIcon
+											className="mr-1.5 size-3"
+											icon={faArrowRightArrowLeft}
+										/>
+										{isMoving ? "Moving..." : "Move"}
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="min-w-[190px]">
+									{libraryOptions.length > 0 && (
+										<>
+											<DropdownMenuLabel>Move to library</DropdownMenuLabel>
+											{libraryOptions.map((kind) => (
+												<DropdownMenuItem
+													key={kind}
+													className="gap-2 rounded-lg"
+													onSelect={() => void moveToLibrary(kind)}
+												>
+													<FontAwesomeIcon
+														className="size-3 text-gray-11"
+														icon={kind === "meeting" ? faUsers : faVideo}
+													/>
+													<span>{LIBRARY_LABELS[kind]}</span>
+												</DropdownMenuItem>
+											))}
+										</>
+									)}
+									{folderOptions.length > 0 && (
+										<>
+											{libraryOptions.length > 0 && <DropdownMenuSeparator />}
+											<DropdownMenuLabel>Move to folder</DropdownMenuLabel>
+											{folderOptions.map((folder) => (
+												<DropdownMenuItem
+													key={folder.id}
+													className="gap-2 rounded-lg"
+													onSelect={() => void moveToFolder(folder)}
+												>
+													<FontAwesomeIcon
+														className="size-3 text-gray-11"
+														icon={faFolder}
+													/>
+													<span className="truncate">{folder.name}</span>
+												</DropdownMenuItem>
+											))}
+										</>
+									)}
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
 						<Button
 							variant="destructive"
 							onClick={() => setConfirmOpen(true)}
-							disabled={isDeleting}
+							disabled={isDeleting || isMoving}
 							className="size-[40px] min-w-[unset] p-0"
 							size="sm"
 						>

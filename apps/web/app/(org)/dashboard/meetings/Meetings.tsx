@@ -310,6 +310,8 @@ export const Meetings = ({
         setSelectedCaps={setSelectedCaps}
         deleteSelectedCaps={() => deleteCaps(selectedCaps)}
         isDeleting={isDeletingCaps || isDeletingCap}
+        currentLibrary="meeting"
+        folders={folders}
       />
     </div>
   );
