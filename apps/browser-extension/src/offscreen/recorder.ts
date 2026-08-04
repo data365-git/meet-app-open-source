@@ -27,6 +27,7 @@ import {
 	VIDEO_BITS_PER_SECOND,
 	micAudioConstraints,
 	pickMimeType,
+	tabAudioConstraints,
 } from "../shared/recording-quality";
 import { newSessionId } from "../shared/recorder-session";
 
@@ -195,12 +196,9 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 						chromeMediaSourceId: msg.streamId,
 					},
 				} as unknown as MediaTrackConstraints,
-				audio: {
-					mandatory: {
-						chromeMediaSource: "tab",
-						chromeMediaSourceId: msg.streamId,
-					},
-				} as unknown as MediaTrackConstraints,
+				// Unprocessed on purpose — see TAB_AUDIO_CONSTRAINTS: AEC/NS/AGC on
+				// a tab stream would gate the remote participant's voice.
+				audio: tabAudioConstraints(msg.streamId),
 			});
 		} catch (err) {
 			// (H1) This used to silently retry VIDEO-ONLY and then report a

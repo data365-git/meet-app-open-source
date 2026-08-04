@@ -95,6 +95,62 @@ export function micAudioConstraints(
 		: { ...MIC_AUDIO_CONSTRAINTS };
 }
 
+// ── Tab / display (system) audio capture constraints ───────────────────────
+//
+// This is the LOAD-BEARING guarantee for the other participant's voice.
+//
+// The mic flags above are deliberately ON; on a tab or display stream the SAME
+// three flags must be deliberately OFF, and the difference is not cosmetic:
+//
+//  • echoCancellation on a tab stream is actively destructive. The AEC treats
+//    the local speaker output as "far end" — and the remote participant's voice
+//    IS the local speaker output — so it gates/ducks exactly the person we are
+//    recording, as if they were echo. Users hear the other side chopped or
+//    missing while their own mic is fine.
+//  • noiseSuppression is tuned for a single near voice over a mic; on already-
+//    encoded conference audio it eats music, screen-shared video sound, and the
+//    quieter of two overlapping speakers.
+//  • autoGainControl fights the deliberate TAB_AUDIO_GAIN boost below — it
+//    pumps the level back down between phrases, which is what "breathing"
+//    meeting audio sounds like.
+//
+// A tab stream is a clean digital copy; there is nothing to clean up. Chrome's
+// default for a tabCapture source is usually already off, but "usually" is not
+// a guarantee: it has varied by Chrome version and by how the stream is
+// obtained (getDisplayMedia audio in particular goes through the normal
+// audio-processing path). Stating all three explicitly removes the variance.
+export const TAB_AUDIO_CONSTRAINTS = {
+	echoCancellation: false,
+	noiseSuppression: false,
+	autoGainControl: false,
+} as const satisfies MediaTrackConstraints;
+
+/**
+ * Audio constraints for consuming a `chrome.tabCapture` streamId through
+ * getUserMedia (the recorder page's meeting leg and the offscreen document).
+ *
+ * Chrome parses a constraints object containing `mandatory` with its LEGACY
+ * parser, which ignores sibling modern keys — so spreading TAB_AUDIO_CONSTRAINTS
+ * next to `mandatory` would silently do nothing. The flags therefore go INSIDE
+ * `mandatory`, in both the modern and the goog-prefixed spelling that the legacy
+ * parser actually reads, and are derived from TAB_AUDIO_CONSTRAINTS so the one
+ * declaration above stays the single source of truth.
+ */
+export function tabAudioConstraints(streamId: string): MediaTrackConstraints {
+	return {
+		mandatory: {
+			chromeMediaSource: "tab",
+			chromeMediaSourceId: streamId,
+			echoCancellation: TAB_AUDIO_CONSTRAINTS.echoCancellation,
+			noiseSuppression: TAB_AUDIO_CONSTRAINTS.noiseSuppression,
+			autoGainControl: TAB_AUDIO_CONSTRAINTS.autoGainControl,
+			googEchoCancellation: TAB_AUDIO_CONSTRAINTS.echoCancellation,
+			googNoiseSuppression: TAB_AUDIO_CONSTRAINTS.noiseSuppression,
+			googAutoGainControl: TAB_AUDIO_CONSTRAINTS.autoGainControl,
+		},
+	} as unknown as MediaTrackConstraints;
+}
+
 // The remote participants arrive quieter than the local mic. Applied to the
 // RECORDED copy of the tab audio only — never to the monitor path, so what the
 // user hears during the call is unchanged.

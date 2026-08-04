@@ -30,6 +30,7 @@ import {
 	CAPTURE_MAX_FRAME_RATE,
 	CAPTURE_MAX_HEIGHT,
 	CAPTURE_MAX_WIDTH,
+	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
 	micAudioConstraints,
@@ -410,7 +411,10 @@ export async function startInPageRecording(
 				height: { max: CAPTURE_MAX_HEIGHT },
 				frameRate: { max: CAPTURE_MAX_FRAME_RATE },
 			},
-			audio: true,
+			// Never let the browser "clean up" the display audio: its AEC would
+			// treat the other participant's voice (which IS the speaker output)
+			// as echo and gate it out. See TAB_AUDIO_CONSTRAINTS.
+			audio: { ...TAB_AUDIO_CONSTRAINTS },
 			surfaceSwitching: "exclude",
 			monitorTypeSurfaces: "include",
 		} as unknown as DisplayMediaStreamOptions);

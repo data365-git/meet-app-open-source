@@ -24,10 +24,12 @@ import {
 	CAPTURE_MAX_FRAME_RATE,
 	CAPTURE_MAX_HEIGHT,
 	CAPTURE_MAX_WIDTH,
+	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
 	micAudioConstraints,
 	pickMimeType,
+	tabAudioConstraints,
 } from "../shared/recording-quality";
 import { newSessionId } from "../shared/recorder-session";
 
@@ -577,7 +579,10 @@ async function startRecording(): Promise<void> {
 				height: { max: CAPTURE_MAX_HEIGHT },
 				frameRate: { max: CAPTURE_MAX_FRAME_RATE },
 			},
-			audio: true,
+			// Unprocessed on purpose — browser AEC/NS/AGC on a display stream
+			// gates the remote speaker as if they were echo. See
+			// TAB_AUDIO_CONSTRAINTS.
+			audio: { ...TAB_AUDIO_CONSTRAINTS },
 			selfBrowserSurface: "exclude",
 			surfaceSwitching: "exclude",
 			monitorTypeSurfaces: "include",
@@ -693,12 +698,7 @@ async function startRecording(): Promise<void> {
 			if (streamId) {
 				try {
 					tabAudioStream = await navigator.mediaDevices.getUserMedia({
-						audio: {
-							mandatory: {
-								chromeMediaSource: "tab",
-								chromeMediaSourceId: streamId,
-							},
-						} as unknown as MediaTrackConstraints,
+						audio: tabAudioConstraints(streamId),
 						video: false,
 					});
 				} catch {
