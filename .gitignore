@@ -112,3 +112,5 @@ tmp-qa/
 /apps/web/scripts/import-real-video.ts
 /apps/web/scripts/scribe-poc/
 /apps/web/scripts/timestamp-ab/
+.goalkeeper-contract-*.json
+.goalkeeper/
