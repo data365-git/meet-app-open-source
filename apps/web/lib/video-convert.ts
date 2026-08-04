@@ -22,7 +22,9 @@ const DEFAULT_COPY_TIMEOUT_MS = 10 * 60 * 1000;
 // a 40+ min recording can take a large fraction of its own runtime to encode.
 const DEFAULT_COMPRESS_TIMEOUT_MS = 45 * 60 * 1000;
 const HIGH_BITRATE_BPS = 2_500_000;
-const HIGH_RESOLUTION_MAX_EDGE = 1280;
+// 1080p is the quality floor we ship, so a 1920-edge source is NOT "too big" —
+// only something larger than 1080p is downscaled by the compress pass.
+const HIGH_RESOLUTION_MAX_EDGE = 1920;
 const MP4_SAFE_VIDEO_CODECS = new Set(["avc1", "h264"]);
 const MP4_SAFE_AUDIO_CODECS = new Set(["aac"]);
 
@@ -446,15 +448,17 @@ async function optimizeRemoteVideoToMp4FileInternal(
 			"-preset",
 			"veryfast",
 			"-crf",
-			"28",
+			"21",
 			"-vf",
-			"scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'",
+			"scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'",
 			"-pix_fmt",
 			"yuv420p",
 			"-c:a",
 			"aac",
 			"-b:a",
-			"96k",
+			"128k",
+			"-ar",
+			"48000",
 			"-movflags",
 			"+faststart",
 			outputPath,

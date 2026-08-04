@@ -165,6 +165,20 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
 			"@/lib/video-convert"
 		);
 
+		// Larger than 1080p — downscaled by the compress pass.
+		expect(
+			chooseVideoOptimizationStrategy({
+				durationSec: 300,
+				width: 2560,
+				height: 1440,
+				videoCodec: "h264",
+				audioCodec: "aac",
+				bitrateBps: 1800000,
+			}),
+		).toBe("compress");
+
+		// Exactly 1080p at a modest bitrate is kept as-is (no quality-destroying
+		// re-encode) now that 1080p is the quality floor we ship.
 		expect(
 			chooseVideoOptimizationStrategy({
 				durationSec: 300,
@@ -174,7 +188,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
 				audioCodec: "aac",
 				bitrateBps: 1800000,
 			}),
-		).toBe("compress");
+		).toBe("copy");
 
 		expect(
 			chooseVideoOptimizationStrategy({
