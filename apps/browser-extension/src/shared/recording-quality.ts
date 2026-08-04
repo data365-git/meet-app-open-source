@@ -48,6 +48,53 @@ export const VIDEO_BITS_PER_SECOND = envBitsPerSecond(
 );
 export const AUDIO_BITS_PER_SECOND = 128_000;
 
+// ── Microphone capture constraints ─────────────────────────────────────────
+//
+// The three recorder paths used to ask for the mic with a bare `{ audio: true }`
+// (or a deviceId and nothing else). That leaves every processing decision to the
+// browser default, which on Chrome varies by device and by how the stream is
+// obtained — so the owner's own voice arrived with room echo and hiss on some
+// runs and clean on others. Zoom-grade local audio is not a codec choice, it is
+// these three DSP flags being ON deliberately.
+//
+//  • echoCancellation  — kills the loop where the remote voice comes out of the
+//    speakers and back into the mic (the "hearing yourself twice" artefact).
+//  • noiseSuppression  — removes fan/keyboard/room hiss under the voice.
+//  • autoGainControl   — levels a quiet or far-away speaker up to a usable
+//    loudness so the mic leg matches the tab leg.
+//  • sampleRate 48000  — matches the AudioContext the mix is built in, so the
+//    mic is never resampled 44.1k→48k inside the graph.
+//  • channelCount 1    — a mic is mono anyway; asking for 2 duplicates the same
+//    signal and only costs bitrate.
+//
+// These are REQUESTS, not guarantees: getUserMedia silently ignores what a
+// device cannot do rather than failing, which is why they are plain values and
+// not `exact` — an `exact` sampleRate would make the whole call throw on
+// hardware locked to 44.1 kHz and lose the mic entirely.
+export const MIC_AUDIO_CONSTRAINTS = {
+	echoCancellation: true,
+	noiseSuppression: true,
+	autoGainControl: true,
+	sampleRate: 48000,
+	channelCount: 1,
+} as const satisfies MediaTrackConstraints;
+
+/**
+ * Mic constraints for getUserMedia, optionally pinned to a chosen input device.
+ *
+ * Every recorder path goes through here so the fallback request (the one used
+ * when the chosen device is gone) keeps the SAME processing flags as the pinned
+ * one — the old code fell back to a bare `{ audio: true }`, which quietly
+ * downgraded the audio exactly when something had already gone wrong.
+ */
+export function micAudioConstraints(
+	deviceId?: string | null,
+): MediaTrackConstraints {
+	return deviceId
+		? { ...MIC_AUDIO_CONSTRAINTS, deviceId: { exact: deviceId } }
+		: { ...MIC_AUDIO_CONSTRAINTS };
+}
+
 // The remote participants arrive quieter than the local mic. Applied to the
 // RECORDED copy of the tab audio only — never to the monitor path, so what the
 // user hears during the call is unchanged.

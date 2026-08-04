@@ -26,6 +26,7 @@ import {
 	CAPTURE_MAX_WIDTH,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	micAudioConstraints,
 	pickMimeType,
 } from "../shared/recording-quality";
 import { newSessionId } from "../shared/recorder-session";
@@ -647,19 +648,21 @@ async function startRecording(): Promise<void> {
 		if (settings.micEnabled && settings.micDeviceId) {
 			micStream = await withTimeout(
 				navigator.mediaDevices.getUserMedia({
-					audio: { deviceId: { exact: settings.micDeviceId } },
+					audio: micAudioConstraints(settings.micDeviceId),
 				}),
 				MIC_ACQUIRE_TIMEOUT_MS,
 			);
 			if (!micStream) {
 				micStream = await withTimeout(
-					navigator.mediaDevices.getUserMedia({ audio: true }),
+					navigator.mediaDevices.getUserMedia({
+						audio: micAudioConstraints(),
+					}),
 					MIC_ACQUIRE_TIMEOUT_MS,
 				);
 			}
 		} else if (settings.micEnabled) {
 			micStream = await withTimeout(
-				navigator.mediaDevices.getUserMedia({ audio: true }),
+				navigator.mediaDevices.getUserMedia({ audio: micAudioConstraints() }),
 				MIC_ACQUIRE_TIMEOUT_MS,
 			);
 		}

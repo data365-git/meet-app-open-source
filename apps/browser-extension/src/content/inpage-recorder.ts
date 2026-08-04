@@ -32,6 +32,7 @@ import {
 	CAPTURE_MAX_WIDTH,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	micAudioConstraints,
 	pickMimeType,
 } from "../shared/recording-quality";
 import { newSessionId } from "../shared/recorder-session";
@@ -360,14 +361,14 @@ async function getOptionalMicStream(
 	if (micDeviceId) {
 		const exact = await withTimeout(
 			navigator.mediaDevices.getUserMedia({
-				audio: { deviceId: { exact: micDeviceId } },
+				audio: micAudioConstraints(micDeviceId),
 			}),
 			MIC_ACQUIRE_TIMEOUT_MS,
 		);
 		if (exact) return exact;
 	}
 	return withTimeout(
-		navigator.mediaDevices.getUserMedia({ audio: true }),
+		navigator.mediaDevices.getUserMedia({ audio: micAudioConstraints() }),
 		MIC_ACQUIRE_TIMEOUT_MS,
 	);
 }

@@ -25,6 +25,7 @@ import {
 	AUDIO_BITS_PER_SECOND,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	micAudioConstraints,
 	pickMimeType,
 } from "../shared/recording-quality";
 import { newSessionId } from "../shared/recorder-session";
@@ -229,15 +230,15 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			// system default mic so an enabled mic is never silently dropped.
 			micStream = await withTimeout(
 				navigator.mediaDevices.getUserMedia({
-					audio: msg.micDeviceId
-						? { deviceId: { exact: msg.micDeviceId } }
-						: true,
+					audio: micAudioConstraints(msg.micDeviceId),
 				}),
 				MIC_ACQUIRE_TIMEOUT_MS,
 			);
 			if (!micStream) {
 				micStream = await withTimeout(
-					navigator.mediaDevices.getUserMedia({ audio: true }),
+					navigator.mediaDevices.getUserMedia({
+						audio: micAudioConstraints(),
+					}),
 					MIC_ACQUIRE_TIMEOUT_MS,
 				);
 			}
