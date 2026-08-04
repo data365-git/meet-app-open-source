@@ -241,6 +241,57 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
 		).toBe("copy");
 	});
 
+	it("pins the compress-pass encoder args to the shipped 1080p quality floor", async () => {
+		const { optimizeRemoteVideoToMp4 } = await import("@/lib/video-convert");
+
+		// 4K/high-bitrate source → "compress" strategy → the single compress encode.
+		const metadataStderr = `
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
+  Duration: 00:02:00.00, start: 0.000000, bitrate: 9000 kb/s
+  Stream #0:0: Video: h264 (High), yuv420p, 3840x2160, 30 fps
+  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo
+`;
+
+		const resultPromise = optimizeRemoteVideoToMp4(
+			"https://example.com/video.mp4",
+		);
+
+		setTimeout(() => {
+			spawnedProcesses[0]?.stderr.emit("data", Buffer.from(metadataStderr));
+			spawnedProcesses[0]?.emit("close", 0);
+			setTimeout(() => {
+				spawnedProcesses[1]?.emit("close", 0);
+			}, 10);
+		}, 5);
+
+		await resultPromise;
+
+		expect(spawnArgs).toHaveLength(2);
+		const args = spawnArgs[1]?.args ?? [];
+
+		// Video: h264 at CRF 21, capped at a 1920 long edge (1080p floor, no 720p
+		// downscale), even-dimension safe via -2.
+		expect(args[args.indexOf("-c:v") + 1]).toBe("libx264");
+		expect(args[args.indexOf("-crf") + 1]).toBe("21");
+		expect(args[args.indexOf("-vf") + 1]).toBe(
+			"scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'",
+		);
+		expect(args[args.indexOf("-pix_fmt") + 1]).toBe("yuv420p");
+
+		// Audio: AAC 128k at 48 kHz — no 96k / resample downgrade.
+		expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
+		expect(args[args.indexOf("-b:a") + 1]).toBe("128k");
+		expect(args[args.indexOf("-ar") + 1]).toBe("48000");
+
+		// Still streamable.
+		expect(args[args.indexOf("-movflags") + 1]).toBe("+faststart");
+
+		// The old degraded values must not reappear.
+		expect(args).not.toContain("28");
+		expect(args).not.toContain("96k");
+		expect(args.join(" ")).not.toContain("min(1280");
+	});
+
 	it("applies a custom timeoutMs override to the copy encode step and its compress fallback", async () => {
 		const { optimizeRemoteVideoToMp4 } = await import("@/lib/video-convert");
 
