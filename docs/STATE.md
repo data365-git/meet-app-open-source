@@ -582,3 +582,19 @@ Read as the decision rule demanded — the RAW duration, not the harness's label
 **What this does NOT prove, stated so it is not over-claimed:** it ran against the local mock server, not real Cloudflare R2 and not real transcription — so 2-hour *storage* and 2-hour *AI analysis* are still unproven. It also used a synthetic tone rather than speech. And 0.94 GB is the RAW recorder output at ~7.8 MB/min; the server-side compress step is what turns a 2-hour meeting into ~120 MB (measured 11.6:1 earlier tonight), so the storage answer depends on that step actually running — which is exactly the gap where 3 of 7 stored videos were found never to have been compressed.
 
 **Reproduce:** `cd apps/browser-extension/e2e-audio-proof && PROOF_MINUTES=120 node run-proof-inpage.mjs` (after `pnpm build` in the extension). Free — no AI spend, no cloud writes. Do not have a dev server on port 3001.
+
+## 🌓 DARK MODE NEEDED A RELOAD — REAL BUG, FIXED 2026-08-04 (`28398c7`)
+
+**The owner reported it and he was right; I had already seen the symptom and explained it away.** In my own live check hours earlier the page reported `bodyClass: "light"` on a dark device with no cookie, and I concluded it was an artifact of the Browser pane applying its dark emulation after the script ran. That conclusion was wrong: the symptom was real, constant, and on every cold load.
+
+**Measured cause on the live build:** `next/script strategy="beforeInteractive"` placed inside `<body>` emitted only `<link rel="preload" href="/theme-script.js">` into `<head>` and pushed the actual execution into the body via Next's deferred loader (`self.__next_s.push([...])`), which runs after hydration. First paint was therefore always light. A second visit ran it from cache early enough to look right — which is precisely why it read as intermittent instead of broken, and why a single check "passed".
+
+**Fix (two halves, both needed):** `layout.tsx` reads the one source file at module scope and inlines it as a plain synchronous `<script>` in `<head>`; and `theme-script.js` now stamps the decided class onto `<html>` immediately, because inside `<head>` the `<body>` element does not exist yet and waiting for DOMContentLoaded would still paint light first. `<body>` is still stamped afterwards, since the theme toggle and the AI chat both read `document.body.classList`.
+
+**Proof:** deleting the `<html>` line fails 2 of 8 assertions on the assertion itself; restoring gives 8/8. Suite 1219 passed / 0 failed. `tsc -b --force` 54s exit 0 — forced, because the cached run is a no-op (see gate hygiene above). Production `next build` exit 0 locally, so the module-scope file read is safe in the standalone output.
+
+**Lesson kept on the board:** when a live check disagrees with the code, the code is not automatically right. I had a real signal and buried it under a plausible harness explanation; the owner's device settled it.
+
+**Also answered for him:** Meetings already had day-grouping (Bugun / Shu hafta / Oldinroq), bulk select, delete, sharing, rename and pagination before last night — folders were the ONLY genuine gap and are now in. Search and sort exist in NEITHER section, so there is nothing to "port"; that would be new work.
+
+**PENDING HIS ONE-WORD CONFIRM:** a full-screen toggle for the AI chat popup (proposed: an expand control next to the close button; tap to fill the screen, tap again to return). Not started.
