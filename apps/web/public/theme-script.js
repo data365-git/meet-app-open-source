@@ -21,6 +21,16 @@
 	};
 
 	if (isDashboardPath) {
+		// This file is inlined into <head>, so <body> does not exist yet on a
+		// cold load. Put the class on <html> IMMEDIATELY: the radix palette and
+		// every Tailwind dark: utility key off `.dark` on any ancestor, so the
+		// very first paint is already correct and there is no light flash.
+		// <body> still gets the class below, because the theme toggle and the
+		// AI chat both read and write document.body.classList.
+		var decided = cookie || systemTheme();
+		if (document.documentElement) {
+			document.documentElement.classList.add(decided);
+		}
 		if (document.body) {
 			applyTheme();
 		} else {

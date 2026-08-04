@@ -23,6 +23,7 @@ function runThemeScript(opts: {
 	const added: string[] = [];
 	const documentStub = {
 		cookie: opts.cookie ?? "",
+		documentElement: { classList: { add: () => {} } },
 		body: { classList: { add: (c: string) => added.push(c) } },
 	};
 	const windowStub = {
@@ -36,6 +37,67 @@ function runThemeScript(opts: {
 	new Function("window", "document", SCRIPT_SRC)(windowStub, documentStub);
 	return added;
 }
+
+// The script is inlined into <head>, so on a COLD load <body> does not exist
+// when it runs. This helper reproduces exactly that: no `body` on the document
+// at script time, which is the state that produced the owner's bug report
+// ("dark mode didn't work until I reloaded").
+function runInHeadBeforeBody(opts: {
+	cookie?: string;
+	prefersDark: boolean;
+	pathname: string;
+}): { htmlClasses: string[]; deferredToDomReady: boolean } {
+	const htmlClasses: string[] = [];
+	let deferred = false;
+	const documentStub: Record<string, unknown> = {
+		cookie: opts.cookie ?? "",
+		documentElement: {
+			classList: { add: (c: string) => htmlClasses.push(c) },
+		},
+		body: null, // <body> genuinely absent, as in <head>
+	};
+	const windowStub = {
+		location: { pathname: opts.pathname },
+		matchMedia: (q: string) => ({
+			matches: q.includes("dark") ? opts.prefersDark : false,
+		}),
+		addEventListener: () => {
+			deferred = true;
+		},
+	};
+	new Function("window", "document", SCRIPT_SRC)(windowStub, documentStub);
+	return { htmlClasses, deferredToDomReady: deferred };
+}
+
+describe("theme-script runs before <body> exists (the reload bug)", () => {
+	it("themes <html> IMMEDIATELY on a cold load, so the first paint is not light", () => {
+		const r = runInHeadBeforeBody({
+			prefersDark: true,
+			pathname: "/s/abc123",
+		});
+		// This is the whole fix: without it the class could only be applied at
+		// DOMContentLoaded, i.e. after the page had already painted light.
+		expect(r.htmlClasses).toEqual(["dark"]);
+		// and it still defers the <body> class for the code that reads it
+		expect(r.deferredToDomReady).toBe(true);
+	});
+
+	it("still lets an explicit cookie win at that same early moment", () => {
+		expect(
+			runInHeadBeforeBody({
+				cookie: "theme=light",
+				prefersDark: true,
+				pathname: "/dashboard/caps",
+			}).htmlClasses,
+		).toEqual(["light"]);
+	});
+
+	it("does not touch <html> on an unthemed path", () => {
+		expect(
+			runInHeadBeforeBody({ prefersDark: true, pathname: "/" }).htmlClasses,
+		).toEqual([]);
+	});
+});
 
 describe("theme-script fallback", () => {
 	it("falls back to the DEVICE preference when there is no cookie", () => {
