@@ -33,6 +33,7 @@ import {
 	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	createMixLimiter,
 	micAudioConstraints,
 	pickMimeType,
 } from "../shared/recording-quality";
@@ -497,11 +498,15 @@ export async function startInPageRecording(
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
 		openedAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
+		// Everything that gets RECORDED passes through the limiter first, so the
+		// TAB_AUDIO_GAIN lift below cannot hard-clip a loud remote speaker.
+		const limiter = createMixLimiter(audioCtx);
+		limiter.connect(dest);
 		const pageGain = audioCtx.createGain();
 		// The remote voices arrive attenuated relative to the local mic — same
 		// reason and same constant as the tabCapture path.
 		pageGain.gain.value = TAB_AUDIO_GAIN;
-		pageGain.connect(dest);
+		pageGain.connect(limiter);
 		const analyser = audioCtx.createAnalyser();
 		analyser.fftSize = 2048;
 
@@ -561,7 +566,7 @@ export async function startInPageRecording(
 		}
 
 		if (micStream && micStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(micStream).connect(dest);
+			audioCtx.createMediaStreamSource(micStream).connect(limiter);
 		}
 		// System audio from the picker is the SAME meeting sound as the page audio
 		// when both exist — mixing both doubles it into echo. So it is only a
@@ -570,7 +575,7 @@ export async function startInPageRecording(
 		// up (the owner starts recording alone; the client joins a minute later).
 		if (usingSystemAudioForClient) {
 			const systemGain = audioCtx.createGain();
-			systemGain.connect(dest);
+			systemGain.connect(limiter);
 			audioCtx.createMediaStreamSource(displayStream).connect(systemGain);
 			pending.systemGain = systemGain;
 		}

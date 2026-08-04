@@ -25,6 +25,7 @@ import {
 	AUDIO_BITS_PER_SECOND,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	createMixLimiter,
 	micAudioConstraints,
 	pickMimeType,
 	tabAudioConstraints,
@@ -246,6 +247,10 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
 		ownAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
+		// Everything that gets RECORDED passes through the limiter first, so the
+		// TAB_AUDIO_GAIN lift below cannot hard-clip a loud remote speaker.
+		const limiter = createMixLimiter(audioCtx);
+		limiter.connect(dest);
 
 		if (displayStream.getAudioTracks().length > 0) {
 			const displaySrc = audioCtx.createMediaStreamSource(displayStream);
@@ -255,14 +260,14 @@ async function startCapture(msg: StartCaptureMsg): Promise<void> {
 			// recorder-page.ts on purpose: these two are the twin capture paths.
 			const tabGain = audioCtx.createGain();
 			tabGain.gain.value = TAB_AUDIO_GAIN;
-			displaySrc.connect(tabGain).connect(dest);
+			displaySrc.connect(tabGain).connect(limiter);
 			// Tab capture mutes the tab for the user by default; route the captured
 			// tab audio back to the speakers so the meeting is still audible.
 			displaySrc.connect(audioCtx.destination);
 		}
 
 		if (micStream && micStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(micStream).connect(dest);
+			audioCtx.createMediaStreamSource(micStream).connect(limiter);
 		}
 
 		const recordStream = new MediaStream([

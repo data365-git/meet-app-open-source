@@ -157,6 +157,50 @@ export function tabAudioConstraints(streamId: string): MediaTrackConstraints {
 export const TAB_AUDIO_GAIN = 1.8;
 
 /**
+ * The safety net for the TAB_AUDIO_GAIN lift: a limiter that sits between the
+ * mixed audio and the MediaStream the MediaRecorder encodes.
+ *
+ * Why it exists: the mix sums the mic (already levelled by autoGainControl) with
+ * the tab audio multiplied by TAB_AUDIO_GAIN. A remote speaker who is ALREADY
+ * loud, or both people talking at once, pushes that sum past full scale — and a
+ * Web Audio graph does not clip gracefully: the samples are hard-clipped on the
+ * way into the recorder and the crackle is baked into the file forever. Lowering
+ * the lift instead would undo the fix the lift exists for (quiet remote voices),
+ * so the correct shape is to keep the lift and catch only the peaks.
+ *
+ * Settings, chosen for transparency rather than loudness:
+ *  • threshold -3 dBFS — below this NOTHING is touched, so ordinary conversation
+ *    passes through untouched; only material heading for 0 dBFS is caught.
+ *  • knee 0 — a hard knee, i.e. a limiter, not a compressor. A soft knee starts
+ *    squeezing well under the threshold and audibly flattens speech dynamics.
+ *  • ratio 20:1 — the maximum DynamicsCompressor allows; anything above the
+ *    threshold is effectively pinned there instead of clipping.
+ *  • attack 3 ms — fast enough to catch a consonant transient, slow enough not
+ *    to distort low frequencies the way a 0 ms attack does.
+ *  • release 250 ms — long enough that the gain does not "pump" between
+ *    syllables, short enough to recover before the next sentence.
+ *
+ * ONE factory, three call sites (recorder page, offscreen document, in-page
+ * recorder): three hand-copied node setups would drift on the first tweak — the
+ * same twin problem pickMimeType() below was created to end.
+ *
+ * Applies to the RECORDED mix only. The monitor path (what the user hears live
+ * during the call) connects straight to `audioCtx.destination` in every path and
+ * deliberately does not pass through here.
+ */
+export function createMixLimiter(
+	audioCtx: AudioContext,
+): DynamicsCompressorNode {
+	const limiter = audioCtx.createDynamicsCompressor();
+	limiter.threshold.value = -3;
+	limiter.knee.value = 0;
+	limiter.ratio.value = 20;
+	limiter.attack.value = 0.003;
+	limiter.release.value = 0.25;
+	return limiter;
+}
+
+/**
  * The container/codec the MediaRecorder should use, most preferred first.
  *
  * ONE home for what used to be three verbatim copies (recorder page, offscreen

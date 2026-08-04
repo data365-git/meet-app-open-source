@@ -27,6 +27,7 @@ import {
 	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	createMixLimiter,
 	micAudioConstraints,
 	pickMimeType,
 	tabAudioConstraints,
@@ -729,16 +730,20 @@ async function startRecording(): Promise<void> {
 		const audioCtx = new AudioContext({ sampleRate: 48000 });
 		ownAudioCtx = audioCtx;
 		const dest = audioCtx.createMediaStreamDestination();
+		// Everything that gets RECORDED passes through the limiter first, so the
+		// TAB_AUDIO_GAIN lift below cannot hard-clip a loud remote speaker.
+		const limiter = createMixLimiter(audioCtx);
+		limiter.connect(dest);
 
 		// System/display audio and tab audio are the SAME meeting sound when both
 		// exist (the user also ticked "share system audio") — mixing both doubles
 		// it into echo/clipping. Tab audio is the reliable source, so prefer it and
 		// skip system audio whenever we have it.
 		if (!haveTabAudio && displayStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(displayStream).connect(dest);
+			audioCtx.createMediaStreamSource(displayStream).connect(limiter);
 		}
 		if (micStream && micStream.getAudioTracks().length > 0) {
-			audioCtx.createMediaStreamSource(micStream).connect(dest);
+			audioCtx.createMediaStreamSource(micStream).connect(limiter);
 		}
 		if (haveTabAudio && tabAudioStream) {
 			const tabSrc = audioCtx.createMediaStreamSource(tabAudioStream);
@@ -752,7 +757,7 @@ async function startRecording(): Promise<void> {
 			// the limiter downstream is the backstop.
 			const tabGain = audioCtx.createGain();
 			tabGain.gain.value = TAB_AUDIO_GAIN;
-			tabSrc.connect(tabGain).connect(dest);
+			tabSrc.connect(tabGain).connect(limiter);
 			// Also route the tab audio back to the speakers — tabCapture otherwise
 			// mutes the source tab, so the meeting would go silent for the user.
 			tabSrc.connect(audioCtx.destination);

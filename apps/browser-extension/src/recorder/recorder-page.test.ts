@@ -116,6 +116,19 @@ class FakeAudioContext {
 	createGain() {
 		return { gain: { value: 1 }, connect: (node?: unknown) => node };
 	}
+	/** The recorded mix passes through a DynamicsCompressor limiter (see
+	 * shared/recording-quality.ts createMixLimiter) before it reaches the
+	 * MediaStream the MediaRecorder encodes. */
+	createDynamicsCompressor() {
+		return {
+			threshold: { value: 0 },
+			knee: { value: 0 },
+			ratio: { value: 1 },
+			attack: { value: 0 },
+			release: { value: 0 },
+			connect: (node?: unknown) => node,
+		};
+	}
 	async close(): Promise<void> {}
 	async resume(): Promise<void> {}
 }
