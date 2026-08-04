@@ -1,5 +1,11 @@
 # Ustoz (data365) — STATE
 
+_Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume._
+<!-- KEEP THIS LINE IN THE TOP 10 LINES. The state-pointer hook reads the quoted
+     phrases from the first 10 lines of this file to route the owner's word
+     "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
+     the routing silently broke — restore it in every future rewrite. -->
+
 ## ▶ NEXT STEP (2026-08-04 morning — read this first)
 
 **GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
