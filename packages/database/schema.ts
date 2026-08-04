@@ -400,6 +400,15 @@ export const videos = mysqlTable(
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
+		// Which library section this video lives in: Recordings or Meetings.
+		// ADDITIVE + nullable on purpose: NULL means "not classified yet", and
+		// callers fall back to inferring the section from `source`. Moving a
+		// video between the two libraries writes ONLY this column — `source`
+		// stays the immutable record of how the video was captured.
+		libraryKind: varchar("libraryKind", {
+			length: 16,
+			enum: ["recording", "meeting"],
+		}).$type<"recording" | "meeting">(),
 		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		effectiveCreatedAt: datetime("effectiveCreatedAt").generatedAlwaysAs(
