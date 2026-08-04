@@ -27,6 +27,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertTabAudioConstraints } from "./assert-tab-constraints.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distDir = join(here, "..", "dist");
@@ -62,6 +63,14 @@ const RECORD_MS =
 			: SECOND_TEST
 				? 8_000
 				: 10_000;
+// The 440 Hz band floor the quality push must not regress past
+// (docs/plans/2026-08-04-quality-push-spec.md, DONE CONTRACT #4). Presence
+// alone is not enough any more: the audio graph gained a gain lift and a
+// limiter, and a limiter that clamped too hard would still leave the tone
+// "present" (analyze-audio.mjs only needs > -50 dB) while quietly crushing the
+// remote voice. This floor is what makes that visible. Env-overridable so a
+// deliberate re-baselining is an explicit act, not an edit to this file.
+const MIN_BAND_MEAN_DB = Number(process.env.PROOF_MIN_BAND_DB ?? -16.5);
 const SERVE_PORT = 8443;
 const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
 
@@ -165,6 +174,18 @@ async function main() {
 			server.on("exit", (c) => reject(new Error(`serve.mjs exited ${c}`)));
 		});
 		log(`fake-meet up on :${SERVE_PORT}`);
+
+		// PHASE 0 — does a REAL Chrome accept the new tab-audio constraint
+		// object at all? Runs first so a rejected constraint object fails in
+		// seconds instead of being diagnosed from a silent recording ten
+		// minutes later. It uses its OWN browser instance with a fake audio
+		// device (see assert-tab-constraints.mjs) precisely so it cannot
+		// contaminate the 440 Hz measurement below.
+		const tabConstraints = await assertTabAudioConstraints({ servePort: SERVE_PORT });
+		log(tabConstraints.claim);
+		if (!tabConstraints.ok) {
+			return verdict("FAIL", `metric=inpage-full-contract ${tabConstraints.claim}`);
+		}
 
 		const userDataDir = mkdtempSync(join(tmpdir(), "proof-inpage-profile-"));
 		context = await chromium.launchPersistentContext(userDataDir, {
@@ -372,7 +393,7 @@ async function main() {
 			);
 		}
 
-		const claims = [];
+		const claims = [tabConstraints.claim];
 		const cv = manifest.createVideo ?? {};
 		claims.push(
 			`filing=${cv.extensionContext === "meeting" && cv.meetingId === "abc-defg-hij" ? "OK" : `WRONG(${cv.extensionContext},${cv.meetingId})`}`,
@@ -409,6 +430,15 @@ async function main() {
 		const analyzeLine = (analyze.stdout ?? "").trim();
 		log(`analyzer: ${analyzeLine}`);
 		claims.push(`tone=${analyze.status === 0 ? "OK" : "MISSING"}`);
+
+		// The LEVEL of that tone, not just its presence — see MIN_BAND_MEAN_DB.
+		const bandMatch = analyzeLine.match(/mean_440band_dB=(-?[\d.]+)/);
+		const bandDb = bandMatch ? Number(bandMatch[1]) : Number.NaN;
+		claims.push(
+			Number.isFinite(bandDb) && bandDb >= MIN_BAND_MEAN_DB
+				? `band=OK(${bandDb}dB >= ${MIN_BAND_MEAN_DB}dB)`
+				: `band=TOO_QUIET(${bandDb}dB, floor ${MIN_BAND_MEAN_DB}dB)`,
+		);
 
 		// Presence somewhere is not enough once the source is swapped mid-call:
 		// require the tone in every segment, so a tap that died at the swap and

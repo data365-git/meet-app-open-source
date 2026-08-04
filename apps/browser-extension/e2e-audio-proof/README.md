@@ -21,6 +21,19 @@ node run-proof.mjs
 PASS line: `VERDICT=PASS metric=full-contract filing=OK duration=OK(...) tone=OK ...`
 
 ## What it proves
+- **(`run-proof-inpage.mjs`, phase 0) real Chrome ACCEPTS the tab-audio constraint
+  object** — `assert-tab-constraints.mjs` compiles the real
+  `shared/recording-quality.ts` and hands `tabAudioConstraints()` to a live
+  Chrome. Every arm carries a control that fails when its detector is blind, so
+  a green `tabconstraints=OK(...)` is not vacuous. Read that file's header for
+  what it deliberately does NOT prove (it cannot mint a real tabCapture
+  streamId — that stays `run-proof.mjs`'s job on an interactive desktop).
+  Runs in its OWN browser instance with a fake audio device, so it can never
+  contaminate the 440 Hz measurement below.
+- **the tone's LEVEL, not just its presence** — `band=OK(x >= -16.5dB)`. The
+  analyzer's own threshold is -50 dB, which a limiter clamping far too hard
+  would still pass while crushing the remote voice. Floor overridable with
+  `PROOF_MIN_BAND_DB` (a deliberate re-baselining, not an edit).
 - Real OS keypress (WScript SendKeys) → manifest `commands` shortcut → activeTab grant →
   tabCapture mints the Meet tab's audio (programmatic openPopup does NOT grant — measured).
 - One-Boshlash 2-click meeting flow; screen picker auto-accepted by
