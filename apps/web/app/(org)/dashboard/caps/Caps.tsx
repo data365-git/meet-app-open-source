@@ -435,6 +435,7 @@ export const Caps = ({
 														isLoadingAnalytics={isLoadingAnalytics}
 														isSelected={selectedCaps.includes(video.id)}
 														anyCapSelected={anyCapSelected}
+														draggableSelection={selectedCaps}
 														onSelectToggle={() => handleCapSelection(video.id)}
 													/>
 												);

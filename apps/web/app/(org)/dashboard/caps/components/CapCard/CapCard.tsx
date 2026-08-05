@@ -129,6 +129,13 @@ export interface CapCardProps extends PropsWithChildren {
   onSelectToggle?: () => void;
   hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
+  /**
+   * The ids currently multi-selected on the page this card lives on. When this
+   * card is part of that selection, dragging it drags the WHOLE selection —
+   * so drag moves exactly what the Move menu already moves. Pass it from every
+   * library grid (Recordings, Meetings, folder view).
+   */
+  draggableSelection?: Video.VideoId[];
   isDeleting?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -145,6 +152,7 @@ export const CapCard = ({
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
+  draggableSelection,
   isDeleting = false,
 }: CapCardProps) => {
   const t = useTranslations("library");
@@ -369,8 +377,27 @@ export const CapCard = ({
     return element;
   };
 
+  // A card is draggable when the viewer owns it and either nothing is selected
+  // (drag just that card) or this card IS part of the selection (drag them all).
+  // An unselected card while a selection is active stays undraggable — its whole
+  // surface is the "add to selection" click target.
+  const isDraggable = isOwner && (!anyCapSelected || isSelected);
+
+  // The ids this card drags: the whole multi-selection when it belongs to one,
+  // otherwise just itself. `id`/`name` stay on the payload so the drop targets
+  // that already read them (Folder, breadcrumb, My Caps, spaces) keep working.
+  const dragIds: Video.VideoId[] =
+    isSelected && draggableSelection && draggableSelection.length > 0
+      ? draggableSelection.includes(cap.id)
+        ? draggableSelection
+        : [cap.id, ...draggableSelection]
+      : [cap.id];
+
   const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
-    if (anyCapSelected || !isOwner) return;
+    if (!isDraggable) {
+      e.preventDefault();
+      return;
+    }
 
     // Set the data transfer
     e.dataTransfer.setData(
@@ -378,6 +405,8 @@ export const CapCard = ({
       JSON.stringify({
         id: cap.id,
         name: cap.name,
+        ids: dragIds,
+        count: dragIds.length,
       }),
     );
 
@@ -386,7 +415,13 @@ export const CapCard = ({
 
     // Set the drag image using the helper function
     try {
-      const dragPreview = createDragPreview(cap.name);
+      const dragPreview = createDragPreview(
+        // Mirrors SelectedCapsBar's count label so the drag preview reads the
+        // same way as the selection bar the owner already sees.
+        dragIds.length > 1
+          ? `${dragIds.length} cap${dragIds.length === 1 ? "" : "s"}`
+          : cap.name,
+      );
       document.body.appendChild(dragPreview);
       e.dataTransfer.setDragImage(dragPreview, 10, 10);
 
@@ -549,7 +584,7 @@ export const CapCard = ({
       />
       <fieldset
         aria-label={cap.name}
-        draggable={isOwner && !anyCapSelected}
+        draggable={isDraggable}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={clsx(
@@ -560,7 +595,7 @@ export const CapCard = ({
               ? "border-[var(--brand)] hover:border-[var(--brand)]"
               : "hover:border-gray-6",
           isDragging && "opacity-50",
-          isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing",
+          isDraggable && "cursor-grab active:cursor-grabbing",
         )}
       >
         {anyCapSelected && !sharedCapCard && (
