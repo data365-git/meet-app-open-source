@@ -436,6 +436,7 @@ export const Caps = ({
 														isSelected={selectedCaps.includes(video.id)}
 														anyCapSelected={anyCapSelected}
 														draggableSelection={selectedCaps}
+														libraryKind="recording"
 														onSelectToggle={() => handleCapSelection(video.id)}
 													/>
 												);

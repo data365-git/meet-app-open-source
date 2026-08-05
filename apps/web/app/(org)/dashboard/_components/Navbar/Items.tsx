@@ -57,7 +57,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { StorageIndicator } from "@/components/StorageIndicator";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import type { LibraryKind } from "@/lib/library-kind";
+import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
 import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
@@ -850,12 +850,28 @@ const NavItem = ({
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
 
+	// True when the cap currently in the air already lives in THIS library, so a
+	// drop here would move nothing. Read from `dataTransfer.types` because that
+	// is all the browser exposes mid-drag (`getData` is blocked until drop).
+	const isNoOpDrop = (e: React.DragEvent<HTMLAnchorElement>) =>
+		!!libraryKind && e.dataTransfer.types.includes(libraryDragType(libraryKind));
+
 	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
 		if (!libraryKind) return;
 		if (!e.dataTransfer.types.includes("application/cap")) return;
+		if (isNoOpDrop(e)) {
+			// Not a valid target: leave the default (no preventDefault) so the
+			// browser shows the "can't drop here" cursor, and stay unhighlighted —
+			// the highlight has to mean "this drop will do something".
+			e.dataTransfer.dropEffect = "none";
+			setIsDragOver(false);
+			return;
+		}
 		// Only preventDefault for a cap payload — otherwise the link keeps its
 		// normal behaviour and other drags (files, text) fall through untouched.
 		e.preventDefault();
+		// Re-asserted on EVERY dragover: the browser resets dropEffect to its
+		// default before each event, so setting it once would flicker back.
 		e.dataTransfer.dropEffect = "move";
 		setIsDragOver(true);
 	};
@@ -866,6 +882,9 @@ const NavItem = ({
 		if (!libraryKind) return;
 		e.preventDefault();
 		setIsDragOver(false);
+		// Belt-and-braces: dragover already refuses this case, so the browser
+		// should never fire a drop here — but never run a no-op move if it does.
+		if (isNoOpDrop(e)) return;
 
 		let capData: {
 			id: VideoDomain.VideoId;

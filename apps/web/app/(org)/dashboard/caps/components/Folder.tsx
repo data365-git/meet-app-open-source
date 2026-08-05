@@ -218,10 +218,15 @@ const FolderCard = ({
 
 		// Check if the dragged item is a CapCard
 		if (e.dataTransfer.types.includes("application/cap")) {
+			// dropEffect is reset by the browser before EVERY dragover event, so it
+			// has to be re-asserted every time — setting it only on the first event
+			// (inside the `!isDragOver` branch below) made the MOVE cursor flicker
+			// back to the default after a single frame.
+			e.dataTransfer.dropEffect = "move";
+
 			if (!isDragOver) {
 				setIsDragOver(true);
 				dragStateRef.current.isDragging = true;
-				e.dataTransfer.dropEffect = "move";
 
 				// Clear any pending animation timer
 				if (animationTimerRef.current) {

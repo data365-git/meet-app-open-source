@@ -290,6 +290,7 @@ export const Meetings = ({
                           isSelected={selectedCaps.includes(video.id)}
                           anyCapSelected={anyCapSelected}
                           draggableSelection={selectedCaps}
+                          libraryKind="meeting"
                           onSelectToggle={() => handleCapSelection(video.id)}
                         />
                       );

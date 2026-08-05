@@ -49,6 +49,7 @@ import {
   VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { usePublicEnv } from "@/utils/public-env";
 
@@ -136,6 +137,14 @@ export interface CapCardProps extends PropsWithChildren {
    * library grid (Recordings, Meetings, folder view).
    */
   draggableSelection?: Video.VideoId[];
+  /**
+   * Which library this card is being dragged FROM. Travels with the drag as its
+   * own MIME type so a drop target can tell, while the drag is still in the air,
+   * that dropping here would be a no-op (a recording dropped on Recordings) and
+   * therefore must not light up. Omit it where the source library is unknown —
+   * every target then accepts, which is the safe default.
+   */
+  libraryKind?: LibraryKind;
   isDeleting?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -153,6 +162,7 @@ export const CapCard = ({
   onSelectToggle,
   anyCapSelected = false,
   draggableSelection,
+  libraryKind,
   isDeleting = false,
 }: CapCardProps) => {
   const t = useTranslations("library");
@@ -409,6 +419,13 @@ export const CapCard = ({
         count: dragIds.length,
       }),
     );
+
+    // The source library rides along as its own MIME type — `types` is the only
+    // thing a drop target can read during `dragover`, so this is what lets a
+    // target refuse (and stay unhighlighted) before the user lets go.
+    if (libraryKind) {
+      e.dataTransfer.setData(libraryDragType(libraryKind), libraryKind);
+    }
 
     // Set drag effect to 'move' to avoid showing the + icon
     e.dataTransfer.effectAllowed = "move";

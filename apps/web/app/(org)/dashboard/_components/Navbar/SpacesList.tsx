@@ -86,7 +86,13 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	if (!spacesData) return null;
 
 	const handleDragOver = (e: React.DragEvent, spaceId: string) => {
+		// A space only accepts caps. Without this guard the row lit up for ANY
+		// drag (a file, selected text), promising a drop that then did nothing.
+		if (!e.dataTransfer.types.includes("application/cap")) return;
+
 		e.preventDefault();
+		// Re-asserted every dragover — the browser resets dropEffect per event.
+		e.dataTransfer.dropEffect = "move";
 		setActiveDropTarget(spaceId);
 	};
 
