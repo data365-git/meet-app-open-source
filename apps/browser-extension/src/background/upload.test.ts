@@ -178,6 +178,37 @@ describe("computeDurationInSecs (pure fn)", () => {
 		expect(computeDurationInSecs(startedAt, 5000, false, undefined)).toBeUndefined();
 	});
 
+	// MEASURED regression (2026-08-05): on a throttled 800 kbit/s soak the
+	// finalize ran 5 minutes after the user pressed Stop — it waits behind the
+	// whole upload backlog — and a 361-second recording was filed as 663 seconds.
+	// The media ends when the recorder stops producing it, not when the last byte
+	// finally reaches the server.
+	it("measures to the END OF THE MEDIA, not to a finalize the slow upload delayed", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 663_000; // finalize is running 663s after start…
+		const endedAt = now - 302_000; // …but the recorder stopped 361s in.
+		expect(computeDurationInSecs(startedAt, 0, false, undefined, endedAt)).toBe(
+			361,
+		);
+		// Without the end-of-media stamp the old behaviour is preserved exactly.
+		expect(computeDurationInSecs(startedAt, 0, false, undefined)).toBe(663);
+	});
+
+	it("ignores a missing or garbage end-of-media stamp instead of returning NaN", () => {
+		const now = Date.now();
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+
+		const startedAt = now - 5000;
+		expect(
+			computeDurationInSecs(startedAt, 0, false, undefined, Number.NaN),
+		).toBe(5);
+		expect(computeDurationInSecs(startedAt, 0, false, undefined, 0)).toBe(5);
+	});
+
 	it("never returns NaN (or any value) on a garbage/missing startedAt", () => {
 		const result = computeDurationInSecs(
 			undefined as unknown as number,

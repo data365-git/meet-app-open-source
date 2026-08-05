@@ -3662,4 +3662,162 @@ describe("adaptive capture tier from the upload backlog", () => {
 
 		expect(qualityNotices(fake.notifications)).toEqual([]);
 	});
+
+	// ── The backlog is what is WAITING too, not only what is buffered ─────────
+	//
+	// Regression guard for the defect a real 800 kbit/s soak exposed (2026-08-05):
+	// the capture produced ~10x what the link could carry for six minutes and the
+	// tier never moved once. Cause: chunks that arrive while a 5 MB part crawls up
+	// the link queue behind it in the serial recorder queue, and `totalBytes` does
+	// not count a chunk until handleChunk has processed it. So a measure of
+	// `totalBytes - uploadedBytes` alone can only ever see the sub-part remainder
+	// left in the buffer — under the high-water mark BY CONSTRUCTION, however far
+	// behind the link is.
+	//
+	// This test pins that: the buffered half of the backlog is exactly ZERO from
+	// start to finish (every part completes in full), so the tier move it demands
+	// can come from nowhere except the queue depth.
+	it("counts the chunks waiting behind a slow part upload, not only the buffered remainder", async () => {
+		const fake = await freshSw();
+		const { setState, getState } = await import("./state");
+		const sent: Array<{ tabId: number; message: Record<string, unknown> }> = [];
+		fake.chrome.tabs.sendMessage = (async (
+			tabId: number,
+			message: Record<string, unknown>,
+		) => {
+			sent.push({ tabId, message });
+			return undefined;
+		}) as unknown as typeof fake.chrome.tabs.sendMessage;
+
+		// A PUT that can be held open — this is the slow link, and it is what makes
+		// the chunks behind it queue instead of being processed.
+		let releasePut: () => void = () => {};
+		let putGate: Promise<void> = Promise.resolve();
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					await putGate;
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-queued"' },
+					});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+
+		await setState(liveRecordingWithBacklog(0, 0));
+		await sendFullPart(fake.captured, 0); // baseline, link still open
+
+		// Now the link stalls, and six more parts' worth of recording arrives.
+		putGate = new Promise<void>((resolve) => {
+			releasePut = resolve;
+		});
+		const inFlight = [1, 2, 3, 4, 5, 6, 7].map((index) =>
+			sendFullPart(fake.captured, index),
+		);
+		await flushAsync();
+		releasePut();
+		await Promise.all(inFlight);
+
+		const names = tierMessages(sent).map(
+			(s) => (s.message.tier as { name: string }).name,
+		);
+		expect(names[0]).toBe("reduced");
+
+		// The proof that the queue is what moved it: nothing was ever left
+		// unuploaded, so `totalBytes - uploadedBytes` was 0 at every decision.
+		const finalState = await getState();
+		if (finalState.kind !== "recording")
+			throw new Error("expected a live recording");
+		expect(finalState.totalBytes).toBe(finalState.uploadedBytes);
+	});
+});
+
+// ── The filed duration is the length of the MEDIA, not of the wait ──────────
+//
+// MEASURED (2026-08-05). A 6-minute in-page recording over a throttled
+// 800 kbit/s link was filed as 663 seconds. Cause: the finalize runs only once
+// the recorder's last chunk has been acknowledged, and on a slow link the SW is
+// still shipping the backlog minutes after Stop — so "now" at finalize time is
+// nowhere near the end of the media. Every recorder path already stamps the
+// moment each chunk was produced; the newest of those is where the media ends.
+describe("recording duration on a slow link", () => {
+	it("files the length of the recording, not the time the backlogged upload took to finish", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const now = Date.now();
+
+		let filedDuration: unknown = "never-completed";
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if ((init?.method ?? "GET") === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-dur"' },
+					});
+				}
+				if (url.includes("/api/upload/multipart/complete")) {
+					filedDuration = JSON.parse(
+						String(init?.body ?? "{}"),
+					).durationInSecs;
+					return jsonResponse({ success: true, fileKey: "file" });
+				}
+				if (url.includes("/api/upload/recording-complete")) {
+					return jsonResponse({});
+				}
+				throw new Error(`Unhandled fetch in test: ${url}`);
+			},
+		);
+
+		await setState({
+			kind: "recording",
+			mode: "instruction",
+			videoId: "vid-dur",
+			uploadId: "upload-dur",
+			startedAt: now - 663_000, // the finalize is running 663s after Start…
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+			recorderSessionId: "sess-dur",
+		});
+
+		// …but the recorder produced its last chunk 361s in, and the remaining
+		// 302s were spent draining the backlog it left behind.
+		await sendMessage(fake.captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(MIN_PART_SIZE)),
+			index: 0,
+			mime: "video/webm",
+			ts: now - 663_000 + 361_000,
+			sessionId: "sess-dur",
+		});
+		await sendMessage(fake.captured, {
+			type: "RECORDER_STOPPED",
+			sessionId: "sess-dur",
+		});
+		await flushAsync();
+
+		expect(filedDuration).toBe(361);
+	});
 });

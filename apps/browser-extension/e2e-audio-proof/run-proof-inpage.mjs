@@ -84,7 +84,42 @@ const SERVE_PORT = 8443;
 // ENOUGH — on a deliberately throttled arm a move is the feature working, so the
 // no-move claim below is asserted on the control arm only.
 const IS_THROTTLED = Number(process.env.THROTTLE_KBPS) > 0;
-const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
+// THE CAPTURED SURFACE'S VIDEO LOAD (see fake-meet/index.html ?load=).
+//
+// The harness records the ENTIRE SCREEN, so before this the recorded bitrate was
+// whatever happened to be on the dev machine's display: a still desktop, ~145
+// kbit/s, which no throttle in the contract can overload. That made the slow-link
+// arm prove nothing — it passed because there was almost nothing to upload, not
+// because the capture adapted. The fake Meet page now paints a deterministic
+// moving surface, so the FULL tier genuinely offers more than an 800 kbit/s link
+// can carry and the adaptation has something real to do.
+// CALIBRATED, not guessed (1-minute runs of this harness, 2026-08-05, recorded
+// bytes straight off the mock server's manifest):
+//     off             ->  1.1 MB/min   (a still desktop: the old, useless load)
+//     1 cell  @  1 Hz ->  6.8 MB/min
+//     20 cells @ 1 Hz -> 12.5 MB/min   <- chosen
+//     20 cells @ 60 Hz-> 39.2 MB/min
+//     200 cells @ 2 Hz-> 39.9 MB/min   (saturated: ~5.7 Mbit/s is this pipeline's
+//     1400 cells@ 60Hz-> 45.6 MB/min    ceiling for screen content)
+// 20 cells at 1 Hz ≈ 1.7 Mbit/s of screen video — the order of a real meeting
+// recording with slides changing — and gives the numbers this proof needs:
+//   • ~75 MB over six minutes, i.e. the FULL tier offers about twice what an
+//     800 kbit/s link (6.1 MB/min) can carry, so the overload is real;
+//   • the backlog crosses the 15 MB degrade mark around 2.5 minutes in, leaving
+//     the rest of the recording to show the adaptation working;
+//   • what is left after Stop still drains inside the harness's own cap.
+// Saturating the pipeline instead (the 40 MB/min settings above) would overload
+// the link so hard that no amount of adaptation could drain it — that would prove
+// the feature CANNOT work rather than that it does.
+const VIDEO_LOAD_CELLS =
+	process.env.PROOF_VIDEO_LOAD === undefined
+		? 20
+		: Number(process.env.PROOF_VIDEO_LOAD);
+const VIDEO_LOAD_HZ =
+	process.env.PROOF_VIDEO_LOAD_HZ === undefined
+		? 1
+		: Number(process.env.PROOF_VIDEO_LOAD_HZ);
+const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}${VIDEO_LOAD_CELLS > 0 ? `&load=${VIDEO_LOAD_CELLS}&loadhz=${VIDEO_LOAD_HZ}` : ""}`;
 
 const log = (m) => console.log(`[proof-inpage] ${m}`);
 
@@ -190,6 +225,14 @@ async function installCaptureTierWatch(sw, mark) {
 				return;
 			}
 			if (text.includes("capture tier")) watch.events.push({ kind: "tier", text });
+			// The measurement behind every decision, whether or not it moved the
+			// tier. Without it a run that never degraded is indistinguishable from
+			// a run whose backlog signal was blind — which is exactly how a
+			// structurally unreachable high-water mark stayed hidden.
+			const backlog = text.match(/upload backlog (\d+) bytes/);
+			if (backlog) {
+				watch.events.push({ kind: "backlog", bytes: Number(backlog[1]), text });
+			}
 			realInfo(...args);
 		};
 
@@ -334,6 +377,11 @@ async function main() {
 	let tierMoves = 0;
 	let tierWatchLost = 0;
 	let tierWatchTeeth = false;
+	// The biggest backlog the extension ever measured. Recorded so the log carries
+	// the evidence for how hard the link was actually squeezed, rather than an
+	// absence — "no tier drop" only means something next to the number that would
+	// have caused one (BACKLOG_DEGRADE_ABOVE_BYTES = 15 MB).
+	let peakBacklogBytes = -1;
 	try {
 		await new Promise((resolve, reject) => {
 			const t = setTimeout(() => reject(new Error("serve.mjs did not start")), 5000);
@@ -399,6 +447,11 @@ async function main() {
 				);
 				tierWatchTeeth = tierWatchTeeth && again.teeth === true;
 				return;
+			}
+			for (const event of drained) {
+				if (event.kind !== "backlog") continue;
+				if (event.bytes > peakBacklogBytes) peakBacklogBytes = event.bytes;
+				log(event.text.replace(/^\[sw\]\s*/, ""));
 			}
 			for (const line of describeTierEvents(drained)) {
 				tierMoves++;
@@ -585,6 +638,13 @@ async function main() {
 		}
 		await collectTierEvents();
 
+		// The evidence, stated as a number rather than as an absence.
+		const peakBacklogLabel =
+			peakBacklogBytes < 0
+				? "peakBacklog=UNMEASURED(no decision was ever reported)"
+				: `peakBacklog=${peakBacklogBytes}B(${(peakBacklogBytes / (1024 * 1024)).toFixed(1)}MB, degrade mark 15.0MB)`;
+		log(`peak upload backlog: ${peakBacklogLabel}`);
+
 		const claims = [tabConstraints.claim];
 
 		// THE REGRESSION GUARD. On a link that is fast enough the capture must run
@@ -661,9 +721,12 @@ async function main() {
 		}
 
 		const allOk = claims.every((c) => c.includes("OK"));
+		// peakBacklogLabel is reported, never judged: it is evidence about the link,
+		// not a pass criterion (and it deliberately stays OUT of `claims`, whose
+		// every member must read OK for the run to pass).
 		return verdict(
 			allOk ? "PASS" : "FAIL",
-			`metric=inpage-full-contract ${claims.join(" ")} sustained_ms=${RECORD_MS} ${analyzeLine}`,
+			`metric=inpage-full-contract ${claims.join(" ")} ${peakBacklogLabel} bytes=${manifest.completeMultipart?.bytes ?? "?"} sustained_ms=${RECORD_MS} ${analyzeLine}`,
 		);
 	} catch (e) {
 		return verdict("FAIL", `reason=harness-exception msg="${e?.message ?? e}"`);

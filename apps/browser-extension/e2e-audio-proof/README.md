@@ -62,6 +62,30 @@ when the active speaker changes, and the tone must then be present in EVERY
 segment. That scenario is what caught a wrong fix on 2026-07-20 (segments 3-4 at
 -90 dB while a plain run stayed green).
 
+### The adaptive-capture arms (slow link vs fast link)
+
+```
+PROOF_MINUTES=6 node run-proof-inpage.mjs                    # control arm
+THROTTLE_KBPS=800 PROOF_MINUTES=6 node run-proof-inpage.mjs  # slow-link arm
+```
+
+The control arm must produce **more than 36 MB** in six minutes, otherwise the
+throttled arm proves nothing: a capture that already fits down an 800 kbit/s pipe
+never needed to adapt. That number is not luck — the fake Meet page paints a
+deterministic moving surface (`?load=<cells>&loadhz=<Hz>`, defaults 20 @ 1 Hz ≈
+12.5 MB/min ≈ 1.7 Mbit/s) so the recorded bitrate is a property of the harness
+rather than of whatever happened to be on the dev machine's screen. Override with
+`PROOF_VIDEO_LOAD` / `PROOF_VIDEO_LOAD_HZ`; `PROOF_VIDEO_LOAD=0` turns it off.
+Calibration table and the saturation ceiling: the header of `run-proof-inpage.mjs`.
+
+Both arms log every backlog measurement the extension made
+(`upload backlog N bytes (buffered B, queued Q)`) and end with
+`peakBacklog=...`, so "the tier never dropped" can be read against the number
+that would have caused a drop (15 MB) instead of being an unexplained absence.
+The throttled arm is expected to log `tier drop:` lines; the control arm is
+expected to log none, and its `tier=OK(never left the best tier)` claim is only
+made when the watch has proved it can see one.
+
 ### Reading a `run-proof.mjs` FAIL honestly
 `reason=recorder-tab-never-opened` usually means the OS keystroke never reached
 Chromium, not that the product broke: `WScript.SendKeys` needs the desktop free

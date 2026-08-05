@@ -586,13 +586,30 @@ async function retryQueuedPartsForUpload(
  * callers must OMIT durationInSecs from the complete request rather than
  * send a bogus value.
  */
+/**
+ * How long the recording actually RAN, in seconds.
+ *
+ * @param endedAt when the capture stopped producing media. Defaults to now,
+ *   which is right only when the finalize happens promptly after the stop.
+ *   MEASURED (2026-08-05, throttled 800 kbit/s soak): it does not. The finalize
+ *   waits for the recorder's last chunk to be acknowledged, and on a slow link
+ *   the service worker is still shipping the backlog long after the user pressed
+ *   Stop — a 361-second recording reported 663 seconds, i.e. the player would be
+ *   told the file is nearly twice as long as its content. The caller passes the
+ *   timestamp of the last chunk the recorder actually produced, which is when
+ *   the media ends no matter how far behind the upload is.
+ */
 export function computeDurationInSecs(
 	startedAt: number,
 	pausedAccumMs: number | undefined,
 	paused: boolean | undefined,
 	pausedAt: number | undefined,
+	endedAt?: number,
 ): number | undefined {
-	const now = Date.now();
+	const now =
+		typeof endedAt === "number" && Number.isFinite(endedAt) && endedAt > 0
+			? endedAt
+			: Date.now();
 	const openPauseMs = paused && pausedAt !== undefined ? now - pausedAt : 0;
 	const elapsedMs = now - startedAt - (pausedAccumMs ?? 0) - openPauseMs;
 	const secs = Math.round(elapsedMs / 1000);

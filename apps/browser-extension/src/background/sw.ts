@@ -180,10 +180,27 @@ async function sendControlWithRetry(
 // the capture PRODUCES is.
 //
 // The SW is the only context that KNOWS the backlog — it owns the uploader — so
-// it is the one that decides. It already tracks both numbers on the recording:
-// `totalBytes` (recorded) and `uploadedBytes` (shipped). Their difference is the
-// backlog. The decision itself is the pure, unit-tested chooseCaptureTier() in
-// shared/recording-quality.ts; nothing about WHEN to move is re-invented here.
+// it is the one that decides. The decision itself is the pure, unit-tested
+// chooseCaptureTier() in shared/recording-quality.ts; nothing about WHEN to move
+// is re-invented here.
+//
+// WHAT THE BACKLOG IS MADE OF (corrected 2026-08-05 after a throttled 800 kbit/s
+// soak that produced 10x the link's capacity and STILL never moved the tier).
+// The obvious measure — `totalBytes - uploadedBytes` off the recording state —
+// is structurally incapable of reaching the high-water mark, and here is why:
+// `totalBytes` only counts chunks handleChunk has already PROCESSED, every chunk
+// runs through the serial `enqueueRecorder` queue, and a chunk's own part upload
+// happens inside that queue. So while a 5 MB part crawls up a slow link, every
+// chunk that arrives behind it sits UNCOUNTED in the queue; by the time a
+// decision is taken (right after a part completed) the only thing left over is
+// the sub-part remainder in the buffer — under 5 MB, i.e. permanently under the
+// 15 MB high-water mark and usually under the 5 MB low-water mark, which reads as
+// "the link is keeping up" precisely when it is drowning.
+// The bytes waiting in that queue ARE recorded-but-not-uploaded, so the backlog
+// is the sum of both parts: the buffered remainder plus the queue depth. Queue
+// depth is tracked as a live counter (incremented when a chunk message arrives,
+// decremented when its handleChunk returns) rather than derived, because nothing
+// else in the SW knows how much is waiting behind the queue's head.
 //
 // Re-decided ONLY when a part actually completed (uploadedBytes advanced). Every
 // chunk raises totalBytes, so re-deciding per chunk would read a backlog that
@@ -207,6 +224,58 @@ let lastTierDecisionUploadedBytes = 0;
  * below, and both stepping the tier would move it two steps on one measurement,
  * defeating the one-step-per-decision rule chooseCaptureTier is built on. */
 let captureTierDecisionInFlight = false;
+/**
+ * Bytes of received RECORDER_CHUNK messages whose handleChunk has not returned
+ * yet — the depth of the serial recorder queue, in bytes.
+ *
+ * Deliberately NOT reset by resetCaptureTierTracking(): it mirrors a real queue,
+ * and every increment is paired with a decrement in the same message handler's
+ * `finally`, so zeroing it out of band would make it drift permanently negative
+ * (and therefore under-report every later backlog).
+ */
+let queuedChunkBytes = 0;
+
+/** A chunk message has arrived and is about to join the recorder queue. */
+function noteChunkQueued(byteLength: number): void {
+	queuedChunkBytes += byteLength;
+}
+
+/**
+ * When the live recorder produced its most recent chunk — i.e. where the MEDIA
+ * ends, which on a slow link is minutes before the finalize gets to run (the
+ * finalize waits behind the whole upload backlog). Every recorder path already
+ * stamps `ts` on RECORDER_CHUNK; this just remembers the newest one.
+ */
+let lastChunkAtSessionId: string | undefined | null = null;
+let lastChunkAt = 0;
+
+function noteChunkTimestamp(
+	sessionId: string | undefined,
+	ts: number | undefined,
+): void {
+	if (lastChunkAtSessionId !== sessionId) {
+		lastChunkAtSessionId = sessionId;
+		lastChunkAt = 0;
+	}
+	if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return;
+	if (ts > lastChunkAt) lastChunkAt = ts;
+}
+
+/** The end of the media for this recorder session, or undefined when we never
+ * saw a usable chunk timestamp (an SW restart loses this — falling back to "now"
+ * is then the only honest answer available). */
+function mediaEndedAt(sessionId: string | undefined): number | undefined {
+	return lastChunkAtSessionId === sessionId && lastChunkAt > 0
+		? lastChunkAt
+		: undefined;
+}
+
+/** That chunk has been processed (or dropped): it is no longer waiting. Clamped
+ * at 0 so a service-worker restart mid-queue — which loses the pending work and
+ * its counter together — can never leave a negative bias behind. */
+function noteChunkDequeued(byteLength: number): void {
+	queuedChunkBytes = Math.max(0, queuedChunkBytes - byteLength);
+}
 
 function resetCaptureTierTracking(): void {
 	captureTierSessionId = null;
@@ -322,7 +391,17 @@ async function adaptCaptureTier(messageSessionId: string | undefined): Promise<v
 		if (state.uploadedBytes <= lastTierDecisionUploadedBytes) return;
 		lastTierDecisionUploadedBytes = state.uploadedBytes;
 
-		const backlogBytes = Math.max(0, state.totalBytes - state.uploadedBytes);
+		// Both halves of "recorded but not uploaded" — see the note at the top of
+		// this section for why the buffered half alone can never see the trouble.
+		const bufferedBytes = Math.max(0, state.totalBytes - state.uploadedBytes);
+		const backlogBytes = bufferedBytes + queuedChunkBytes;
+		// The measurement itself, on every decision — not only on the moves. An
+		// adaptive control loop that logs only when it acts leaves no way to tell
+		// "the link was fine" apart from "the signal was blind", which is exactly
+		// the confusion that hid the queue-depth defect above.
+		console.info(
+			`[sw] upload backlog ${backlogBytes} bytes (buffered ${bufferedBytes}, queued ${queuedChunkBytes}) at tier ${currentCaptureTier}`,
+		);
 		const nextTier = chooseCaptureTier(currentCaptureTier, backlogBytes);
 		if (nextTier === currentCaptureTier) return;
 
@@ -726,6 +805,7 @@ async function finalizeRecording(
 		state.pausedAccumMs,
 		state.paused,
 		state.pausedAt,
+		mediaEndedAt(state.recorderSessionId),
 	);
 
 	const nextState: ExtensionState = {
@@ -1693,9 +1773,22 @@ async function handleMessage(
 				// state it then appends to — checking out here would be
 				// time-of-check/time-of-use, because CANCEL and RECORDER_STARTED write
 				// state outside this queue (see upload.ts R7).
-				const outcome = await enqueueRecorder(() =>
-					handleChunk(new Uint8Array(raw).buffer, index, mime, sessionId),
-				);
+				// Counted BEFORE the queue and released the moment this chunk leaves
+				// it, so adaptCaptureTier below sees the bytes still waiting behind us
+				// without double-counting our own (which totalBytes now includes).
+				noteChunkQueued(raw.length);
+				// Where the media ends, captured at ARRIVAL: by the time the
+				// finalize runs, a slow link may have held this chunk in the queue
+				// for minutes (see mediaEndedAt).
+				noteChunkTimestamp(sessionId, getNumber(msg, "ts"));
+				let outcome: Awaited<ReturnType<typeof handleChunk>>;
+				try {
+					outcome = await enqueueRecorder(() =>
+						handleChunk(new Uint8Array(raw).buffer, index, mime, sessionId),
+					);
+				} finally {
+					noteChunkDequeued(raw.length);
+				}
 				if (outcome === "stale") return STALE_SESSION_REPLY;
 				// The uploader has just reported whatever this chunk produced, so the
 				// backlog is as fresh as it gets. Deliberately OUTSIDE enqueueRecorder:
