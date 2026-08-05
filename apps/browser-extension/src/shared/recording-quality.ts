@@ -200,6 +200,137 @@ export function createMixLimiter(
 	return limiter;
 }
 
+// ── Adaptive capture tier, decided from the upload backlog ─────────────────
+//
+// WHY THIS EXISTS (measured, not guessed). A throttled soak run at 800 kbit/s
+// FAILED with upload-never-completed: the capture kept producing ~8 Mbit/s of
+// video while the link could only carry ~0.8, so after a 6-minute recording only
+// 8 of ~17 parts had reached the server and the user was left waiting after Stop.
+// The same harness PASSED at 4 Mbit/s and unthrottled
+// (e2e-audio-proof/soak-throttle-{A,B,C}.log). The link is not something we can
+// fix; what the capture PRODUCES is. So when the backlog — bytes recorded but not
+// yet uploaded — grows, we step the capture down; when the link catches up, we
+// step it back up.
+//
+// This function is deliberately PURE: no chrome.*, no timers, no MediaRecorder.
+// The caller measures the backlog and applies the returned tier; everything that
+// decides WHEN to move lives here, where the thresholds are asserted by tests
+// instead of eyeballed on a live recording.
+
+export type CaptureTierName = "full" | "reduced" | "minimal";
+
+export interface CaptureTier {
+	readonly name: CaptureTierName;
+	readonly maxWidth: number;
+	readonly maxHeight: number;
+	readonly frameRate: number;
+	readonly videoBitsPerSecond: number;
+	readonly audioBitsPerSecond: number;
+}
+
+/**
+ * The tiers, BEST FIRST. Each step roughly thirds the produced bitrate, so two
+ * steps take an 8 Mbit/s capture under the 800 kbit/s link that failed the soak.
+ *
+ * Audio is never reduced: voice is the part of a meeting recording that must
+ * survive, and at 128 kbit/s it is a rounding error next to the video.
+ *
+ * The lower tiers clamp against VIDEO_BITS_PER_SECOND so a deploy that already
+ * overrode the ceiling downwards can never "degrade" INTO a higher bitrate.
+ */
+export const CAPTURE_TIERS: readonly CaptureTier[] = [
+	{
+		name: "full",
+		maxWidth: CAPTURE_MAX_WIDTH,
+		maxHeight: CAPTURE_MAX_HEIGHT,
+		frameRate: CAPTURE_MAX_FRAME_RATE,
+		videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+		audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+	},
+	{
+		name: "reduced",
+		maxWidth: 1280,
+		maxHeight: 720,
+		frameRate: 15,
+		videoBitsPerSecond: Math.min(VIDEO_BITS_PER_SECOND, 2_500_000),
+		audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+	},
+	{
+		name: "minimal",
+		maxWidth: 854,
+		maxHeight: 480,
+		frameRate: 10,
+		videoBitsPerSecond: Math.min(VIDEO_BITS_PER_SECOND, 800_000),
+		audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+	},
+];
+
+/** The tier settings for a name; unknown names fall back to the best tier. */
+export function captureTierFor(name: CaptureTierName | string): CaptureTier {
+	return CAPTURE_TIERS.find((tier) => tier.name === name) ?? CAPTURE_TIERS[0];
+}
+
+// The backlog is measured in whole S3/R2 parts because that is the unit the
+// uploader actually ships (background/upload.ts MIN_PART_SIZE = 5 MB). Kept as a
+// literal rather than imported so this module stays free of background/ code.
+const PART_BYTES = 5 * 1024 * 1024;
+
+/**
+ * HIGH-WATER MARK: above this the capture steps DOWN one tier.
+ * Three parts of unshipped video ≈ the link is losing ground, not just jittering
+ * behind a single in-flight part.
+ */
+export const BACKLOG_DEGRADE_ABOVE_BYTES = 3 * PART_BYTES;
+
+/**
+ * LOW-WATER MARK: below this the capture steps UP one tier.
+ *
+ * It is deliberately far below the high-water mark. With a single threshold, a
+ * backlog hovering at the line would flip the tier every few seconds — and every
+ * flip restarts the MediaRecorder, i.e. the "cure" would itself be a defect. The
+ * gap between the two marks is the hysteresis: once degraded, the link must
+ * genuinely drain (down to under one part outstanding) before we trust it again.
+ */
+export const BACKLOG_RESTORE_BELOW_BYTES = 1 * PART_BYTES;
+
+/**
+ * Decide the capture tier from the current tier and the current upload backlog.
+ *
+ * Pure. One step per call, so a backlog spike cannot jump straight to the floor
+ * and a recovery cannot jump straight back to full — each move is re-justified by
+ * the next measurement.
+ *
+ * @param current      the tier the capture is running at right now
+ * @param backlogBytes bytes recorded but not yet uploaded (>= 0)
+ */
+export function chooseCaptureTier(
+	current: CaptureTierName | string,
+	backlogBytes: number,
+): CaptureTierName {
+	const currentIndex = Math.max(
+		0,
+		CAPTURE_TIERS.findIndex((tier) => tier.name === current),
+	);
+	const currentName = CAPTURE_TIERS[currentIndex].name;
+
+	// No usable measurement is not evidence of trouble OR of recovery: hold.
+	if (!Number.isFinite(backlogBytes)) return currentName;
+
+	const backlog = Math.max(0, backlogBytes);
+
+	if (backlog > BACKLOG_DEGRADE_ABOVE_BYTES) {
+		const next = Math.min(currentIndex + 1, CAPTURE_TIERS.length - 1);
+		return CAPTURE_TIERS[next].name;
+	}
+	if (backlog < BACKLOG_RESTORE_BELOW_BYTES) {
+		const next = Math.max(currentIndex - 1, 0);
+		return CAPTURE_TIERS[next].name;
+	}
+	// Inside the hysteresis band: whatever we are doing is keeping up well
+	// enough — changing tier here is exactly the flapping this band prevents.
+	return currentName;
+}
+
 /**
  * The container/codec the MediaRecorder should use, most preferred first.
  *
