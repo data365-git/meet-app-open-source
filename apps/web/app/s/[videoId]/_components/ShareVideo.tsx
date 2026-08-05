@@ -989,6 +989,7 @@ export const ShareVideo = forwardRef<
 												onVideoJump={handleSeekAndPlay}
 												duration={data.duration}
 												chapters={transcriptChapters}
+												videoTitle={data.name}
 											/>
 										) : hasCleanTranscript ? (
 											<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
@@ -1006,6 +1007,7 @@ export const ShareVideo = forwardRef<
 												onVideoJump={handleSeekAndPlay}
 												duration={data.duration}
 												chapters={transcriptChapters}
+												videoTitle={data.name}
 											/>
 										)}
 									</>

@@ -82,6 +82,10 @@ async function uploadVideoForServerProcessing(
 			orgId,
 			isAudio: isAudioFile(file),
 			mimeType: file.type || undefined,
+			// The owner picked this file and knows it by this name. Without it the
+			// recording was titled from a template ("data365 Upload - <date>") and
+			// his own filename was discarded at the door.
+			fileName: file.name,
 		});
 
 		const uploadId = videoData.id;

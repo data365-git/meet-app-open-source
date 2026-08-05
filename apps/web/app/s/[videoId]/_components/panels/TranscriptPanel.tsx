@@ -12,6 +12,7 @@ import {
 	computeFollowScrollTop,
 	isNearActiveRow,
 } from "../utils/transcript-utils";
+import { downloadFilename } from "@/lib/download-filename";
 import { renderMarkdownBold } from "./markdownBold";
 
 interface TranscriptPanelProps {
@@ -20,6 +21,10 @@ interface TranscriptPanelProps {
 	onVideoJump?: (seconds: number) => void;
 	chapters?: { startSec: number; title: string }[];
 	duration?: number | null;
+	/** The recording's current title — the downloaded transcript is named after
+	 *  it. Without this every transcript downloaded as "transcript.txt", so five
+	 *  meetings produced five identical files. */
+	videoTitle?: string | null;
 }
 
 interface Cue {
@@ -377,6 +382,7 @@ export function TranscriptPanel({
 	currentTime = 0,
 	onVideoJump,
 	duration,
+	videoTitle,
 }: TranscriptPanelProps) {
 	const t = useTranslations("share");
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -503,10 +509,14 @@ export function TranscriptPanel({
 
 	// --- Download ---
 	function handleDownload(format: "txt" | "srt") {
+		// Named after the recording, via the same helper the video and audio
+		// downloads use. It used to be the literal "transcript.txt" for every
+		// video, which made a folder of downloaded transcripts unusable.
+		const filename = downloadFilename(videoTitle, format);
 		if (format === "txt") {
-			downloadBlob(cuesToPlainText(cues), "transcript.txt", "text/plain");
+			downloadBlob(cuesToPlainText(cues), filename, "text/plain");
 		} else {
-			downloadBlob(cuesToSRT(cues), "transcript.srt", "text/plain");
+			downloadBlob(cuesToSRT(cues), filename, "text/plain");
 		}
 	}
 

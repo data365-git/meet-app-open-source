@@ -22,6 +22,7 @@ import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
+import { titleFromFileName } from "@/lib/video-title";
 import { resolveVideoFolderAssignment } from "@/lib/video-folder-assignment";
 
 export interface CreateForProcessingResult {
@@ -43,6 +44,7 @@ export async function createVideoForServerProcessing({
 	orgId,
 	isAudio,
 	mimeType,
+	fileName,
 }: {
 	duration?: number;
 	resolution?: string;
@@ -50,6 +52,9 @@ export async function createVideoForServerProcessing({
 	orgId: Organisation.OrganisationId;
 	isAudio?: boolean;
 	mimeType?: string;
+	/** The name of the file the user chose, e.g. "Bitrix24 meeting.mp4". Used as
+	 *  the recording's starting title. Untrusted client input — sanitised below. */
+	fileName?: string;
 }): Promise<CreateForProcessingResult> {
 	const user = await getCurrentUser();
 
@@ -104,7 +109,9 @@ export async function createVideoForServerProcessing({
 	await db().transaction(async (tx) => {
 		await tx.insert(videos).values({
 			id: videoId,
-			name: `data365 ${isAudio ? "Audio " : ""}Upload - ${formattedDate}`,
+			name:
+				titleFromFileName(fileName) ??
+				`data365 ${isAudio ? "Audio " : ""}Upload - ${formattedDate}`,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },
