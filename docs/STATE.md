@@ -40,8 +40,10 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 - **Gates measured after the fix:** `tsc -b --force` 0 · web suite green · real `next build` 0.
 - **NOT live-verified, and here is the honest reason:** the dashboard needs a login and I do not enter passwords. The local `.env` also points at the PRODUCTION database and R2, so pressing this particular button locally would destroy the team's real videos. First real click must be on a throwaway recording after deploy.
 
+**🚀 DEPLOY TRIGGERED 2026-08-05 night — owner said "Ha, chiqar".** Commit `8227766` pushed to `qa-fixes`; Coolify deployment `v12u7rxy0ywrayezzlfsh0fz` queued. **LANDING NOT YET VERIFIED at the time of writing** — a failed Coolify build is invisible from outside (green health, working site, change simply absent), so check `docker ps` image tag against `git rev-parse` BEFORE believing any of this is live. **This batch adds NO migration** (no new columns), so the §3a `SHOW COLUMNS` trap does not apply to it — the next additive column still meets the unfixed "benign error aborts the run" defect.
+
 **STILL TO DO, in order:**
-1. **Deploy the whole batch**, then live-verify. **Migration check is mandatory** — see the falsified §3a note above; `SHOW COLUMNS`, do not trust the migration log.
+1. ~~Deploy the whole batch~~ (triggered, see above), then live-verify. **Migration check is mandatory** — see the falsified §3a note above; `SHOW COLUMNS`, do not trust the migration log.
 2. **One throwaway video** to exercise replace-with-audio for real (single and bulk) — still the one gate no rig can close, because it destroys what it touches.
 
 **Two things that must not be re-derived:**
