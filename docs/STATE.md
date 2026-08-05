@@ -10,7 +10,19 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
 
-### ✅ THE QUALITY PUSH IS BUILT AND MEASURED — NOT YET DEPLOYED (deploy is owner-gated)
+### ✅ DEPLOYED AND LIVE-VERIFIED 2026-08-05 — quality push + adaptive capture
+
+**Prod image `9e58a05`, `/api/health` → `db:ok storage:ok`.** Owner said "Ha, chiqar". Verified INSIDE the artifacts, not by their existence: the served zip was 0.5.8 with bitrate `8e6` and `echoCancellation` true on the mic leg / false on the tab leg in both `content.js` and `offscreen.js`; Recordings and Meetings both render; **Move was exercised end-to-end on real data** — a Loom-imported video (`source.type webMP4`) moved to Meetings, appeared there, moved back, and `source` stayed byte-identical both ways while `/s/<id>` kept returning 200. The owner's data was restored to where it started.
+
+**⚠️ THE DEPLOY SHIPPED A BROKEN DATABASE FOR A FEW MINUTES AND NOTHING WARNED.** Migration `0038` never applied: the runner hit `ER_DUP_FIELDNAME` on an older migration, called it benign, and stopped — so `videos.libraryKind` did not exist while the code that queries it was live, with `/api/health` still green. Found by checking `SHOW COLUMNS` rather than trusting the log, and fixed by hand. **RUNBOOK §3a now carries the falsification and the exact check; the underlying "benign error aborts the whole run" defect is NOT fixed and will bite the next additive column.**
+
+**ADAPTIVE CAPTURE (owner chose "o'zi moslashsin"), HEAD `c7828e1`, extension 0.5.9 — built, measured, NOT yet deployed.** When the upload falls behind, the capture tier drops (frame rate, then height) via `applyConstraints` on the live track — the MediaRecorder is never restarted, deliberately: restarting mid-recording is the exact failure family that produced the interleaved-fragment corruption. Measured on the real harness: at 800 kbit/s the run that previously FAILED `upload-never-completed` now PASSES, producing **59 MB instead of 127 MB** with peak backlog 29.5 MB, while the unthrottled control **never left the best tier** (1.9 MB backlog) — so the quality raise is not quietly undone on a good link. Audio was identical in both arms (-14.9 / -14.8 dB): video degrades, the voice never does.
+
+**Gates at `c7828e1`:** `tsc -b --force` 0 · web 1235 · extension 230 · `next build` 0 · no CRLF churn.
+
+**A defect class that recurred TWICE in one day, now mechanically impossible:** both goalkeeper runs reported converged with extension code changed and the manifest version NOT bumped (0.5.7, then 0.5.8). The pre-commit guard in `scripts/check-extension-zip-freshness.mjs` now blocks a commit that touches extension src without changing the manifest version — proven RED→GREEN.
+
+### (history) THE QUALITY PUSH — built and measured before deploy
 
 **HEAD `5684a48` on `qa-fixes`, tree clean, nothing pushed.** Measured, not asserted: `pnpm exec tsc -b --force` **0** · `next build` **0** · web **1235 passed** · extension **160 passed** · extension repackaged at **0.5.8** and verified INSIDE the served zip (bitrate `8e6`, old `3e6` gone, `echoCancellation: true` on the mic leg and `false` on the tab leg in both `content.js` and `offscreen.js`).
 

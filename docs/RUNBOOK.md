@@ -185,11 +185,34 @@ the log says so:
 ⚠️  Migration error is benign (ER_DUP_FIELDNAME). Schema is already at desired state. Continuing.
 ```
 
-So a new column shipped in code is applied by the deploy itself; it does **not**
-need a hand-run DDL, and a plan that assumes otherwise is working from a wrong
-premise (measured 2026-07-20, after a review flagged it as a release blocker).
-Verify per deploy with `docker logs <app> | grep -i migration` rather than
-trusting either assumption.
+**⚠️ FALSIFIED 2026-08-05 — do not trust the paragraph above on its own.** The
+deploy of `9e58a05` logged exactly that reassuring sequence and then
+`🚨 MIGRATION_FAILED … ⚠️ Migration error is benign (ER_DUP_FIELDNAME) … Continuing.`
+— and the brand-new `videos.libraryKind` column from migration `0038` **was never
+applied**. The runner hit a duplicate column in an EARLIER migration, declared it
+benign, and stopped without running the later ones. The log says "Continuing" and
+means "stopping". `/api/health` stayed `ok` throughout, because it does not touch
+that column; the dashboard queries that DO touch it would have failed for every
+user. Fixed by hand in seconds once found:
+
+```bash
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+  'docker exec fot1zbunh8jld7l4k67h2zp4 bash -c "mysql -uroot -p\$MYSQL_ROOT_PASSWORD capdb -e \"ALTER TABLE videos ADD COLUMN libraryKind varchar(16) NULL\""'
+```
+
+**So the rule is: the deploy TRIES to migrate; it does not GUARANTEE it.** Any
+deploy that adds a column must be followed by checking that the column actually
+exists — the migration log line is not evidence:
+
+```bash
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+  'docker exec fot1zbunh8jld7l4k67h2zp4 bash -c "mysql -uroot -p\$MYSQL_ROOT_PASSWORD -N -B capdb -e \"SHOW COLUMNS FROM videos\""' | grep <newColumn>
+```
+
+The underlying defect is worth fixing properly and is not fixed yet: treating any
+`ER_DUP_FIELDNAME` as "schema is already at the desired state" is wrong on its
+face — a duplicate column in migration N says nothing about migrations N+1…M.
+Until that is repaired, **every future additive column can silently fail to ship.**
 
 ## 4. Roll back a bad deploy
 
