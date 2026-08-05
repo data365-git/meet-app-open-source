@@ -3358,3 +3358,214 @@ describe("F2 — a stale recorder's messages must not touch the live recording",
 		expect((await getState()).kind).toBe("recording");
 	});
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Adaptive capture tier — the SW is the only context that knows the backlog.
+//
+// Measured motivation: a throttled soak at 800 kbit/s FAILED with
+// upload-never-completed (only 8 of ~17 parts uploaded during a 6-minute
+// recording); the same harness PASSED at 4 Mbit/s and unthrottled
+// (e2e-audio-proof/soak-throttle-{A,B,C}.log). These tests drive the SW with a
+// real chunk→part→upload cycle and assert what it TELLS the recorder.
+// ────────────────────────────────────────────────────────────────────────────
+describe("adaptive capture tier from the upload backlog", () => {
+	const RECORDER_TAB = 42;
+
+	/** A live instruction recording owned by `sess-live`, whose recorder is the
+	 * visible recorder.html tab RECORDER_TAB. */
+	function liveRecordingWithBacklog(totalBytes: number, uploadedBytes: number) {
+		return {
+			kind: "recording" as const,
+			mode: "instruction" as const,
+			videoId: "vid-tier",
+			uploadId: "upload-tier",
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes,
+			uploadedBytes,
+			recorderTabId: RECORDER_TAB,
+			mime: "video/webm",
+			paused: false,
+			recorderSessionId: "sess-live",
+		};
+	}
+
+	/** Records every chrome.tabs.sendMessage and answers presign+PUT so each
+	 * MIN_PART_SIZE chunk really completes a part (which is what advances
+	 * uploadedBytes — the trigger for a tier decision). */
+	function instrument(fake: Awaited<ReturnType<typeof freshSw>>) {
+		const sent: Array<{ tabId: number; message: Record<string, unknown> }> = [];
+		fake.chrome.tabs.sendMessage = (async (
+			tabId: number,
+			message: Record<string, unknown>,
+		) => {
+			sent.push({ tabId, message });
+			return undefined;
+		}) as unknown as typeof fake.chrome.tabs.sendMessage;
+
+		vi.stubGlobal(
+			"fetch",
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = input.toString();
+				const method = init?.method ?? "GET";
+				if (url.includes("/api/upload/multipart/presign-part")) {
+					return jsonResponse({
+						presignedUrl: "https://fake-r2.example/put",
+						provider: "r2",
+					});
+				}
+				if (method === "PUT") {
+					return new Response(null, {
+						status: 200,
+						headers: { ETag: '"etag-tier"' },
+					});
+				}
+				throw new Error(`Unhandled fetch in test: ${method} ${url}`);
+			},
+		);
+		return sent;
+	}
+
+	function sendFullPart(
+		captured: ReturnType<typeof createFakeChrome>["captured"],
+		index: number,
+		sessionId = "sess-live",
+	) {
+		return sendMessage(captured, {
+			type: "RECORDER_CHUNK",
+			chunk: Array.from(new Uint8Array(MIN_PART_SIZE)),
+			index,
+			mime: "video/webm",
+			sessionId,
+		});
+	}
+
+	const tierMessages = (
+		sent: Array<{ tabId: number; message: Record<string, unknown> }>,
+	) => sent.filter((s) => s.message.type === "CAPTURE_TIER");
+
+	it("tells the recorder to step DOWN one tier once the backlog passes the high-water mark", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const sent = instrument(fake);
+		// 40 MiB recorded, nothing uploaded: far past BACKLOG_DEGRADE_ABOVE_BYTES.
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		// The first completed part only establishes the baseline (there is no
+		// "since the last part" delta yet), so it must NOT move the tier.
+		await sendFullPart(fake.captured, 0);
+		expect(tierMessages(sent)).toHaveLength(0);
+
+		// The second completed part is the first real measurement.
+		await sendFullPart(fake.captured, 1);
+
+		const tiers = tierMessages(sent);
+		expect(tiers).toHaveLength(1);
+		expect(tiers[0].tabId).toBe(RECORDER_TAB);
+		// Addressed to the live recorder session, so a recorder left over from an
+		// earlier session can tell the message is not for it.
+		expect(tiers[0].message.sessionId).toBe("sess-live");
+		// One step, not a jump to the floor.
+		const tier = tiers[0].message.tier as { name: string; frameRate: number };
+		expect(tier.name).toBe("reduced");
+		expect(tier.frameRate).toBe(15);
+	});
+
+	it("steps down only ONE tier per completed part", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const sent = instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // -> reduced
+		await sendFullPart(fake.captured, 2); // -> minimal
+		await sendFullPart(fake.captured, 3); // already at the floor
+
+		const names = tierMessages(sent).map(
+			(s) => (s.message.tier as { name: string }).name,
+		);
+		expect(names).toEqual(["reduced", "minimal"]);
+	});
+
+	it("says NOTHING while the link is keeping up", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const sent = instrument(fake);
+		// Everything recorded so far has already shipped: no backlog at all.
+		await setState(liveRecordingWithBacklog(0, 0));
+
+		await sendFullPart(fake.captured, 0);
+		await sendFullPart(fake.captured, 1);
+		await sendFullPart(fake.captured, 2);
+
+		// Already at the best tier, and chooseCaptureTier cannot go above it —
+		// an unnecessary message would reconfigure a capture for no reason.
+		expect(tierMessages(sent)).toHaveLength(0);
+	});
+
+	it("steps back UP once the link drains below the low-water mark", async () => {
+		const fake = await freshSw();
+		const { setState, getState } = await import("./state");
+		const sent = instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // -> reduced
+		expect(
+			(tierMessages(sent)[0].message.tier as { name: string }).name,
+		).toBe("reduced");
+
+		// The link catches up: the uploader has now shipped all but a fraction of
+		// a part. Rewrite only the byte counters, keeping the same recording.
+		const live = await getState();
+		if (live.kind !== "recording") throw new Error("expected a live recording");
+		await setState({
+			...live,
+			totalBytes: 60 * MIN_PART_SIZE,
+			uploadedBytes: 60 * MIN_PART_SIZE - Math.floor(MIN_PART_SIZE / 5),
+		});
+
+		await sendFullPart(fake.captured, 2);
+
+		const names = tierMessages(sent).map(
+			(s) => (s.message.tier as { name: string }).name,
+		);
+		expect(names).toEqual(["reduced", "full"]);
+	});
+
+	it("does not decide anything from a chunk stamped with a FOREIGN session", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const sent = instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		// A recorder from an earlier session is still emitting. Its bytes are
+		// dropped by the uploader, so they must not drive the live capture either.
+		await sendFullPart(fake.captured, 0, "sess-stale");
+		await sendFullPart(fake.captured, 1, "sess-stale");
+
+		expect(tierMessages(sent)).toHaveLength(0);
+	});
+
+	it("routes the tier to the in-page Meet recorder when that is what owns the capture", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		const sent = instrument(fake);
+		await setState({
+			...liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0),
+			mode: "meeting" as const,
+			recorderTabId: undefined,
+			contentRecorderTabId: 9,
+		});
+
+		await sendFullPart(fake.captured, 0);
+		await sendFullPart(fake.captured, 1);
+
+		const tiers = tierMessages(sent);
+		expect(tiers).toHaveLength(1);
+		expect(tiers[0].tabId).toBe(9);
+		expect(tiers[0].message.sessionId).toBe("sess-live");
+	});
+});

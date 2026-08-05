@@ -3,6 +3,12 @@ import type { ExtensionSettings, ExtensionState } from "./state";
 import { getSettings, getState, setSettings, setState } from "./state";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
 import { getMeetingId } from "../shared/meeting-url";
+import type { CaptureTier, CaptureTierName } from "../shared/recording-quality";
+import {
+	CAPTURE_TIERS,
+	captureTierFor,
+	chooseCaptureTier,
+} from "../shared/recording-quality";
 import {
 	abortUpload,
 	computeDurationInSecs,
@@ -160,6 +166,149 @@ async function sendControlWithRetry(
 		}
 	}
 	return false;
+}
+
+// ── Adaptive capture tier (backlog → what the capture is allowed to produce) ─
+//
+// WHY. A throttled soak run at 800 kbit/s FAILED with upload-never-completed:
+// the capture kept producing ~8 Mbit/s while the link carried ~0.8, so after a
+// 6-minute recording only 8 of ~17 parts had reached the server and the user was
+// left waiting after Stop (e2e-audio-proof/soak-throttle-{A,B,C}.log; the same
+// harness PASSED at 4 Mbit/s and unthrottled). The link is not ours to fix; what
+// the capture PRODUCES is.
+//
+// The SW is the only context that KNOWS the backlog — it owns the uploader — so
+// it is the one that decides. It already tracks both numbers on the recording:
+// `totalBytes` (recorded) and `uploadedBytes` (shipped). Their difference is the
+// backlog. The decision itself is the pure, unit-tested chooseCaptureTier() in
+// shared/recording-quality.ts; nothing about WHEN to move is re-invented here.
+//
+// Re-decided ONLY when a part actually completed (uploadedBytes advanced). Every
+// chunk raises totalBytes, so re-deciding per chunk would read a backlog that
+// only ever grows between two part completions and would walk the tier down
+// three steps in three seconds on a link that was merely mid-part.
+//
+// This does NOT start, stop, restart or finalize anything: it sends one advisory
+// message to the recorder that already owns the live capture, addressed with the
+// EXISTING recorder-session id (shared/recorder-session.ts), so a recorder left
+// over from an earlier session ignores it exactly as it ignores every other
+// message addressed to a session that is not its own.
+
+/** Session the tier tracking below belongs to. `null` (not `undefined`) is the
+ * "no session tracked yet" sentinel, because an unstamped pre-F2 recording has a
+ * genuinely `undefined` id and must still be recognised as a NEW session once. */
+let captureTierSessionId: string | undefined | null = null;
+let currentCaptureTier: CaptureTierName = CAPTURE_TIERS[0].name;
+/** uploadedBytes at the last decision — the "has a part completed since?" mark. */
+let lastTierDecisionUploadedBytes = 0;
+/** One decision at a time: two chunk handlers can interleave across the awaits
+ * below, and both stepping the tier would move it two steps on one measurement,
+ * defeating the one-step-per-decision rule chooseCaptureTier is built on. */
+let captureTierDecisionInFlight = false;
+
+function resetCaptureTierTracking(): void {
+	captureTierSessionId = null;
+	currentCaptureTier = CAPTURE_TIERS[0].name;
+	lastTierDecisionUploadedBytes = 0;
+}
+
+/** Send the tier to whichever recorder owns the live capture. Returns whether it
+ * was delivered — the three routes mirror STOP/PAUSE/RESUME exactly. */
+function sendCaptureTier(
+	state: Extract<ExtensionState, { kind: "recording" }>,
+	tier: CaptureTier,
+): Promise<boolean> {
+	const message = {
+		type: "CAPTURE_TIER",
+		// (F2) Addressed to THIS recording's recorder. A recorder that minted a
+		// different id must ignore it rather than reconfigure a capture that is
+		// feeding some other upload.
+		sessionId: state.recorderSessionId,
+		tier,
+	};
+	if (state.recorderTabId !== undefined && state.mode === "instruction") {
+		const tabId = state.recorderTabId;
+		return sendControlWithRetry(
+			() => chrome.tabs.sendMessage(tabId, message),
+			"CAPTURE_TIER→tab",
+			2,
+			100,
+		);
+	}
+	if (state.contentRecorderTabId !== undefined) {
+		const tabId = state.contentRecorderTabId;
+		return sendControlWithRetry(
+			() => chrome.tabs.sendMessage(tabId, message),
+			"CAPTURE_TIER→tab",
+			2,
+			100,
+		);
+	}
+	return sendControlWithRetry(
+		() => sendToOffscreen(message),
+		"CAPTURE_TIER→offscreen",
+		2,
+		100,
+	);
+}
+
+/**
+ * Re-decide the capture tier from the upload backlog and tell the recorder.
+ *
+ * Called after a chunk has been handled, i.e. after any part it produced has
+ * finished uploading. Reads state; never writes it — a wrong tier costs quality
+ * for a few seconds, so nothing here may risk the recording itself.
+ */
+async function adaptCaptureTier(messageSessionId: string | undefined): Promise<void> {
+	if (captureTierDecisionInFlight) return;
+	captureTierDecisionInFlight = true;
+	try {
+		const state = await getState();
+		if (state.kind !== "recording") return;
+		// The chunk that triggered this must belong to the live recording, judged
+		// by the same strict rule the uploader uses.
+		if (isForeignRecorderSession(state, messageSessionId)) return;
+
+		const liveSessionId = state.recorderSessionId;
+		if (captureTierSessionId !== liveSessionId) {
+			// First measurement of a new recording: adopt its baseline, decide
+			// nothing. There is no "since the last part" delta to judge yet.
+			captureTierSessionId = liveSessionId;
+			currentCaptureTier = CAPTURE_TIERS[0].name;
+			lastTierDecisionUploadedBytes = state.uploadedBytes;
+			return;
+		}
+
+		// No part has completed since the last decision — the backlog has only
+		// grown by the bytes of an in-flight part, which is not evidence of
+		// anything. Wait for the uploader to report.
+		if (state.uploadedBytes <= lastTierDecisionUploadedBytes) return;
+		lastTierDecisionUploadedBytes = state.uploadedBytes;
+
+		const backlogBytes = Math.max(0, state.totalBytes - state.uploadedBytes);
+		const nextTier = chooseCaptureTier(currentCaptureTier, backlogBytes);
+		if (nextTier === currentCaptureTier) return;
+
+		const delivered = await sendCaptureTier(state, captureTierFor(nextTier));
+		// Only commit once the recorder actually got it. An undelivered step that
+		// we recorded anyway would make the NEXT decision start from a tier the
+		// capture is not running at, and the step would be silently skipped.
+		if (!delivered) {
+			console.warn(
+				`[sw] capture tier ${currentCaptureTier}→${nextTier} was not delivered; will re-decide on the next part`,
+			);
+			return;
+		}
+		console.info(
+			`[sw] capture tier ${currentCaptureTier}→${nextTier} (backlog ${backlogBytes} bytes)`,
+		);
+		currentCaptureTier = nextTier;
+	} catch (err) {
+		// Advisory path: never let it break chunk handling.
+		console.warn("[sw] capture tier adaptation failed:", err);
+	} finally {
+		captureTierDecisionInFlight = false;
+	}
 }
 
 // ── Badge ─────────────────────────────────────────────────────────────────
@@ -1481,6 +1630,9 @@ async function handleMessage(
 			// prior tab-audio-degraded notification no longer applies.
 			intentionalStop = false;
 			tabAudioDegradedNotified = false;
+			// A fresh capture always begins at the best tier; the previous
+			// recording's backlog says nothing about this one's link.
+			resetCaptureTierTracking();
 			startKeepAlive();
 			updateBadge(nextState);
 			return { ok: true };
@@ -1507,6 +1659,11 @@ async function handleMessage(
 					handleChunk(new Uint8Array(raw).buffer, index, mime, sessionId),
 				);
 				if (outcome === "stale") return STALE_SESSION_REPLY;
+				// The uploader has just reported whatever this chunk produced, so the
+				// backlog is as fresh as it gets. Deliberately OUTSIDE enqueueRecorder:
+				// this only reads state, and its retrying send would otherwise park the
+				// queue that the next chunk's upload has to run on.
+				await adaptCaptureTier(sessionId);
 			}
 			return { ok: true };
 		}
