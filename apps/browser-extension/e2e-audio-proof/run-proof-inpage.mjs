@@ -71,6 +71,13 @@ const RECORD_MS =
 // remote voice. This floor is what makes that visible. Env-overridable so a
 // deliberate re-baselining is an explicit act, not an edit to this file.
 const MIN_BAND_MEAN_DB = Number(process.env.PROOF_MIN_BAND_DB ?? -16.5);
+// How long the harness will wait, after Stop, for the leftover upload backlog to
+// drain. Scaled off the recording length because the backlog a slow link leaves
+// behind grows with the recording, plus a floor for short runs. The stall window
+// must comfortably exceed the time one throttled part takes (a 5 MB part at
+// 800 kbit/s is ~50 s), otherwise a healthy slow upload looks like a dead one.
+const DRAIN_HARD_CAP_MS = Number(process.env.PROOF_DRAIN_CAP_MS) || Math.max(180_000, RECORD_MS);
+const DRAIN_STALL_MS = Number(process.env.PROOF_DRAIN_STALL_MS) || 150_000;
 const SERVE_PORT = 8443;
 const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
 
@@ -159,7 +166,43 @@ async function main() {
 		[join(here, "mock-server.mjs"), "3001", outDir],
 		{ stdio: ["ignore", "pipe", "pipe"] },
 	);
-	mock.stdout.on("data", (d) => log(String(d).trim()));
+	// Post-Stop drain progress. The old wait was a flat 60x1s, which is shorter
+	// than a LEGITIMATE drain on a throttled link (one 5 MB part at 800 kbit/s
+	// alone takes ~50 s), so a slow-but-healthy run could be misreported as
+	// "upload-never-completed". Every mock-server line is an upload event, so the
+	// mock's own chatter is the progress signal: keep waiting while parts are
+	// still moving, and only declare failure once the link has gone genuinely
+	// silent (or the hard cap is hit). A truly stuck upload still fails — it just
+	// fails on evidence of a stall instead of on a stopwatch.
+	let lastMockActivityAt = Date.now();
+	mock.stdout.on("data", (d) => {
+		lastMockActivityAt = Date.now();
+		log(String(d).trim());
+	});
+	const { readFileSync, existsSync } = await import("node:fs");
+	const waitForCompletedManifest = async (manifestPath) => {
+		const deadline = Date.now() + DRAIN_HARD_CAP_MS;
+		lastMockActivityAt = Date.now();
+		while (Date.now() < deadline) {
+			if (existsSync(manifestPath)) {
+				try {
+					const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+					if (m.recordingComplete && m.assembledFile) return m;
+				} catch {
+					// manifest is written non-atomically; a torn read just means "not yet"
+				}
+			}
+			if (Date.now() - lastMockActivityAt > DRAIN_STALL_MS) {
+				log(
+					`drain stalled: no upload activity for ${Math.round(DRAIN_STALL_MS / 1000)}s`,
+				);
+				return null;
+			}
+			await new Promise((r) => setTimeout(r, 1000));
+		}
+		log(`drain hit the hard cap of ${Math.round(DRAIN_HARD_CAP_MS / 1000)}s`);
+		return null;
+	};
 	let context;
 	try {
 		await new Promise((resolve, reject) => {
@@ -277,16 +320,8 @@ async function main() {
 		await meetPage.mouse.click(stopCentre.x, stopCentre.y);
 		log("stopped; waiting for upload to the mock server");
 
-		const { readFileSync, existsSync } = await import("node:fs");
 		const manifestPath = join(outDir, "manifest.json");
-		let manifest = null;
-		for (let i = 0; i < 60; i++) {
-			if (existsSync(manifestPath)) {
-				manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-				if (manifest.recordingComplete && manifest.assembledFile) break;
-			}
-			await new Promise((r) => setTimeout(r, 1000));
-		}
+		const manifest = await waitForCompletedManifest(manifestPath);
 		if (!manifest?.assembledFile)
 			return verdict("FAIL", "reason=upload-never-completed-to-mock");
 
@@ -368,14 +403,7 @@ async function main() {
 			log("stopped 2nd recording; waiting for upload to the mock server");
 
 			const manifest2Path = join(outDir, "manifest-2.json");
-			let manifest2 = null;
-			for (let i = 0; i < 60; i++) {
-				if (existsSync(manifest2Path)) {
-					manifest2 = JSON.parse(readFileSync(manifest2Path, "utf8"));
-					if (manifest2.recordingComplete && manifest2.assembledFile) break;
-				}
-				await new Promise((r) => setTimeout(r, 1000));
-			}
+			const manifest2 = await waitForCompletedManifest(manifest2Path);
 			if (!manifest2?.assembledFile)
 				return verdict("FAIL", "reason=second-recording-upload-never-completed-to-mock");
 
