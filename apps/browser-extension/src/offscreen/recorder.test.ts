@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureTierFor } from "../shared/recording-quality";
 
 // ── Fake-DOM harness for the offscreen tab-capture recorder ─────────────────
 //
@@ -22,6 +23,14 @@ class FakeTrack {
 	onmute: (() => void) | null = null;
 	onunmute: (() => void) | null = null;
 	stopped = false;
+	/** Every constraint set this track accepted, in order. */
+	applied: MediaTrackConstraints[] = [];
+	/** Make applyConstraints reject (OverconstrainedError) for matching steps. */
+	refuse: ((c: MediaTrackConstraints) => boolean) | null = null;
+	applyConstraints = vi.fn(async (c: MediaTrackConstraints) => {
+		if (this.refuse?.(c)) throw new Error("OverconstrainedError");
+		this.applied.push(c);
+	});
 
 	constructor(kind: TrackKind, init?: { muted?: boolean; ended?: boolean }) {
 		this.kind = kind;
@@ -76,18 +85,24 @@ class FakeRecorder {
 	onerror: (() => void) | null = null;
 	onstop: (() => void) | null = null;
 	startCalls = 0;
+	stopCalls = 0;
 
 	constructor(_stream: unknown, opts: { mimeType: string }) {
 		this.mimeType = opts.mimeType;
 		FakeRecorder.last = this;
+		FakeRecorder.constructed++;
 	}
 	static last: FakeRecorder | null = null;
+	/** How many MediaRecorder objects have been built. A tier change must never
+	 * increase this: a second encoder mid-upload interleaves two fMP4 streams. */
+	static constructed = 0;
 
 	start(): void {
 		this.startCalls++;
 		this.state = "recording";
 	}
 	stop(): void {
+		this.stopCalls++;
 		this.state = "inactive";
 		this.onstop?.();
 	}
@@ -205,6 +220,7 @@ async function setup(
 	vi.stubGlobal("AudioContext", FakeAudioContext);
 	vi.stubGlobal("MediaStream", FakeStream);
 	FakeRecorder.last = null;
+	FakeRecorder.constructed = 0;
 
 	await import("./recorder");
 
@@ -214,6 +230,31 @@ async function setup(
 		listener: captured.fn,
 		displayTracks: { audio: audioTrack, video: videoTrack },
 	};
+}
+
+/** The session id THIS document minted for its live capture — every control
+ * message from the SW is addressed to it. */
+function sessionIdOf(h: Harness): string {
+	const started = h.sent.find((m) => m.type === "RECORDER_STARTED");
+	const id = started?.sessionId;
+	if (typeof id !== "string") throw new Error("no session id: capture never started");
+	return id;
+}
+
+/** Fire CAPTURE_TIER the way sendCaptureTier() in background/sw.ts does, and
+ * return whatever this document answered (or "NO_RESPONSE" when it stayed
+ * silent, which is itself the honest answer for a context that owns no capture). */
+async function sendTier(
+	h: Harness,
+	tier: unknown,
+	sessionId: string | undefined,
+): Promise<unknown> {
+	let responded: unknown = "NO_RESPONSE";
+	h.listener({ type: "CAPTURE_TIER", sessionId, tier }, {}, (r) => {
+		responded = r;
+	});
+	for (let i = 0; i < 10; i++) await Promise.resolve();
+	return responded;
 }
 
 /** Fire START_CAPTURE and let the async startCapture chain settle. */
@@ -402,6 +443,17 @@ describe("control-message acks are honest", () => {
 		expect(responded).toBe("NO_RESPONSE");
 	});
 
+	it("does not ack CAPTURE_TIER when this document owns no capture", async () => {
+		// An idle offscreen document that answered "ok" would tell the SW the
+		// capture had stepped down when nothing here stepped anywhere: the SW would
+		// commit a tier the recording is NOT running at and tell the user about a
+		// quality change that never happened.
+		const h = await setup({});
+		expect(await sendTier(h, captureTierFor("reduced"), "sess-anything")).toBe(
+			"NO_RESPONSE",
+		);
+	});
+
 	it("acks PAUSE_CAPTURE when it really paused the recorder", async () => {
 		const h = await setup({});
 		await startCapture(h);
@@ -411,5 +463,141 @@ describe("control-message acks are honest", () => {
 		});
 		expect(responded).toEqual({ ok: true });
 		expect(FakeRecorder.last?.state).toBe("paused");
+	});
+});
+
+// ── Adaptive capture tier on the "Record Meet tab only" path ────────────────
+//
+// The SW is willing to route CAPTURE_TIER to the offscreen document (it is the
+// fallback route in sendCaptureTier), so this path MUST be able to apply it.
+// While it could not, the ack gate correctly refused to commit — which means a
+// meeting recorded here could never adapt to a slow link at all, and a 6-minute
+// recording on an 800 kbit/s connection left the user waiting after Stop.
+describe("CAPTURE_TIER on the offscreen tab-capture recorder", () => {
+	it("applies the tier to the LIVE video track — frame rate first, then the height cap", async () => {
+		const h = await setup({});
+		await startCapture(h);
+		const reduced = captureTierFor("reduced");
+
+		const ack = await sendTier(h, reduced, sessionIdOf(h));
+
+		expect(ack).toEqual({ ok: true, sessionId: sessionIdOf(h) });
+		// It is the track the recorder is actually encoding, not a copy.
+		expect(h.displayTracks.video.applied).toEqual([
+			{ frameRate: { max: reduced.frameRate } },
+			{
+				frameRate: { max: reduced.frameRate },
+				width: { max: reduced.maxWidth },
+				height: { max: reduced.maxHeight },
+			},
+		]);
+		expect(h.displayTracks.video.readyState).toBe("live");
+	});
+
+	it("never stops or recreates the MediaRecorder across tier changes", async () => {
+		const h = await setup({});
+		await startCapture(h);
+		const before = FakeRecorder.last;
+		if (!before) throw new Error("no recorder");
+		const builtAtStart = FakeRecorder.constructed;
+		const sessionId = sessionIdOf(h);
+
+		await sendTier(h, captureTierFor("reduced"), sessionId);
+		await sendTier(h, captureTierFor("minimal"), sessionId);
+		await sendTier(h, captureTierFor("full"), sessionId); // and back up
+
+		// Object identity — not "a recorder exists", but THE SAME ONE. A second
+		// encoder mid-upload emits a fresh fMP4 init segment and interleaves two
+		// byte streams into a file no player can open.
+		expect(FakeRecorder.last).toBe(before);
+		expect(FakeRecorder.constructed).toBe(builtAtStart);
+		expect(before.stopCalls).toBe(0);
+		expect(before.startCalls).toBe(1);
+		expect(before.state).toBe("recording");
+		// The capture itself is still alive and was re-constrained in place.
+		expect(h.displayTracks.video.stopped).toBe(false);
+		expect(h.displayTracks.video.applied).toHaveLength(6);
+		// And the upload was never told anything happened.
+		expect(h.sent.map((m) => m.type)).not.toContain("RECORDER_STOPPED");
+	});
+
+	it("never touches the audio tracks", async () => {
+		// On this path the audio IS the meeting — the other participants' voices.
+		const h = await setup({});
+		await startCapture(h);
+		const audio = h.displayTracks.audio;
+		if (!audio) throw new Error("no tab audio track");
+
+		await sendTier(h, captureTierFor("minimal"), sessionIdOf(h));
+
+		expect(audio.applyConstraints).not.toHaveBeenCalled();
+		expect(audio.applied).toEqual([]);
+		expect(audio.stopped).toBe(false);
+		expect(audio.readyState).toBe("live");
+	});
+
+	it("keeps the frame-rate step when the source refuses the resolution cap", async () => {
+		const h = await setup({});
+		await startCapture(h);
+		h.displayTracks.video.refuse = (c) => "height" in c;
+		const minimal = captureTierFor("minimal");
+
+		const ack = await sendTier(h, minimal, sessionIdOf(h));
+
+		// Still a truthful yes: output really was reduced by the frame-rate cap.
+		expect(ack).toEqual({ ok: true, sessionId: sessionIdOf(h) });
+		expect(h.displayTracks.video.applied).toEqual([
+			{ frameRate: { max: minimal.frameRate } },
+		]);
+	});
+
+	it("answers ok:false — never a false yes — when the source refuses everything", async () => {
+		const h = await setup({});
+		await startCapture(h);
+		h.displayTracks.video.refuse = () => true;
+
+		const ack = await sendTier(h, captureTierFor("minimal"), sessionIdOf(h));
+
+		expect(ack).toEqual({ ok: false, sessionId: sessionIdOf(h) });
+		expect(h.displayTracks.video.applied).toEqual([]);
+		expect(FakeRecorder.last?.stopCalls).toBe(0);
+	});
+
+	it("refuses a tier addressed to a DIFFERENT recorder session", async () => {
+		// A decision computed for a finished recording must never reconfigure the
+		// capture that is live now.
+		const h = await setup({});
+		await startCapture(h);
+
+		const ack = await sendTier(h, captureTierFor("minimal"), "sess-from-an-old-recording");
+
+		expect(ack).toEqual({ ok: false, sessionId: "sess-from-an-old-recording" });
+		expect(h.displayTracks.video.applied).toEqual([]);
+	});
+
+	it("refuses a message that names no tier we know, instead of restoring quality", async () => {
+		const h = await setup({});
+		await startCapture(h);
+
+		expect(await sendTier(h, {}, sessionIdOf(h))).toEqual({
+			ok: false,
+			sessionId: sessionIdOf(h),
+		});
+		expect(await sendTier(h, { name: "ultra" }, sessionIdOf(h))).toEqual({
+			ok: false,
+			sessionId: sessionIdOf(h),
+		});
+		expect(h.displayTracks.video.applied).toEqual([]);
+	});
+
+	it("does nothing once the share has ended", async () => {
+		const h = await setup({});
+		await startCapture(h);
+		h.displayTracks.video.readyState = "ended";
+
+		const ack = await sendTier(h, captureTierFor("minimal"), sessionIdOf(h));
+
+		expect(ack).toEqual({ ok: false, sessionId: sessionIdOf(h) });
+		expect(h.displayTracks.video.applied).toEqual([]);
 	});
 });

@@ -36,6 +36,7 @@ import {
 	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	captureTierConstraintSteps,
 	createMixLimiter,
 	micAudioConstraints,
 	pickMimeType,
@@ -341,26 +342,18 @@ export async function applyCaptureTierTo(
 
 	let applied = false;
 
-	try {
-		await videoTrack.applyConstraints({
-			frameRate: { max: tier.frameRate },
-		});
-		applied = true;
-	} catch {
-		// Source refused the frame-rate cap. Still try the resolution cap below —
-		// either one alone reduces what the encoder has to write.
-	}
-
-	try {
-		await videoTrack.applyConstraints({
-			frameRate: { max: tier.frameRate },
-			width: { max: tier.maxWidth },
-			height: { max: tier.maxHeight },
-		});
-		applied = true;
-	} catch {
-		// Resolution refused. The frame-rate step above (if it took) still stands,
-		// which is exactly why the two are separate calls.
+	// The steps (and their order) come from the ONE shared builder so this path,
+	// the offscreen document and the visible recorder page cannot drift apart.
+	for (const step of captureTierConstraintSteps(tier)) {
+		try {
+			await videoTrack.applyConstraints(step);
+			applied = true;
+		} catch {
+			// The source refused THIS step. Keep going: either the frame-rate cap or
+			// the resolution cap alone reduces what the encoder has to write, and a
+			// refused resolution change must not throw away a frame-rate change that
+			// already succeeded — which is exactly why they are separate calls.
+		}
 	}
 
 	// Record the tier only when something actually changed, so the next decision

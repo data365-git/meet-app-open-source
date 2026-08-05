@@ -270,6 +270,57 @@ export function captureTierFor(name: CaptureTierName | string): CaptureTier {
 	return CAPTURE_TIERS.find((tier) => tier.name === name) ?? CAPTURE_TIERS[0];
 }
 
+/**
+ * The tier a CAPTURE_TIER message is asking for, resolved against OUR OWN tier
+ * table — or null when the message names no tier we know.
+ *
+ * The numbers are deliberately NOT taken from the wire. Every recorder context
+ * ships this same table, so reading the name and looking it up locally makes a
+ * malformed or half-serialized message (`{ tier: {} }`, an older sender, a
+ * future name) a no-op instead of a constraint set full of `undefined` that a
+ * source might "honour" in some arbitrary way. Unlike captureTierFor() this does
+ * NOT fall back to the best tier: silently RESTORING quality on an unparseable
+ * message is the one wrong answer here — the SW only ever sends this while it is
+ * trying to protect a struggling upload.
+ */
+export function captureTierFromMessage(raw: unknown): CaptureTier | null {
+	if (typeof raw !== "object" || raw === null) return null;
+	const name = (raw as { name?: unknown }).name;
+	if (typeof name !== "string") return null;
+	return CAPTURE_TIERS.find((tier) => tier.name === name) ?? null;
+}
+
+/**
+ * The constraint sets to hand to MediaStreamTrack.applyConstraints(), in the
+ * order they must be applied. Shared by all three recorder paths (in-page,
+ * offscreen tab capture, visible recorder page) so the exact asks — and their
+ * order — cannot drift apart between contexts.
+ *
+ *  1. FRAME RATE first. It is the cheaper and safer of the two — the capturer
+ *     just drops frames, no re-scaler is reconfigured, and on screen content it
+ *     buys most of the bitrate saving with the least visible damage (text stays
+ *     sharp). If step 2 is then refused, output has still genuinely been reduced.
+ *  2. THE HEIGHT CAP second, CARRYING the frame rate along with it. A constraint
+ *     set REPLACES the previous one, so omitting frameRate here would silently
+ *     undo step 1.
+ *
+ * Callers apply each step in its own try/catch: applyConstraints rejects with
+ * OverconstrainedError when a source cannot honour the ask, and a refused
+ * resolution change must not throw away the frame-rate change that succeeded.
+ */
+export function captureTierConstraintSteps(
+	tier: CaptureTier,
+): MediaTrackConstraints[] {
+	return [
+		{ frameRate: { max: tier.frameRate } },
+		{
+			frameRate: { max: tier.frameRate },
+			width: { max: tier.maxWidth },
+			height: { max: tier.maxHeight },
+		},
+	];
+}
+
 // The backlog is measured in whole S3/R2 parts because that is the unit the
 // uploader actually ships (background/upload.ts MIN_PART_SIZE = 5 MB). Kept as a
 // literal rather than imported so this module stays free of background/ code.

@@ -24,9 +24,14 @@ import {
 	CAPTURE_MAX_FRAME_RATE,
 	CAPTURE_MAX_HEIGHT,
 	CAPTURE_MAX_WIDTH,
+	CAPTURE_TIERS,
+	type CaptureTier,
+	type CaptureTierName,
 	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
+	captureTierConstraintSteps,
+	captureTierFromMessage,
 	createMixLimiter,
 	micAudioConstraints,
 	pickMimeType,
@@ -106,6 +111,9 @@ interface RecordingState {
 	displayStream: MediaStream;
 	micStream: MediaStream | null;
 	tabAudioStream: MediaStream | null;
+	/** The capture tier the LIVE video track is currently constrained to. Starts
+	 * at the best tier and is moved only by applyCaptureTier below. */
+	captureTier: CaptureTierName;
 }
 
 let state: RecordingState | null = null;
@@ -223,6 +231,53 @@ async function attemptAudioCtxResume(audioCtx: AudioContext): Promise<void> {
 	}
 	if (intentionalStop || !state || state.recorder.state === "inactive") return;
 	if (audioCtx.state === "running") handleTabAudioRecovered("suspended");
+}
+
+// ── Adaptive capture tier, applied to the LIVE track ───────────────────────
+//
+// The SW decides WHEN to move (background/sw.ts → chooseCaptureTier); this is
+// where it lands on the full-screen INSTRUCTION path. Twin of applyCaptureTierTo
+// in content/inpage-recorder.ts and applyCaptureTier in offscreen/recorder.ts —
+// same rules, and the constraint sets come from the ONE shared builder
+// (shared/recording-quality.ts captureTierConstraintSteps) so the three cannot
+// drift apart.
+//
+// THE RULE: NEVER stop, recreate or restart the MediaRecorder. Restarting the
+// encoder mid-recording emits a fresh fMP4 init segment into a multipart upload
+// that is already mid-stream, and the two byte streams interleave into a file no
+// player can open (the 2026-07-23 corruption). applyConstraints() changes the
+// SOURCE in place: the same track stays in the same MediaStream the recorder was
+// constructed with, so the encoder and the upload never learn anything happened.
+//
+// AUDIO IS NEVER TOUCHED — not the mic, not the tab audio carrying the other
+// participants, not the mixed destination. Voice is the part of a recording that
+// must survive, and at 128 kbit/s it is a rounding error next to the video.
+async function applyCaptureTier(
+	s: RecordingState,
+	tier: CaptureTier,
+): Promise<boolean> {
+	const videoTrack = s.displayStream.getVideoTracks()[0];
+	// No live video (the user hit Chrome's "Stop sharing" between the SW's
+	// decision and its delivery): nothing to constrain, and nothing worth
+	// disturbing the recorder over.
+	if (!videoTrack || videoTrack.readyState !== "live") return false;
+	if (typeof videoTrack.applyConstraints !== "function") return false;
+
+	let applied = false;
+	for (const step of captureTierConstraintSteps(tier)) {
+		try {
+			await videoTrack.applyConstraints(step);
+			applied = true;
+		} catch {
+			// OverconstrainedError on one step must not throw away the other — that
+			// is exactly why they are separate calls.
+		}
+	}
+
+	// Record the tier only when something actually changed, so the next decision
+	// starts from what the capture is really running at.
+	if (applied) s.captureTier = tier.name;
+	return applied;
 }
 
 // ── View switching ──────────────────────────────────────────────────────────
@@ -917,6 +972,7 @@ async function startRecording(): Promise<void> {
 			displayStream,
 			micStream,
 			tabAudioStream,
+			captureTier: CAPTURE_TIERS[0].name,
 		};
 
 		// MID-RECORDING WATCHDOG (guaranteed client audio): belt-and-suspenders
@@ -1293,6 +1349,43 @@ function wire(): void {
 				syncPauseLabel();
 				sendResponse({ ok: true });
 			}
+		} else if (msg.type === "CAPTURE_TIER") {
+			// Adaptive capture: the SW watched the upload backlog and picked a tier.
+			// This only re-constrains the LIVE video track — it never stops, recreates
+			// or restarts the recorder, and never touches audio.
+			const s = state;
+			// Conditional ack, for exactly the reason STOP/PAUSE above are: this tab
+			// receives the broadcast even when it owns no capture, and an
+			// unconditional "ok" would tell the SW the capture had moved when nothing
+			// here moved — it would commit a tier the recording is NOT running at and
+			// tell the user about a quality change that never happened.
+			if (!s || s.recorder.state === "inactive") return;
+			const tierSessionId =
+				typeof msg.sessionId === "string" ? msg.sessionId : undefined;
+			// (F2) A decision computed for a FINISHED recording must never
+			// reconfigure the capture that is live now. Answered rather than ignored:
+			// this tab does own a capture, so silence would only make the SW burn its
+			// delivery retries.
+			if (tierSessionId !== undefined && tierSessionId !== s.sessionId) {
+				sendResponse({ ok: false, sessionId: tierSessionId });
+				return;
+			}
+			const tier = captureTierFromMessage(msg.tier);
+			if (!tier) {
+				sendResponse({ ok: false, sessionId: tierSessionId });
+				return;
+			}
+			// Ack ASYNCHRONOUSLY, once the constraints have actually been applied, so
+			// the SW's "delivered" flag means the capture really moved.
+			applyCaptureTier(s, tier)
+				// The ack carries the session it was answered FOR, so the SW can tell
+				// this reply apart from one produced by a leftover recorder tab still
+				// listening for an earlier recording's messages.
+				.then((applied) =>
+					sendResponse({ ok: applied, sessionId: tierSessionId }),
+				)
+				.catch(() => sendResponse({ ok: false, sessionId: tierSessionId }));
+			return true; // keep the message channel open for the async reply
 		} else if (msg.type === "TAB_AUDIO_LOST_REMOTE") {
 			// SW detected the loss independently (source tab closed/navigated
 			// away) — this is always the unrecoverable "ended" cause. Route
