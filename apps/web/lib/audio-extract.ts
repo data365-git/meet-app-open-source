@@ -622,6 +622,82 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 	});
 }
 
+// Listening quality, deliberately NOT the transcription settings above.
+//
+// `extractAudioToBuffer` produces mono 24 kHz at 64 kbit/s because its consumer
+// is Gemini, where smaller input is cheaper and speech recognition does not care.
+// That is telephone quality: fine for a machine, poor for a person who asked to
+// download the audio of their own meeting. A download is listened to, so it keeps
+// both channels (two people on a call are not the same signal), the full 48 kHz
+// the recorder captured at, and a bitrate that does not audibly thin the voice.
+// The cost is size — roughly 1 MB/min instead of 0.5 — which is the right trade
+// for a file whose whole purpose is being heard.
+const DOWNLOAD_AUDIO_BITRATE = "128k";
+const DOWNLOAD_AUDIO_SAMPLE_RATE = "48000";
+
+/**
+ * Extract a video's audio as an mp3 meant for a HUMAN to listen to.
+ *
+ * Read-only: it takes a URL and returns bytes. It writes nothing and deletes
+ * nothing — deliberately unlike `replaceVideoWithAudio`, which destroys the
+ * video. Keeping the two on separate code paths is what makes it impossible for
+ * a download to ever become a replacement.
+ */
+export async function extractAudioForDownload(
+	videoUrl: string,
+): Promise<Buffer> {
+	const ffmpeg = getFfmpegPath();
+	const ffmpegArgs = [
+		"-i",
+		videoUrl,
+		"-vn",
+		"-ar",
+		DOWNLOAD_AUDIO_SAMPLE_RATE,
+		"-acodec",
+		"libmp3lame",
+		"-b:a",
+		DOWNLOAD_AUDIO_BITRATE,
+		"-f",
+		"mp3",
+		// Output TARGET, not an option — a leading dash makes ffmpeg 8 exit 8
+		// with "Unrecognized option 'pipe:1'". That typo shipped twice in this
+		// file and broke replace-with-audio for every video (prod logs
+		// 2026-08-03); it is spelled correctly here on purpose.
+		"pipe:1",
+	];
+
+	return new Promise((resolve, reject) => {
+		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+
+		const chunks: Buffer[] = [];
+		let stderr = "";
+
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			chunks.push(chunk);
+		});
+
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err: Error) => {
+			reject(new Error(`Audio download extraction failed: ${err.message}`));
+		});
+
+		proc.on("close", (code: number | null) => {
+			if (code === 0) {
+				resolve(Buffer.concat(chunks));
+			} else {
+				reject(
+					new Error(
+						`Audio download extraction failed with code ${code}: ${stderr}`,
+					),
+				);
+			}
+		});
+	});
+}
+
 export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
 	const ffmpeg = getFfmpegPath();
 	const ffmpegArgs = [
