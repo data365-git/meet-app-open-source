@@ -31,6 +31,7 @@ import {
 	Loader2,
 	MessageCircle,
 	Moon,
+	Music,
 	Pencil,
 	Scissors,
 	Send,
@@ -55,6 +56,7 @@ import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { downloadFilename } from "@/lib/download-filename";
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import { useTranslations } from "next-intl";
@@ -112,6 +114,7 @@ export const ShareHeader = ({
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [linkCopied, setLinkCopied] = useState(false);
 	const [isDownloading, setIsDownloading] = useState(false);
+	const [isDownloadingAudio, setIsDownloadingAudio] = useState(false);
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
 	const [showShareOptions, setShowShareOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
@@ -353,6 +356,33 @@ export const ShareHeader = ({
 			toast.error(t("downloadFailed"));
 		} finally {
 			setIsDownloading(false);
+		}
+	};
+
+	// Audio-only download. Signed-in team members only, by the owner's decision
+	// (2026-08-05): a meeting's audio travels further than a share link, so it is
+	// deliberately NOT offered to anonymous link viewers even though the video
+	// download is. The route enforces the same rule server-side — this only hides
+	// a button that would otherwise 401.
+	const handleDownloadAudio = async () => {
+		if (isDownloadingAudio) return;
+		setIsDownloadingAudio(true);
+		try {
+			const res = await fetch(`/api/videos/${data.id}/audio`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = downloadFilename(displayTitle, "mp3");
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			toast.error(t("downloadFailed"));
+		} finally {
+			setIsDownloadingAudio(false);
 		}
 	};
 
@@ -767,6 +797,34 @@ export const ShareHeader = ({
 									{isDownloading ? t("downloadPreparing") : t("download")}
 								</span>
 							</button>
+
+							{/* Audio-only download — signed-in team members ONLY.
+							    Owner's decision 2026-08-05: a meeting's audio file travels
+							    further than a share link, so anonymous link viewers do not
+							    get it even though they can download the video. The route
+							    enforces this too; hiding the button just avoids offering
+							    something that would fail. */}
+							{user && (
+								<button
+									type="button"
+									onClick={handleDownloadAudio}
+									disabled={isDownloadingAudio}
+									aria-label={t("downloadAudioAriaLabel")}
+									title={t("downloadAudioAriaLabel")}
+									className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
+								>
+									{isDownloadingAudio ? (
+										<Loader2 className="size-3.5 shrink-0 animate-spin" />
+									) : (
+										<Music className="size-3.5 shrink-0" />
+									)}
+									<span className="hidden sm:inline">
+										{isDownloadingAudio
+											? t("downloadPreparing")
+											: t("downloadAudio")}
+									</span>
+								</button>
+							)}
 
 							{/* Overflow menu (owner only) */}
 							{isOwner && (
