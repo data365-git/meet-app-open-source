@@ -83,6 +83,19 @@ module.exports = (__app, _options) => {
 					gray: getColorScale("gray"),
 					"gray-a": getColorScale("gray-a", true),
 					blue: getColorScale("blue"),
+					// Was missing while ~10 sites already used `green-3` / `green-11`
+					// / `border-green-6` — every one of them resolved to no class at
+					// all and rendered unstyled (found 2026-08-03, fixed 2026-08-05).
+					// The `--green-*` variables were already imported in globals.css,
+					// light and dark, so this only connects a scale that was there.
+					green: getColorScale("green"),
+					// Same defect, same cause: amber/purple/yellow classes were in
+					// use (ShareVideo's caption notice, the recorder's how-it-works
+					// panel, the developer environment badge) with no scale behind
+					// them. Found by the test that now guards this file.
+					amber: getColorScale("amber"),
+					purple: getColorScale("purple"),
+					yellow: getColorScale("yellow"),
 					border: "hsl(var(--border))",
 					input: "hsl(var(--input))",
 					ring: "hsl(var(--ring))",
