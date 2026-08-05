@@ -5,7 +5,9 @@ import { DEFAULT_API_BASE_URL } from "../shared/config";
 import { getMeetingId } from "../shared/meeting-url";
 import type { CaptureTier, CaptureTierName } from "../shared/recording-quality";
 import {
+	CAPTURE_TIER_NOTICE_ID,
 	CAPTURE_TIERS,
+	captureTierChangeNotice,
 	captureTierFor,
 	chooseCaptureTier,
 } from "../shared/recording-quality";
@@ -210,6 +212,41 @@ function resetCaptureTierTracking(): void {
 	captureTierSessionId = null;
 	currentCaptureTier = CAPTURE_TIERS[0].name;
 	lastTierDecisionUploadedBytes = 0;
+	// A previous recording's quality notice does not describe this one's link.
+	chrome.notifications.clear(CAPTURE_TIER_NOTICE_ID);
+}
+
+/**
+ * Tell the user, in plain words, that the capture tier moved — and tell them
+ * again when it comes back up.
+ *
+ * Called ONLY after a tier change has actually been delivered to the recorder,
+ * so the message can never describe a change that did not happen. Everything
+ * about WHEN a tier moves (and therefore when a message appears at all) is the
+ * hysteresis in chooseCaptureTier: a short backlog that drains inside the band
+ * produces no tier move, hence no notification. The wording itself lives in
+ * shared/recording-quality.ts next to the thresholds it describes.
+ */
+function notifyCaptureTierChanged(
+	from: CaptureTierName,
+	to: CaptureTierName,
+): void {
+	const notice = captureTierChangeNotice(from, to);
+	if (!notice) return;
+	chrome.notifications.create(notice.id, {
+		type: "basic",
+		iconUrl: "icons/icon-128.png",
+		title: notice.title,
+		message: notice.message,
+	});
+	if (notice.restored) {
+		// Back at full quality: the alert badge would otherwise keep implying
+		// something is still wrong. Recording state owns the badge again.
+		void getState().then(updateBadge);
+	} else {
+		chrome.action.setBadgeText({ text: "!" });
+		chrome.action.setBadgeBackgroundColor({ color: "#dd6b20" });
+	}
 }
 
 /** Send the tier to whichever recorder owns the live capture. Returns whether it
@@ -302,6 +339,7 @@ async function adaptCaptureTier(messageSessionId: string | undefined): Promise<v
 		console.info(
 			`[sw] capture tier ${currentCaptureTier}→${nextTier} (backlog ${backlogBytes} bytes)`,
 		);
+		notifyCaptureTierChanged(currentCaptureTier, nextTier);
 		currentCaptureTier = nextTier;
 	} catch (err) {
 		// Advisory path: never let it break chunk handling.

@@ -5,6 +5,7 @@ import {
 	BACKLOG_RESTORE_BELOW_BYTES,
 	CAPTURE_TIERS,
 	type CaptureTierName,
+	captureTierChangeNotice,
 	captureTierFor,
 	chooseCaptureTier,
 } from "./recording-quality";
@@ -179,5 +180,125 @@ describe("chooseCaptureTier", () => {
 		for (let i = 0; i < 5; i++) {
 			expect(chooseCaptureTier("full", MID_BAND)).toBe("full");
 		}
+	});
+});
+
+// ── The user-facing half: told plainly, told truthfully, never falsely ──────
+//
+// These assert the two failure modes that matter. (1) Silence on a real drop:
+// the recording goes blurry and the user is left guessing. (2) A false alarm:
+// a message for a hiccup that resolved itself, which is worse than silence
+// because it teaches people to ignore the message that mattered. The second is
+// structural — the notice is derived from the tier move, and the hysteresis
+// band means a short backlog produces no move — so it is asserted by walking a
+// real backlog through chooseCaptureTier, not by trusting the wording.
+describe("captureTierChangeNotice", () => {
+	it("says nothing at all when the tier did not move", () => {
+		expect(captureTierChangeNotice("full", "full")).toBeNull();
+		expect(captureTierChangeNotice("reduced", "reduced")).toBeNull();
+		expect(captureTierChangeNotice("minimal", "minimal")).toBeNull();
+	});
+
+	it("produces NO message for a brief backlog that recovers inside the hysteresis window", () => {
+		// A backlog that rises to just under the high-water mark and drains again.
+		// Every step is fed through the real decision function, so this is the
+		// actual production path, not a re-statement of the rule.
+		let tier: CaptureTierName = "full";
+		const notices: unknown[] = [];
+		for (const backlog of [
+			0,
+			BACKLOG_RESTORE_BELOW_BYTES + 1,
+			BACKLOG_DEGRADE_ABOVE_BYTES - 1,
+			BACKLOG_DEGRADE_ABOVE_BYTES,
+			BACKLOG_RESTORE_BELOW_BYTES + 1,
+			0,
+		]) {
+			const next = chooseCaptureTier(tier, backlog);
+			const notice = captureTierChangeNotice(tier, next);
+			if (notice) notices.push(notice);
+			tier = next;
+		}
+		expect(tier).toBe("full");
+		expect(notices).toEqual([]);
+	});
+
+	it("tells the user plainly when quality drops, and why", () => {
+		const notice = captureTierChangeNotice("full", "reduced");
+		expect(notice).not.toBeNull();
+		if (!notice) throw new Error("expected a notice");
+		expect(notice.title).toBe("Recording quality reduced");
+		// The observation the signal actually supports: the link is behind the
+		// recording. Not "your internet is slow" — the backlog cannot tell a slow
+		// wifi from a slow server.
+		expect(notice.message).toContain("connection is slower than the recording");
+		expect(notice.message).toContain("finish uploading");
+		expect(notice.restored).toBe(false);
+	});
+
+	it("states the quality it actually switched to, taken from the tier table", () => {
+		const notice = captureTierChangeNotice("reduced", "minimal");
+		if (!notice) throw new Error("expected a notice");
+		const minimal = captureTierFor("minimal");
+		expect(notice.message).toContain(`${minimal.maxHeight}p`);
+		expect(notice.message).toContain(`${minimal.frameRate} fps`);
+	});
+
+	it("never claims audio was reduced — no tier touches it", () => {
+		const audioRates = new Set(CAPTURE_TIERS.map((t) => t.audioBitsPerSecond));
+		expect(audioRates.size).toBe(1);
+		const notice = captureTierChangeNotice("full", "reduced");
+		if (!notice) throw new Error("expected a notice");
+		expect(notice.message).toContain("Audio is unchanged");
+	});
+
+	it("does not promise an outcome it cannot know", () => {
+		for (const [from, to] of [
+			["full", "reduced"],
+			["reduced", "minimal"],
+			["minimal", "reduced"],
+			["reduced", "full"],
+		] as const) {
+			const notice = captureTierChangeNotice(from, to);
+			if (!notice) throw new Error("expected a notice");
+			// No promises about time or certainty of completion, and no diagnosis
+			// of a cause the backlog cannot identify.
+			expect(notice.message).not.toMatch(
+				/will (finish|complete|upload)|guarantee|your (internet|wifi|network)|minutes? (left|remaining)/i,
+			);
+		}
+	});
+
+	it("tells the user when quality is restored", () => {
+		const notice = captureTierChangeNotice("reduced", "full");
+		if (!notice) throw new Error("expected a notice");
+		expect(notice.title).toBe("Recording quality restored");
+		expect(notice.message).toContain("back to full");
+		expect(notice.restored).toBe(true);
+	});
+
+	it("does not claim FULL restoration on a partial step back up", () => {
+		const notice = captureTierChangeNotice("minimal", "reduced");
+		if (!notice) throw new Error("expected a notice");
+		expect(notice.restored).toBe(false);
+		expect(notice.title).toBe("Recording quality partly restored");
+		const reduced = captureTierFor("reduced");
+		expect(notice.message).toContain(`${reduced.maxHeight}p`);
+	});
+
+	it("replaces the previous notice instead of stacking a new one", () => {
+		const ids = (
+			[
+				["full", "reduced"],
+				["reduced", "minimal"],
+				["minimal", "reduced"],
+				["reduced", "full"],
+			] as const
+		).map(([from, to]) => captureTierChangeNotice(from, to)?.id);
+		expect(new Set(ids).size).toBe(1);
+	});
+
+	it("says nothing for an unknown tier name rather than inventing an event", () => {
+		expect(captureTierChangeNotice("bogus", "full")).toBeNull();
+		expect(captureTierChangeNotice("full", "bogus")).toBeNull();
 	});
 });

@@ -331,6 +331,95 @@ export function chooseCaptureTier(
 	return currentName;
 }
 
+// ── Telling the user, truthfully ───────────────────────────────────────────
+//
+// A quality drop the user is never told about looks like a bug ("why is my
+// recording blurry?"). But the opposite failure is worse: a warning that fires
+// on every little hiccup teaches people to ignore the one that matters. So the
+// notice is derived from the SAME tier movement the hysteresis above governs —
+// no separate trigger, no separate thresholds. A brief backlog that drains
+// inside the band never changes the tier, so `captureTierChangeNotice` is never
+// even reached with a different from/to, and the user hears nothing.
+//
+// TRUTHFULNESS RULE for this copy: the only thing measured is that the upload
+// backlog grew, i.e. the link is shipping bytes SLOWER THAN THE RECORDING
+// PRODUCES THEM. That is what the message says. It must not claim to know why
+// (the user's wifi, their ISP, the server, a VPN — the signal cannot tell them
+// apart), and it must not promise an outcome it cannot know ("your recording
+// will upload in N minutes"). Reducing quality is stated as the action taken
+// and its purpose, not as a guarantee.
+
+/** A user-facing notification about a capture-tier move. */
+export interface CaptureTierNotice {
+	/** Stable id: a later notice REPLACES the previous one rather than stacking. */
+	readonly id: string;
+	readonly title: string;
+	readonly message: string;
+	/** True once the capture is back at the best tier — the caller clears any
+	 * degraded badge/alert state on this. */
+	readonly restored: boolean;
+}
+
+export const CAPTURE_TIER_NOTICE_ID = "capture-tier-changed";
+
+/** "up to 720p" — derived from the tier table so the copy cannot drift from
+ * what is actually applied. `maxHeight` is a ceiling, hence "up to". */
+function tierLabel(tier: CaptureTier): string {
+	return `up to ${tier.maxHeight}p at ${tier.frameRate} fps`;
+}
+
+/**
+ * The message for a tier move, or `null` when there is nothing to say.
+ *
+ * Pure: no chrome.*, no state. The caller decides how to show it.
+ *
+ * @param from the tier the capture was running at
+ * @param to   the tier it has just been moved to
+ */
+export function captureTierChangeNotice(
+	from: CaptureTierName | string,
+	to: CaptureTierName | string,
+): CaptureTierNotice | null {
+	const fromIndex = CAPTURE_TIERS.findIndex((tier) => tier.name === from);
+	const toIndex = CAPTURE_TIERS.findIndex((tier) => tier.name === to);
+	// Nothing moved (including the no-op the hysteresis band produces), or a
+	// name we do not know: say nothing rather than invent an event.
+	if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return null;
+
+	const toTier = CAPTURE_TIERS[toIndex];
+
+	if (toIndex > fromIndex) {
+		return {
+			id: CAPTURE_TIER_NOTICE_ID,
+			title: "Recording quality reduced",
+			message:
+				`The connection is slower than the recording, so video quality was reduced to ${tierLabel(toTier)} ` +
+				"to let the recording finish uploading. Audio is unchanged, and quality goes back up if the connection catches up.",
+			restored: false,
+		};
+	}
+
+	if (toIndex === 0) {
+		return {
+			id: CAPTURE_TIER_NOTICE_ID,
+			title: "Recording quality restored",
+			message:
+				"The connection caught up with the recording, so video quality is back to full " +
+				`(${tierLabel(toTier)}).`,
+			restored: true,
+		};
+	}
+
+	return {
+		id: CAPTURE_TIER_NOTICE_ID,
+		title: "Recording quality partly restored",
+		message:
+			"The connection is keeping up better, so video quality was raised to " +
+			`${tierLabel(toTier)}. It goes back to full if the connection keeps up.`,
+		restored: false,
+	};
+}
+
 /**
  * The container/codec the MediaRecorder should use, most preferred first.
  *

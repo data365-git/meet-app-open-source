@@ -3568,4 +3568,98 @@ describe("adaptive capture tier from the upload backlog", () => {
 		expect(tiers[0].tabId).toBe(9);
 		expect(tiers[0].message.sessionId).toBe("sess-live");
 	});
+
+	// ── Telling the user ─────────────────────────────────────────────────────
+	//
+	// A silent quality drop reads as a bug; a message for every hiccup trains
+	// people to ignore the one that matters. Both are asserted here against the
+	// real chunk→part→upload cycle, not against the copy in isolation.
+
+	const qualityNotices = (
+		notifications: Awaited<ReturnType<typeof freshSw>>["notifications"],
+	) => notifications.filter((n) => n.id === "capture-tier-changed");
+
+	it("tells the user plainly when the quality drops", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // -> reduced
+
+		const notices = qualityNotices(fake.notifications);
+		expect(notices).toHaveLength(1);
+		expect(notices[0].title).toBe("Recording quality reduced");
+		expect(notices[0].message).toContain(
+			"connection is slower than the recording",
+		);
+	});
+
+	it("says NOTHING when a brief backlog drains inside the hysteresis window", async () => {
+		const fake = await freshSw();
+		const { setState, getState } = await import("./state");
+		const sent = instrument(fake);
+		// A backlog that is real but never crosses the high-water mark.
+		await setState(
+			liveRecordingWithBacklog(
+				10 * MIN_PART_SIZE,
+				10 * MIN_PART_SIZE - 2 * MIN_PART_SIZE,
+			),
+		);
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // still inside the band
+
+		// ...and then it drains.
+		const live = await getState();
+		if (live.kind !== "recording") throw new Error("expected a live recording");
+		await setState({ ...live, uploadedBytes: live.totalBytes });
+		await sendFullPart(fake.captured, 2);
+
+		// No tier move at all, hence nothing said to the user.
+		expect(tierMessages(sent)).toHaveLength(0);
+		expect(qualityNotices(fake.notifications)).toEqual([]);
+	});
+
+	it("tells the user when the quality is restored", async () => {
+		const fake = await freshSw();
+		const { setState, getState } = await import("./state");
+		instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // -> reduced (degraded notice)
+
+		const live = await getState();
+		if (live.kind !== "recording") throw new Error("expected a live recording");
+		await setState({
+			...live,
+			totalBytes: 60 * MIN_PART_SIZE,
+			uploadedBytes: 60 * MIN_PART_SIZE - Math.floor(MIN_PART_SIZE / 5),
+		});
+		await sendFullPart(fake.captured, 2); // -> full
+
+		const notices = qualityNotices(fake.notifications);
+		expect(notices).toHaveLength(2);
+		expect(notices[1].title).toBe("Recording quality restored");
+		expect(notices[1].message).toContain("back to full");
+	});
+
+	it("does not announce a tier the recorder never received", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		instrument(fake);
+		// Every control send to the recorder tab fails, so the tier change is
+		// never actually applied — claiming it was would be a false statement.
+		fake.chrome.tabs.sendMessage = (async () => {
+			throw new Error("no receiving end");
+		}) as unknown as typeof fake.chrome.tabs.sendMessage;
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0);
+		await sendFullPart(fake.captured, 1);
+
+		expect(qualityNotices(fake.notifications)).toEqual([]);
+	});
 });
