@@ -18,6 +18,7 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
+import type { Video as VideoDomain } from "@cap/web-domain";
 import {
 	faBuilding,
 	faCircleInfo,
@@ -49,11 +50,14 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
+import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { StorageIndicator } from "@/components/StorageIndicator";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import type { LibraryKind } from "@/lib/library-kind";
 import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
@@ -103,6 +107,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			ownerOnly: false,
 			matchChildren: false,
 			icon: <GraduationCapIcon />,
+			// Dropping a dragged cap here moves it into the Recordings library.
+			libraryKind: "recording" as LibraryKind,
 			subNav: [] as { name: string; href: string }[],
 		},
 		{
@@ -112,6 +118,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			adminOnly: false,
 			ownerOnly: false,
 			icon: <UsersIcon />,
+			libraryKind: "meeting" as LibraryKind,
 			subNav: [],
 		},
 		{
@@ -440,6 +447,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											isPathActive={isPathActive}
 											extraText={item.extraText}
 											matchChildren={item.matchChildren ?? false}
+											libraryKind={
+												"libraryKind" in item ? item.libraryKind : undefined
+											}
 										/>
 									</div>
 								))}
@@ -813,6 +823,7 @@ const NavItem = ({
 	isPathActive,
 	matchChildren,
 	extraText,
+	libraryKind,
 }: {
 	name: string;
 	href: string;
@@ -826,8 +837,78 @@ const NavItem = ({
 	isPathActive: (path: string, matchChildren: boolean) => boolean;
 	extraText: number | null | undefined;
 	matchChildren: boolean;
+	/**
+	 * When set, this sidebar entry is a drop target: dragging a cap card onto it
+	 * moves that cap into this library. Same server action the Move menu uses —
+	 * ONE code path for a move — and it only ever writes `libraryKind`, never
+	 * `videos.source`.
+	 */
+	libraryKind?: LibraryKind;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
+	const router = useRouter();
+	const [isDragOver, setIsDragOver] = useState(false);
+	const [isMovingVideo, setIsMovingVideo] = useState(false);
+
+	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
+		if (!libraryKind) return;
+		if (!e.dataTransfer.types.includes("application/cap")) return;
+		// Only preventDefault for a cap payload — otherwise the link keeps its
+		// normal behaviour and other drags (files, text) fall through untouched.
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "move";
+		setIsDragOver(true);
+	};
+
+	const handleDragLeave = () => setIsDragOver(false);
+
+	const handleDrop = async (e: React.DragEvent<HTMLAnchorElement>) => {
+		if (!libraryKind) return;
+		e.preventDefault();
+		setIsDragOver(false);
+
+		let capData: {
+			id: VideoDomain.VideoId;
+			name: string;
+			ids?: VideoDomain.VideoId[];
+		} | null = null;
+		try {
+			capData = JSON.parse(e.dataTransfer.getData("application/cap"));
+		} catch (error) {
+			console.error("Error processing drop:", error);
+		}
+
+		if (!capData?.id) {
+			toast.error("Failed to move video");
+			return;
+		}
+
+		// The card drags the whole multi-selection when it belongs to one, so move
+		// every id on the payload — same as the Move menu does for a selection.
+		const ids =
+			capData.ids && capData.ids.length > 0 ? capData.ids : [capData.id];
+
+		setIsMovingVideo(true);
+		try {
+			const result = await setVideosLibraryKind(ids, libraryKind);
+			if (!result.success) {
+				toast.error(result.error);
+				return;
+			}
+			toast.success(
+				ids.length > 1
+					? `Moved ${ids.length} caps to ${name}`
+					: `Moved "${capData.name}" to ${name}`,
+			);
+			router.refresh();
+		} catch (error) {
+			console.error("Error moving video:", error);
+			toast.error("Failed to move video");
+		} finally {
+			setIsMovingVideo(false);
+		}
+	};
+
 	return (
 		<Tooltip disable={!sidebarCollapsed} content={name} position="right">
 			<Link
@@ -841,8 +922,13 @@ const NavItem = ({
 				}}
 				prefetch={true}
 				passHref
+				onDragOver={libraryKind ? handleDragOver : undefined}
+				onDragLeave={libraryKind ? handleDragLeave : undefined}
+				onDrop={libraryKind ? handleDrop : undefined}
 				className={classNames(
 					"relative border border-transparent transition z-3",
+					isDragOver && "border-blue-9 bg-blue-3",
+					isMovingVideo && "opacity-70",
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
 						: toggleMobileNav
