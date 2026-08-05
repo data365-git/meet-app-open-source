@@ -54,8 +54,19 @@ type FakeVideoRow = {
 	ownerId: string;
 	orgId: string;
 	libraryKind: "recording" | "meeting" | null;
+	folderId: string | null;
 	source: Record<string, unknown>;
 };
+
+/**
+ * What the dashboard actually shows at a library's root: both the caps and the
+ * meetings page list `libraryKind = <kind> AND folderId IS NULL`. A video whose
+ * library changed but which still points at a folder is invisible there, which
+ * is the bug this file guards.
+ */
+function rootListing(rows: FakeVideoRow[], kind: "recording" | "meeting") {
+	return rows.filter((r) => r.libraryKind === kind && r.folderId === null);
+}
 
 function loomImportedVideo(): FakeVideoRow {
 	return {
@@ -63,6 +74,7 @@ function loomImportedVideo(): FakeVideoRow {
 		ownerId: "user-1",
 		orgId: "org-1",
 		libraryKind: null,
+		folderId: null,
 		// A Loom import lands as a plain remote MP4. If a move rewrote this to
 		// look like an extension meeting capture, playback and sharing would
 		// resolve the wrong storage path.
@@ -84,7 +96,9 @@ function arrangeCaller(rows: FakeVideoRow[]) {
 		// membership lookup
 		.mockResolvedValueOnce([{ organizationId: "org-1" }])
 		// videos the caller is allowed to touch
-		.mockResolvedValueOnce(rows.map((r) => ({ id: r.id })));
+		.mockResolvedValueOnce(
+			rows.map((r) => ({ id: r.id, folderId: r.folderId })),
+		);
 }
 
 async function importAction() {
@@ -109,8 +123,11 @@ describe("setVideosLibraryKind", () => {
 
 		expect(result).toEqual({ success: true, movedIds: ["vid-loom"] });
 		expect(setPayloads).toHaveLength(1);
-		// The teeth: the SET clause contains exactly one column.
-		expect(Object.keys(setPayloads[0]!)).toEqual(["libraryKind"]);
+		// The teeth: the SET clause contains exactly the move columns.
+		expect(Object.keys(setPayloads[0]!).sort()).toEqual([
+			"folderId",
+			"libraryKind",
+		]);
 		expect(setPayloads[0]).not.toHaveProperty("source");
 
 		const after = applySetPayload(row, setPayloads[0]!);
@@ -145,7 +162,10 @@ describe("setVideosLibraryKind", () => {
 		expect(JSON.stringify(backHome.source)).toBe(originalBytes);
 		expect(backHome.source.type).toBe("webMP4");
 		for (const payload of setPayloads) {
-			expect(Object.keys(payload)).toEqual(["libraryKind"]);
+			expect(Object.keys(payload).sort()).toEqual([
+				"folderId",
+				"libraryKind",
+			]);
 		}
 	});
 
@@ -174,12 +194,72 @@ describe("setVideosLibraryKind", () => {
 			movedIds: ["vid-a", "vid-b", "vid-c"],
 		});
 		expect(setPayloads).toHaveLength(1);
-		expect(Object.keys(setPayloads[0]!)).toEqual(["libraryKind"]);
+		expect(Object.keys(setPayloads[0]!).sort()).toEqual([
+			"folderId",
+			"libraryKind",
+		]);
 		rows.forEach((row, i) => {
 			const after = applySetPayload(row, setPayloads[0]!);
 			expect(after.libraryKind).toBe("recording");
 			expect(JSON.stringify(after.source)).toBe(before[i]);
 		});
+	});
+
+	it("clears folderId so a video dragged out of a folder lands in the destination library's ROOT", async () => {
+		// An org video sitting inside a Recordings folder, dragged onto the
+		// Meetings entry in the sidebar.
+		const row: FakeVideoRow = {
+			...loomImportedVideo(),
+			id: "vid-in-folder",
+			libraryKind: "recording",
+			folderId: "folder-1",
+		};
+
+		arrangeCaller([row]);
+		const setVideosLibraryKind = await importAction();
+
+		const result = await setVideosLibraryKind(
+			["vid-in-folder"] as never,
+			"meeting",
+		);
+
+		expect(result).toEqual({ success: true, movedIds: ["vid-in-folder"] });
+		expect(setPayloads).toHaveLength(1);
+		// The teeth: the UPDATE nulls folderId alongside libraryKind.
+		expect(setPayloads[0]).toMatchObject({
+			libraryKind: "meeting",
+			folderId: null,
+		});
+
+		const after = applySetPayload(row, setPayloads[0]!);
+		expect(after.folderId).toBeNull();
+		// ...and it is now actually visible where the user dropped it.
+		expect(rootListing([after], "meeting").map((r) => r.id)).toEqual([
+			"vid-in-folder",
+		]);
+		expect(rootListing([after], "recording")).toEqual([]);
+		// The move must not have touched how the video was captured.
+		expect(after.source).toEqual({ type: "webMP4" });
+	});
+
+	it("leaves a root-level video at the root (folderId stays null) when it changes library", async () => {
+		const row: FakeVideoRow = {
+			...loomImportedVideo(),
+			id: "vid-root",
+			libraryKind: "meeting",
+			folderId: null,
+		};
+
+		arrangeCaller([row]);
+		const setVideosLibraryKind = await importAction();
+
+		await setVideosLibraryKind(["vid-root"] as never, "recording");
+
+		const after = applySetPayload(row, setPayloads[0]!);
+		expect(after.folderId).toBeNull();
+		expect(rootListing([after], "recording").map((r) => r.id)).toEqual([
+			"vid-root",
+		]);
 	});
 
 	it("is membership-guarded: scopes the lookup to the caller and never writes when nothing is accessible", async () => {

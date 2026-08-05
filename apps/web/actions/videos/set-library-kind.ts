@@ -74,7 +74,7 @@ export async function setVideosLibraryKind(
 		const memberOrgIds = memberships.map((m) => m.organizationId);
 
 		const allowed = await db()
-			.select({ id: videos.id })
+			.select({ id: videos.id, folderId: videos.folderId })
 			.from(videos)
 			.where(
 				and(
@@ -94,14 +94,30 @@ export async function setVideosLibraryKind(
 			return { success: false, error: "No videos found or not accessible" };
 		}
 
-		// The whole point of this action: ONE column in the SET clause.
+		// Two columns, and only these two.
+		//
+		// `libraryKind` is the move itself. `folderId` is cleared because a
+		// library's root listing is `folderId IS NULL` (see the caps and meetings
+		// pages): a video that still points at a folder of the library it just
+		// left would land nowhere the user can see it. Dropping a cap on the
+		// Recordings/Meetings sidebar entry — or picking that library from the
+		// Move menu — means "put it in that library's root", so the old folder
+		// membership does not survive the move.
+		//
+		// `source` is still never touched here (see the header comment).
 		await db()
 			.update(videos)
-			.set({ libraryKind })
+			.set({ libraryKind, folderId: null })
 			.where(inArray(videos.id, movedIds));
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/meetings");
+		// The videos also left their folders, so those folder pages are stale.
+		for (const folderId of new Set(
+			allowed.map((v) => v.folderId).filter(Boolean),
+		)) {
+			revalidatePath(`/dashboard/folder/${folderId}`);
+		}
 		for (const id of movedIds) {
 			revalidatePath(`/s/${id}`);
 		}
