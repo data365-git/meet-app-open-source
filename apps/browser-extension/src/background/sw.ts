@@ -146,16 +146,34 @@ function sendToOffscreen(message: Record<string, unknown>): Promise<unknown> {
  * STOP and the Meet-ended auto-stop — must check this: a swallowed failure used
  * to leave the recording stuck in "recording" forever with its uploaded parts
  * never completed. */
+/**
+ * @param accept Decides whether a RESOLVED send actually counts as delivered.
+ *   The default answers "yes" for every reply, which is the historical behaviour
+ *   and the right one for the fire-and-forget controls: `chrome.*.sendMessage`
+ *   resolves with `undefined` whenever the receiver has no async handler, so for
+ *   STOP/PAUSE/RESUME "it did not throw" is all the evidence that exists.
+ *   A caller whose command must have taken EFFECT (the capture tier) passes a
+ *   predicate that reads the receiver's acknowledgment payload instead — a
+ *   resolved-but-refused reply is then retried like any other failure and, if it
+ *   never turns into a real ack, reported as NOT delivered.
+ */
 async function sendControlWithRetry(
 	send: () => Promise<unknown>,
 	label: string,
 	attempts = 4,
 	delayMs = 150,
+	accept: (response: unknown) => boolean = () => true,
 ): Promise<boolean> {
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		try {
-			await send();
-			return true;
+			const response = await send();
+			if (accept(response)) return true;
+			if (attempt === attempts) {
+				console.warn(
+					`[sw] control send was refused by the receiver after ${attempts} attempts: ${label}`,
+				);
+				return false;
+			}
 		} catch (err) {
 			if (attempt === attempts) {
 				console.warn(
@@ -164,8 +182,8 @@ async function sendControlWithRetry(
 				);
 				return false;
 			}
-			await new Promise((r) => setTimeout(r, delayMs));
 		}
+		await new Promise((r) => setTimeout(r, delayMs));
 	}
 	return false;
 }
@@ -318,12 +336,48 @@ function notifyCaptureTierChanged(
 	}
 }
 
+/**
+ * Did the recorder ACKNOWLEDGE that it applied the constraints?
+ *
+ * "The send resolved" is not that answer. `chrome.tabs.sendMessage` /
+ * `chrome.runtime.sendMessage` resolve with `undefined` when the far end has no
+ * handler for the message at all, and the in-page recorder deliberately answers
+ * `{ ok: false }` when it declines — the capture is owned by a different
+ * recorder session, or applyConstraints threw OverconstrainedError. Treating
+ * either as delivered would commit `currentCaptureTier` to a tier the capture is
+ * NOT running at: the next measurement would then start from the wrong step and
+ * silently skip the reduction the backlog was asking for, while the user got a
+ * notification about a quality change that never happened.
+ *
+ * The sessionId echo is the third refusal. It is defence in depth — the recorder
+ * already refuses a foreign session itself — for the case where a leftover
+ * recorder from an EARLIER recording answers a message addressed to the live
+ * one. An ack that carries no sessionId at all is still accepted, because a
+ * recorder path that does not echo it (and cannot, being a different context's
+ * older build) is not evidence of the wrong session; a MISMATCHED one is.
+ */
+function isCaptureTierAck(
+	response: unknown,
+	expectedSessionId: string | undefined,
+): boolean {
+	if (typeof response !== "object" || response === null) return false;
+	const ack = response as { ok?: unknown; sessionId?: unknown };
+	const acknowledged = ack.ok === true;
+	if (!acknowledged) return false;
+	if (typeof ack.sessionId === "string" && ack.sessionId !== expectedSessionId)
+		return false;
+	return true;
+}
+
 /** Send the tier to whichever recorder owns the live capture. Returns whether it
- * was delivered — the three routes mirror STOP/PAUSE/RESUME exactly. */
+ * was delivered AND acknowledged — the three routes mirror STOP/PAUSE/RESUME
+ * exactly, but unlike them this one reads the reply (see isCaptureTierAck). */
 function sendCaptureTier(
 	state: Extract<ExtensionState, { kind: "recording" }>,
 	tier: CaptureTier,
 ): Promise<boolean> {
+	const accept = (response: unknown) =>
+		isCaptureTierAck(response, state.recorderSessionId);
 	const message = {
 		type: "CAPTURE_TIER",
 		// (F2) Addressed to THIS recording's recorder. A recorder that minted a
@@ -339,6 +393,7 @@ function sendCaptureTier(
 			"CAPTURE_TIER→tab",
 			2,
 			100,
+			accept,
 		);
 	}
 	if (state.contentRecorderTabId !== undefined) {
@@ -348,6 +403,7 @@ function sendCaptureTier(
 			"CAPTURE_TIER→tab",
 			2,
 			100,
+			accept,
 		);
 	}
 	return sendControlWithRetry(
@@ -355,6 +411,7 @@ function sendCaptureTier(
 		"CAPTURE_TIER→offscreen",
 		2,
 		100,
+		accept,
 	);
 }
 
@@ -406,12 +463,14 @@ async function adaptCaptureTier(messageSessionId: string | undefined): Promise<v
 		if (nextTier === currentCaptureTier) return;
 
 		const delivered = await sendCaptureTier(state, captureTierFor(nextTier));
-		// Only commit once the recorder actually got it. An undelivered step that
-		// we recorded anyway would make the NEXT decision start from a tier the
-		// capture is not running at, and the step would be silently skipped.
+		// Only commit once the recorder ACKNOWLEDGED applying it. A step that was
+		// not delivered — or was delivered and refused — but recorded anyway would
+		// make the NEXT decision start from a tier the capture is not running at,
+		// so this same step would be silently skipped and the backlog would keep
+		// growing while the user was told the quality had already been reduced.
 		if (!delivered) {
 			console.warn(
-				`[sw] capture tier ${currentCaptureTier}→${nextTier} was not delivered; will re-decide on the next part`,
+				`[sw] capture tier ${currentCaptureTier}→${nextTier} was not acknowledged by the recorder; will retry the same step on the next part`,
 			);
 			return;
 		}

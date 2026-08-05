@@ -1119,12 +1119,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 		// once the constraints have actually been applied, so the SW's
 		// "delivered" flag means the capture really moved.
 		if (isInPageRecording()) {
-			applyInPageCaptureTier(
-				message.tier as CaptureTier,
-				typeof message.sessionId === "string" ? message.sessionId : undefined,
-			)
-				.then((applied) => sendResponse({ ok: applied }))
-				.catch(() => sendResponse({ ok: false }));
+			const tierSessionId =
+				typeof message.sessionId === "string" ? message.sessionId : undefined;
+			applyInPageCaptureTier(message.tier as CaptureTier, tierSessionId)
+				// The ack carries the session it was answered FOR, so the SW can tell
+				// this reply apart from one produced by a leftover recorder that is
+				// still listening for an earlier recording's messages.
+				.then((applied) =>
+					sendResponse({ ok: applied, sessionId: tierSessionId }),
+				)
+				.catch(() => sendResponse({ ok: false, sessionId: tierSessionId }));
 			return true; // keep the message channel open for the async reply
 		}
 	}

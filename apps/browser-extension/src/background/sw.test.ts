@@ -3393,15 +3393,25 @@ describe("adaptive capture tier from the upload backlog", () => {
 
 	/** Records every chrome.tabs.sendMessage and answers presign+PUT so each
 	 * MIN_PART_SIZE chunk really completes a part (which is what advances
-	 * uploadedBytes — the trigger for a tier decision). */
-	function instrument(fake: Awaited<ReturnType<typeof freshSw>>) {
+	 * uploadedBytes — the trigger for a tier decision).
+	 *
+	 * `reply` stands in for the recorder's acknowledgment. The default is what a
+	 * healthy in-page recorder sends back once it has actually applied the
+	 * constraints: `{ ok: true, sessionId }`. The refusal tests below replace it. */
+	function instrument(
+		fake: Awaited<ReturnType<typeof freshSw>>,
+		reply: (message: Record<string, unknown>) => unknown = (message) => ({
+			ok: true,
+			sessionId: message.sessionId,
+		}),
+	) {
 		const sent: Array<{ tabId: number; message: Record<string, unknown> }> = [];
 		fake.chrome.tabs.sendMessage = (async (
 			tabId: number,
 			message: Record<string, unknown>,
 		) => {
 			sent.push({ tabId, message });
-			return undefined;
+			return message.type === "CAPTURE_TIER" ? reply(message) : undefined;
 		}) as unknown as typeof fake.chrome.tabs.sendMessage;
 
 		vi.stubGlobal(
@@ -3663,6 +3673,93 @@ describe("adaptive capture tier from the upload backlog", () => {
 		expect(qualityNotices(fake.notifications)).toEqual([]);
 	});
 
+	// ── A tier counts as changed only when the recorder ACKNOWLEDGES it ──────
+	//
+	// `chrome.tabs.sendMessage` resolving proves the message left the SW, not that
+	// anything happened at the other end: it resolves with `undefined` when the far
+	// end has no handler for the message, and the in-page recorder answers
+	// `{ ok: false }` when it declines (foreign session, or applyConstraints threw
+	// OverconstrainedError). Committing currentCaptureTier on either would leave the
+	// SW believing the capture runs at a tier it never moved to — so the NEXT
+	// measurement would start from the wrong step, skip the reduction the backlog is
+	// asking for, and the user would have been told about a change that never
+	// happened. Each test below therefore asserts BOTH halves: no notification, and
+	// the same step is retried rather than advanced.
+
+	const tierNames = (
+		sent: Array<{ tabId: number; message: Record<string, unknown> }>,
+	) => tierMessages(sent).map((s) => (s.message.tier as { name: string }).name);
+
+	it("does not commit the tier when the recorder REFUSES it with { ok: false }", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		// The recorder received it and declined — e.g. applyConstraints threw
+		// OverconstrainedError, so the capture is still running at the old tier.
+		const sent = instrument(fake, () => ({ ok: false }));
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // asks for "reduced" — refused
+		await sendFullPart(fake.captured, 2); // must ask for "reduced" AGAIN
+
+		// Every attempt is the SAME step: a refusal must never advance the ladder.
+		expect(tierNames(sent).length).toBeGreaterThan(0);
+		expect(new Set(tierNames(sent))).toEqual(new Set(["reduced"]));
+		expect(tierNames(sent)).not.toContain("minimal");
+		// And nothing was claimed to the user about a quality change that the
+		// capture never made.
+		expect(qualityNotices(fake.notifications)).toEqual([]);
+	});
+
+	it("does not commit the tier when nothing on the other end answers (undefined ack)", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		// No CAPTURE_TIER handler at the far end: chrome resolves with `undefined`
+		// rather than throwing, which the old code read as "delivered".
+		const sent = instrument(fake, () => undefined);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // asks for "reduced" — unanswered
+		await sendFullPart(fake.captured, 2); // must ask for "reduced" AGAIN
+
+		expect(tierNames(sent).length).toBeGreaterThan(0);
+		expect(new Set(tierNames(sent))).toEqual(new Set(["reduced"]));
+		expect(qualityNotices(fake.notifications)).toEqual([]);
+	});
+
+	it("does not accept an acknowledgment stamped with a DIFFERENT sessionId", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		// A recorder left over from an earlier recording answers the live
+		// recording's message. Its "ok" describes ITS capture, not this one's.
+		const sent = instrument(fake, () => ({ ok: true, sessionId: "sess-stale" }));
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // asks for "reduced" — wrong session
+		await sendFullPart(fake.captured, 2); // must ask for "reduced" AGAIN
+
+		expect(tierNames(sent).length).toBeGreaterThan(0);
+		expect(new Set(tierNames(sent))).toEqual(new Set(["reduced"]));
+		expect(qualityNotices(fake.notifications)).toEqual([]);
+	});
+
+	it("commits and announces once the recorder acknowledges with { ok: true }", async () => {
+		const fake = await freshSw();
+		const { setState } = await import("./state");
+		// The control for the three refusals above: same backlog, real ack.
+		const sent = instrument(fake);
+		await setState(liveRecordingWithBacklog(40 * MIN_PART_SIZE, 0));
+
+		await sendFullPart(fake.captured, 0); // baseline
+		await sendFullPart(fake.captured, 1); // -> reduced (acknowledged)
+		await sendFullPart(fake.captured, 2); // -> minimal (the ladder advances)
+
+		expect(tierNames(sent)).toEqual(["reduced", "minimal"]);
+		expect(qualityNotices(fake.notifications)).toHaveLength(2);
+	});
+
 	// ── The backlog is what is WAITING too, not only what is buffered ─────────
 	//
 	// Regression guard for the defect a real 800 kbit/s soak exposed (2026-08-05):
@@ -3686,7 +3783,9 @@ describe("adaptive capture tier from the upload backlog", () => {
 			message: Record<string, unknown>,
 		) => {
 			sent.push({ tabId, message });
-			return undefined;
+			return message.type === "CAPTURE_TIER"
+				? { ok: true, sessionId: message.sessionId }
+				: undefined;
 		}) as unknown as typeof fake.chrome.tabs.sendMessage;
 
 		// A PUT that can be held open — this is the slow link, and it is what makes
