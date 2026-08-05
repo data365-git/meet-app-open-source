@@ -79,6 +79,11 @@ const MIN_BAND_MEAN_DB = Number(process.env.PROOF_MIN_BAND_DB ?? -16.5);
 const DRAIN_HARD_CAP_MS = Number(process.env.PROOF_DRAIN_CAP_MS) || Math.max(180_000, RECORD_MS);
 const DRAIN_STALL_MS = Number(process.env.PROOF_DRAIN_STALL_MS) || 150_000;
 const SERVE_PORT = 8443;
+// Is the mock server throttling this arm? (mock-server.mjs reads the same var.)
+// The adaptive-capture contract only forbids a tier move on a link that is fast
+// ENOUGH — on a deliberately throttled arm a move is the feature working, so the
+// no-move claim below is asserted on the control arm only.
+const IS_THROTTLED = Number(process.env.THROTTLE_KBPS) > 0;
 const FAKE_MEET_URL = `https://meet.google.com/abc-defg-hij?tone=${SECOND_TEST ? "stream" : "media"}${SWAP_TEST ? "&swap=8000" : ""}`;
 
 const log = (m) => console.log(`[proof-inpage] ${m}`);
@@ -145,6 +150,126 @@ async function shadowDump(cdp) {
 	return "no-shadow-root";
 }
 
+// ── Capture-tier watch ────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. The regression guard for adaptive capture is "on a link that
+// is fast enough, the capture never degrades", checked by grepping this log for
+// a tier-drop line. Before this watch the harness printed NO tier line under any
+// circumstance, so that grep could not fail — a guard that cannot fail guards
+// nothing, and the quality push could have been silently undone by a stray
+// degrade with the control arm still reporting PASS.
+//
+// The signal is the extension's OWN evidence of a DELIVERED tier change, taken
+// at the two places sw.ts emits it after `sendCaptureTier` resolves true:
+// the `[sw] capture tier x→y (backlog N bytes)` console line (which carries the
+// tier names and the measurement behind them) and the user-facing notification
+// (whose title says which DIRECTION the tier moved). An undelivered change goes
+// through console.warn and is deliberately NOT captured — the capture did not
+// actually change, so it is not a degradation.
+//
+// Both hooks wrap and call through; nothing about the extension's behaviour is
+// altered by observing it.
+const TIER_SELFTEST_MARK = "__proof-tier-selftest__";
+
+/** Install (idempotently) into the live service worker. Returns whether the
+ * wrapper proved it can capture a matching line — silence from an uninstalled
+ * hook must never be read as "nothing happened". */
+async function installCaptureTierWatch(sw, mark) {
+	return await sw.evaluate((selftestMark) => {
+		if (globalThis.__proofTierWatch) {
+			return { fresh: false, teeth: globalThis.__proofTierWatch.teeth, notices: globalThis.__proofTierWatch.noticeHook };
+		}
+		const watch = { events: [], teeth: false, noticeHook: false };
+		globalThis.__proofTierWatch = watch;
+
+		const realInfo = console.info.bind(console);
+		console.info = (...args) => {
+			const text = args.map((a) => String(a)).join(" ");
+			if (text.includes(selftestMark)) {
+				watch.teeth = true;
+				return;
+			}
+			if (text.includes("capture tier")) watch.events.push({ kind: "tier", text });
+			realInfo(...args);
+		};
+
+		try {
+			const realCreate = chrome.notifications.create.bind(chrome.notifications);
+			chrome.notifications.create = (...args) => {
+				const options = args.find(
+					(a) => a && typeof a === "object" && typeof a.title === "string",
+				);
+				if (options && options.title.startsWith("Recording quality")) {
+					watch.events.push({
+						kind: "notice",
+						title: options.title,
+						message: String(options.message ?? ""),
+					});
+				}
+				return realCreate(...args);
+			};
+			watch.noticeHook = true;
+		} catch {
+			// Direction is then unknown; the reporter fails safe (see below).
+		}
+
+		// TEETH: push a line through the very branch a real tier change takes, and
+		// require it to have been seen before trusting this watch's silence.
+		console.info(`[sw] capture tier ${selftestMark} (not a real tier move)`);
+		return { fresh: true, teeth: watch.teeth, notices: watch.noticeHook };
+	}, mark);
+}
+
+/** Take everything observed since the last drain. `null` means the watch is gone
+ * — an MV3 service worker can be torn down and restarted, taking the wrapper (and
+ * any event it would have caught) with it. That is a HOLE in the evidence, not a
+ * quiet pass, so the caller records it. */
+async function drainCaptureTierEvents(sw) {
+	try {
+		return await sw.evaluate(() => {
+			const watch = globalThis.__proofTierWatch;
+			if (!watch) return null;
+			return watch.events.splice(0, watch.events.length);
+		});
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Turn raw observations into log lines. A DROP is reported with the words the
+ * regression check greps for; a move back up is reported with its own wording,
+ * because on a link that is fast enough neither should ever occur — a restore
+ * can only exist because a degradation preceded it.
+ */
+function describeTierEvents(events) {
+	const lines = [];
+	for (let i = 0; i < events.length; i++) {
+		const event = events[i];
+		if (event.kind !== "tier") continue;
+		const detail = event.text.replace(/^\[sw\]\s*/, "");
+		// sw.ts logs the line and then raises the notice, so the direction for this
+		// move is the next notice in the stream.
+		const notice = events.slice(i + 1, i + 3).find((e) => e.kind === "notice");
+		if (!notice) {
+			// Fail safe: an unclassifiable move is still a move.
+			lines.push(`tier drop or restore, direction unclassified: ${detail}`);
+		} else if (/reduced/i.test(notice.title)) {
+			lines.push(`tier drop: ${detail} — "${notice.title}"`);
+		} else {
+			lines.push(`degraded capture moved back up: ${detail} — "${notice.title}"`);
+		}
+	}
+	// A notice with no console line before it would mean the console hook missed a
+	// change the user was told about. Report it rather than lose it.
+	const paired = lines.length;
+	const notices = events.filter((e) => e.kind === "notice").length;
+	for (let i = paired; i < notices; i++) {
+		lines.push("tier drop or restore, console line missing: a quality notice was raised");
+	}
+	return lines;
+}
+
 async function main() {
 	let chromium;
 	for (const pkg of ["playwright", "@playwright/test", "playwright-core"]) {
@@ -204,6 +329,11 @@ async function main() {
 		return null;
 	};
 	let context;
+	// Capture-tier observations (see the watch above).
+	let tierPoll = null;
+	let tierMoves = 0;
+	let tierWatchLost = 0;
+	let tierWatchTeeth = false;
 	try {
 		await new Promise((resolve, reject) => {
 			const t = setTimeout(() => reject(new Error("serve.mjs did not start")), 5000);
@@ -252,6 +382,32 @@ async function main() {
 		}
 		if (!sw) return verdict("FAIL", "reason=no-service-worker");
 		log(`extension ${new URL(sw.url()).host} loaded`);
+
+		const tierWatch = await installCaptureTierWatch(sw, TIER_SELFTEST_MARK);
+		tierWatchTeeth = tierWatch.teeth === true;
+		log(
+			`capture-tier watch: ${tierWatchTeeth ? "control line captured (has teeth)" : "SELF-TEST FAILED — its silence proves nothing"}` +
+				`${tierWatch.notices ? "" : ", direction hook unavailable"}`,
+		);
+		const collectTierEvents = async () => {
+			const drained = await drainCaptureTierEvents(sw);
+			if (drained === null) {
+				tierWatchLost++;
+				log("capture-tier watch went away (service worker restart); reinstalling");
+				const again = await installCaptureTierWatch(sw, TIER_SELFTEST_MARK).catch(
+					() => ({ teeth: false }),
+				);
+				tierWatchTeeth = tierWatchTeeth && again.teeth === true;
+				return;
+			}
+			for (const line of describeTierEvents(drained)) {
+				tierMoves++;
+				log(line);
+			}
+		};
+		tierPoll = setInterval(() => {
+			void collectTierEvents();
+		}, 5000);
 
 		await sw.evaluate(async () => {
 			await chrome.storage.local.set({
@@ -421,7 +577,29 @@ async function main() {
 			);
 		}
 
+		// Last look before judging: a tier move decided on the final part would
+		// otherwise land after the poller's last tick.
+		if (tierPoll) {
+			clearInterval(tierPoll);
+			tierPoll = null;
+		}
+		await collectTierEvents();
+
 		const claims = [tabConstraints.claim];
+
+		// THE REGRESSION GUARD. On a link that is fast enough the capture must run
+		// at its best tier from start to finish, so the owner's quality push is not
+		// quietly undone by the adaptive path. Asserted on the control arm only: on
+		// a deliberately throttled arm a tier move is the feature doing its job.
+		if (!IS_THROTTLED) {
+			claims.push(
+				!tierWatchTeeth || tierWatchLost > 0
+					? `tier=UNPROVEN(watch teeth=${tierWatchTeeth}, lost=${tierWatchLost})`
+					: tierMoves === 0
+						? "tier=OK(never left the best tier)"
+						: `tier=MOVED(${tierMoves})`,
+			);
+		}
 		const cv = manifest.createVideo ?? {};
 		claims.push(
 			`filing=${cv.extensionContext === "meeting" && cv.meetingId === "abc-defg-hij" ? "OK" : `WRONG(${cv.extensionContext},${cv.meetingId})`}`,
@@ -490,6 +668,7 @@ async function main() {
 	} catch (e) {
 		return verdict("FAIL", `reason=harness-exception msg="${e?.message ?? e}"`);
 	} finally {
+		if (tierPoll) clearInterval(tierPoll);
 		await context?.close().catch(() => {});
 		server.kill();
 		mock.kill();
