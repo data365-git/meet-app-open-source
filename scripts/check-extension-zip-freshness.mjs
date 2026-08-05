@@ -20,6 +20,7 @@ import { execSync } from "node:child_process";
 
 const SRC = "apps/browser-extension/src";
 const ZIP = "apps/web/public/365-extension.zip";
+const MANIFEST = "apps/browser-extension/manifest.json";
 
 const git = (args) =>
 	execSync(`git ${args}`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -29,6 +30,47 @@ const fail = (msg) => {
 	console.error(
 		`[zip-freshness] Fix: cd apps/browser-extension && pnpm build && pnpm package, then git add ${ZIP}`,
 	);
+	console.error(`[zip-freshness] Mid-work escape hatch: SKIP_ZIP_CHECK=1 git commit ...\n`);
+	process.exit(1);
+};
+
+// The version guard, added 2026-08-05 after the SAME miss happened twice in one day:
+// a shipped zip whose code had changed while manifest.json still read 0.5.7 (then
+// 0.5.8). A repackaged zip under an unchanged version is worse than a stale zip —
+// installed browsers never see an update, and two different builds then share one
+// version string, so "which build is the team running?" becomes unanswerable.
+// Both misses were caught by eye, after the automated loop reported converged.
+const readVersion = (text) => {
+	const m = /"version"\s*:\s*"([^"]+)"/.exec(text ?? "");
+	return m ? m[1] : null;
+};
+
+const manifestVersionChanged = () => {
+	// HEAD may not have the file (first commit) — treat that as "changed".
+	let head = null;
+	try {
+		head = git(`show HEAD:${MANIFEST}`);
+	} catch {
+		return true;
+	}
+	const staged = git(`show :${MANIFEST}`);
+	const before = readVersion(head);
+	const after = readVersion(staged);
+	if (!before || !after) return true; // cannot tell → do not block
+	return before !== after;
+};
+
+const failVersion = () => {
+	console.error(
+		`\n[zip-freshness] BLOCKED: this commit changes extension src but leaves the manifest version unchanged.`,
+	);
+	console.error(
+		`[zip-freshness] An installed browser never updates to a build that reuses its version string,`,
+	);
+	console.error(
+		`[zip-freshness] and two different builds sharing one version make "which build is live?" unanswerable.`,
+	);
+	console.error(`[zip-freshness] Fix: bump "version" in ${MANIFEST}, then rebuild and repackage.`);
 	console.error(`[zip-freshness] Mid-work escape hatch: SKIP_ZIP_CHECK=1 git commit ...\n`);
 	process.exit(1);
 };
@@ -47,6 +89,10 @@ if (process.argv.includes("--staged")) {
 		fail(
 			"this commit changes extension src but not the packaged zip — prod would serve a stale extension.",
 		);
+	}
+	if (touchesSrc && !files.includes(MANIFEST)) failVersion();
+	if (touchesSrc && files.includes(MANIFEST) && !manifestVersionChanged()) {
+		failVersion();
 	}
 	process.exit(0);
 }
