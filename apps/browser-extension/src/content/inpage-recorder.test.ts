@@ -372,7 +372,14 @@ describe("applyCaptureTierTo", () => {
 		const { s } = tierState(track);
 
 		expect(await applyCaptureTierTo(s, captureTierFor("minimal"))).toBe(true);
-		expect(track.applied).toEqual([{ frameRate: { max: 10 } }]);
+		// Derived from the tier table, like the sibling assertions above: this one
+		// hardcoded the frame rate and so broke when the floor was lowered, even
+		// though the behaviour under test (keep step 1 when step 2 is refused) was
+		// unchanged. The assertion is no weaker — it still pins that EXACTLY ONE
+		// constraint set was applied and that it is the frame-rate step.
+		expect(track.applied).toEqual([
+			{ frameRate: { max: captureTierFor("minimal").frameRate } },
+		]);
 		expect(s.captureTier).toBe("minimal");
 	});
 

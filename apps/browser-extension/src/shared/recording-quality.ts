@@ -229,8 +229,33 @@ export interface CaptureTier {
 }
 
 /**
- * The tiers, BEST FIRST. Each step roughly thirds the produced bitrate, so two
- * steps take an 8 Mbit/s capture under the 800 kbit/s link that failed the soak.
+ * The tiers, BEST FIRST.
+ *
+ * WHAT ACTUALLY REDUCES THE BYTES — corrected 2026-08-05 after measuring it
+ * (e2e-audio-proof/run-tier-bitrate-proof.mjs, log tier-bitrate.log). This
+ * comment used to claim "each step roughly thirds the produced bitrate", which
+ * was an assumption nobody had ever put a number on. The truth:
+ *
+ *  • `maxWidth` / `maxHeight` / `frameRate` are the WORKING part. They are
+ *    applied to the live MediaStreamTrack with applyConstraints(), which changes
+ *    the source in place, so they take effect mid-recording — the only moment
+ *    that matters, because the backlog that triggers a drop appears while the
+ *    recording is running.
+ *  • `videoBitsPerSecond` is a CEILING, NOT A LEVER. It is fixed when the
+ *    MediaRecorder is constructed and there is no API to change it on a live
+ *    recorder; and rebuilding the recorder mid-run is forbidden here (a second
+ *    encoder emits a fresh init segment that interleaves into the in-flight
+ *    multipart upload and corrupts the file — see the header of
+ *    src/content/inpage-recorder.ts). So the lower tiers' bitrates describe what
+ *    a recording STARTING at that tier would be capped to; they never lower a
+ *    running recording. They are kept because they are the honest ceiling for
+ *    the tier, not because a drop applies them.
+ *
+ * MEASURED, full -> minimal, same surface, identical recorder options, only the
+ * caps differing: 3.09x fewer bytes per second on a source repainting at 30 Hz
+ * (745 kB/s -> 241 kB/s), and 2.07x across a real mid-recording drop on one
+ * recorder. That was with minimal at 854x480@10; the floor was then lowered to
+ * 640x360@8 for the margin the 800 kbit/s link needs — see the tier below.
  *
  * Audio is never reduced: voice is the part of a meeting recording that must
  * survive, and at 128 kbit/s it is a rounding error next to the video.
@@ -255,11 +280,23 @@ export const CAPTURE_TIERS: readonly CaptureTier[] = [
 		videoBitsPerSecond: Math.min(VIDEO_BITS_PER_SECOND, 2_500_000),
 		audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
 	},
+	// THE FLOOR. Its one job is to let a recording on a link that cannot carry
+	// the capture still FINISH — the failure this whole feature exists for was a
+	// 6-minute recording at 800 kbit/s where only 8 of ~17 parts ever uploaded.
+	//
+	// 640x360 at 8 fps rather than the 854x480 at 10 fps it started as. That was
+	// not a taste call: at 854x480@10 the measured full->minimal reduction was
+	// 3.09x, and an 800 kbit/s link carries ~100 kB/s against the ~745 kB/s this
+	// capture produces — i.e. the old floor left the slow link still losing
+	// ground, which is exactly what the throttled soak showed (bytes roughly
+	// halved, not quartered). Choppy 360p that arrives beats sharp 480p that
+	// never does, and the tier is only ever reached after the link has already
+	// proven it cannot keep up.
 	{
 		name: "minimal",
-		maxWidth: 854,
-		maxHeight: 480,
-		frameRate: 10,
+		maxWidth: 640,
+		maxHeight: 360,
+		frameRate: 8,
 		videoBitsPerSecond: Math.min(VIDEO_BITS_PER_SECOND, 800_000),
 		audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
 	},

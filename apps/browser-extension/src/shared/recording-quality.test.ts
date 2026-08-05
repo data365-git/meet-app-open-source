@@ -56,6 +56,26 @@ describe("capture tiers", () => {
 		);
 	});
 
+	// The caps are the ONLY part of a tier that takes effect on a running
+	// recording (videoBitsPerSecond is fixed when the MediaRecorder is built and
+	// the recorder is never rebuilt mid-run). So the floor's ability to rescue a
+	// struggling upload lives entirely in this number, and e2e-audio-proof/
+	// run-tier-bitrate-proof.mjs measures what it is worth in real bytes.
+	//
+	// This is the cheap guard that stops the table drifting back under the bar
+	// the expensive harness proved: that harness needs a headed desktop and ~3
+	// minutes, so it is not what a routine `vitest run` would catch a regression
+	// with. 8x pixel-rate is the structural headroom behind a measured 3x+ of
+	// actual bytes — encoders never give back the full ratio, so the arithmetic
+	// bar has to sit above the byte bar.
+	it("leaves the floor with enough pixel-rate headroom to rescue a slow link", () => {
+		const pixelRate = (t: (typeof CAPTURE_TIERS)[number]) =>
+			t.maxWidth * t.maxHeight * t.frameRate;
+		const best = CAPTURE_TIERS[0];
+		const floor = CAPTURE_TIERS[CAPTURE_TIERS.length - 1];
+		expect(pixelRate(best) / pixelRate(floor)).toBeGreaterThanOrEqual(8);
+	});
+
 	it("looks up tier settings by name and falls back to the best tier", () => {
 		expect(captureTierFor("reduced").maxHeight).toBe(720);
 		expect(captureTierFor("minimal").name).toBe("minimal");
