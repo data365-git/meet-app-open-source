@@ -27,6 +27,13 @@ let parts = new Map(); // partNumber -> Buffer
 let session = 0;
 let manifest = null; // current session's manifest object
 
+// Optional upload throttle for the "network slower than capture bitrate" proof.
+// Unset (default) = today's behaviour, unchanged. When set, the PUT part
+// handler sleeps for (bytes / (THROTTLE_KBPS*1024/8)) seconds before answering,
+// simulating a capped upload link.
+const throttleKbps = process.env.THROTTLE_KBPS ? Number(process.env.THROTTLE_KBPS) : null;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const manifestPathFor = (n) => join(outDir, n === 1 ? "manifest.json" : `manifest-${n}.json`);
 const recordingPathFor = (n) => join(outDir, n === 1 ? "recording.bin" : `recording-${n}.bin`);
 
@@ -97,6 +104,10 @@ const server = createServer(async (req, res) => {
 		const partNumber = Number(path.split("/").pop());
 		const buf = await readBody(req);
 		parts.set(partNumber, buf);
+		if (throttleKbps) {
+			const seconds = buf.length / ((throttleKbps * 1024) / 8);
+			await sleep(seconds * 1000);
+		}
 		res.writeHead(200, { ETag: `"etag-${partNumber}"` });
 		return res.end();
 	}

@@ -18,6 +18,17 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **Quality proof he can look at:** `docs/qa/quality-2026-08-04/before-smalltext-crop.png` vs `after-smalltext-crop.png` — same frame through the old and new production args. I compared them by eye: small text is visibly sharper.
 
+**📡 UPLOAD HEALTH — MEASURED 2026-08-05, three throttled arms (the owner asked twice; this replaces the earlier guesswork).** Harness: `e2e-audio-proof/run-proof-inpage.mjs` with a new optional `THROTTLE_KBPS` on the mock server (default unset = unchanged). Logs kept as `soak-throttle-{A,B,C}.log`.
+| arm | link | result |
+|---|---|---|
+| A (control) | unthrottled | **PASS** 361s/360s, 17 parts, audio -14.7 dB, post-Stop wait ≈ instant |
+| B | 4 Mbit/s | **PASS** 371s/360s, 14 parts, -14.8 dB, no error, no stall |
+| C | 800 kbit/s | **FAIL** `upload-never-completed-to-mock` — only 8 parts up during the recording, still uploading when the harness gave up |
+**What C actually proves, stated carefully:** no crash, no error, no corrupted audio — the upload is simply SLOWER THAN THE RECORDING, so the backlog grows and the user must leave the browser open after Stop. **It is NOT a regression from the bitrate raise:** arm A produced ~1.9 Mbit/s of real data even with the 8 Mbit/s ceiling (the bitrate is a CAP, not a floor, and static screen content never reaches it), so the old 3 Mbit/s build would have drowned on an 800 kbit/s link too. The raise does move the WORST case (video-heavy screens) from 3 → 8 Mbit/s.
+**Requirement to state to the client:** sustained upload ≥ the recording bitrate — ~2 Mbit/s for slides/documents, up to 8 Mbit/s when the shared screen is playing video.
+**Also verified, not assumed:** the popup DOES render an "Uploading…"/"Finishing up…" view with byte progress (`popup/popup.ts:682-776`), so a lagging upload is visible to the user, not silent. And `tabconstraints=OK` in all three runs is live proof the new unprocessed-tab-audio constraints reach the real capture stage, with a control arm proving the detector has teeth.
+**OPEN DECISION for the owner:** leave as is · adapt the bitrate down automatically when the link cannot keep up · or lower the ceiling. Not started.
+
 **THREE THINGS THE NEXT SESSION MUST NOT SKIP:**
 1. **The DB migration must run BEFORE the code deploys.** `libraryKind` is additive, but the new queries read it — deploying the code first means every dashboard query hits a missing column.
 2. **A found-by-review defect that the green gates missed, recorded so the lesson survives:** the move action originally exported a plain const from a `"use server"` file. `tsc` and 1235 tests were green; `next build` would have FAILED (Next rule 71011 is a framework rule, not a type rule). Fixed in `5684a48` by moving constants to `lib/library-kind.ts`. **Any done-contract that gates a deploy must include the real `next build`.**
