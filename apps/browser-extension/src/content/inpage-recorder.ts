@@ -30,6 +30,9 @@ import {
 	CAPTURE_MAX_FRAME_RATE,
 	CAPTURE_MAX_HEIGHT,
 	CAPTURE_MAX_WIDTH,
+	CAPTURE_TIERS,
+	type CaptureTier,
+	type CaptureTierName,
 	TAB_AUDIO_CONSTRAINTS,
 	TAB_AUDIO_GAIN,
 	VIDEO_BITS_PER_SECOND,
@@ -86,6 +89,9 @@ export interface InPageState {
 	rescan: MutationObserver | null;
 	watchdog: ReturnType<typeof setInterval> | null;
 	host: InPageRecorderHost;
+	/** The capture tier the LIVE video track is currently constrained to. Starts
+	 * at the best tier and is moved only by applyCaptureTierTo below. */
+	captureTier: CaptureTierName;
 }
 
 let state: InPageState | null = null;
@@ -274,6 +280,114 @@ function pageAudioPeak(s: InPageState, buf: Float32Array): number {
 		if (a > peak) peak = a;
 	}
 	return peak;
+}
+
+// ── Adaptive capture tier, applied to the LIVE track ───────────────────────
+//
+// The SW decides WHEN to move (background/sw.ts → chooseCaptureTier); this is
+// the WHERE-IT-LANDS. The whole design of this function is one rule:
+//
+//   NEVER stop, recreate or restart the MediaRecorder.
+//
+// That is not a style preference. Restarting the encoder mid-recording is the
+// exact failure family that produced the interleaved-fragment corruption fixed
+// over four review rounds on 2026-07-23: a second MediaRecorder emits a fresh
+// fMP4 init segment, the SW's multipart upload is already mid-stream, and the two
+// byte streams interleave into a file no player can open. A "quality" feature
+// that can corrupt the recording is worse than a slow upload.
+//
+// MediaStreamTrack.applyConstraints() changes the SOURCE in place. The same
+// track object stays in the same MediaStream the recorder was constructed with,
+// so the encoder and the upload session never learn anything happened — the
+// frames simply arrive smaller and less often. (videoBitsPerSecond cannot be
+// changed on a live MediaRecorder at all, which is the other half of why the
+// tier's bitrate is advisory here: cutting frame rate and resolution is what
+// actually reduces the bytes produced.)
+//
+// AUDIO IS NEVER TOUCHED. Voice is the part of a meeting recording that must
+// survive; at 128 kbit/s it is a rounding error next to the video, and
+// re-constraining a live audio track risks a glitch in the one signal we cannot
+// afford to damage.
+
+/**
+ * Constrain the live video track down (or back up) to `tier`.
+ *
+ * Two applyConstraints() calls, deliberately in this order:
+ *
+ *  1. FRAME RATE first. It is the cheaper and safer of the two — the capturer
+ *     just drops frames, no re-scaler is reconfigured, and on screen content it
+ *     buys most of the bitrate saving with the least visible damage (text stays
+ *     sharp). If step 2 then fails, we have still genuinely reduced output.
+ *  2. THE HEIGHT CAP second, carrying the frame rate along with it. A constraint
+ *     set REPLACES the previous one, so omitting frameRate here would silently
+ *     undo step 1.
+ *
+ * Each step is guarded on its own: applyConstraints rejects with
+ * OverconstrainedError when a source cannot honour the ask, and a rejected
+ * resolution change must not throw away the frame-rate change that succeeded.
+ *
+ * @returns true if at least one constraint step was applied.
+ */
+export async function applyCaptureTierTo(
+	s: InPageState,
+	tier: CaptureTier,
+): Promise<boolean> {
+	const videoTrack = s.displayStream.getVideoTracks()[0];
+	// No live video (the user hit Chrome's "Stop sharing" between the SW's
+	// decision and its delivery): nothing to constrain, and definitely nothing
+	// worth disturbing the recorder over.
+	if (!videoTrack || videoTrack.readyState !== "live") return false;
+	if (typeof videoTrack.applyConstraints !== "function") return false;
+
+	let applied = false;
+
+	try {
+		await videoTrack.applyConstraints({
+			frameRate: { max: tier.frameRate },
+		});
+		applied = true;
+	} catch {
+		// Source refused the frame-rate cap. Still try the resolution cap below —
+		// either one alone reduces what the encoder has to write.
+	}
+
+	try {
+		await videoTrack.applyConstraints({
+			frameRate: { max: tier.frameRate },
+			width: { max: tier.maxWidth },
+			height: { max: tier.maxHeight },
+		});
+		applied = true;
+	} catch {
+		// Resolution refused. The frame-rate step above (if it took) still stands,
+		// which is exactly why the two are separate calls.
+	}
+
+	// Record the tier only when something actually changed, so the next decision
+	// starts from what the capture is really running at.
+	if (applied) s.captureTier = tier.name;
+	return applied;
+}
+
+/**
+ * Entry point for the SW's CAPTURE_TIER message.
+ *
+ * Ignores a message addressed to a DIFFERENT recorder session for the same
+ * reason every other message on this protocol does (F2): a content script
+ * outlives a recording, so a tier decision computed for a finished upload must
+ * never reconfigure the capture that is live now.
+ */
+export function applyInPageCaptureTier(
+	tier: CaptureTier,
+	sessionId?: string,
+): Promise<boolean> {
+	const s = state;
+	if (!s) return Promise.resolve(false);
+	if (sessionId !== undefined && sessionId !== s.sessionId) {
+		return Promise.resolve(false);
+	}
+	if (s.recorder.state === "inactive") return Promise.resolve(false);
+	return applyCaptureTierTo(s, tier);
 }
 
 // ── Teardown ───────────────────────────────────────────────────────────────
@@ -524,6 +638,7 @@ export async function startInPageRecording(
 			rescan: null,
 			watchdog: null,
 			host,
+			captureTier: CAPTURE_TIERS[0].name,
 		};
 
 		const tapped = attachPageAudio(pending);

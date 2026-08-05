@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	type InPageState,
+	applyCaptureTierTo,
 	attachPageAudio,
 	detachAllPageAudio,
 	SILENCE_WARN_MSG,
 	pruneDeadTaps,
 } from "./inpage-recorder";
+import { CAPTURE_TIERS, captureTierFor } from "../shared/recording-quality";
 
 // ── The tap-repair logic behind "the remote voices don't vanish mid-call" ────
 //
@@ -224,5 +226,173 @@ describe("silence warning wording", () => {
 		// What it may say: the observation, plus a conditional action.
 		expect(msg).toContain("no sound");
 		expect(msg).toContain("if");
+	});
+});
+
+// ── Stepping the capture down must NOT disturb the encoder ──────────────────
+//
+// The whole adaptive-capture feature is only safe because of one property: it
+// changes the SOURCE, not the recorder. Restarting a MediaRecorder mid-recording
+// emits a second fMP4 init segment into an upload that is already mid-stream, and
+// the two byte streams interleave into an unplayable file — the corruption family
+// that took four review rounds to clear on 2026-07-23. So these tests assert the
+// negative space (same recorder object, never stopped, audio untouched) as hard
+// as they assert the positive.
+
+interface FakeVideoTrack {
+	kind: "video";
+	readyState: "live" | "ended";
+	applied: MediaTrackConstraints[];
+	stop: () => void;
+	applyConstraints: (c: MediaTrackConstraints) => Promise<void>;
+}
+
+function videoTrack(
+	reject: (c: MediaTrackConstraints) => boolean = () => false,
+): FakeVideoTrack {
+	const t: FakeVideoTrack = {
+		kind: "video",
+		readyState: "live",
+		applied: [],
+		stop: () => {
+			t.readyState = "ended";
+		},
+		applyConstraints: async (c) => {
+			if (reject(c)) throw new Error("OverconstrainedError");
+			t.applied.push(c);
+		},
+	};
+	return t;
+}
+
+function audioTrackWithConstraints() {
+	const constraints: MediaTrackConstraints[] = [];
+	return {
+		kind: "audio" as const,
+		readyState: "live" as const,
+		applied: constraints,
+		stop: vi.fn(),
+		applyConstraints: vi.fn(async (c: MediaTrackConstraints) => {
+			constraints.push(c);
+		}),
+	};
+}
+
+function tierState(video: FakeVideoTrack) {
+	const audio = audioTrackWithConstraints();
+	const recorder = {
+		state: "recording",
+		stop: vi.fn(),
+		start: vi.fn(),
+		mimeType: "video/mp4;codecs=h264",
+	};
+	const s = {
+		sessionId: "sess-1",
+		recorder,
+		displayStream: {
+			getVideoTracks: () => [video],
+			getAudioTracks: () => [audio],
+			getTracks: () => [video, audio],
+		},
+		taps: new Map(),
+		captureTier: "full",
+	} as unknown as InPageState;
+	return { s, recorder, audio };
+}
+
+describe("applyCaptureTierTo", () => {
+	it("lowers the LIVE video track with applyConstraints — frame rate first, then the height cap", async () => {
+		const track = videoTrack();
+		const { s } = tierState(track);
+		const reduced = captureTierFor("reduced");
+
+		expect(await applyCaptureTierTo(s, reduced)).toBe(true);
+
+		// Two calls, in the documented order.
+		expect(track.applied).toHaveLength(2);
+		const [first, second] = track.applied;
+
+		// 1) frame rate alone — the cheap, safe step.
+		expect(first).toEqual({ frameRate: { max: reduced.frameRate } });
+		expect(first).not.toHaveProperty("height");
+
+		// 2) the height cap, CARRYING the frame rate: a constraint set replaces the
+		//    previous one, so dropping frameRate here would silently undo step 1.
+		expect(second).toEqual({
+			frameRate: { max: reduced.frameRate },
+			width: { max: reduced.maxWidth },
+			height: { max: reduced.maxHeight },
+		});
+
+		expect(s.captureTier).toBe("reduced");
+	});
+
+	it("keeps the SAME MediaRecorder object across a tier change and never stops or restarts it", async () => {
+		const track = videoTrack();
+		const { s, recorder } = tierState(track);
+		const before = s.recorder;
+
+		await applyCaptureTierTo(s, captureTierFor("reduced"));
+		await applyCaptureTierTo(s, captureTierFor("minimal"));
+		await applyCaptureTierTo(s, captureTierFor("full")); // and back up
+
+		// Object identity — not "a recorder exists", but THE SAME ONE.
+		expect(s.recorder).toBe(before);
+		expect(recorder.stop).not.toHaveBeenCalled();
+		expect(recorder.start).not.toHaveBeenCalled();
+		expect(recorder.state).toBe("recording");
+		expect(s.captureTier).toBe("full");
+	});
+
+	it("never touches the audio tracks", async () => {
+		const track = videoTrack();
+		const { s, audio } = tierState(track);
+
+		await applyCaptureTierTo(s, captureTierFor("minimal"));
+
+		expect(audio.applyConstraints).not.toHaveBeenCalled();
+		expect(audio.applied).toEqual([]);
+		expect(audio.stop).not.toHaveBeenCalled();
+		expect(audio.readyState).toBe("live");
+	});
+
+	it("does not stop the video track either — the source is re-constrained in place", async () => {
+		const track = videoTrack();
+		const { s } = tierState(track);
+
+		await applyCaptureTierTo(s, captureTierFor("minimal"));
+
+		expect(track.readyState).toBe("live");
+	});
+
+	it("keeps the frame-rate reduction when the source refuses the resolution cap", async () => {
+		// OverconstrainedError on the height step must not throw away the frame-rate
+		// step that already succeeded — that is why they are two separate calls.
+		const track = videoTrack((c) => "height" in c);
+		const { s } = tierState(track);
+
+		expect(await applyCaptureTierTo(s, captureTierFor("minimal"))).toBe(true);
+		expect(track.applied).toEqual([{ frameRate: { max: 10 } }]);
+		expect(s.captureTier).toBe("minimal");
+	});
+
+	it("does nothing when the share has already ended", async () => {
+		const track = videoTrack();
+		track.readyState = "ended";
+		const { s, recorder } = tierState(track);
+
+		expect(await applyCaptureTierTo(s, captureTierFor("minimal"))).toBe(false);
+		expect(track.applied).toEqual([]);
+		expect(recorder.stop).not.toHaveBeenCalled();
+		expect(s.captureTier).toBe("full"); // unchanged
+	});
+
+	it("reports failure — and leaves the tier untouched — when every step is refused", async () => {
+		const track = videoTrack(() => true);
+		const { s, recorder } = tierState(track);
+
+		expect(await applyCaptureTierTo(s, captureTierFor("minimal"))).toBe(false);
+		expect(s.captureTier).toBe(CAPTURE_TIERS[0].name);
+		expect(recorder.stop).not.toHaveBeenCalled();
 	});
 });

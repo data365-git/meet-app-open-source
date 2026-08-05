@@ -1,5 +1,7 @@
 import { getMeetingId } from "../shared/meeting-url";
+import type { CaptureTier } from "../shared/recording-quality";
 import {
+	applyInPageCaptureTier,
 	isInPageRecording,
 	pauseInPageRecording,
 	resumeInPageRecording,
@@ -1108,6 +1110,22 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 		if (isInPageRecording()) {
 			resumeInPageRecording();
 			sendResponse({ ok: true });
+		}
+	} else if (message.type === "CAPTURE_TIER") {
+		// Adaptive capture: the SW watched the upload backlog and picked a tier.
+		// This only re-constrains the LIVE video track — it never stops, recreates
+		// or restarts the recorder, and never touches audio. Ack only when this tab
+		// owns the capture (same rule as the controls above), and ack ASYNCHRONOUSLY
+		// once the constraints have actually been applied, so the SW's
+		// "delivered" flag means the capture really moved.
+		if (isInPageRecording()) {
+			applyInPageCaptureTier(
+				message.tier as CaptureTier,
+				typeof message.sessionId === "string" ? message.sessionId : undefined,
+			)
+				.then((applied) => sendResponse({ ok: applied }))
+				.catch(() => sendResponse({ ok: false }));
+			return true; // keep the message channel open for the async reply
 		}
 	}
 });
