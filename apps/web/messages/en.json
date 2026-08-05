@@ -163,6 +163,8 @@
 		"downloadPreparing": "Preparing download…",
 		"downloadStarted": "Download started",
 		"downloadFailed": "Failed to download video — please try again.",
+		"downloadAudio": "Download audio",
+		"downloadAudioFailed": "Failed to download the audio — please try again.",
 		"duplicating": "Duplicating recording…",
 		"duplicateSuccess": "Recording duplicated",
 		"duplicateFailed": "Failed to duplicate recording",

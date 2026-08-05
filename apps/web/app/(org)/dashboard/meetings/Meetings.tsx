@@ -314,6 +314,11 @@ export const Meetings = ({
         isDeleting={isDeletingCaps || isDeletingCap}
         currentLibrary="meeting"
         folders={folders}
+        capDetails={data.map((video) => ({
+          id: video.id,
+          name: video.name,
+          isAudio: video.metadata?.isAudio === true,
+        }))}
       />
     </div>
   );

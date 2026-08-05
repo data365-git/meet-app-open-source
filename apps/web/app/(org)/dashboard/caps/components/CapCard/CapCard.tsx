@@ -32,7 +32,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
-import { AudioLines, TimerReset } from "lucide-react";
+import { AudioLines, Music, TimerReset } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -48,6 +48,7 @@ import {
   type ImageLoadingStatus,
   VideoThumbnail,
 } from "@/components/VideoThumbnail";
+import { downloadFilename } from "@/lib/download-filename";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
@@ -191,6 +192,7 @@ export const CapCard = ({
   const [confirmReplaceWithAudioOpen, setConfirmReplaceWithAudioOpen] =
     useState(false);
   const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
+  const [isDownloadingAudio, setIsDownloadingAudio] = useState(false);
   const [confirmTimestampRefinementOpen, setConfirmTimestampRefinementOpen] =
     useState(false);
   // A PROCESSING refinement older than this is treated as stale (a crashed
@@ -478,6 +480,36 @@ export const CapCard = ({
     });
   };
 
+  // Audio-only download from the dashboard card. Same read-only route the share
+  // page uses — the video is never touched. Deliberately NOT the neighbouring
+  // "replace with audio", which destroys the video permanently; the two sit in
+  // the same menu, so they must never share a handler or a wording.
+  const handleDownloadAudio = async () => {
+    if (isDownloadingAudio) return;
+    setIsDownloadingAudio(true);
+    // Extraction can take a while on a long meeting, so a toast carries the wait
+    // instead of the menu looking frozen.
+    const waiting = toast.loading(t("downloadPreparing"));
+    try {
+      const res = await fetch(`/api/videos/${cap.id}/audio`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = downloadFilename(cap.name, "mp3");
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      toast.success(t("downloadStarted"), { id: waiting });
+    } catch {
+      toast.error(t("downloadAudioFailed"), { id: waiting });
+    } finally {
+      setIsDownloadingAudio(false);
+    }
+  };
+
   const handleSelectClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -693,6 +725,19 @@ export const CapCard = ({
               >
                 <FontAwesomeIcon icon={faDownload} />
                 <p className="text-sm text-gray-12">{t("download")}</p>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownloadAudio();
+                }}
+                disabled={isDownloadingAudio}
+                className="flex gap-2 items-center rounded-lg"
+              >
+                <Music className="size-3" />
+                <p className="text-sm text-gray-12">
+                  {t("downloadAudio")}
+                </p>
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={(e) => {

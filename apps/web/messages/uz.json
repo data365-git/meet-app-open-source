@@ -163,6 +163,8 @@
 		"downloadPreparing": "Yuklab olishga tayyorlanmoqda…",
 		"downloadStarted": "Yuklab olish boshlandi",
 		"downloadFailed": "Videoni yuklab olib bo'lmadi — qayta urinib ko'ring.",
+		"downloadAudio": "Audiosini yuklab olish",
+		"downloadAudioFailed": "Audioni yuklab olib bo'lmadi — qayta urinib ko'ring.",
 		"duplicating": "Yozuv nusxalanmoqda…",
 		"duplicateSuccess": "Yozuv nusxalandi",
 		"duplicateFailed": "Yozuvni nusxalab bo'lmadi",

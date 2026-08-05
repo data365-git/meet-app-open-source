@@ -461,6 +461,11 @@ export const Caps = ({
 				isDeleting={isDeletingCaps || isDeletingCap}
 				currentLibrary="recording"
 				folders={folders}
+				capDetails={data.map((video) => ({
+					id: video.id,
+					name: video.name,
+					isAudio: video.metadata?.isAudio === true,
+				}))}
 			/>
 			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">

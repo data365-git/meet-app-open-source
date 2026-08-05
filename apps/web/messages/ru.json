@@ -163,6 +163,8 @@
 		"downloadPreparing": "Подготовка к загрузке…",
 		"downloadStarted": "Загрузка началась",
 		"downloadFailed": "Не удалось скачать видео — попробуйте ещё раз.",
+		"downloadAudio": "Скачать аудио",
+		"downloadAudioFailed": "Не удалось скачать аудио — попробуйте ещё раз.",
 		"duplicating": "Копирование записи…",
 		"duplicateSuccess": "Запись скопирована",
 		"duplicateFailed": "Не удалось скопировать запись",
