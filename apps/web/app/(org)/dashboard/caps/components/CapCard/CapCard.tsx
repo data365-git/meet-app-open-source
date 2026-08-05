@@ -667,14 +667,22 @@ export const CapCard = ({
               <button
                 type="button"
                 aria-label={t("moreOptions")}
-                // Icon-only: invisible 44x44 hit target, no border/bg/shadow so
-                // the open/focus state never reads as a selected checkbox surface
-                // (Codex refinement 2026-07-15). Subtle drop-shadow keeps the
-                // ellipsis legible over any thumbnail; focus-visible ring for a11y.
-                className="flex size-11 items-center justify-center rounded-full text-gray-12 drop-shadow-sm transition-colors hover:text-gray-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+                // 44x44 hit target, but the VISIBLE part is the small disc
+                // below. It used to be `text-gray-12` with only a drop-shadow:
+                // that colour follows the THEME, while the thing behind it is a
+                // THUMBNAIL, whose brightness has nothing to do with the theme —
+                // so in light mode a near-black ellipsis sat on a dark screen
+                // recording and vanished (owner, 2026-08-05). A fixed white
+                // glyph on a fixed dark disc is legible over any thumbnail in
+                // either theme, and stays circular + small so the open/focus
+                // state still cannot read as a selected-checkbox surface
+                // (the Codex 2026-07-15 constraint that shaped the original).
+                className="flex size-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
                 onClick={(e) => e.stopPropagation()}
               >
-                <FontAwesomeIcon icon={faEllipsis} className="size-3.5" />
+                <span className="flex size-7 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-[2px] transition-colors group-hover:bg-black/65">
+                  <FontAwesomeIcon icon={faEllipsis} className="size-3.5" />
+                </span>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
