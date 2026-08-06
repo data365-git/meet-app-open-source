@@ -47,7 +47,7 @@
 	"aiChat": {
 		"title": "Meeting AI",
 		"subtitle": "Ushbu uchrashuv konteksti yuklandi",
-		"welcomeTitle": "Salom! Men bu uchrashuv haqida hamma narsani bilaman.",
+		"welcomeTitle": "Salom! Shu uchrashuv bo'yicha so'rang.",
 		"welcomeSubtitle": "Transkript, vazifalar va qarorlar bo'yicha savol bering — yoki quyidagilardan birini tanlang.",
 		"placeholder": "Uchrashuv haqida so'rang...",
 		"disclaimer": "AI javoblari tekshirilishi kerak bo'lishi mumkin",
@@ -63,7 +63,9 @@
 		"you": "Siz",
 		"close": "Yopish",
 		"send": "Yuborish",
-		"errorGeneric": "Nimadir xato ketdi. Qayta urinib ko'ring."
+		"errorGeneric": "Nimadir xato ketdi. Qayta urinib ko'ring.",
+		"expand": "Butun ekranga yoyish",
+		"collapse": "Butun ekrandan chiqish"
 	},
 	"settings": {
 		"devMode": "Developer Mode",

@@ -275,6 +275,7 @@ body.dark .ai-popup {
 	animation: aiLive 2s infinite;
 }
 
+.ai-expand,
 .ai-x {
 	width: 30px;
 	height: 30px;
@@ -289,9 +290,46 @@ body.dark .ai-popup {
 	justify-content: center;
 	transition: all var(--dur) var(--ease);
 }
+.ai-expand:hover,
 .ai-x:hover {
 	background: var(--surface-2);
 	color: var(--txt);
+}
+
+/* Expanded — the panel fills the window so a long answer reads in one column
+   instead of wrapping every three words. The drag-resize writes width/height
+   INLINE, which would beat these rules; AIChatPopup parks and restores those
+   inline values around the toggle instead of forcing it with !important. */
+.ai-popup.expanded {
+	top: 16px;
+	right: 16px;
+	bottom: 16px;
+	left: 16px;
+	width: auto;
+	max-width: none;
+	height: auto;
+	max-height: none;
+}
+.ai-popup.expanded .ai-resize {
+	/* Nothing to drag when the panel is already at full size. */
+	display: none;
+}
+.ai-popup.expanded .ai-body {
+	/* A full-width line is hard to read; keep the text column comfortable and
+	   centred rather than letting it stretch across a wide monitor. */
+	align-items: center;
+}
+.ai-popup.expanded .ai-body > * {
+	width: 100%;
+	max-width: 760px;
+}
+
+@media (max-width: 640px) {
+	/* Mobile is already effectively full-screen, so the control would toggle
+	   between two identical looks. */
+	.ai-expand {
+		display: none;
+	}
 }
 
 /* ---------- Body ---------- */

@@ -15,6 +15,7 @@ import {
 	isOverDailyChatLimit,
 } from "@/lib/ai-chat-limit";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
+import { createGeminiChatFetcher } from "@/lib/gemini-chat-fetch";
 import { EMBED_MODEL, embedChunksWithUsage } from "@/lib/gemini-embed";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { runPromise } from "@/lib/server";
@@ -87,10 +88,51 @@ function buildVideoOverviewContext(
 					startMs: chapter.start * 1000,
 				}));
 
+	// The tasks and decisions were already extracted once, at transcription time,
+	// WITH assignees and priorities, and stored on the video. The chat used to
+	// ignore them and ask the model to re-derive both from ten retrieved chunks —
+	// which is worse (the chunks are retrieved by similarity to a GENERIC question
+	// like "what were the main tasks?", so they are close to arbitrary) and is
+	// paid for again on every click. Handing the stored lists to the model turns
+	// those two chips from a re-derivation into a lookup.
+	const storedTasks = metadata?.aiSummary?.tasks ?? [];
+	const storedNextSteps = metadata?.aiSummary?.nextSteps ?? [];
+	const storedTopics = metadata?.aiSummary?.topics ?? [];
+
 	const parts: string[] = [];
 
 	if (summary) {
 		parts.push(`Summary:\n${summary}`);
+	}
+
+	if (storedTasks.length > 0) {
+		parts.push(
+			`Tasks already extracted from this meeting (authoritative - prefer these over re-deriving):\n${storedTasks
+				.map((task) => {
+					const bits = [task.title];
+					if (task.assignee) bits.push(`assignee: ${task.assignee}`);
+					if (task.priority) bits.push(`priority: ${task.priority}`);
+					if (task.deadline) bits.push(`deadline: ${task.deadline}`);
+					return `- ${bits.join(" | ")}`;
+				})
+				.join("\n")}`,
+		);
+	}
+
+	if (storedNextSteps.length > 0) {
+		parts.push(
+			`Next steps already extracted (authoritative):\n${storedNextSteps
+				.map((step) => `- ${step}`)
+				.join("\n")}`,
+		);
+	}
+
+	if (storedTopics.length > 0) {
+		parts.push(
+			`Topics already extracted (authoritative):\n${storedTopics
+				.map((topic) => `- ${topic.title}: ${topic.body}`)
+				.join("\n")}`,
+		);
 	}
 
 	if (chapters.length > 0) {
@@ -294,6 +336,12 @@ export async function POST(request: NextRequest) {
 	}
 
 	const resolvedApiKey = apiKey;
+	// Only the SHARED free key gets the free-first treatment. A video owner who
+	// supplied their own key is deliberately using theirs, and silently answering
+	// on someone else's quota would be the wrong kind of thrift.
+	const freeApiKey = owner?.geminiApiKey
+		? undefined
+		: serverEnv().GEMINI_API_KEY_FREE;
 	const videoOverviewContext = buildVideoOverviewContext(video.metadata);
 
 	const stream = new ReadableStream({
@@ -373,7 +421,7 @@ export async function POST(request: NextRequest) {
 						role: "user",
 						parts: [
 							{
-								text: `${promptContext}\n\nAnswer questions about this meeting recording using ONLY the provided context. Use the overview only to understand broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. "main lessons", "summary", "key takeaways"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more. The content may be in Uzbek, Russian, or English — respond in the same language as the user's question.`,
+								text: `${promptContext}\n\nAnswer questions about this meeting recording using ONLY the provided context. Use the overview only to understand broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. "main lessons", "summary", "key takeaways"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more. BUT when the user explicitly asks for a SHORT answer — "qisqacha", "qisqa", "brief", "short", "in a few sentences", "кратко" — that request WINS over the detail rule above: answer in three or four sentences, no headings, no bullet list. When a list of tasks, next steps or topics is supplied above as "already extracted (authoritative)", answer from that list rather than rebuilding it from the transcript, and keep each item's assignee and deadline. The content may be in Uzbek, Russian, or English — respond in the same language as the user's question.`,
 							},
 						],
 					},
@@ -391,6 +439,26 @@ export async function POST(request: NextRequest) {
 					})),
 				];
 
+				// FREE FIRST, then paid — the way transcription and summaries have
+				// worked since 2026-07-29. Chat was the last path still pinned to the
+				// paid key, so every question billed even while the free quota sat
+				// untouched. Two free models, because the free key's daily quota is
+				// per-MODEL and separate (verified live: one 429s while the other
+				// still answers 200 on the same key).
+				//
+				// This is safe HERE for one specific reason: the fallback happens at
+				// CONNECT time. A quota rejection arrives before a single token has
+				// been streamed, so swapping keys is invisible to the user. Nothing
+				// may retry once tokens have started flowing — that would duplicate
+				// text mid-answer.
+				// Free models first, paid as the fallback. The rules that make this
+				// safe (connect-time only, free chain walked at most once, final
+				// response left unread) live in the module and are pinned by tests.
+				const chatFetcher = createGeminiChatFetcher({
+					paidKey: resolvedApiKey,
+					freeKey: freeApiKey,
+				});
+
 				await withCostGuard({
 					orgId: video.orgId,
 					userId: video.ownerId,
@@ -402,8 +470,7 @@ export async function POST(request: NextRequest) {
 				// Retry the initial connect on transient Gemini errors
 				// (429/500/503/overloaded), matching summary/transcription.
 				const geminiRes = await withGeminiRetry(async () => {
-					const res = await fetch(
-						`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${resolvedApiKey}`,
+					const res = await chatFetcher.fetch(
 						{
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -411,7 +478,7 @@ export async function POST(request: NextRequest) {
 								system_instruction: {
 									parts: [
 										{
-											text: "You answer questions about a meeting recording. Use ONLY the provided context. Use the overview for broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. \"main lessons\", \"summary\", \"key takeaways\"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more. The content may be in Uzbek, Russian, or English — respond in the same language.\n\nFORMAT (keep it scannable and calm):\n- Begin with ONE short summary sentence — the TL;DR.\n- For a simple question, stop there: one or two sentences, no headings.\n- For a richer answer, add short sections with markdown \"## Heading\" lines and \"- \" bullets. One idea per bullet. Keep timestamps as [mm:ss].",
+											text: "You answer questions about a meeting recording. Use ONLY the provided context. Use the overview for broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. \"main lessons\", \"key takeaways\"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more.\n\nBREVITY OVERRIDE — this outranks the detail rule above. When the user explicitly asks for a SHORT answer (\"qisqacha\", \"qisqa\", \"brief\", \"short\", \"in a few sentences\", \"кратко\"), give three or four sentences, no headings and no bullets. Do not expand a request for brevity into a full report; the user asked for the opposite.\n\nAUTHORITATIVE LISTS — when the context above supplies tasks, next steps or topics marked \"already extracted (authoritative)\", answer from that list instead of rebuilding it from the transcript, and preserve each item's assignee and deadline. Only add from the transcript what the list is missing.\n\nThe content may be in Uzbek, Russian, or English — respond in the same language.\n\nFORMAT (keep it scannable and calm):\n- Begin with ONE short summary sentence — the TL;DR.\n- For a simple question, stop there: one or two sentences, no headings.\n- For a richer answer, add short sections with markdown \"## Heading\" lines and \"- \" bullets. One idea per bullet. Keep timestamps as [mm:ss].",
 										},
 									],
 								},
@@ -492,10 +559,15 @@ export async function POST(request: NextRequest) {
 					}
 				}
 
-				return {
-					inputTokens: chatInputTokens,
-					outputTokens: chatOutputTokens,
-				};
+				// A free-key answer costs nothing, so it must not be billed to the
+				// org's AI budget — reporting its tokens would put money in the spend
+				// panel that was never spent.
+				return chatFetcher.usedFreeKey()
+					? { inputTokens: 0, outputTokens: 0 }
+					: {
+							inputTokens: chatInputTokens,
+							outputTokens: chatOutputTokens,
+						};
 					},
 				});
 

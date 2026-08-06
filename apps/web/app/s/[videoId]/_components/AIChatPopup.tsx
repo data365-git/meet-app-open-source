@@ -358,6 +358,11 @@ export function AIChatPopup({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
+	// Expanded = the chat fills the window. A long answer (a meeting summary, a
+	// task list) wraps after two or three words in a 400px column, which is what
+	// made it hard to read. The drag handle could already do this, but by hand,
+	// every time.
+	const [isExpanded, setIsExpanded] = useState(false);
 
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -646,13 +651,41 @@ export function AIChatPopup({
 		window.addEventListener("mouseup", onUp);
 	};
 
+	// The drag-resize writes width/height as INLINE styles, and inline beats any
+	// stylesheet rule — so an `.expanded` CSS class alone would silently do
+	// nothing for anyone who had ever dragged the corner. Rather than escalate to
+	// !important, the inline values are parked on expand and put back on collapse,
+	// so a user who sized the panel by hand gets their size back.
+	const parkedSizeRef = useRef<{ width: string; height: string } | null>(null);
+
+	const toggleExpanded = () => {
+		const el = popupRef.current;
+		if (el) {
+			if (!isExpanded) {
+				parkedSizeRef.current = {
+					width: el.style.width,
+					height: el.style.height,
+				};
+				el.style.width = "";
+				el.style.height = "";
+			} else if (parkedSizeRef.current) {
+				el.style.width = parkedSizeRef.current.width;
+				el.style.height = parkedSizeRef.current.height;
+				parkedSizeRef.current = null;
+			}
+		}
+		setIsExpanded((v) => !v);
+	};
+
 	const hasMessages = messages.length > 0;
 
 	return (
 		<div
 			ref={popupRef}
 			data-theme={theme}
-			className={`ai-popup${isOpen ? " open" : ""}`}
+			className={`ai-popup${isOpen ? " open" : ""}${
+				isExpanded ? " expanded" : ""
+			}`}
 			role="dialog"
 			aria-label={t("title")}
 			aria-hidden={!isOpen}
@@ -676,6 +709,32 @@ export function AIChatPopup({
 								: t("subtitle")}
 					</div>
 				</div>
+				<button
+					type="button"
+					className="ai-expand"
+					onClick={toggleExpanded}
+					aria-label={isExpanded ? t("collapse") : t("expand")}
+					title={isExpanded ? t("collapse") : t("expand")}
+					aria-pressed={isExpanded}
+				>
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2.2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						aria-hidden="true"
+					>
+						{isExpanded ? (
+							<path d="M9 3v6H3M15 21v-6h6M21 3l-6 6M3 21l6-6" />
+						) : (
+							<path d="M9 3H3v6M15 21h6v-6M21 9V3h-6M3 15v6h6" />
+						)}
+					</svg>
+				</button>
 				<button
 					ref={closeButtonRef}
 					type="button"
