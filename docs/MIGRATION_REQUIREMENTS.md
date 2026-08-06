@@ -16,7 +16,7 @@ Bu to'rttasi bo'lmasa ko'chirishni boshlab bo'lmaydi.
 | 3 | **Cloudflare R2**: `ustoz-videos` nomli bucket + **API token** | cloudflare.com → R2 | Videolar shu yerda yotadi. Token'dan **2 ta kalit** chiqadi (access + secret) — ikkalasi ham kerak |
 | 4 | **Gemini API kaliti** | aistudio.google.com/app/apikey | AI tahlil. Shundan keyin AI puli mijoznikidan ketadi (hozir ~$7/oy) |
 
-**Xotira hisobi:** hozirgi hamma videolar **3.4 GB**. Mijozda 12 GB bo'lsa — yetadi. 2 soatlik uchrashuv ~120 MB (siqilgan holda).
+**Xotira hisobi (2026-08-07 da qayta o'lchandi — eski "3.4 GB" raqami eskirgan).** Ko'chiriladigan asosiy yuk: **12 ta yozuv, jami 7 soat 40 daqiqa, video fayllari 0.49 GB.** Kamayishining sababi: siqilmagan ikkita yozuv siqildi (970 MB tejaldi) va bittasi audioga aylantirildi. Bunga qo'shimcha: rasmchalar, transkriptlar va eski nusxalar — ular bir necha yuz MB. **O'chirilgan 18 ta yozuvning fayllari ko'chirilmaydi** (ular allaqachon o'chirilgan, yangi joyga tashib yurishning ma'nosi yo'q). Mijozda 5 GB bo'lsa ham yetadi; 2 soatlik uchrashuv ~120 MB.
 
 ---
 
@@ -35,7 +35,7 @@ Qolgan sozlamalarni biz o'zimiz yozamiz yoki generatsiya qilamiz:
 
 ## 3-QISM — BIZNING ISHIMIZ (ko'chirish paytida)
 
-1. **36 ta video + baza** ko'chiriladi va **har biri ochilishi tekshiriladi**
+1. **12 ta video + baza** (3 foydalanuvchi, 1 tashkilot, 2 papka, 11 izoh) ko'chiriladi va **har biri ochilishi tekshiriladi** — bittalab, ro'yxat bilan
 2. **Kengaytma qayta yig'iladi** — ichida eski manzil (`data365.duckdns.org`) yozilgan, yangi manzilga o'zgaradi
 3. **Jamoa bir marta kengaytmani qayta o'rnatadi** — bu yagona narsa, ular sezadi
 4. **Yangi admin hisob** ochiladi

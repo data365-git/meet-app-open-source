@@ -29,7 +29,11 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 ## ▶ (previous) NEXT STEP (2026-08-04 night)
 
-**GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
+**GOAL — updated 2026-08-07 by the owner's own declaration, relayed from HQ: _"Biz Data365 loyihasini productionga chiqardik"_.** He considers the product LAUNCHED. The remaining goal is therefore no longer "finish it" but **move it to the CLIENT's own Railway server WITH the existing videos** — and he has given the go-word for that ("Bularni barchasini qilib bo'lganman", answering a list that included starting the migration). **The safety law is unchanged and is not his to waive casually: nothing is deleted from the old server until every video is proven to open on the new one.**
+
+**MIGRATION PRE-FLIGHT — measured 2026-08-07, and the payload is far smaller than the plan doc assumed.** `docs/MIGRATION_REQUIREMENTS.md` has been corrected: **12 live recordings, 7h40m total, 0.49 GB of video files** (not "36 videos / 3.4 GB" — two uncompressed recordings were compressed and one was converted to audio-only since that was written). Also: 3 users, 1 org, 2 folders, 11 comments, and **`awsBucket` is NULL on every row**, so the bucket still comes purely from ENV and a same-named bucket in the client's account needs no DB re-pointing. The 18 soft-deleted recordings are deliberately NOT carried over.
+
+**BLOCKED ON THE CLIENT, not on us:** nothing can start until the client creates the four things in §1 of the requirements doc (Railway project + its MySQL, an `ustoz-videos` R2 bucket + API token, a Gemini key). We fill in the other 19 settings.
 
 ### ✅ DEPLOYED AND LIVE-VERIFIED 2026-08-05 — quality push + adaptive capture
 
