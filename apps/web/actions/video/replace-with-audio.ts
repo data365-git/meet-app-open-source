@@ -6,7 +6,7 @@ import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { extractAudioToBuffer } from "@/lib/audio-extract";
+import { extractAudioForDownload } from "@/lib/audio-extract";
 import { runPromise } from "@/lib/server";
 import { patchVideoMetadata } from "@/lib/video-metadata";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
@@ -79,9 +79,17 @@ export async function replaceVideoWithAudio(
 
 	// Extract fully into memory BEFORE any write — nothing is mutated yet, so
 	// a failure here leaves storage untouched.
+	//
+	// LISTENING quality, not Gemini quality. This used `extractAudioToBuffer`,
+	// which is deliberately mono / 24 kHz / 64 kbit/s because its consumer is a
+	// speech model that does not care. Here the audio is not an input to a
+	// machine — it is EVERYTHING THAT SURVIVES, and a person listens to it. The
+	// owner replaced a 53-minute client meeting on 2026-08-06 and got telephone
+	// quality with no way back; that is what this line is for. Roughly 1 MB/min
+	// instead of 0.5 — the right trade for the only remaining copy.
 	let audioBuf: Buffer;
 	try {
-		audioBuf = await extractAudioToBuffer(sourceUrl);
+		audioBuf = await extractAudioForDownload(sourceUrl);
 	} catch (err) {
 		console.error("[replaceVideoWithAudio] extract failed", {
 			videoId,

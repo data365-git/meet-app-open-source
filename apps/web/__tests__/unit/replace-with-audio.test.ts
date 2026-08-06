@@ -26,6 +26,7 @@ const H = vi.hoisted(() => ({
 		fields: unknown;
 	}>,
 	deleteObjectCalls: [] as string[],
+	extractAudioForDownload: vi.fn(),
 	extractAudioToBuffer: vi.fn(),
 	patchVideoMetadata: vi.fn(
 		async (
@@ -106,6 +107,8 @@ vi.mock("next/cache", () => ({
 	revalidatePath: (path: string) => H.revalidatePath(path),
 }));
 vi.mock("@/lib/audio-extract", () => ({
+	extractAudioForDownload: (url: string) => H.extractAudioForDownload(url),
+	// Exposed only so the test below can prove it is NOT the one used here.
 	extractAudioToBuffer: (url: string) => H.extractAudioToBuffer(url),
 }));
 vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
@@ -135,7 +138,7 @@ beforeEach(() => {
 	H.callOrder = [];
 	H.putObjectCalls = [];
 	H.deleteObjectCalls = [];
-	H.extractAudioToBuffer.mockReset();
+	H.extractAudioForDownload.mockReset();
 	H.patchVideoMetadata.mockReset().mockImplementation(
 		async (
 			_id: string,
@@ -183,13 +186,30 @@ describe("replaceVideoWithAudio", () => {
 		expect(H.deleteObjectCalls).toHaveLength(0);
 	});
 
+	// The audio this action writes is EVERYTHING THAT SURVIVES — the video is
+	// deleted — and a person listens to it. It originally used the Gemini-grade
+	// extractor (mono / 24 kHz / 64 kbit/s), which is correct for a speech model
+	// and telephone quality for a human. The owner replaced a 53-minute client
+	// meeting on 2026-08-06 and got exactly that, unrecoverably. RED against
+	// that version.
+	it("0. uses the LISTENING-grade extractor, never the Gemini-grade one", async () => {
+		H.getCurrentUser.mockResolvedValue({ id: OWNER_ID });
+		H.existingObjects.set(RESULT_KEY, 1_000_000);
+		H.extractAudioForDownload.mockResolvedValue(Buffer.alloc(500, 1));
+
+		await replaceVideoWithAudio(VIDEO_ID);
+
+		expect(H.extractAudioForDownload).toHaveBeenCalledTimes(1);
+		expect(H.extractAudioToBuffer).not.toHaveBeenCalled();
+	});
+
 	it("4. happy path: extract -> put -> verify -> reclaim -> patch metadata, in order", async () => {
 		H.getCurrentUser.mockResolvedValue({ id: OWNER_ID });
 		H.existingObjects.set(RESULT_KEY, 1_000_000); // pre-existing video bytes
 		H.existingObjects.set(RAW_MP4_KEY, 900_000); // reclaimable
 		// RAW_WEBM_KEY intentionally absent — must NOT show up in reclaimedFrom
 		const audioBuf = Buffer.alloc(500, 1);
-		H.extractAudioToBuffer.mockResolvedValue(audioBuf);
+		H.extractAudioForDownload.mockResolvedValue(audioBuf);
 		H.patchVideoMetadata.mockImplementation(
 			async (
 				_id: string,
@@ -241,7 +261,7 @@ describe("replaceVideoWithAudio", () => {
 		// but the write to result.mp4 never actually lands (putSkipsWrite).
 		H.existingObjects.set(RAW_MP4_KEY, 900_000);
 		H.putSkipsWrite = true;
-		H.extractAudioToBuffer.mockResolvedValue(Buffer.alloc(500, 1));
+		H.extractAudioForDownload.mockResolvedValue(Buffer.alloc(500, 1));
 
 		const result = await replaceVideoWithAudio(VIDEO_ID);
 
@@ -257,7 +277,7 @@ describe("replaceVideoWithAudio", () => {
 	it("6. extraction failure -> extract_failed, no put, no delete", async () => {
 		H.getCurrentUser.mockResolvedValue({ id: OWNER_ID });
 		H.existingObjects.set(RESULT_KEY, 1_000_000);
-		H.extractAudioToBuffer.mockRejectedValue(new Error("ffmpeg exploded"));
+		H.extractAudioForDownload.mockRejectedValue(new Error("ffmpeg exploded"));
 
 		const result = await replaceVideoWithAudio(VIDEO_ID);
 
