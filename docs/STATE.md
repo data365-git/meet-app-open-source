@@ -35,6 +35,10 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **BLOCKED ON THE CLIENT, not on us:** nothing can start until the client creates the four things in §1 of the requirements doc (Railway project + its MySQL, an `ustoz-videos` R2 bucket + API token, a Gemini key). We fill in the other 19 settings.
 
+**OWNER TODO (since 2026-08-07) — asked and deferred the same day: he answered "keyinroq ertaga eslat".** ONE action: forward the ready message in [`MIGRATION_CLIENT_MESSAGE.md`](MIGRATION_CLIENT_MESSAGE.md) to the client — it is written to be copied as-is, no editing needed. WHAT HE WILL SEE: the client sends back four things, and at that moment the migration stops being blocked. VALVE: if the client pushes back on cost or on owning the accounts, say so — the current server can simply stay, nothing breaks.
+
+**Deliberately NOT pre-built while waiting:** the copy-and-verify script. It cannot be run or tested against a target that does not exist yet, and an untested migration script is worse than none — it invites being trusted. The verification RULE is what matters and it is already fixed: every recording must open on the new host before anything is removed from the old one.
+
 ### ✅ DEPLOYED AND LIVE-VERIFIED 2026-08-05 — quality push + adaptive capture
 
 **Prod image `9e58a05`, `/api/health` → `db:ok storage:ok`.** Owner said "Ha, chiqar". Verified INSIDE the artifacts, not by their existence: the served zip was 0.5.8 with bitrate `8e6` and `echoCancellation` true on the mic leg / false on the tab leg in both `content.js` and `offscreen.js`; Recordings and Meetings both render; **Move was exercised end-to-end on real data** — a Loom-imported video (`source.type webMP4`) moved to Meetings, appeared there, moved back, and `source` stayed byte-identical both ways while `/s/<id>` kept returning 200. The owner's data was restored to where it started.
