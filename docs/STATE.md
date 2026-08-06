@@ -6,7 +6,25 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
-## ▶ NEXT STEP (2026-08-04 night — read this first)
+## ▶ NEXT STEP (2026-08-06 evening — read this first)
+
+**PROD = `b38901c`, `/api/health` → `db:ok storage:ok`.** Live and verified: audio download (share page + card menu), bulk replace-with-audio, the card `⋮` fix, the four AI-chat fixes, the chat full-screen toggle, and the dead colour scales.
+
+**⚠️ ONE COMMIT AHEAD OF PROD AND DELIBERATELY NOT DEPLOYED YET: `7bf7d63`.** A re-compression job is running INSIDE the app container (`/tmp/recompress.log`); a deploy replaces that container and kills it mid-encode — which already happened once tonight. **Check the job is finished before triggering any deploy.** The job is safe to lose: nothing is overwritten until the new file is probed and proven, so a killed run leaves storage untouched.
+
+**✅ REPLACE-WITH-AUDIO WAS EXERCISED FOR REAL, and it exposed a defect no test could have.** The owner ran it on `fm3pz7yref328m7` (a 53-minute client meeting). It worked — `isAudio: true`, the object is `audio/mpeg`, transcript and summary intact. **But the surviving audio is mono / 24 kHz / 64 kbit/s — telephone quality — and the video is gone.** Cause: the action called `extractAudioToBuffer`, which is deliberately machine-grade because its consumer is Gemini. This is the one place where the audio is EVERYTHING THAT SURVIVES. Fixed in `7bf7d63` (48 kHz / 128k / stereo) with a RED-first test that pins which extractor is used. **That one recording cannot be recovered — do not offer to.**
+
+**✅ TWO UNCOMPRESSED RECORDINGS FOUND BY MEASUREMENT, owner chose "compress, drop the original".** Measured over the live playlist route with a 1-byte ranged request against durations from the prod DB: of 9 recordings over 5 minutes, seven store at 0.5–1.3 MB/min and two were raw.
+- `jbemr633th8ct7t` (11.8 min upload): **269.0 MB → 34.2 MB, 7.9:1** — done, verified, the app now serves the compressed `result.mp4` and the raw source is deleted. **235 MB freed.**
+- `jm2ngbqg97wxk5t` ("Bunyod & Aman agency. deal 2", 53.7 min): 952.2 MB, encode IN FLIGHT at the time of writing.
+- **Do not re-derive the method:** the app container has ffmpeg but NO aws-sdk and NO curl, so the script (`/root/recompress.mjs` on the VPS, copied in with `docker cp`) does SigV4 with node crypto and transfers with global `fetch`. **And the source is not always `result.mp4`** — a video that never got optimized has none and is served straight from `raw-upload.mp4`; asking for `result.mp4` there is a 404, which is how this was found. Read the key off the playlist redirect.
+- Encoder args are copied EXACTLY from `lib/video-convert.ts` (h264 CRF 21, long edge capped at 1920, aac 128k, faststart) so these files do not become the odd ones out.
+
+**A working-style correction the owner made twice in one session, now in memory:** I twice ended a turn saying I would wait for a build or a reviewer to finish. That was wrong — a conflict means TWO WRITERS ON ONE FILE, and a build only READS the tree. The disjoint surfaces I was blind to: the prod server, the DB, storage. The measurement above was found in two minutes once I looked there. (A deploy vs. a container-resident encode, on the other hand, IS a real conflict — hence the warning at the top.)
+
+---
+
+## ▶ (previous) NEXT STEP (2026-08-04 night)
 
 **GOAL (unchanged, owner's words):** finish Ustoz, hand it to the internal IT team, then move it to the CLIENT's own Railway server WITH the existing videos. Nothing is deleted from the old server until every video is proven to open on the new one.
 
