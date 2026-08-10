@@ -330,8 +330,13 @@ export async function transcribeVideo(
 		// First-start failure: roll the claim back to "not started" so the owner
 		// can click again. A RETRY must never do this — nulling the status here
 		// would make a live (cron-managed) job render as "not started" on every
-		// page load; the row keeps its previous status (PROCESSING/ERROR) and the
-		// recovery cron simply tries again on its next tick.
+		// page load. The row keeps its previous status (PROCESSING/ERROR); a
+		// PROCESSING row left this way has NO liveness markers (its takeover
+		// cleared them, and this failure path writes none), and the recovery
+		// cron's candidate SQL deliberately treats marker-less rows as
+		// infinitely stale (the COALESCE(..., '') arm) — so the cron genuinely
+		// re-selects it on its next tick. That SQL arm is what makes this
+		// comment true; before it existed, this row was invisible forever.
 		if (!isRetry) {
 			await db()
 				.update(videos)

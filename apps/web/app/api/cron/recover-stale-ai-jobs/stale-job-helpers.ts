@@ -87,17 +87,30 @@ export function isQuotaBlocked(metadata: VideoMetadata): boolean {
 	return metadata.transcriptionError?.code === "QUOTA";
 }
 
-/** Pure decision: may this quota-blocked video be re-kicked right now? */
-export function shouldRetryQuotaBlocked(
+/** Pure schedule check shared by BOTH quota-blocked shapes — terminal ERROR
+ * rows (code QUOTA) and cheap rows PARKED in PROCESSING + aiQuotaWaiting with
+ * no durable Batch (the no-paid-key / failed-submit deployment). One ladder,
+ * one owner, one budget: free re-kicks at the backoff cadence until the
+ * bounded budget runs out. */
+export function isQuotaRetryDue(
 	metadata: VideoMetadata,
 	nowMs = Date.now(),
 ): boolean {
-	if (!isQuotaBlocked(metadata)) return false;
 	if ((metadata.quotaRetryAttempts ?? 0) >= MAX_QUOTA_RETRY_ATTEMPTS)
 		return false;
 	if (!metadata.quotaRetryNextAt) return true;
 	const nextMs = Date.parse(metadata.quotaRetryNextAt);
 	return !Number.isFinite(nextMs) || nextMs <= nowMs;
+}
+
+/** Pure decision: may this quota-blocked (terminal ERROR) video be re-kicked
+ * right now? */
+export function shouldRetryQuotaBlocked(
+	metadata: VideoMetadata,
+	nowMs = Date.now(),
+): boolean {
+	if (!isQuotaBlocked(metadata)) return false;
+	return isQuotaRetryDue(metadata, nowMs);
 }
 
 /** Metadata after booking one quota re-kick: counter up, next attempt pushed

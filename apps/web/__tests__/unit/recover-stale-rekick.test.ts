@@ -17,13 +17,15 @@ const state = vi.hoisted(() => ({
 	selectResults: [] as unknown[][],
 	selectCall: 0,
 	setCalls: [] as Array<Record<string, unknown>>,
+	whereArgs: [] as unknown[][],
 }));
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
 			from: () => ({
-				where: () => {
+				where: (...args: unknown[]) => {
+					state.whereArgs.push(args);
 					const result =
 						state.selectResults[state.selectCall++] ?? ([] as unknown[]);
 					const promise = Promise.resolve(result) as Promise<unknown[]> & {
@@ -118,6 +120,7 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		state.selectResults = [];
 		state.selectCall = 0;
 		state.setCalls = [];
+		state.whereArgs = [];
 		process.env.CRON_SECRET = CRON_SECRET;
 	});
 
@@ -199,12 +202,51 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		expect(body.skippedAlive).toBe(1);
 	});
 
-	it("a quota-PARKED cheap job is left alone — no hourly ffmpeg re-kick, no flag flicker (round-3 #5)", async () => {
+	it("a quota-PARKED cheap job with NO Batch gets a FREE ladder re-kick when due (round-4 #1)", async () => {
+		// The no-paid-key deployment: submitCheapChunkBatch could not submit, so
+		// the row parked with aiQuotaWaiting and no aiBatchJobs. Skipping it
+		// entirely (round-3 shape) made the 4h PAID flip its only exit — the
+		// owner's original "cheap billed as paid" complaint reintroduced. The
+		// exit is the same bounded free backoff ladder the quota-ERROR loop
+		// uses; the 4h flip stays the ceiling.
 		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 		armWithCandidate({
 			aiMode: "cheap",
 			aiQuotaWaiting: true,
-			autoRecoverAttempts: 5,
+			processingStartedAt: twoHoursAgo,
+			aiJobStartedAt: twoHoursAgo,
+			// No quotaRetryNextAt yet -> first ladder attempt is due now.
+		});
+
+		const res = await GET(cronRequest());
+		const body = (await res.json()) as { quotaRetried?: number };
+
+		expect(transcribeVideoMock).toHaveBeenCalledWith(
+			"vid-cheap-1",
+			"owner-1",
+			true,
+			true,
+			"cheap",
+		);
+		expect(body.quotaRetried).toBe(1);
+		// The re-kick books the next ladder slot (bounded budget), so it does
+		// NOT fire again every tick.
+		const scheduled = state.setCalls.find(
+			(setArg) =>
+				(setArg.metadata as { quotaRetryAttempts?: number } | undefined)
+					?.quotaRetryAttempts === 1,
+		);
+		expect(scheduled).toBeDefined();
+	});
+
+	it("a quota-PARKED cheap job whose ladder slot is NOT due yet is left alone (no hourly ffmpeg, no flag flicker)", async () => {
+		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+		const inOneHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+		armWithCandidate({
+			aiMode: "cheap",
+			aiQuotaWaiting: true,
+			quotaRetryAttempts: 1,
+			quotaRetryNextAt: inOneHour,
 			processingStartedAt: twoHoursAgo,
 			aiJobStartedAt: twoHoursAgo,
 		});
@@ -214,6 +256,30 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 
 		expect(transcribeVideoMock).not.toHaveBeenCalled();
 		expect(body.skippedQuotaWaiting).toBe(1);
+	});
+
+	it("the candidate SQL treats a row with NO liveness markers as infinitely stale (round-4 #2)", async () => {
+		// NULL <= ? is NULL in MySQL: without an explicit fallback arm, a
+		// PROCESSING row whose takeover cleared both markers (and whose
+		// re-claim then failed) was invisible to the cron forever — permanent
+		// spinner, no ERROR, no flip. The '' COALESCE arm is that fallback.
+		armWithStaleCheapCandidate();
+		await GET(cronRequest());
+
+		const fragments = state.whereArgs
+			.flat(Number.POSITIVE_INFINITY)
+			.filter(
+				(arg): arg is { strings: TemplateStringsArray } =>
+					typeof arg === "object" &&
+					arg !== null &&
+					"strings" in (arg as Record<string, unknown>),
+			)
+			.map((arg) => arg.strings.join("?"));
+		const stalenessFragment = fragments.find((text) =>
+			text.includes("$.aiProgressAt"),
+		);
+		expect(stalenessFragment).toBeDefined();
+		expect(stalenessFragment).toContain("''");
 	});
 
 	it("a cheap job out of free retries is offered the PAID path before being declared dead (round-3 #2)", async () => {

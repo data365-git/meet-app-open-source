@@ -14,6 +14,7 @@ import {
 	CHEAP_STALE_JOB_THRESHOLD_MS,
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
+	isQuotaRetryDue,
 	isTranscriptionJobStale,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
@@ -93,17 +94,25 @@ export async function GET(request: Request) {
 				// re-stamped on every completed chunk), falling back to the claim
 				// time for pre-heartbeat rows. Judging from processingStartedAt
 				// alone killed every recording longer than the threshold.
+				// The final COALESCE arm '' makes a row with NO markers at all
+				// compare as infinitely stale — matching isTranscriptionJobStale.
+				// Without it, NULL <= ? is NULL and a PROCESSING row whose takeover
+				// cleared both markers (and whose re-claim then failed: budget, no
+				// key, crash) was INVISIBLE forever: no retry, no ERROR, no flip —
+				// a permanent spinner the generate route refuses as already-running.
 				sql`(
 					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
 						AND COALESCE(
 							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt'))
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')),
+							''
 						) <= ${cheapStaleBeforeIso})
 					OR
 					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
 						AND COALESCE(
 							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt'))
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')),
+							''
 						) <= ${fastStaleBeforeIso})
 				)`,
 			),
@@ -204,14 +213,37 @@ export async function GET(request: Request) {
 				metadata.aiMode === "cheap" &&
 				metadata.aiQuotaWaiting === true
 			) {
-				// Quota-parked = alive by design, NOT stale. Re-kicking it every
-				// tick re-ran ffmpeg extraction hourly forever and flickered the
-				// "waiting for free quota" notice off/on (validateVideo resets the
-				// flag). The normal cheap quota path always submits a durable Batch
-				// (handled above by the collector); the rare no-Batch park (no paid
-				// key / submit failed) self-heals at the 4h paid flip, which is
-				// checked FIRST and always wins.
-				skippedQuotaWaiting++;
+				// Quota-parked WITHOUT a pending Batch (the branch above owns the
+				// with-Batch case). This state's owner is THIS loop and its exit is
+				// the SAME bounded backoff ladder the quota-ERROR loop uses — free
+				// re-kicks at 30m/1h/2h/... so the job can still finish FREE when
+				// quota returns, while the 4h paid flip (checked first, the UI's
+				// own "4 soatda avtomatik tezlashadi" promise) remains the ceiling.
+				// History: re-kicking every tick was hourly-ffmpeg noise (round-3
+				// #5); skipping entirely left the no-paid-key deployment with paid
+				// billing as its ONLY exit (round-4 #1). The ladder is the shape
+				// that serves both: bounded, slowing, free.
+				if (isQuotaRetryDue(metadata, now)) {
+					const nextMetadata: VideoMetadata = {
+						...withQuotaRetryScheduled(metadata, now),
+						processingStartedAt: undefined,
+						aiProgressAt: undefined,
+					};
+					await db()
+						.update(videos)
+						.set({ metadata: nextMetadata })
+						.where(eq(videos.id, candidate.id));
+					await transcribeVideo(
+						candidate.id,
+						candidate.ownerId,
+						true,
+						true,
+						"cheap",
+					);
+					quotaRetried++;
+				} else {
+					skippedQuotaWaiting++;
+				}
 			} else if (!isTranscriptionJobStale(metadata, now)) {
 				// Freshness re-check in JS on the row we actually hold: the job has
 				// proven life (heartbeat) — chunk progress is the third liveness

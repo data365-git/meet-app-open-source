@@ -634,9 +634,13 @@ async function extractAudio(
 	// audio" while this step is REALLY running, so the marker is written here at
 	// the step's start (never guessed in the UI) and cleared once per-chunk
 	// transcription progress takes over in savePartialTranscription.
+	// Heartbeat at extraction START too: the single-file and unknown-duration
+	// branches have no chunk boundary to stamp at, so this write is their only
+	// in-extraction proof of life.
 	await patchVideoMetadata(videoId, (current) => ({
 		...current,
 		aiProcessingSubStep: "extract_audio",
+		aiProgressAt: new Date().toISOString(),
 	})).catch(() => {});
 
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
@@ -694,6 +698,16 @@ async function extractAudio(
 					speechEndSec: chunk.speechEndSec,
 					durationSec: chunk.durationSec,
 				});
+
+				// Heartbeat INSIDE the extraction loop — each transcoded+uploaded
+				// chunk is real progress. Without this, a long download/transcode
+				// showed no life for the whole extraction and the cron killed and
+				// duplicated a healthy job (round-4 #4). Cadence = one write per
+				// extracted chunk, the same natural boundary transcription uses.
+				await patchVideoMetadata(videoId, (current) => ({
+					...current,
+					aiProgressAt: new Date().toISOString(),
+				})).catch(() => {});
 			}
 
 			console.log(
@@ -1903,6 +1917,12 @@ async function saveTranscription(
 	delete md.transcriptionError;
 	delete md.quotaRetryAttempts;
 	delete md.quotaRetryNextAt;
+	// Success also refunds the FREE auto-recover budget (round-4 #5): the
+	// counter is only ever incremented by the recovery cron, so leaving it
+	// meant a video that once used its retries started every LATER cheap job
+	// at attempts=2 and went straight to the paid flip with zero free
+	// re-kicks — against the owner's explicit cheap choice.
+	delete md.autoRecoverAttempts;
 	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
 	// analysis does not inherit this completed job's timestamp and immediately
 	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.
