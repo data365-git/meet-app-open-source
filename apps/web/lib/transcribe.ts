@@ -9,12 +9,12 @@ import {
 import { serverEnv } from "@cap/env";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
 	assertAiBudgetAvailable,
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
-import type { AiSpeedMode } from "@/lib/ai-speed-mode";
+import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
@@ -221,14 +221,34 @@ export async function transcribeVideo(
 		// for `transcriptionStatus = PROCESSING` older than the stale threshold and
 		// clears it. `processingStartedAt` is what makes that staleness measurable —
 		// and it is the same field the panel's ETA reads.
+		// JSON_SET, not a spread of the row we read at the top of this function.
+		// Between that read and here we await an owner lookup, a decrypt, an
+		// upload-row check and the budget guard — several real round-trips — so a
+		// spread would write back a STALE metadata object and silently revert
+		// whatever a concurrent writer (retry-ai, the batch-poll cron) had set in
+		// the meantime. JSON_SET merges server-side and touches only these keys.
+		//
+		// `aiMode` is written here for a specific reason, not for completeness:
+		// recover-stale-ai-jobs picks its staleness threshold from it and treats a
+		// MISSING aiMode as "fast", which is the SHORTER window. Claiming the row
+		// with a start time but no mode would let the cron judge a legitimately
+		// patient "cheap" job stale far too early, until the workflow's own later
+		// write filled the mode in.
+		const claimSpeedMode =
+			speedModeOverride ??
+			resolveAiSpeedMode(
+				((video.metadata as VideoMetadata) || {}).aiMode ??
+					result.orgSettings?.aiSpeedMode,
+			);
 		await db()
 			.update(videos)
 			.set({
 				transcriptionStatus: "PROCESSING",
-				metadata: {
-					...((video.metadata as VideoMetadata) || {}),
-					processingStartedAt: new Date().toISOString(),
-				} as VideoMetadata,
+				metadata: sql`JSON_SET(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.processingStartedAt', ${new Date().toISOString()},
+					'$.aiMode', ${claimSpeedMode}
+				)`,
 			})
 			.where(eq(videos.id, videoId));
 

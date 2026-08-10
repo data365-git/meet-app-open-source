@@ -57,6 +57,23 @@ describe("transcribeVideo claims the job before launching the workflow", () => {
 		expect(body).toMatch(/processingStartedAt/);
 	});
 
+	it("merges metadata server-side instead of writing back the row it read", () => {
+		// The row is read at the top of the function; the claim happens after an
+		// owner lookup, a decrypt, an upload check and the budget guard. Spreading
+		// that stale object would revert whatever a concurrent writer (retry-ai,
+		// the batch-poll cron) set in between. Found by a blind review, 2026-08-10.
+		const claim = body.slice(body.search(/transcriptionStatus:\s*"PROCESSING"/));
+		expect(claim).toMatch(/JSON_SET\(/);
+	});
+
+	it("claims aiMode too, so the stale-job cron uses the right threshold", () => {
+		// recover-stale-ai-jobs picks cheap vs fast from aiMode and treats a MISSING
+		// aiMode as "fast" — the SHORTER window. A claim with a start time but no
+		// mode would let it judge a patient cheap job stale far too early.
+		const claim = body.slice(body.search(/transcriptionStatus:\s*"PROCESSING"/));
+		expect(claim).toMatch(/\$\.aiMode/);
+	});
+
 	it("still clears the claim if the workflow could not be started", () => {
 		// The catch below resets the row, so a failure to launch does not leave a
 		// recording stuck showing progress that will never happen.

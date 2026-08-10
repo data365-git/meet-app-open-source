@@ -101,12 +101,27 @@ function useAppTheme(): Theme {
 }
 
 /* ---- Inline: **bold** + [mm:ss] citations ---- */
-function renderInline(
+
+/** One timestamp, e.g. `4:12` or `1:45:45`. */
+const TIMESTAMP = String.raw`\d{1,3}:\d{2}(?::\d{2})?`;
+
+// The model routinely groups citations into ONE bracket — "[1:45:45, 2:01:40]" —
+// and the old pattern only accepted a bracket holding a single timestamp, so
+// those groups fell through as plain grey text while their single-timestamp
+// neighbours rendered as clickable chips (owner spotted it in the UI, 2026-08-10).
+// Accepting a comma/semicolon separated LIST and emitting one chip per timestamp
+// makes every citation clickable regardless of how the model chose to group them.
+const INLINE_RE = new RegExp(
+	String.raw`\[(${TIMESTAMP}(?:\s*[,;]\s*${TIMESTAMP})*)\]|\*\*(.+?)\*\*`,
+	"g",
+);
+
+export function renderInline(
 	text: string,
 	onVideoJump: (seconds: number) => void,
 	keyBase: string,
 ): React.ReactNode[] {
-	const re = /\[(\d{1,3}:\d{2}(?::\d{2})?)\]|\*\*(.+?)\*\*/g;
+	const re = new RegExp(INLINE_RE.source, "g");
 	const out: React.ReactNode[] = [];
 	let last = 0;
 	let i = 0;
@@ -115,17 +130,26 @@ function renderInline(
 	while ((m = re.exec(text)) !== null) {
 		if (m.index > last) out.push(text.slice(last, m.index));
 		if (m[1]) {
-			const secs = parseMmSsToSeconds(m[1]);
-			out.push(
-				<button
-					key={`${keyBase}-c${i}`}
-					type="button"
-					className="ai-citation"
-					onClick={() => onVideoJump(secs)}
-				>
-					[{m[1]}]
-				</button>,
-			);
+			const stamps = m[1]
+				.split(/\s*[,;]\s*/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+			stamps.forEach((stamp, s) => {
+				const secs = parseMmSsToSeconds(stamp);
+				// Keep the comma the model wrote. Joining the chips with a bare
+				// space would quietly edit the sentence the user is reading.
+				if (s > 0) out.push(", ");
+				out.push(
+					<button
+						key={`${keyBase}-c${i}-${s}`}
+						type="button"
+						className="ai-citation"
+						onClick={() => onVideoJump(secs)}
+					>
+						[{stamp}]
+					</button>,
+				);
+			});
 		} else if (m[2]) {
 			out.push(<strong key={`${keyBase}-b${i}`}>{m[2]}</strong>);
 		}

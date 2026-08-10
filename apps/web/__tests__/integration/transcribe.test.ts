@@ -89,6 +89,15 @@ vi.mock("@cap/database/schema", () => ({
 
 vi.mock("drizzle-orm", () => ({
 	eq: vi.fn((field, value) => ({ field, value })),
+	// `transcribeVideo` claims the job with a server-side JSON_SET so a
+	// concurrent writer's metadata is not clobbered; that needs drizzle's `sql`
+	// tag. A mock missing it throws INSIDE the try, which the function reports as
+	// "failed to start" — the whole workflow-triggering group went red with a
+	// message that named the mock, not the code.
+	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+		sql: strings.join("?"),
+		values,
+	})),
 }));
 
 import type { Video } from "@cap/web-domain";
