@@ -6,6 +6,25 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## 📋 THE OWNER'S LIST — hand him ONE at a time, in this order (agreed 2026-08-10)
+
+He asked for his ClickUp checks to be MERGED INTO this list, not for his other duties to be pushed into ClickUp — I had it backwards once; do not repeat it. He works through them by saying "keyingisi"; give exactly one, wait, then the next.
+
+Verification checks, from the ClickUp "tekshirishda" column (list `901819987518`):
+1. `86eyk4cj0` AI chat — every timestamp clickable
+2. `86eyjtx4p` AI analysis progress survives a page reload (his own card)
+3. `86eyh74gk` transcript downloads under the recording's title
+4. `86eyh74fk` an uploaded file's name becomes the recording's title
+5. `86eyh749y` bulk "keep audio only"
+6. `86eyh7493` MP3 download
+7. `86eyh4v8w` drag-and-drop into folders
+8. `86eyh4v7p` "Move to folder" button
+
+Duties that live only here:
+9. **A real 2-person Meet recording, judged BY EAR** — the launch gate no rig can close.
+10. **Forward `MIGRATION_CLIENT_MESSAGE.md` to the client** — unblocks the whole migration.
+11. **The team reinstalls extension 0.5.9** — one message from him.
+
 ## ▶ NEXT STEP (2026-08-10 morning — read this first)
 
 **✅ OWNER-REPORTED UX DEFECT, ROOT-CAUSED AND FIXED: pressing "AI tahlil" and reloading made the progress vanish**, leaving him unable to tell a running job from a cancelled one. Cause, found in code and confirmed against the DB: `transcribeVideo` launches the workflow WITHOUT claiming the row first — `transcriptionStatus` only becomes PROCESSING inside the workflow, after it has fetched the video, the owner and the org settings. A reload in that window reads NULL and the panel correctly renders "not started". `startAiGeneration` already claimed its job (QUEUED before launch); transcription was the one path that did not. Now claimed synchronously with `processingStartedAt`, so the existing stale-job cron can still clear a dead claim. 4 new tests pin the ORDERING (claim before launch) — they are RED against the old code.
@@ -21,6 +40,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 - Cause: the fallback was built with `new URL(path, request.url)`, and behind the Coolify/Traefik proxy `request.url` is the container's own origin (`HOSTNAME=0.0.0.0`, `PORT=3000`). **The public base-URL envs were all correct** — `WEB_URL`, `NEXT_PUBLIC_WEB_URL` and `NEXTAUTH_URL` all read `https://data365.duckdns.org` — so reading an env would have hidden this rather than fixed it.
 - Fix: no absolute URL at all. A relative `Location` is resolved by the client against the URL it actually requested, so it is right on any host — which matters specifically because this app is about to move to the client's Railway domain.
 - 3 tests, RED against the old code. They strip comments before asserting, because the fix's own comment quotes the broken pattern.
+- **STILL OPEN, and deliberately left with an honest caveat:** `/api/thumbnail?videoId=…` returns `{"error":true,"message":"No thumbnail found"}` for the NEWEST recording (`p0rq8r7d27g98bb`) while an older one (`hcjeyee20t4fvvp`) returns a signed URL — so the OG failure is a MISSING object, not a decode problem, and thumbnail generation is not running (or not finishing) for the current recording path. **Do not trust a count here:** two sweeps over the same ids disagreed (5 missing vs 2), so that endpoint is flaky under rapid polling and the population list was stale. Re-measure slowly before drawing conclusions about how many are affected.
 
 ---
 
