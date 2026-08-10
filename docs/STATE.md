@@ -15,6 +15,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 **ONE-TRUTH, and an honest correction to how it was first stated.** `docs/STATE.md` is the source for STATUS; ClickUp is a one-direction VIEW of it. I already bent that on the day it was written — I read the eight `tekshirishda` cards and folded them into the owner list below, which is ClickUp → board.
 - Keeping the strict rule as-is would be wrong, because **he files real requests as ClickUp cards himself** — `86eyjtx4p` ("AI tahlil jarayoni sahifa yangilangandan keyin yo'qolib ketmasin") is his own card, and ignoring it would have meant ignoring the owner.
 - So the working rule is narrower and survives contact: **STATUS flows one way (board → ClickUp) and ClickUp status is never authoritative back.** But a card the OWNER authored is genuine input: pull it into the board ONCE, and from that moment the board owns it. The twin trap is two places claiming to know the state — not one place receiving a request.
+- **This narrowing was reviewed and APPROVED by HQ the same day and is now the charter's own wording, with `86eyjtx4p` cited as the case that forced it.** Do not "restore" the strict form later thinking it was a shortcut — the strict form would have made the rule outrank the owner.
 
 ## 📋 THE OWNER'S LIST — hand him ONE at a time, in this order (agreed 2026-08-10)
 
