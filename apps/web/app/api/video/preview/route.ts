@@ -17,11 +17,24 @@ function getFallbackResponse(request: NextRequest, videoId: string) {
 		return new NextResponse(null, { status: 404 });
 	}
 
-	const fallbackUrl = new URL("/api/video/og", request.url);
-	fallbackUrl.searchParams.set("videoId", videoId);
-	const response = NextResponse.redirect(fallbackUrl, 302);
-	response.headers.set("Cache-Control", "private, no-store, max-age=0");
-	return response;
+	// A RELATIVE Location, deliberately — not `new URL(..., request.url)`.
+	//
+	// This is the og:image every social scraper fetches when a recording has no
+	// animated preview yet. Behind the Coolify/Traefik proxy `request.url` is the
+	// container's own origin, so the absolute URL this used to build came out as
+	// `https://0.0.0.0:3000/api/video/og?...` — measured on production 2026-08-10.
+	// Telegram, WhatsApp and Slack followed that to nowhere, so every shared link
+	// showed a blank preview card. A relative Location (RFC 7231 §7.1.2) is
+	// resolved by the client against the URL it actually requested, so it is
+	// correct on any host without depending on an env var being right.
+	const params = new URLSearchParams({ videoId });
+	return new NextResponse(null, {
+		status: 302,
+		headers: {
+			Location: `/api/video/og?${params.toString()}`,
+			"Cache-Control": "private, no-store, max-age=0",
+		},
+	});
 }
 
 export async function GET(request: NextRequest) {
