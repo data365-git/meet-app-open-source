@@ -211,13 +211,41 @@ describe("staleThresholdMsForMetadata", () => {
 		);
 	});
 
-	it("cheap staleness equals the 4h paid-flip window; fast/default stays 60 minutes", () => {
+	it("uses 60 minutes for cheap (crash detection) and 60 minutes for fast/default", () => {
 		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBe(
-			4 * 60 * 60 * 1000,
+			60 * 60 * 1000,
 		);
 		expect(staleThresholdMsForMetadata({ aiMode: "fast" })).toBe(
 			60 * 60 * 1000,
 		);
 		expect(staleThresholdMsForMetadata({})).toBe(60 * 60 * 1000);
+	});
+
+	it("a CRASHED cheap job is re-kicked on the FREE path before it is ever flipped to paid", () => {
+		// Invariant from the 2026-08-10 review: with the cheap threshold at the
+		// 4h flip window, a cheap row only ever became a candidate when the flip
+		// (checked first, keyed on the preserved aiJobStartedAt <=
+		// processingStartedAt) was already due — the free re-kick branch was
+		// unreachable and a crash at t+5min cost paid money at hour 4 against an
+		// explicit cheap choice. So: at first staleness eligibility PLUS a full
+		// cron interval of lag, the flip must still NOT be due — the free
+		// re-kick handles the crash first.
+		const t0 = Date.parse("2026-08-10T12:00:00.000Z");
+		const iso = (ms: number) => new Date(ms).toISOString();
+		const crashedCheap = {
+			aiMode: "cheap" as const,
+			aiJobStartedAt: iso(t0),
+			processingStartedAt: iso(t0),
+			// No evidence-of-life markers: not quota-waiting, no pending Batch —
+			// this row is genuinely dead, not patiently waiting.
+		};
+		const cronIntervalMs = 30 * 60 * 1000;
+		const firstRecoveryTick =
+			t0 + staleThresholdMsForMetadata(crashedCheap) + cronIntervalMs;
+
+		expect(
+			shouldAutoFlipCheapJobToPaid(crashedCheap, firstRecoveryTick),
+		).toBe(false);
+		expect(shouldAutoRetry(0, crashedCheap)).toBe(true);
 	});
 });

@@ -3,10 +3,9 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { type AiSpeedMode, isAiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
-import { requestAiGenerationAfterTranscription } from "@/lib/ai-generation-request";
+import { type AiSpeedMode, isAiSpeedMode } from "@/lib/ai-speed-mode";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
 import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
@@ -115,22 +114,29 @@ export async function POST(
     // request so the workflow starts AI analysis as soon as the transcript
     // finishes. Do not set aiGenerationStatus=QUEUED here: startAiGeneration
     // uses that status to mean a real AI workflow has already been launched.
+    //
+    // Server-side JSON_SET, same discipline as transcribeVideo's claim. A
+    // plain spread of the row read above would (a) let a stale panel / second
+    // tab with speedMode overwrite a RUNNING cheap job's mode, and (b) revert
+    // everything the workflow wrote between that read and this write —
+    // aiBatchJobs (losing the handle means the collector never collects),
+    // aiQuotaWaiting, chunk progress. A start request never changes the mode
+    // of a job that is already running; it only records the explicit AI
+    // request and backfills the job clock if missing.
     if (video.transcriptionStatus === "PROCESSING") {
-      const metadata = (video.metadata as VideoMetadata) || {};
       const now = new Date().toISOString();
-      const aiMode = speedMode ?? resolveAiSpeedMode(metadata.aiMode);
       await db()
         .update(videos)
         .set({
-          metadata: requestAiGenerationAfterTranscription({
-            metadata: {
-              ...metadata,
-              aiMode,
-              aiJobStartedAt: metadata.aiJobStartedAt ?? now,
-            },
-            requestedAt: now,
-            requestedBy: user.id,
-          }),
+          metadata: sql`JSON_SET(
+            COALESCE(${videos.metadata}, JSON_OBJECT()),
+            '$.aiGenerationRequestedAt', ${now},
+            '$.aiGenerationRequestedBy', ${user.id},
+            '$.aiJobStartedAt', COALESCE(
+              JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiJobStartedAt')),
+              ${now}
+            )
+          )`,
         })
         .where(eq(videos.id, videoId));
 

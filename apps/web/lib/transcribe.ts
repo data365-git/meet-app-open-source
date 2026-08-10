@@ -14,6 +14,7 @@ import {
 	assertAiBudgetAvailable,
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
+import { staleThresholdMsForMetadata } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
@@ -150,12 +151,27 @@ export async function transcribeVideo(
 		};
 	}
 
+	// A retry (cron re-kick / Batch collector / paid flip) may re-claim a
+	// PROCESSING row in place — that is the whole point of isRetry (no NULL
+	// pass-through). But the caller's say-so is not enough: two recovery paths
+	// can race on the same row, and re-claiming a genuinely LIVE workflow means
+	// two workflows billing Gemini for the same video. So the re-claim is
+	// gated on the row's own evidence: a recovery owner clears
+	// processingStartedAt as part of taking the job over (absent marker = row
+	// handed to us), and a marker older than the mode's stale threshold is a
+	// crashed run by the same definition the cron uses. A FRESH marker means a
+	// live workflow — refuse, retry or not.
+	const guardMetadata = (video.metadata as VideoMetadata) || {};
+	const processingClaimMs = guardMetadata.processingStartedAt
+		? Date.parse(guardMetadata.processingStartedAt)
+		: Number.NaN;
+	const processingLooksLive =
+		Number.isFinite(processingClaimMs) &&
+		Date.now() - processingClaimMs < staleThresholdMsForMetadata(guardMetadata);
 	if (
 		video.transcriptionStatus === "COMPLETE" ||
-		// A retry (cron re-kick / Batch collector) may re-claim a PROCESSING row
-		// in place — that is the whole point of isRetry (no NULL pass-through).
-		// A normal user-facing start still treats PROCESSING as "already running".
-		(video.transcriptionStatus === "PROCESSING" && !isRetry) ||
+		(video.transcriptionStatus === "PROCESSING" &&
+			(!isRetry || processingLooksLive)) ||
 		video.transcriptionStatus === "SKIPPED" ||
 		video.transcriptionStatus === "NO_AUDIO"
 	) {

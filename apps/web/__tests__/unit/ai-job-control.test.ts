@@ -158,26 +158,35 @@ describe("continueAiJobOnPaid", () => {
 			"server-paid-key",
 		);
 
-		// The persisted metadata drops the batch jobs + quota wait and flips to fast.
+		// The persisted metadata drops the batch jobs + quota wait and flips to
+		// fast — WITHOUT resetting transcriptionStatus. The no-NULL law applies
+		// here too (review finding #3, 2026-08-10): this flip fires unattended
+		// at hour 4, and a NULL window during transcribeVideo's multi-second
+		// pre-claim work rendered "start AI analysis?" for a continuing job.
+		// Handing the row over = clearing processingStartedAt, which is what
+		// lets the isRetry re-claim pass the fresh-claim guard.
 		const setArg = H.updateSet.mock.calls[0]?.[0] as {
-			transcriptionStatus: unknown;
+			transcriptionStatus?: unknown;
 			metadata: {
 				aiMode?: string;
 				aiBatchJobs?: unknown;
 				aiQuotaWaiting?: unknown;
+				processingStartedAt?: unknown;
 			};
 		};
-		expect(setArg.transcriptionStatus).toBeNull();
+		expect("transcriptionStatus" in setArg).toBe(false);
 		expect(setArg.metadata.aiMode).toBe("fast");
 		expect(setArg.metadata.aiBatchJobs).toBeUndefined();
 		expect(setArg.metadata.aiQuotaWaiting).toBeUndefined();
+		expect(setArg.metadata.processingStartedAt).toBeUndefined();
 
-		// Paid Standard transcription resumes from the checkpoint (fast, not cheap).
+		// Paid Standard transcription resumes from the checkpoint (fast, not
+		// cheap) — as a RETRY, so it re-claims the still-PROCESSING row in place.
 		expect(H.transcribeVideo).toHaveBeenCalledWith(
 			"v1",
 			"u1",
 			true,
-			false,
+			true,
 			"fast",
 		);
 		expect(H.startAiGeneration).not.toHaveBeenCalled();

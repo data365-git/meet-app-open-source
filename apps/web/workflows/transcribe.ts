@@ -523,6 +523,9 @@ async function validateVideo(
 				transcriptionError: undefined,
 				processingStartedAt: new Date().toISOString(),
 				aiProcessingStep: "transcribe",
+				// A fresh attempt must not inherit a previous crashed run's
+				// sub-phase marker — extractAudio re-writes it when it really runs.
+				aiProcessingSubStep: undefined,
 			} as VideoMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
@@ -549,6 +552,14 @@ async function markSkipped(videoId: string): Promise<void> {
 async function markNoAudio(videoId: string): Promise<void> {
 	"use step";
 
+	// The no-audio verdict comes from INSIDE extractAudio, before its own
+	// marker clear runs — drop the sub-phase marker so this terminal state
+	// never keeps claiming "extracting audio".
+	await patchVideoMetadata(videoId, (current) => ({
+		...current,
+		aiProcessingSubStep: undefined,
+	})).catch(() => {});
+
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
@@ -566,6 +577,8 @@ async function markError(
 	// read-modify-write here would clobber it.
 	await patchVideoMetadata(videoId, (current) => ({
 		...current,
+		// A terminal error must not keep a live-progress claim around.
+		aiProcessingSubStep: undefined,
 		transcriptionError: {
 			code: reason.code,
 			message: reason.message.slice(0, 500),
@@ -677,6 +690,19 @@ async function extractAudio(
 				`[transcribe] Extracted ${chunks.length} audio chunks for ${videoId}`,
 			);
 
+			// Extraction is over — clear the sub-phase marker HERE, not in the
+			// progress callbacks (the single-chunk transcription path never fires
+			// them, so a marker left set would show "extracting audio" for the
+			// whole Gemini call — a lying progress line). Seeding the real chunk
+			// counters in the same write hands the live line straight to honest
+			// "0/N sent" data.
+			await patchVideoMetadata(videoId, (current) => ({
+				...current,
+				aiProcessingSubStep: undefined,
+				transcriptionChunksCompleted: 0,
+				transcriptionChunksTotal: chunks.length,
+			})).catch(() => {});
+
 			return { chunks, totalDurationSec };
 		} catch (error) {
 			for (const chunk of chunks) {
@@ -713,6 +739,16 @@ async function extractAudio(
 		const audioSignedUrl = await bucket
 			.getInternalSignedObjectUrl(audioKey)
 			.pipe(runPromise);
+
+		// Same honesty rule as the chunked branch above: extraction is done, so
+		// the marker must go now — this single-chunk path never reaches the
+		// progress callbacks that would otherwise clear it.
+		await patchVideoMetadata(videoId, (current) => ({
+			...current,
+			aiProcessingSubStep: undefined,
+			transcriptionChunksCompleted: 0,
+			transcriptionChunksTotal: 1,
+		})).catch(() => {});
 
 		return {
 			chunks: [

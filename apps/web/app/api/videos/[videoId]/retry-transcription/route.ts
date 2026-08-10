@@ -4,6 +4,7 @@ import { transcriptChunks, videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { transcribeVideo } from "@/lib/transcribe";
 
 export async function POST(
 	request: Request,
@@ -63,11 +64,22 @@ export async function POST(
 			.delete(transcriptChunks)
 			.where(eq(transcriptChunks.videoId, videoId));
 
-		// Reset status to null - this will trigger automatic retry via get-status.ts
+		// Reset the status, then START the pipeline ourselves. Nothing auto-
+		// triggers on a NULL status anymore (get-status.ts stopped doing that —
+		// its comment says "no auto-trigger"), so leaving the row NULL here left
+		// the video permanently not-started. The reset is still required first:
+		// transcribeVideo refuses COMPLETE rows outright, and this is the one
+		// path where re-running a COMPLETE transcript is an explicit, confirmed
+		// owner decision.
 		await db()
 			.update(videos)
 			.set({ transcriptionStatus: null })
 			.where(eq(videos.id, videoId));
+
+		const result = await transcribeVideo(videoId, user.id, true);
+		if (!result.success) {
+			return Response.json({ error: result.message }, { status: 500 });
+		}
 
 		// Revalidate the video page to ensure UI updates with fresh data
 		revalidatePath(`/s/${videoId}`);

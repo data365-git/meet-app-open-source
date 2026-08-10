@@ -47,6 +47,10 @@ vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+		sql: strings.join("?"),
+		values,
+	})),
 }));
 
 vi.mock("@cap/web-domain", () => ({
@@ -100,16 +104,68 @@ describe("POST /api/videos/[videoId]/generate", () => {
 			alreadyRunning: true,
 			queuedAfterTranscription: true,
 		});
-		expect(updateSetMock).toHaveBeenCalledWith(
-			expect.objectContaining({
-				metadata: expect.objectContaining({
-					sourceName: "Meet tab",
-					aiGenerationRequestedAt: expect.any(String),
-					aiGenerationRequestedBy: "user-1",
-				}),
-			}),
-		);
+		// The request markers are written via a server-side JSON_SET merge (so
+		// concurrent workflow writes survive), not a plain object replace.
+		const setArg = (
+			updateSetMock.mock.calls[0] as unknown[] | undefined
+		)?.[0] as {
+			metadata: { sql: string; values: unknown[] };
+		};
+		expect(setArg.metadata.sql).toContain("JSON_SET");
+		expect(setArg.metadata.sql).toContain("'$.aiGenerationRequestedAt'");
+		expect(setArg.metadata.sql).toContain("'$.aiGenerationRequestedBy'");
+		expect(setArg.metadata.values).toContain("user-1");
 		expect(startAiGenerationMock).not.toHaveBeenCalled();
+		expect(transcribeVideoMock).not.toHaveBeenCalled();
+	});
+
+	it("NEVER changes a RUNNING job's mode and never clobbers workflow-written metadata", async () => {
+		// 2026-08-10 review finding #2: this branch used to write
+		// {...metadata, aiMode: speedMode ?? ...} — a plain spread of a row read
+		// seconds earlier. (a) a stale panel posting speedMode:"fast" flipped a
+		// RUNNING cheap job to the paid path; (b) everything the workflow wrote
+		// in between (aiBatchJobs, aiQuotaWaiting, chunk progress) was reverted,
+		// and a lost Batch handle is never collected.
+		videoRows.value = [
+			{
+				id: "video-1",
+				ownerId: "user-1",
+				orgId: null,
+				transcriptionStatus: "PROCESSING",
+				metadata: {
+					aiMode: "cheap",
+					aiBatchJobs: [{ batchName: "batches/a" }],
+					aiQuotaWaiting: true,
+				},
+			},
+		];
+
+		const { POST } = await import("@/app/api/videos/[videoId]/generate/route");
+		const response = await POST(
+			new Request("http://localhost", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ speedMode: "fast" }),
+			}) as unknown as NextRequest,
+			{
+				params: Promise.resolve({ videoId: "video-1" }),
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(updateSetMock).toHaveBeenCalledTimes(1);
+		const setArg = (
+			updateSetMock.mock.calls[0] as unknown[] | undefined
+		)?.[0] as {
+			metadata: { sql: string; values: unknown[] } | Record<string, unknown>;
+		};
+		// The whole write must be a server-side merge, not an object replace...
+		expect("sql" in setArg.metadata).toBe(true);
+		const serialized = JSON.stringify(setArg.metadata);
+		// ...and it must not touch aiMode at all — a start request cannot
+		// change the mode of a job that is already running.
+		expect(serialized).not.toContain("aiMode");
+		expect(serialized).not.toContain('"fast"');
 		expect(transcribeVideoMock).not.toHaveBeenCalled();
 	});
 });

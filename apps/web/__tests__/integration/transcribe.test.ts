@@ -447,6 +447,41 @@ describe("transcribeVideo", () => {
 			expect(claim?.metadata?.values).toContain("cheap");
 		});
 
+		it("a retry REFUSES a PROCESSING row whose claim marker is fresh (live workflow)", async () => {
+			// isRetry is not a bypass on the caller's say-so: re-claiming a
+			// genuinely LIVE row would run two workflows billing Gemini for the
+			// same video. A recovery owner hands the row over by CLEARING
+			// processingStartedAt; a fresh marker means someone is really working.
+			mockQueryResult = [
+				{
+					video: {
+						id: "video-123",
+						transcriptionStatus: "PROCESSING",
+						settings: null,
+						metadata: {
+							aiMode: "cheap",
+							processingStartedAt: new Date().toISOString(),
+						},
+					},
+					bucket: null,
+					settings: null,
+					orgSettings: null,
+				},
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+				true,
+				true,
+				"cheap",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain("in progress");
+			expect(transcribeVideoWorkflow).not.toHaveBeenCalled();
+		});
+
 		it("a retry (isRetry=true) re-claims a PROCESSING row instead of returning early", async () => {
 			// The cron re-kick no longer nulls the status first (no NULL window for
 			// page loads), so the retry path must be able to pass the PROCESSING

@@ -80,14 +80,19 @@ export async function continueAiJobOnPaid({
 	};
 
 	if (phase === "transcription") {
+		// No transcriptionStatus reset: the status must never pass through NULL
+		// on a re-kick — this flip fires unattended at hour 4, exactly when the
+		// owner is watching, and a reload during transcribeVideo's multi-second
+		// pre-claim work (owner lookup, decrypt, upload check, budget guard)
+		// would render "start AI analysis?" for a job that is being continued.
+		// Clearing processingStartedAt above is what hands the row to the retry
+		// re-claim (transcribeVideo refuses to re-claim a row whose claim marker
+		// is still fresh). The "fast" forcing is deliberate and stays.
 		await db()
 			.update(videos)
-			.set({
-				transcriptionStatus: null,
-				metadata: nextMetadata,
-			})
+			.set({ metadata: nextMetadata })
 			.where(eq(videos.id, videoId));
-		return transcribeVideo(videoId, ownerId, true, false, "fast");
+		return transcribeVideo(videoId, ownerId, true, true, "fast");
 	}
 
 	await db()

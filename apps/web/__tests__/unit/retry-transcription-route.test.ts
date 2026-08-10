@@ -16,6 +16,9 @@ const updateSetMock = vi.hoisted(() =>
 	vi.fn(() => ({ where: updateWhereMock })),
 );
 const revalidatePathMock = vi.hoisted(() => vi.fn());
+const transcribeVideoMock = vi.hoisted(() =>
+	vi.fn(async (..._a: unknown[]) => ({ success: true, message: "started" })),
+);
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(() => currentUser.value),
@@ -48,6 +51,10 @@ vi.mock("next/cache", () => ({
 	revalidatePath: (path: string) => revalidatePathMock(path),
 }));
 
+vi.mock("@/lib/transcribe", () => ({
+	transcribeVideo: (...a: unknown[]) => transcribeVideoMock(...a),
+}));
+
 import { POST } from "@/app/api/videos/[videoId]/retry-transcription/route";
 
 function makeProps(videoId: string) {
@@ -77,6 +84,44 @@ describe("POST /api/videos/[videoId]/retry-transcription — paid re-run guard (
 		deleteWhereMock.mockResolvedValue(undefined);
 		updateSetMock.mockReturnValue({ where: updateWhereMock });
 		updateWhereMock.mockResolvedValue(undefined);
+		transcribeVideoMock.mockResolvedValue({
+			success: true,
+			message: "started",
+		});
+	});
+
+	// 2026-08-10 review finding #3b: after the reset this route used to STOP,
+	// with a comment claiming get-status.ts would auto-trigger the retry —
+	// false since get-status stopped auto-triggering. The row stayed NULL
+	// forever: a "retry" that permanently un-starts the video.
+	it("actually STARTS transcription after the reset (nothing auto-triggers on NULL)", async () => {
+		videoRows.value = [
+			{ id: "video-1", ownerId: "user-1", transcriptionStatus: "ERROR" },
+		];
+
+		const response = await POST(makeRequest(), makeProps("video-1"));
+		const body = await response.json();
+
+		expect(body.success).toBe(true);
+		expect(transcribeVideoMock).toHaveBeenCalledWith(
+			"video-1",
+			"user-1",
+			true,
+		);
+	});
+
+	it("surfaces a trigger failure instead of silently leaving the row not-started", async () => {
+		videoRows.value = [
+			{ id: "video-1", ownerId: "user-1", transcriptionStatus: "ERROR" },
+		];
+		transcribeVideoMock.mockResolvedValue({
+			success: false,
+			message: "AI budget exceeded",
+		});
+
+		const response = await POST(makeRequest(), makeProps("video-1"));
+
+		expect(response.status).toBe(500);
 	});
 
 	it("returns 409 and does NOT delete/reset when a COMPLETE transcript exists and no confirm is sent", async () => {
