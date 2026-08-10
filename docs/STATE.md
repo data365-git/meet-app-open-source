@@ -6,6 +6,16 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## 📐 STANDING PROJECT RULE (TRIAL, opened 2026-08-10) — I keep ClickUp current, he never does
+
+**The rule:** when I finish something, I move its ClickUp card and comment the diagnosis plus how he can check it. He should never drag a card to record work I did. Board: list "Meeting app" `901819987518`; columns `shkafda` → `jarayonda` → `tekshirishda` → `tamom`. My job stops at `tekshirishda` with the evidence; only he closes a card that needs his eyes.
+
+**NET-BENEFIT LINE (what this must earn, or it dies):** he gets one glanceable board of what is waiting on him without asking me, and I stop re-explaining status in chat. Cost is a few API writes per finished item — near zero. **TRIAL:** if he does not actually open and use these cards within about a month, this is dead weight and the retro kills it.
+
+**ONE-TRUTH, and an honest correction to how it was first stated.** `docs/STATE.md` is the source for STATUS; ClickUp is a one-direction VIEW of it. I already bent that on the day it was written — I read the eight `tekshirishda` cards and folded them into the owner list below, which is ClickUp → board.
+- Keeping the strict rule as-is would be wrong, because **he files real requests as ClickUp cards himself** — `86eyjtx4p` ("AI tahlil jarayoni sahifa yangilangandan keyin yo'qolib ketmasin") is his own card, and ignoring it would have meant ignoring the owner.
+- So the working rule is narrower and survives contact: **STATUS flows one way (board → ClickUp) and ClickUp status is never authoritative back.** But a card the OWNER authored is genuine input: pull it into the board ONCE, and from that moment the board owns it. The twin trap is two places claiming to know the state — not one place receiving a request.
+
 ## 📋 THE OWNER'S LIST — hand him ONE at a time, in this order (agreed 2026-08-10)
 
 He asked for his ClickUp checks to be MERGED INTO this list, not for his other duties to be pushed into ClickUp — I had it backwards once; do not repeat it. He works through them by saying "keyingisi"; give exactly one, wait, then the next.
