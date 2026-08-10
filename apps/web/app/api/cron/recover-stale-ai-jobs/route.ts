@@ -14,6 +14,7 @@ import {
 	CHEAP_STALE_JOB_THRESHOLD_MS,
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
+	isTranscriptionJobStale,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
@@ -88,12 +89,22 @@ export async function GET(request: Request) {
 			and(
 				eq(videos.transcriptionStatus, "PROCESSING"),
 				isNull(videos.deletedAt),
+				// Staleness = time since LAST PROGRESS (the aiProgressAt heartbeat,
+				// re-stamped on every completed chunk), falling back to the claim
+				// time for pre-heartbeat rows. Judging from processingStartedAt
+				// alone killed every recording longer than the threshold.
 				sql`(
 					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
-						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')) <= ${cheapStaleBeforeIso})
+						AND COALESCE(
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt'))
+						) <= ${cheapStaleBeforeIso})
 					OR
 					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
-						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')) <= ${fastStaleBeforeIso})
+						AND COALESCE(
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
+							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt'))
+						) <= ${fastStaleBeforeIso})
 				)`,
 			),
 		);
@@ -163,6 +174,8 @@ export async function GET(request: Request) {
 	let gaveUp = 0;
 	let flippedToPaid = 0;
 	let skippedForBatch = 0;
+	let skippedQuotaWaiting = 0;
+	let skippedAlive = 0;
 	let quotaRetried = 0;
 	let refinementReset = 0;
 
@@ -187,6 +200,24 @@ export async function GET(request: Request) {
 				// The poll-batch-jobs collector owns this cheap job's pending Batch;
 				// re-kicking here would create a duplicate non-idempotent Batch.
 				skippedForBatch++;
+			} else if (
+				metadata.aiMode === "cheap" &&
+				metadata.aiQuotaWaiting === true
+			) {
+				// Quota-parked = alive by design, NOT stale. Re-kicking it every
+				// tick re-ran ffmpeg extraction hourly forever and flickered the
+				// "waiting for free quota" notice off/on (validateVideo resets the
+				// flag). The normal cheap quota path always submits a durable Batch
+				// (handled above by the collector); the rare no-Batch park (no paid
+				// key / submit failed) self-heals at the 4h paid flip, which is
+				// checked FIRST and always wins.
+				skippedQuotaWaiting++;
+			} else if (!isTranscriptionJobStale(metadata, now)) {
+				// Freshness re-check in JS on the row we actually hold: the job has
+				// proven life (heartbeat) — chunk progress is the third liveness
+				// case that neither aiQuotaWaiting nor aiBatchJobs marks. Never
+				// kill a job that is visibly advancing, whatever its total runtime.
+				skippedAlive++;
 			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
 				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
 				// Deliberately NOT resetting transcriptionStatus to null: the status
@@ -206,6 +237,28 @@ export async function GET(request: Request) {
 					true,
 					resolveAiSpeedMode(nextMetadata.aiMode),
 				);
+				retried++;
+			} else if (metadata.aiMode === "cheap") {
+				// Free retries exhausted on a CHEAP job: offer the paid path BEFORE
+				// declaring it dead — that is the original 4h-flip design intent
+				// (a cheap job that cannot finish free finishes on paid), which a
+				// pure time-based flip could never reach once the row went ERROR.
+				// Fires here at ~(2 retries x stale threshold) of no-progress wall
+				// time. If the paid continuation also crashes, attempts are already
+				// exhausted and aiMode is "fast", so the next tick lands in the
+				// death branch below — bounded.
+				console.warn(
+					`[recover-stale-ai-jobs] Cheap transcription out of free retries; continuing on paid before death: ${candidate.id}`,
+				);
+				const result = await continueAiJobOnPaid({
+					videoId: candidate.id,
+					ownerId: candidate.ownerId,
+					phase: "transcription",
+				});
+				if (!result.success) {
+					throw new Error(result.message);
+				}
+				flippedToPaid++;
 				retried++;
 			} else {
 				await db()
@@ -370,6 +423,8 @@ export async function GET(request: Request) {
 		gaveUp,
 		flippedToPaid,
 		skippedForBatch,
+		skippedQuotaWaiting,
+		skippedAlive,
 		quotaRetried,
 		refinementReset,
 	});

@@ -2,22 +2,42 @@ import type { VideoMetadata } from "@cap/database/types";
 
 export const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
 const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
-// Cheap staleness is NOT a wall-clock judgment on the patient path itself —
-// the things that make cheap legitimately slow both leave evidence of life
-// (aiQuotaWaiting for a parked free-quota wait, aiBatchJobs for a pending
-// durable Batch) and the recovery loop already treats those specially
-// (quota waits are exempt from the death counter; Batch rows are skipped for
-// the collector). What this threshold detects is a cheap row with NEITHER
-// marker: its claim/extract/transcribe machinery is the same as fast's, so a
-// silent hour means the same thing it means for fast — a crashed run. Keeping
-// it well under CHEAP_AUTO_PAID_AFTER_MS is what guarantees a crashed cheap
-// job gets FREE re-kicks (bounded by MAX_AUTO_RETRY_ATTEMPTS) before the 4h
-// paid flip ever spends money against the owner's explicit cheap choice.
-// History: 20min killed healthy long extractions every tick (2026-08-10
-// treadmill); 4h made the free re-kick branch unreachable because the flip
-// (checked first, keyed on the preserved aiJobStartedAt) was already due the
-// moment a row first became eligible.
+// These thresholds are TIME SINCE LAST PROGRESS (the aiProgressAt heartbeat,
+// falling back to processingStartedAt for rows claimed before the heartbeat
+// existed), NOT time since the job started. That distinction is the whole
+// mechanism: a job's total runtime is unbounded — a 3-hour cheap recording at
+// chunk 12/20 is perfectly healthy at minute 61 — but a healthy job always
+// advances within minutes (the heartbeat rides the existing per-chunk
+// metadata writes, so it costs zero extra write volume). A row that has shown
+// NO progress of any kind for a whole hour is crashed, whatever its mode or
+// length. History of tuning this as time-since-start, recorded so nobody
+// re-tries it: 20min killed healthy long extractions (2026-08-10 treadmill);
+// 4h made the free re-kick unreachable behind the paid flip; 60min-since-
+// start killed healthy 2-3h cheap recordings mid-chunk. The number stopped
+// being load-bearing when the clock became time-since-progress.
 export const CHEAP_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
+
+/** The job's last evidence of life: the progress heartbeat, or the claim
+ * time for rows that never got a heartbeat (pre-heartbeat claims). */
+export function lastTranscriptionProgressAt(
+	metadata: VideoMetadata,
+): string | undefined {
+	return metadata.aiProgressAt ?? metadata.processingStartedAt;
+}
+
+/** Pure decision: has this transcription job shown NO evidence of life for
+ * longer than its threshold? No marker at all = handed over / never claimed
+ * = stale (safe to take). */
+export function isTranscriptionJobStale(
+	metadata: VideoMetadata,
+	nowMs = Date.now(),
+	thresholdMs = staleThresholdMsForMetadata(metadata),
+): boolean {
+	const last = lastTranscriptionProgressAt(metadata);
+	if (!last) return true;
+	const lastMs = Date.parse(last);
+	return !Number.isFinite(lastMs) || nowMs - lastMs > thresholdMs;
+}
 const MAX_AUTO_RETRY_ATTEMPTS = 2;
 
 export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {
@@ -123,6 +143,12 @@ export function withIncrementedAutoRecoverAttempts(
 		...metadata,
 		processingStartedAt: undefined,
 		aiProcessingStartedAt: undefined,
+		// Handing the row over: the heartbeat must go too, or the retry
+		// re-claim guard would read the OLD heartbeat and misjudge liveness in
+		// either direction. A workflow that is secretly still alive will
+		// re-stamp it before the re-claim reads, which is exactly the race the
+		// guard exists to catch.
+		aiProgressAt: undefined,
 	};
 	if (shouldCountStaleJobTowardDeath(metadata)) {
 		next.autoRecoverAttempts = (metadata.autoRecoverAttempts ?? 0) + 1;

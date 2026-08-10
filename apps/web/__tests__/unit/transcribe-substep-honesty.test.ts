@@ -56,7 +56,28 @@ describe("extract_audio marker honesty — the live line must never lie", () => 
 	});
 
 	it("a fresh attempt (validateVideo) does not inherit a dead run's marker", () => {
-		expect(bodyOf("validateVideo")).toMatch(CLEAR_MARKER);
+		// validateVideo writes via server-side JSON_REMOVE/JSON_SET (round-3
+		// finding #4), so the clear is the JSON_REMOVE path, not a JS undefined.
+		expect(bodyOf("validateVideo")).toMatch(/'\$\.aiProcessingSubStep'/);
+	});
+
+	it("validateVideo merges server-side — no spread of step-start metadata into the claim write (round-3 #4)", () => {
+		const body = bodyOf("validateVideo");
+		// A spread of the metadata read at workflow start reverts whatever a
+		// concurrent run wrote in between — losing an aiBatchJobs handle means
+		// a PAID Batch that is never collected and never cancelled.
+		expect(body).toMatch(/JSON_SET\(/);
+		expect(body).toMatch(/JSON_REMOVE\(/);
+		expect(body).not.toMatch(/\.\.\.metadata/);
+	});
+
+	it("the workflow stamps the progress heartbeat where progress really happens", () => {
+		// Claim (validateVideo), extraction done (extractAudio), every completed
+		// chunk (savePartialTranscription) — the recovery cron judges staleness
+		// by time since this stamp.
+		expect(bodyOf("validateVideo")).toMatch(/'\$\.aiProgressAt'/);
+		expect(bodyOf("extractAudio")).toMatch(/aiProgressAt:/);
+		expect(bodyOf("savePartialTranscription")).toMatch(/aiProgressAt:/);
 	});
 
 	it("terminal states (markError, markNoAudio) drop the marker", () => {

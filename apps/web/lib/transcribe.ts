@@ -14,7 +14,7 @@ import {
 	assertAiBudgetAvailable,
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
-import { staleThresholdMsForMetadata } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
+import { isTranscriptionJobStale } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
@@ -156,18 +156,13 @@ export async function transcribeVideo(
 	// pass-through). But the caller's say-so is not enough: two recovery paths
 	// can race on the same row, and re-claiming a genuinely LIVE workflow means
 	// two workflows billing Gemini for the same video. So the re-claim is
-	// gated on the row's own evidence: a recovery owner clears
-	// processingStartedAt as part of taking the job over (absent marker = row
-	// handed to us), and a marker older than the mode's stale threshold is a
-	// crashed run by the same definition the cron uses. A FRESH marker means a
-	// live workflow — refuse, retry or not.
+	// gated on the row's own EVIDENCE OF LIFE — the aiProgressAt heartbeat
+	// (re-stamped on every completed chunk), same clock the recovery cron
+	// judges by. A recovery owner clears the markers when taking the job over
+	// (absent = row handed to us); a fresh heartbeat means a live workflow —
+	// refuse, retry or not, whatever the job's total runtime.
 	const guardMetadata = (video.metadata as VideoMetadata) || {};
-	const processingClaimMs = guardMetadata.processingStartedAt
-		? Date.parse(guardMetadata.processingStartedAt)
-		: Number.NaN;
-	const processingLooksLive =
-		Number.isFinite(processingClaimMs) &&
-		Date.now() - processingClaimMs < staleThresholdMsForMetadata(guardMetadata);
+	const processingLooksLive = !isTranscriptionJobStale(guardMetadata);
 	if (
 		video.transcriptionStatus === "COMPLETE" ||
 		(video.transcriptionStatus === "PROCESSING" &&
@@ -281,11 +276,13 @@ export async function transcribeVideo(
 					? sql`JSON_SET(
 						COALESCE(${videos.metadata}, JSON_OBJECT()),
 						'$.processingStartedAt', ${new Date().toISOString()},
+						'$.aiProgressAt', ${new Date().toISOString()},
 						'$.aiMode', ${speedModeOverride}
 					)`
 					: sql`JSON_SET(
 						COALESCE(${videos.metadata}, JSON_OBJECT()),
 						'$.processingStartedAt', ${new Date().toISOString()},
+						'$.aiProgressAt', ${new Date().toISOString()},
 						'$.aiMode', COALESCE(
 							JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiMode')),
 							${claimSpeedMode}

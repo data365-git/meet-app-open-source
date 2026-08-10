@@ -62,6 +62,7 @@ vi.mock("@/lib/transcribe", () => ({
 
 const {
 	hasPendingBatchJobs,
+	isTranscriptionJobStale,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	staleThresholdMsForMetadata,
@@ -148,6 +149,15 @@ describe("withIncrementedAutoRecoverAttempts", () => {
 		expect(result.autoRecoverAttempts).toBe(2);
 		expect(result.aiProcessingStartedAt).toBeUndefined();
 		expect(result.sourceName).toBe("Meet tab");
+	});
+
+	it("clears the progress heartbeat on handover (or the re-claim guard reads stale liveness)", () => {
+		const result = withIncrementedAutoRecoverAttempts({
+			processingStartedAt: "2026-01-01T00:00:00.000Z",
+			aiProgressAt: "2026-01-01T00:30:00.000Z",
+		});
+
+		expect(result.aiProgressAt).toBeUndefined();
 	});
 
 	it("does not increment attempts for cheap quota waits", () => {
@@ -247,5 +257,51 @@ describe("staleThresholdMsForMetadata", () => {
 			shouldAutoFlipCheapJobToPaid(crashedCheap, firstRecoveryTick),
 		).toBe(false);
 		expect(shouldAutoRetry(0, crashedCheap)).toBe(true);
+	});
+});
+
+describe("isTranscriptionJobStale — liveness by TIME SINCE LAST PROGRESS", () => {
+	const now = Date.parse("2026-08-10T12:00:00.000Z");
+	const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+	const H = 60 * 60 * 1000;
+	const MIN = 60 * 1000;
+
+	it("a job started hours ago with a fresh heartbeat is ALIVE (any total runtime)", () => {
+		expect(
+			isTranscriptionJobStale(
+				{
+					aiMode: "cheap",
+					processingStartedAt: iso(3 * H),
+					aiProgressAt: iso(5 * MIN),
+				},
+				now,
+			),
+		).toBe(false);
+	});
+
+	it("a job with an old heartbeat is stale even if it once made progress", () => {
+		expect(
+			isTranscriptionJobStale(
+				{
+					aiMode: "cheap",
+					processingStartedAt: iso(3 * H),
+					aiProgressAt: iso(2 * H),
+				},
+				now,
+			),
+		).toBe(true);
+	});
+
+	it("falls back to the claim time for pre-heartbeat rows", () => {
+		expect(
+			isTranscriptionJobStale({ processingStartedAt: iso(30 * MIN) }, now),
+		).toBe(false);
+		expect(
+			isTranscriptionJobStale({ processingStartedAt: iso(2 * H) }, now),
+		).toBe(true);
+	});
+
+	it("no markers at all = handed over / unclaimed = stale (safe to take)", () => {
+		expect(isTranscriptionJobStale({}, now)).toBe(true);
 	});
 });

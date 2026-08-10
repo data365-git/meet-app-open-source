@@ -141,6 +141,9 @@ describe("continueAiJobOnPaid", () => {
 					aiMode: "cheap",
 					aiQuotaWaiting: true,
 					aiBatchJobs: [JOB_A],
+					// A recent chunk heartbeat: the handover must CLEAR it, or the
+					// retry re-claim guard reads it as "live" and refuses the flip.
+					aiProgressAt: new Date().toISOString(),
 				},
 			},
 		];
@@ -179,6 +182,9 @@ describe("continueAiJobOnPaid", () => {
 		expect(setArg.metadata.aiBatchJobs).toBeUndefined();
 		expect(setArg.metadata.aiQuotaWaiting).toBeUndefined();
 		expect(setArg.metadata.processingStartedAt).toBeUndefined();
+		expect(
+			(setArg.metadata as { aiProgressAt?: unknown }).aiProgressAt,
+		).toBeUndefined();
 
 		// Paid Standard transcription resumes from the checkpoint (fast, not
 		// cheap) — as a RETRY, so it re-claims the still-PROCESSING row in place.

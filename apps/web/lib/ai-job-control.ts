@@ -77,6 +77,9 @@ export async function continueAiJobOnPaid({
 		aiBatchJobs: undefined,
 		processingStartedAt: undefined,
 		aiProcessingStartedAt: undefined,
+		// Handover: clear the heartbeat too, or the retry re-claim guard would
+		// read a recent chunk stamp and refuse the paid continuation.
+		aiProgressAt: undefined,
 	};
 
 	if (phase === "transcription") {

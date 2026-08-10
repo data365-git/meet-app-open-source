@@ -427,6 +427,10 @@ describe("transcribeVideo", () => {
 			) as { metadata?: { sql: string } } | undefined;
 			expect(claim).toBeDefined();
 			expect(claim?.metadata?.sql).toContain("'$.aiMode', COALESCE(");
+			// The claim is also the first progress HEARTBEAT — the recovery cron
+			// judges staleness by time since last progress, so every claim must
+			// stamp it (round-3 review: the heartbeat mechanism).
+			expect(claim?.metadata?.sql).toContain("'$.aiProgressAt'");
 		});
 
 		it("claim WITH an explicit per-click override writes that mode unconditionally", async () => {
@@ -461,6 +465,44 @@ describe("transcribeVideo", () => {
 						metadata: {
 							aiMode: "cheap",
 							processingStartedAt: new Date().toISOString(),
+						},
+					},
+					bucket: null,
+					settings: null,
+					orgSettings: null,
+				},
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+				true,
+				true,
+				"cheap",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain("in progress");
+			expect(transcribeVideoWorkflow).not.toHaveBeenCalled();
+		});
+
+		it("a retry REFUSES a long-running row whose progress HEARTBEAT is fresh (round-3 #1)", async () => {
+			// The claim marker is hours old — a 2-3h recording legitimately runs
+			// that long — but the last chunk completed minutes ago. Liveness is
+			// judged by the heartbeat, not by time since claim; re-claiming here
+			// would run two workflows billing Gemini for the same video.
+			mockQueryResult = [
+				{
+					video: {
+						id: "video-123",
+						transcriptionStatus: "PROCESSING",
+						settings: null,
+						metadata: {
+							aiMode: "cheap",
+							processingStartedAt: new Date(
+								Date.now() - 2 * 60 * 60 * 1000,
+							).toISOString(),
+							aiProgressAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
 						},
 					},
 					bucket: null,

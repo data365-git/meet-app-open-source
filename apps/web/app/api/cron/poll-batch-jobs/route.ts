@@ -245,6 +245,9 @@ export async function GET(request: Request) {
 							...persisted,
 							processingStartedAt: undefined,
 							aiProcessingStartedAt: undefined,
+							// Handover: the heartbeat goes too, or the re-claim guard
+							// would read a recent chunk stamp and refuse this re-kick.
+							aiProgressAt: undefined,
 							aiQuotaWaiting: false,
 						} as VideoMetadata,
 					})

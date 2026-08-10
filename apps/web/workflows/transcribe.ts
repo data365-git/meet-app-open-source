@@ -13,7 +13,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import type { Organisation, User, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
@@ -508,25 +508,35 @@ async function validateVideo(
 		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}, aiSpeedMode=${aiSpeedMode}`,
 	);
 
+	// Server-side merge, NOT a spread of the metadata read at step start: a
+	// duplicate/racing workflow reaching this write after another run stored
+	// aiBatchJobs would revert the handle — the Batch was submitted with the
+	// SERVER PAID key and the collector finds it via JSON_LENGTH($.aiBatchJobs),
+	// so a reverted handle = paid work that is never collected and never
+	// cancelled. JSON_REMOVE drops the keys a fresh attempt must not inherit
+	// (previous run's error reason + sub-phase marker); JSON_SET writes only
+	// this attempt's own claims and touches nothing else.
+	const nowIso = new Date().toISOString();
 	await db()
 		.update(videos)
 		.set({
 			transcriptionStatus: "PROCESSING",
-			metadata: {
-				...metadata,
-				aiMode: aiSpeedMode,
-				aiJobStartedAt: metadata.aiJobStartedAt ?? new Date().toISOString(),
-				aiQuotaWaiting: false,
-				// A new attempt owns its own outcome: carrying the previous run's
-				// QUOTA reason would let the recovery cron re-kick a video that has
-				// since died for a different, permanent reason.
-				transcriptionError: undefined,
-				processingStartedAt: new Date().toISOString(),
-				aiProcessingStep: "transcribe",
-				// A fresh attempt must not inherit a previous crashed run's
-				// sub-phase marker — extractAudio re-writes it when it really runs.
-				aiProcessingSubStep: undefined,
-			} as VideoMetadata,
+			metadata: sql`JSON_SET(
+				JSON_REMOVE(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.transcriptionError',
+					'$.aiProcessingSubStep'
+				),
+				'$.aiMode', ${aiSpeedMode},
+				'$.aiJobStartedAt', COALESCE(
+					JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiJobStartedAt')),
+					${nowIso}
+				),
+				'$.aiQuotaWaiting', CAST('false' AS JSON),
+				'$.processingStartedAt', ${nowIso},
+				'$.aiProgressAt', ${nowIso},
+				'$.aiProcessingStep', 'transcribe'
+			)`,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
@@ -701,6 +711,8 @@ async function extractAudio(
 				aiProcessingSubStep: undefined,
 				transcriptionChunksCompleted: 0,
 				transcriptionChunksTotal: chunks.length,
+				// Heartbeat: finished extraction is proof of life.
+				aiProgressAt: new Date().toISOString(),
 			})).catch(() => {});
 
 			return { chunks, totalDurationSec };
@@ -748,6 +760,8 @@ async function extractAudio(
 			aiProcessingSubStep: undefined,
 			transcriptionChunksCompleted: 0,
 			transcriptionChunksTotal: 1,
+			// Heartbeat: finished extraction is proof of life.
+			aiProgressAt: new Date().toISOString(),
 		})).catch(() => {});
 
 		return {
@@ -1847,6 +1861,10 @@ async function savePartialTranscription(
 				// Chunk progress is now the live truth — the audio-extraction
 				// sub-phase is over (undefined keys are dropped on JSON serialize).
 				aiProcessingSubStep: undefined,
+				// Progress HEARTBEAT: a completed chunk is proof of life, and the
+				// recovery cron judges staleness by time since this stamp. Rides
+				// this existing per-chunk write — zero extra write volume.
+				aiProgressAt: new Date().toISOString(),
 			} as VideoMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
