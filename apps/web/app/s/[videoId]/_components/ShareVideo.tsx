@@ -268,6 +268,10 @@ export const ShareVideo = forwardRef<
 			aiStatusQuery.data?.aiProcessingStep ??
 			data.metadata?.aiProcessingStep ??
 			null;
+		const effectiveAiProcessingSubStep =
+			aiStatusQuery.data?.aiProcessingSubStep ??
+			data.metadata?.aiProcessingSubStep ??
+			null;
 		const effectiveAiMode =
 			aiStatusQuery.data?.aiMode ?? data.metadata?.aiMode ?? null;
 		const effectiveAiQuotaWaiting =
@@ -910,6 +914,7 @@ export const ShareVideo = forwardRef<
 											}
 											aiGenerationStatus={effectiveAiStatus}
 											aiProcessingStep={effectiveAiProcessingStep}
+											aiProcessingSubStep={effectiveAiProcessingSubStep}
 											aiMode={effectiveAiMode}
 											aiQuotaWaiting={effectiveAiQuotaWaiting}
 											transcriptionErrorCode={effectiveTranscriptionErrorCode}

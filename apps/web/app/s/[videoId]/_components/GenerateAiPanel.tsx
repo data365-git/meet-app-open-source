@@ -43,6 +43,7 @@ type AiGenerationStatus =
 	| "SKIPPED";
 
 type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
+type AiProcessingSubStep = "extract_audio";
 type AiSpeedMode = "fast" | "cheap";
 
 interface GenerateAiPanelProps {
@@ -51,6 +52,9 @@ interface GenerateAiPanelProps {
 	transcriptionStatus: TranscriptionStatus | null | undefined;
 	aiGenerationStatus: AiGenerationStatus | null | undefined;
 	aiProcessingStep?: AiProcessingStep | null;
+	/** Fine sub-phase inside "transcribe", written by the workflow when the
+	 * phase really starts — never inferred client-side. */
+	aiProcessingSubStep?: AiProcessingSubStep | null;
 	aiMode?: AiSpeedMode | null;
 	aiQuotaWaiting?: boolean;
 	/** Why transcription failed. QUOTA = the AI account ran out of credits —
@@ -115,6 +119,7 @@ export function GenerateAiPanel({
 	transcriptionStatus,
 	aiGenerationStatus,
 	aiProcessingStep,
+	aiProcessingSubStep,
 	aiMode,
 	aiQuotaWaiting = false,
 	transcriptionErrorCode = null,
@@ -419,6 +424,22 @@ export function GenerateAiPanel({
 						})
 				: null;
 
+		// ONE honest live line under the overall bar — only ever claims a step
+		// that is PROVEN by real backend data, in priority order:
+		//   1. cheap mode waiting for free quota (aiQuotaWaiting flag),
+		//   2. real chunk progress ("Gemini'ga 3/12 audio yuborildi"),
+		//   3. the workflow-written audio-extraction marker.
+		// If none of those markers exist, no line is shown — never an invented
+		// label or a fake percentage.
+		const liveDetailLine =
+			currentMode === "cheap" && aiQuotaWaiting
+				? tShare("aiLiveWaitingFreeQuota")
+				: (activeDetail ??
+					(currentStep === "transcribe" &&
+					aiProcessingSubStep === "extract_audio"
+						? tShare("aiLiveExtractingAudio")
+						: null));
+
 		return (
 			<div className="flex flex-col gap-4 rounded-2xl border border-gray-5 bg-gray-1 p-4 shadow-[0_18px_50px_-36px_rgba(0,92,177,0.7)] sm:p-5">
 				<div className="flex items-start justify-between gap-3">
@@ -486,6 +507,11 @@ export function GenerateAiPanel({
 					<p className="mt-1.5 text-right text-[11px] font-medium tabular-nums text-gray-9">
 						{overallPct}%
 					</p>
+					{liveDetailLine && (
+						<p aria-live="polite" className="mt-1 text-xs text-gray-9">
+							{liveDetailLine}
+						</p>
+					)}
 				</div>
 
 				{/* Vertical step list per the owner's design contract (AI Status.dc.html):

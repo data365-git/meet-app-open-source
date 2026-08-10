@@ -201,9 +201,19 @@ describe("shouldAutoFlipCheapJobToPaid", () => {
 });
 
 describe("staleThresholdMsForMetadata", () => {
-	it("uses 20 minutes for cheap and 60 minutes for fast/default", () => {
+	it("a HEALTHY cheap job is NOT stale at 25 minutes (cheap is the patient hours-long path)", () => {
+		// Regression pin for the 2026-08-10 restart treadmill: with a 20-min cheap
+		// threshold the cron killed and re-kicked a healthy free-tier/Batch job on
+		// every tick, burning Gemini calls. Cheap staleness must comfortably
+		// exceed an ordinary quota wait.
+		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBeGreaterThan(
+			25 * 60 * 1000,
+		);
+	});
+
+	it("cheap staleness equals the 4h paid-flip window; fast/default stays 60 minutes", () => {
 		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBe(
-			20 * 60 * 1000,
+			4 * 60 * 60 * 1000,
 		);
 		expect(staleThresholdMsForMetadata({ aiMode: "fast" })).toBe(
 			60 * 60 * 1000,

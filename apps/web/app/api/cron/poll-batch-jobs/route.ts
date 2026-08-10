@@ -232,10 +232,13 @@ export async function GET(request: Request) {
 			// All jobs resolved (none pending) → re-kick cheap so the workflow resumes
 			// from the fuller checkpoint (collected chunk now covered → skipped).
 			if (terminal && remaining.length === 0) {
+				// No transcriptionStatus reset here: the status must never pass
+				// through NULL on a re-kick (a reload in that window would offer
+				// "start AI analysis?" for a live job). transcribeVideo(isRetry=true)
+				// re-claims the parked PROCESSING row in place.
 				await db()
 					.update(videos)
 					.set({
-						transcriptionStatus: null,
 						metadata: {
 							// Retain aiJobStartedAt (the original job's 4h clock); only reset
 							// the stale processing markers and quota-wait flag.

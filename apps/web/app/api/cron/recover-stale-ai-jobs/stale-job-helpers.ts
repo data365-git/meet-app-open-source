@@ -1,8 +1,16 @@
 import type { VideoMetadata } from "@cap/database/types";
 
 export const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
-export const CHEAP_STALE_JOB_THRESHOLD_MS = 20 * 60 * 1000;
 const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
+// Cheap = the patient free-tier/Batch path, which is DESIGNED to take hours
+// (quota waits, durable Batch turnaround). Declaring it stale after 20 minutes
+// made the cron kill and re-kick a perfectly healthy job every tick — an
+// endless restart treadmill that also re-billed Gemini. A cheap job is only
+// "stale" once it has outlived its whole patience window, which is exactly the
+// 4-hour paid-flip deadline: the first cron tick after 4h then either flips it
+// to paid (shouldAutoFlipCheapJobToPaid, checked first) or, for rows without a
+// job clock, falls back to the normal bounded re-kick.
+export const CHEAP_STALE_JOB_THRESHOLD_MS = CHEAP_AUTO_PAID_AFTER_MS;
 const MAX_AUTO_RETRY_ATTEMPTS = 2;
 
 export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {

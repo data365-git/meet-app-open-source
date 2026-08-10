@@ -545,6 +545,8 @@
 		"aiBadge": "data365 AI",
 		"aiEta": "~{minutes} min left",
 		"aiFineTranscribing": "Sent {completed}/{total} audio chunks to Gemini",
+		"aiLiveExtractingAudio": "Extracting audio from the video…",
+		"aiLiveWaitingFreeQuota": "Waiting for free quota…",
 		"aiFineStageProgress": "Processed {completed}/{total} parts",
 		"aiCardChunkProgress": "Chunk {completed}/{total}",
 		"aiStatusRow": "Preparing summary and tasks…",

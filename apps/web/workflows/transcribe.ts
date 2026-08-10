@@ -607,6 +607,15 @@ async function extractAudio(
 ): Promise<ExtractedAudio | null> {
 	"use step";
 
+	// Honest live-progress marker: the share panel may only show "extracting
+	// audio" while this step is REALLY running, so the marker is written here at
+	// the step's start (never guessed in the UI) and cleared once per-chunk
+	// transcription progress takes over in savePartialTranscription.
+	await patchVideoMetadata(videoId, (current) => ({
+		...current,
+		aiProcessingSubStep: "extract_audio",
+	})).catch(() => {});
+
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
 
 	const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
@@ -1799,6 +1808,9 @@ async function savePartialTranscription(
 				...((row?.metadata as VideoMetadata) || {}),
 				transcriptionChunksCompleted: completed,
 				transcriptionChunksTotal: total,
+				// Chunk progress is now the live truth — the audio-extraction
+				// sub-phase is over (undefined keys are dropped on JSON serialize).
+				aiProcessingSubStep: undefined,
 			} as VideoMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
@@ -1830,6 +1842,7 @@ async function saveTranscription(
 	const md = { ...((row?.metadata as VideoMetadata) || {}) } as VideoMetadata;
 	delete (md as any).transcriptionChunksCompleted;
 	delete (md as any).transcriptionChunksTotal;
+	delete md.aiProcessingSubStep;
 	delete md.aiQuotaWaiting;
 	// Success ends the quota episode: drop the reason AND the retry budget, so a
 	// future outage starts from a full budget instead of an exhausted counter.

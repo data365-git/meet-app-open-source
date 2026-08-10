@@ -93,6 +93,10 @@ export async function GET(request: NextRequest) {
 		// see these move — that's what let ShareVideo.tsx retire its 6s
 		// `router.refresh()` workaround.
 		const chunkProgress = {
+			// Fine sub-phase inside "transcribe" (e.g. audio extraction), written
+			// by the workflow at the moment the phase starts — same honesty rule
+			// as the chunk counters below.
+			aiProcessingSubStep: metadata.aiProcessingSubStep ?? null,
 			transcriptionChunksCompleted:
 				metadata.transcriptionChunksCompleted ?? null,
 			transcriptionChunksTotal: metadata.transcriptionChunksTotal ?? null,

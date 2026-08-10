@@ -63,7 +63,11 @@ export async function transcribeVideo(
 	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
-	_isRetry = false,
+	// A cron/collector re-kick of a job whose row may still say PROCESSING.
+	// The re-kick path must NOT reset the status to NULL first (a page load in
+	// that window renders "not started" for a job that is alive), so instead a
+	// retry is allowed to pass the PROCESSING guard and re-claim in place.
+	isRetry = false,
 	speedModeOverride?: AiSpeedMode,
 ): Promise<TranscribeResult> {
 	if (!userId || !videoId) {
@@ -148,7 +152,10 @@ export async function transcribeVideo(
 
 	if (
 		video.transcriptionStatus === "COMPLETE" ||
-		video.transcriptionStatus === "PROCESSING" ||
+		// A retry (cron re-kick / Batch collector) may re-claim a PROCESSING row
+		// in place — that is the whole point of isRetry (no NULL pass-through).
+		// A normal user-facing start still treats PROCESSING as "already running".
+		(video.transcriptionStatus === "PROCESSING" && !isRetry) ||
 		video.transcriptionStatus === "SKIPPED" ||
 		video.transcriptionStatus === "NO_AUDIO"
 	) {
@@ -240,15 +247,34 @@ export async function transcribeVideo(
 				((video.metadata as VideoMetadata) || {}).aiMode ??
 					result.orgSettings?.aiSpeedMode,
 			);
+		// The owner's per-click choice is authoritative for the WHOLE job.
+		// Two starts can race (double-tap / reload+retap a few seconds apart):
+		// the second call's metadata was read at the top of this function, BEFORE
+		// the first call's claim landed, so its in-process resolution falls back
+		// to the org default ("fast") and would silently overwrite the owner's
+		// already-claimed "cheap" — the paid path spends money he chose not to.
+		// So: an EXPLICIT override always wins (the owner just clicked it); a
+		// start WITHOUT an override must defer, server-side, to whatever mode is
+		// already claimed in the row and only fall back to the resolved default
+		// when the row has none.
 		await db()
 			.update(videos)
 			.set({
 				transcriptionStatus: "PROCESSING",
-				metadata: sql`JSON_SET(
-					COALESCE(${videos.metadata}, JSON_OBJECT()),
-					'$.processingStartedAt', ${new Date().toISOString()},
-					'$.aiMode', ${claimSpeedMode}
-				)`,
+				metadata: speedModeOverride
+					? sql`JSON_SET(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.processingStartedAt', ${new Date().toISOString()},
+						'$.aiMode', ${speedModeOverride}
+					)`
+					: sql`JSON_SET(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.processingStartedAt', ${new Date().toISOString()},
+						'$.aiMode', COALESCE(
+							JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiMode')),
+							${claimSpeedMode}
+						)
+					)`,
 			})
 			.where(eq(videos.id, videoId));
 
@@ -288,10 +314,17 @@ export async function transcribeVideo(
 
 		console.error("[transcribeVideo] Failed to trigger workflow:", error);
 
-		await db()
-			.update(videos)
-			.set({ transcriptionStatus: null })
-			.where(eq(videos.id, videoId));
+		// First-start failure: roll the claim back to "not started" so the owner
+		// can click again. A RETRY must never do this — nulling the status here
+		// would make a live (cron-managed) job render as "not started" on every
+		// page load; the row keeps its previous status (PROCESSING/ERROR) and the
+		// recovery cron simply tries again on its next tick.
+		if (!isRetry) {
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: null })
+				.where(eq(videos.id, videoId));
+		}
 
 		return {
 			success: false,

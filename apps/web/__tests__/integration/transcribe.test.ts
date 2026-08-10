@@ -38,6 +38,9 @@ let mockUploadQueryResult: unknown[] = [];
 // Owner's saved Gemini key lookup. Defaults to "no saved key", which is fine
 // since serverEnv() already provides GEMINI_API_KEY in most tests.
 let mockOwnerQueryResult: unknown[] = [];
+// Every db().update().set(arg) call, so tests can inspect the claim write
+// (status + JSON_SET metadata expression) that transcribeVideo issues.
+let updateSetCalls: Array<Record<string, unknown>> = [];
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -69,9 +72,12 @@ vi.mock("@cap/database", () => ({
 			},
 		}),
 		update: () => ({
-			set: () => ({
-				where: vi.fn().mockResolvedValue([]),
-			}),
+			set: (arg: Record<string, unknown>) => {
+				updateSetCalls.push(arg);
+				return {
+					where: vi.fn().mockResolvedValue([]),
+				};
+			},
 		}),
 		delete: () => ({
 			where: vi.fn().mockResolvedValue([]),
@@ -110,6 +116,7 @@ describe("transcribeVideo", () => {
 		mockQueryResult = [];
 		mockUploadQueryResult = [];
 		mockOwnerQueryResult = [];
+		updateSetCalls = [];
 	});
 
 	describe("input validation", () => {
@@ -404,6 +411,70 @@ describe("transcribeVideo", () => {
 				userId: "user-456",
 				aiGenerationEnabled: false,
 			});
+		});
+
+		it("claim WITHOUT an explicit override defers server-side to the row's already-claimed aiMode", async () => {
+			// 2026-08-10 incident pin: two starts raced (two taps seconds apart);
+			// the later one carried no per-click override, resolved the mode from a
+			// STALE pre-claim read and overwrote the owner's claimed "cheap" with
+			// the org default "fast" — the paid path. The claim must therefore
+			// resolve aiMode INSIDE the UPDATE (COALESCE on the row's current
+			// value), not from the in-process snapshot.
+			await transcribeVideo("video-123" as Video.VideoId, "user-456", true);
+
+			const claim = updateSetCalls.find(
+				(setArg) => setArg.transcriptionStatus === "PROCESSING",
+			) as { metadata?: { sql: string } } | undefined;
+			expect(claim).toBeDefined();
+			expect(claim?.metadata?.sql).toContain("'$.aiMode', COALESCE(");
+		});
+
+		it("claim WITH an explicit per-click override writes that mode unconditionally", async () => {
+			await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+				true,
+				false,
+				"cheap",
+			);
+
+			const claim = updateSetCalls.find(
+				(setArg) => setArg.transcriptionStatus === "PROCESSING",
+			) as { metadata?: { sql: string; values: unknown[] } } | undefined;
+			expect(claim).toBeDefined();
+			// The owner's click wins outright — no deferring to the stored mode.
+			expect(claim?.metadata?.sql).not.toContain("'$.aiMode', COALESCE(");
+			expect(claim?.metadata?.values).toContain("cheap");
+		});
+
+		it("a retry (isRetry=true) re-claims a PROCESSING row instead of returning early", async () => {
+			// The cron re-kick no longer nulls the status first (no NULL window for
+			// page loads), so the retry path must be able to pass the PROCESSING
+			// guard and re-claim in place.
+			mockQueryResult = [
+				{
+					video: {
+						id: "video-123",
+						transcriptionStatus: "PROCESSING",
+						settings: null,
+					},
+					bucket: null,
+					settings: null,
+					orgSettings: null,
+				},
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+				true,
+				true,
+				"cheap",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toBe("Transcription started inline");
+			expect(transcribeVideoWorkflow).toHaveBeenCalled();
 		});
 
 		it("handles workflow trigger failure gracefully", async () => {

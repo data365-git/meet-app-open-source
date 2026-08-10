@@ -545,6 +545,8 @@
 		"aiBadge": "data365 AI",
 		"aiEta": "~{minutes} daqiqa qoldi",
 		"aiFineTranscribing": "Gemini'ga {completed}/{total} audio yuborildi",
+		"aiLiveExtractingAudio": "Videodan audio ajratilyapti…",
+		"aiLiveWaitingFreeQuota": "Bepul kvota kutilmoqda…",
 		"aiFineStageProgress": "{completed}/{total} qism qayta ishlandi",
 		"aiCardChunkProgress": "Bo'lak {completed}/{total}",
 		"aiStatusRow": "Xulosa va vazifalar tayyorlanmoqda…",

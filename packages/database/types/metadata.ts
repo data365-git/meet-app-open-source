@@ -63,6 +63,14 @@ export interface VideoMetadata {
 		| "ERROR"
 		| "SKIPPED";
 	aiProcessingStep?: "transcribe" | "summary" | "refined" | "done";
+	/**
+	 * Fine sub-phase marker inside the "transcribe" step, written by the workflow
+	 * at the moment the phase actually starts — the UI must never claim a step it
+	 * cannot prove from metadata. "extract_audio" = ffmpeg is splitting the video
+	 * into audio chunks (before any chunk totals exist). Cleared as soon as chunk
+	 * progress (transcriptionChunksCompleted/Total) takes over.
+	 */
+	aiProcessingSubStep?: "extract_audio";
 	aiGenerationRequestedAt?: string;
 	aiGenerationRequestedBy?: string;
 	aiGenerationError?: string;

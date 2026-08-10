@@ -9,12 +9,15 @@ export type AiGenerationStatus =
 	| "SKIPPED";
 
 export type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
+export type AiProcessingSubStep = "extract_audio";
 export type AiSpeedMode = "fast" | "cheap";
 
 type AiStatusResult = {
 	processing: boolean;
 	aiGenerationStatus: AiGenerationStatus | null;
 	aiProcessingStep: AiProcessingStep | null;
+	/** Fine sub-phase inside "transcribe" ("videodan audio ajratilyapti"). */
+	aiProcessingSubStep: AiProcessingSubStep | null;
 	aiMode: AiSpeedMode | null;
 	aiQuotaWaiting: boolean;
 	hasContent: boolean;
@@ -46,6 +49,7 @@ export const useAiStatus = (
 				processing: !!body.processing,
 				aiGenerationStatus: body.aiGenerationStatus ?? null,
 				aiProcessingStep: body.aiProcessingStep ?? null,
+				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
 				aiMode: body.aiMode ?? null,
 				aiQuotaWaiting: body.aiQuotaWaiting === true,
 				hasContent: !!(body.summary || body.chapters),

@@ -545,6 +545,8 @@
 		"aiBadge": "data365 AI",
 		"aiEta": "~{minutes} мин осталось",
 		"aiFineTranscribing": "Отправлено {completed}/{total} аудио в Gemini",
+		"aiLiveExtractingAudio": "Извлекается аудио из видео…",
+		"aiLiveWaitingFreeQuota": "Ожидается бесплатная квота…",
 		"aiFineStageProgress": "Обработано {completed}/{total} частей",
 		"aiCardChunkProgress": "Часть {completed}/{total}",
 		"aiStatusRow": "Готовятся сводка и задачи…",

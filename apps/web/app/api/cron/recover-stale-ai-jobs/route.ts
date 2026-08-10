@@ -6,6 +6,7 @@ import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { continueAiJobOnPaid } from "@/lib/ai-job-control";
+import { resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -188,11 +189,23 @@ export async function GET(request: Request) {
 				skippedForBatch++;
 			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
 				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
+				// Deliberately NOT resetting transcriptionStatus to null: the status
+				// must never pass through NULL on a re-kick — a page load in that
+				// window reads NULL and renders "start AI analysis?" for a job that
+				// is alive. transcribeVideo(isRetry=true) re-claims a PROCESSING row
+				// in place. The re-kick also carries the job's own resolved speed
+				// mode so the owner's cheap choice survives the restart.
 				await db()
 					.update(videos)
-					.set({ transcriptionStatus: null, metadata: nextMetadata })
+					.set({ metadata: nextMetadata })
 					.where(eq(videos.id, candidate.id));
-				await transcribeVideo(candidate.id, candidate.ownerId, true);
+				await transcribeVideo(
+					candidate.id,
+					candidate.ownerId,
+					true,
+					true,
+					resolveAiSpeedMode(nextMetadata.aiMode),
+				);
 				retried++;
 			} else {
 				await db()
@@ -236,11 +249,21 @@ export async function GET(request: Request) {
 				...withQuotaRetryScheduled(metadata, now),
 				transcriptionError: undefined,
 			};
+			// Keep the row's ERROR status until the re-claim writes PROCESSING —
+			// never NULL in between (same no-NULL law as the stale re-kick above;
+			// ERROR passes transcribeVideo's start guard on its own). The re-kick
+			// carries the job's resolved mode so a cheap choice stays cheap.
 			await db()
 				.update(videos)
-				.set({ transcriptionStatus: null, metadata: nextMetadata })
+				.set({ metadata: nextMetadata })
 				.where(eq(videos.id, candidate.id));
-			await transcribeVideo(candidate.id, candidate.ownerId, true);
+			await transcribeVideo(
+				candidate.id,
+				candidate.ownerId,
+				true,
+				true,
+				resolveAiSpeedMode(nextMetadata.aiMode),
+			);
 			quotaRetried++;
 		} catch (error) {
 			console.error(
