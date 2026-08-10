@@ -7,6 +7,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import {
@@ -202,6 +203,34 @@ export async function transcribeVideo(
 		console.log(
 			`[transcribeVideo] Triggering transcription workflow for video ${videoId}`,
 		);
+
+		// Claim the job in the DB BEFORE launching the workflow, not inside it.
+		//
+		// Owner-reported 2026-08-10: he pressed "AI tahlil", reloaded the page, and
+		// the progress panel was gone — leaving him unable to tell whether the job
+		// was still running or had been cancelled. The reason is that this row said
+		// nothing yet: the workflow only writes PROCESSING after it has fetched the
+		// video, the owner and the org settings, which on a long recording is many
+		// seconds. A reload inside that window reads `transcriptionStatus = NULL`
+		// and the panel correctly renders "not started" — so a running job looks
+		// like a cancelled one. `startAiGeneration` already claims its job this way
+		// (QUEUED before launch); transcription was the one path that did not.
+		//
+		// Safe against a stuck row: the guard above turns a duplicate request into
+		// "already in progress", and `api/cron/recover-stale-ai-jobs` already scans
+		// for `transcriptionStatus = PROCESSING` older than the stale threshold and
+		// clears it. `processingStartedAt` is what makes that staleness measurable —
+		// and it is the same field the panel's ETA reads.
+		await db()
+			.update(videos)
+			.set({
+				transcriptionStatus: "PROCESSING",
+				metadata: {
+					...((video.metadata as VideoMetadata) || {}),
+					processingStartedAt: new Date().toISOString(),
+				} as VideoMetadata,
+			})
+			.where(eq(videos.id, videoId));
 
 		const runTranscribe = () => transcribeVideoWorkflow({
 			videoId,

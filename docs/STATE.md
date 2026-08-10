@@ -6,7 +6,22 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
-## ▶ NEXT STEP (2026-08-06 evening — read this first)
+## ▶ NEXT STEP (2026-08-10 morning — read this first)
+
+**✅ OWNER-REPORTED UX DEFECT, ROOT-CAUSED AND FIXED: pressing "AI tahlil" and reloading made the progress vanish**, leaving him unable to tell a running job from a cancelled one. Cause, found in code and confirmed against the DB: `transcribeVideo` launches the workflow WITHOUT claiming the row first — `transcriptionStatus` only becomes PROCESSING inside the workflow, after it has fetched the video, the owner and the org settings. A reload in that window reads NULL and the panel correctly renders "not started". `startAiGeneration` already claimed its job (QUEUED before launch); transcription was the one path that did not. Now claimed synchronously with `processingStartedAt`, so the existing stale-job cron can still clear a dead claim. 4 new tests pin the ORDERING (claim before launch) — they are RED against the old code.
+
+**📊 GEMINI COST — measured, and my own first extrapolation was wrong; the corrected numbers are these.**
+- The free tier is **20 requests per day PER MODEL** — that is not inferred, prod logs say `limit: 20` verbatim. Two free models ≈ 40 free calls/day.
+- One 50-minute meeting costs ~33 transcription + ~23 summary calls, so **the free tier covers roughly one short recording a day**; everything past that falls back to paid, which is exactly what the logs show (`all free-tier models failed … falling back to paid`).
+- The free key is NOT broken — probed live, both models answered 200. It was simply spent for the day.
+- **Actual spend: last month $7.27; this month $1.45 in 10 days.** The org's budget cap is $11.63/month with an alert at 75%. I first extrapolated "~$12/month" from two unusually heavy days (two new long recordings landed on 9–10 Aug) — that was wrong and is corrected here so nobody plans against it.
+- The lever if cost ever matters: "arzon" (cheap) mode waits for free quota instead of paying; it is per-job today and `organizations.settings.aiSpeedMode` is unset, so the default is fast/paid-first.
+
+**🐞 FOUND WHILE READING THE LOGS, NOT FIXED, NOT ASKED FOR: thumbnail generation fails on the newest recordings.** Both 9–10 Aug recordings log `Can't load image …/screenshot/screen-capture.jpg: o is not iterable` — a Next image-loader failure, not a 404, so the object likely exists and the loader chokes. Share pages still return 200. Worth a look before the client handover, since a library of thumbnail-less cards looks broken.
+
+---
+
+## ▶ (previous) NEXT STEP (2026-08-06 evening)
 
 **PROD = `b38901c`, `/api/health` → `db:ok storage:ok`.** Live and verified: audio download (share page + card menu), bulk replace-with-audio, the card `⋮` fix, the four AI-chat fixes, the chat full-screen toggle, and the dead colour scales.
 
