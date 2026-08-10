@@ -1,0 +1,164 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The local .env points at PRODUCTION — never let anything open a real connection.
+vi.mock("@cap/database", () => ({
+	db: () => ({
+		execute: async () => {
+			throw new Error("real db() must never be used in this test");
+		},
+		update: () => ({ set: () => ({ where: async () => undefined }) }),
+	}),
+	updateIfDefined: () => undefined,
+}));
+vi.mock("@cap/database/schema", () => ({
+	spaceMembers: { role: "role" },
+	users: {},
+	videos: {},
+}));
+
+import { migrateDb } from "@cap/database/migrate";
+
+type ScriptedError = { code: string };
+
+let folder: string;
+
+function writeMigration(tag: string, when: number, body: string) {
+	fs.writeFileSync(path.join(folder, `${tag}.sql`), body);
+	return { idx: 0, version: "5", when, tag, breakpoints: true };
+}
+
+function writeJournal(entries: unknown[]) {
+	fs.writeFileSync(
+		path.join(folder, "meta", "_journal.json"),
+		JSON.stringify({ version: "5", dialect: "mysql", entries }),
+	);
+}
+
+/**
+ * Fake drizzle executor. Answers the migrations-table bookkeeping queries and
+ * fails whichever migration body the test asks it to fail.
+ */
+function makeExecutor(opts: {
+	failOn?: Record<string, ScriptedError>;
+	existingCreatedAt?: number[];
+}) {
+	const executed: string[] = [];
+	const inserted: Array<{ hash: string; createdAt: number }> = [];
+	const rows = (opts.existingCreatedAt ?? []).map((created_at) => ({
+		created_at,
+	}));
+	return {
+		executed,
+		inserted,
+		async execute(query: string) {
+			executed.push(query);
+			if (/create table if not exists/i.test(query)) return undefined;
+			if (/^select created_at from/i.test(query.trim())) return rows;
+			if (/^insert into/i.test(query.trim())) {
+				const m = query.match(/values\('([0-9a-f]+)',\s*(\d+)\)/);
+				if (m?.[1] && m[2])
+					inserted.push({ hash: m[1], createdAt: Number(m[2]) });
+				return undefined;
+			}
+			for (const [needle, err] of Object.entries(opts.failOn ?? {})) {
+				if (query.includes(needle)) throw Object.assign(new Error(needle), err);
+			}
+			return undefined;
+		},
+	};
+}
+
+function makeLogger() {
+	return { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+beforeEach(() => {
+	folder = fs.mkdtempSync(path.join(os.tmpdir(), "cap-migrations-"));
+	fs.mkdirSync(path.join(folder, "meta"), { recursive: true });
+});
+
+afterEach(() => {
+	fs.rmSync(folder, { recursive: true, force: true });
+});
+
+describe("migrateDb — benign duplicate-schema handling", () => {
+	it("skips a benign duplicate error and still applies later migrations", async () => {
+		const a = writeMigration(
+			"0001_add_col",
+			1000,
+			"ALTER TABLE `videos` ADD `libraryKind` varchar(16);",
+		);
+		const b = writeMigration(
+			"0002_add_other",
+			2000,
+			"ALTER TABLE `videos` ADD `other` varchar(16);",
+		);
+		writeJournal([a, b]);
+
+		const exec = makeExecutor({
+			failOn: { libraryKind: { code: "ER_DUP_FIELDNAME" } },
+		});
+		const logger = makeLogger();
+
+		await migrateDb({ migrationsFolder: folder, executor: exec, logger });
+
+		// migration B must still have run
+		expect(exec.executed.some((q) => q.includes("`other`"))).toBe(true);
+		// both migrations recorded, with drizzle's own hash + created_at
+		expect(exec.inserted.map((i) => i.createdAt)).toEqual([1000, 2000]);
+		expect(exec.inserted[0]?.hash).toBe(
+			crypto
+				.createHash("sha256")
+				.update(fs.readFileSync(path.join(folder, "0001_add_col.sql")).toString())
+				.digest("hex"),
+		);
+		// the skip is logged BY FILENAME
+		const warned = logger.warn.mock.calls.flat().join(" ");
+		expect(warned).toContain("0001_add_col.sql");
+		expect(logger.error).not.toHaveBeenCalledWith(
+			expect.stringContaining("MIGRATIONS_INCOMPLETE"),
+			expect.anything(),
+		);
+	});
+
+	it("still throws a non-benign error", async () => {
+		const a = writeMigration("0001_bad", 1000, "ALTER TABLE `nope` ADD `x` int;");
+		const b = writeMigration("0002_after", 2000, "ALTER TABLE `v` ADD `y` int;");
+		writeJournal([a, b]);
+
+		const exec = makeExecutor({
+			failOn: { "`nope`": { code: "ER_NO_SUCH_TABLE" } },
+		});
+
+		await expect(
+			migrateDb({
+				migrationsFolder: folder,
+				executor: exec,
+				logger: makeLogger(),
+			}),
+		).rejects.toThrow();
+
+		expect(exec.executed.some((q) => q.includes("`y`"))).toBe(false);
+		expect(exec.inserted).toHaveLength(0);
+	});
+
+	it("logs MIGRATIONS_INCOMPLETE (without crashing) when a journal entry has no row", async () => {
+		const a = writeMigration("0001_first", 1000, "ALTER TABLE `v` ADD `a` int;");
+		const b = writeMigration("0002_second", 2000, "ALTER TABLE `v` ADD `b` int;");
+		writeJournal([a, b]);
+
+		// watermark is past both, but 0001's row is missing from the table
+		const exec = makeExecutor({ existingCreatedAt: [2000] });
+		const logger = makeLogger();
+
+		await migrateDb({ migrationsFolder: folder, executor: exec, logger });
+
+		const errored = logger.error.mock.calls.flat();
+		expect(errored.join(" ")).toContain("MIGRATIONS_INCOMPLETE");
+		expect(JSON.stringify(errored)).toContain("0001_first");
+	});
+});

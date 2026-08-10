@@ -36,6 +36,69 @@ Duties that live only here:
 10. **Forward `MIGRATION_CLIENT_MESSAGE.md` to the client** — unblocks the whole migration.
 11. **The team reinstalls extension 0.5.9** — one message from him.
 
+## 🎯 GOAL CHANGED BY THE OWNER 2026-08-10 — Railway is DEAD, it is the team's own Contabo server
+
+**The new goal:** move Data365 onto **the team's existing Contabo VPS** (they already have one),
+not onto a Railway project the client would have to create. The owner redirected mid-session.
+
+**The question he asked, answered with the vendor's own words:** "can we just hand ownership over
+without redeploying?" — **No.** Contabo transfers *"the entire account as a whole; it is not
+possible to transfer a single instance"*, and only with a signed Transfer-of-Contract from both
+parties ([source](https://help.contabo.com/en/support/solutions/articles/103000269442-can-i-transfer-my-account-to-someone-else-)).
+Our account holds other things, so that door is closed — and it does not matter, because the team
+already has their own server. A redeploy is unavoidable; the consolation is that the stack is
+identical (Coolify + Docker + MySQL), so this is a copy, not a rebuild.
+
+**His four decisions, settled — do not re-litigate:**
+1. **Videos → the team's own Cloudflare R2.** 0.49 GB moves; they own it afterwards.
+2. **Domain `data365.duckdns.org` stays.** Consequence, and it is large: **the team does NOT
+   reinstall the browser extension** (the extension reads a configurable `apiBaseUrl` with
+   `DEFAULT_API_BASE_URL`, checked in `apps/browser-extension/src/shared/config`), and **every
+   share link already handed out keeps working**. Honest caveat recorded in the requirements doc:
+   the name is still OUR DuckDNS record, so full independence would later mean their own domain.
+3. **Gemini key → theirs**, so AI spend follows the product.
+4. **Their server probably already runs other projects** (his words, not measured) — so a
+   read-only inspection comes before anything is installed.
+
+**DELIVERABLES BUILT THIS SESSION (his ask: one HTML for the human, one file for the server):**
+- [`docs/migration/data365-kochirish.html`](migration/data365-kochirish.html) — self-contained
+  Uzbek guide for the team member: 4 steps, saved checkboxes, copy buttons, light+dark.
+  **Live-verified in the Browser pane** at desktop dark and mobile light, zero console errors.
+- [`docs/migration/01-server-check.sh`](migration/01-server-check.sh) — **read-only** server
+  inspector. Installs nothing, deletes nothing, stops nothing; prints a copy-paste report
+  (OS, cores, RAM, disk, Docker, Coolify, ports 80/443, outbound reachability, public IP).
+- [`docs/MIGRATION_CLIENT_MESSAGE.md`](MIGRATION_CLIENT_MESSAGE.md) — rewritten cover note that
+  ships those two files. **The old Railway text was wrong and is gone.**
+- [`docs/MIGRATION_REQUIREMENTS.md`](MIGRATION_REQUIREMENTS.md) — rewritten for Contabo. The old
+  "Railway bills by usage, the invoice may spike" warning is DELETED (Contabo is a flat monthly
+  fee) and replaced with the two real risks: a shared server, and AI spend moving to them.
+
+**WHY THE INSTALLER SCRIPT WAS DELIBERATELY NOT WRITTEN YET.** We have never seen their server.
+An untested migration script is worse than none because it invites being trusted — the same rule
+that stopped the Railway copy-script. Phase 1 (inspect) is safe to run today and needs no
+decisions; phase 2 (install) gets written against the report it returns.
+
+**PRUNED as part of this re-baseline:** the 2026-08-07 OWNER TODO "forward
+`MIGRATION_CLIENT_MESSAGE.md`" is superseded — the message it pointed at described Railway. The
+duty survives in new wording (send the HTML + the check script), and its original age is carried
+below so it does not reset.
+
+**OWNER TODO (since 2026-08-07)** — ONE action: send the two files above to the team member.
+WHAT HE WILL SEE: they run one command and send back a short report, and at that moment we can
+write the real installer. VALVE: if they push back on owning the Cloudflare/Gemini accounts, say
+so — the current server can simply stay, nothing breaks.
+
+**Parked, NOT in the tree, do not deploy it blind:** `docs/parked/migration-runner-skip-benign.patch`
+(+ its test, `.parked`). A ~150-line rewrite of the DB migration runner so a benign duplicate-column
+error skips one migration instead of silently aborting the whole run (the 2026-08-05 `0038` incident).
+It was reverted on purpose: its RED-first proof was vacuous (the old code failed the new tests for
+the wrong reason — a missing fixture journal, not the defect), it drops drizzle's wrapping
+transaction, and it would land in the exact deploy we can least afford to break — a fresh DB on
+their server has no duplicate errors, so the defect it fixes does not even apply to that path.
+Pick it up AFTER the migration, with a blind non-author review and a genuine RED test.
+
+---
+
 ## ▶ NEXT STEP (2026-08-10 morning — read this first)
 
 **✅ OWNER-REPORTED UX DEFECT, ROOT-CAUSED AND FIXED: pressing "AI tahlil" and reloading made the progress vanish**, leaving him unable to tell a running job from a cancelled one. Cause, found in code and confirmed against the DB: `transcribeVideo` launches the workflow WITHOUT claiming the row first — `transcriptionStatus` only becomes PROCESSING inside the workflow, after it has fetched the video, the owner and the org settings. A reload in that window reads NULL and the panel correctly renders "not started". `startAiGeneration` already claimed its job (QUEUED before launch); transcription was the one path that did not. Now claimed synchronously with `processingStartedAt`, so the existing stale-job cron can still clear a dead claim. 4 new tests pin the ORDERING (claim before launch) — they are RED against the old code.

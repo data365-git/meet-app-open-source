@@ -161,6 +161,17 @@ module.exports = (__app, _options) => {
 						20: "rgba(34,64,122,0.2)",
 					},
 					red: {
+						// Radix 1..12 AND the bespoke 50..400 live side by side; the step
+						// numbers cannot collide and both are genuinely in use. ~20 sites
+						// already wrote `bg-red-3` / `text-red-11` (the share page's AI
+						// error panel, the Loom import failure banner, the recorder's
+						// error bar) and every one rendered NOTHING — the same defect
+						// that hit green/amber/purple/yellow. The old note feared a wide
+						// blast radius from switching `red` to the Radix scale; measured,
+						// the bespoke steps have exactly THREE call sites (components/
+						// mdx.tsx), so merging costs nothing and replacing would have
+						// cost those three. `--red-*` was already imported in globals.css.
+						...getColorScale("red"),
 						50: "#FFEBEE",
 						100: "#FFADBB",
 						200: "#FF8599",

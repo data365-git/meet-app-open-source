@@ -1,0 +1,215 @@
+﻿diff --git a/apps/web/instrumentation.node.ts b/apps/web/instrumentation.node.ts
+index d86a57a..8e800d0 100644
+--- a/apps/web/instrumentation.node.ts
++++ b/apps/web/instrumentation.node.ts
+@@ -19,20 +19,9 @@ export async function register() {
+ 		try {
+ 			await runMigrations();
+ 		} catch (error) {
+-			const code =
+-				(error as { code?: string; cause?: { code?: string } })?.code ??
+-				(error as { cause?: { code?: string } })?.cause?.code;
+-			const benign = [
+-				"ER_DUP_FIELDNAME",
+-				"ER_TABLE_EXISTS_ERROR",
+-				"ER_DUP_KEYNAME",
+-			];
+-			if (code && benign.includes(code)) {
+-				console.warn(
+-					`⚠️  Migration error is benign (${code}). Schema is already at desired state. Continuing.`,
+-				);
+-				return;
+-			}
++			// Duplicate-schema errors are NOT swallowed here: swallowing them left
++			// every later migration unapplied while the boot still looked clean.
++			// The migration runner skips them per-migration instead.
+ 			console.error(
+ 				`🚨 Error triggering migrations (attempt ${retryCount + 1}):`,
+ 				error,
+diff --git a/packages/database/migrate.ts b/packages/database/migrate.ts
+index 881e93d..e254846 100644
+--- a/packages/database/migrate.ts
++++ b/packages/database/migrate.ts
+@@ -1,17 +1,151 @@
++import crypto from "node:crypto";
++import fs from "node:fs";
+ import path from "node:path";
+ import { db } from "@cap/database";
+-import { DrizzleQueryError } from "drizzle-orm";
+-import { migrate } from "drizzle-orm/mysql2/migrator";
++import { DrizzleQueryError, sql } from "drizzle-orm";
+ 
+ import { runOrgIdBackfill } from "./migrations/orgid_backfill.ts";
+ import { runSpaceMemberRoleBackfill } from "./migrations/space_member_role_backfill.ts";
+ 
+-async function runMigrate() {
+-	await migrate(db(), {
+-		migrationsFolder: path.join(process.cwd(), "/migrations"),
++// drizzle's own defaults — mirrored from drizzle-orm/mysql-core/dialect.ts
++// (MySqlDialect.migrate) so the rows we write are indistinguishable from the
++// ones drizzle writes itself.
++const MIGRATIONS_TABLE = "__drizzle_migrations";
++const CREATE_MIGRATIONS_TABLE = `create table if not exists \`${MIGRATIONS_TABLE}\` (
++	id serial primary key,
++	hash text not null,
++	created_at bigint
++)`;
++
++/**
++ * MySQL error codes that mean "this schema object already exists". They are the
++ * only errors a migration may be skipped for.
++ */
++const BENIGN_DUPLICATE_CODES = new Set([
++	"ER_DUP_FIELDNAME",
++	"ER_TABLE_EXISTS_ERROR",
++	"ER_DUP_KEYNAME",
++]);
++
++function benignDuplicateCode(error: unknown): string | undefined {
++	const code =
++		(error as { code?: string })?.code ??
++		(error as { cause?: { code?: string } })?.cause?.code;
++	return code && BENIGN_DUPLICATE_CODES.has(code) ? code : undefined;
++}
++
++export interface JournalMigration {
++	tag: string;
++	hash: string;
++	folderMillis: number;
++	statements: string[];
++}
++
++/**
++ * Same as drizzle's readMigrationFiles (drizzle-orm/migrator.ts) — identical
++ * statement split and identical sha256 hash — but it also keeps the journal
++ * `tag` so failures can be reported by filename.
++ */
++export function readJournalMigrations(
++	migrationsFolder: string,
++): JournalMigration[] {
++	const journalPath = path.join(migrationsFolder, "meta", "_journal.json");
++	if (!fs.existsSync(journalPath))
++		throw new Error(`Can't find meta/_journal.json file`);
++
++	const journal = JSON.parse(fs.readFileSync(journalPath).toString()) as {
++		entries: Array<{ when: number; tag: string }>;
++	};
++
++	return journal.entries.map((entry) => {
++		const query = fs
++			.readFileSync(path.join(migrationsFolder, `${entry.tag}.sql`))
++			.toString();
++		return {
++			tag: entry.tag,
++			hash: crypto.createHash("sha256").update(query).digest("hex"),
++			folderMillis: entry.when,
++			statements: query.split("--> statement-breakpoint"),
++		};
+ 	});
+ }
+ 
++export interface MigrationExecutor {
++	execute(query: string): Promise<unknown>;
++}
++
++type MigrationLogger = Pick<Console, "log" | "warn" | "error">;
++
++/**
++ * Applies pending migrations one at a time.
++ *
++ * Differences from drizzle's built-in migrator, and why:
++ *  - a benign duplicate-schema error SKIPS that one migration (recording it as
++ *    applied, with drizzle's own hash/created_at) instead of aborting the whole
++ *    run, so every later migration still gets applied;
++ *  - no wrapping transaction: MySQL implicitly commits DDL, so drizzle's single
++ *    transaction never gave atomicity here — it only guaranteed that the first
++ *    failure stopped everything after it;
++ *  - after the run, every journal entry is checked against the migrations table
++ *    and any gap is logged loudly instead of passing silently.
++ */
++export async function applyMigrations(
++	executor: MigrationExecutor,
++	migrations: JournalMigration[],
++	logger: MigrationLogger = console,
++): Promise<{ skipped: string[]; missing: string[] }> {
++	await executor.execute(CREATE_MIGRATIONS_TABLE);
++
++	const rows = ((await executor.execute(
++		`select created_at from \`${MIGRATIONS_TABLE}\``,
++	)) ?? []) as Array<{ created_at: unknown }>;
++	const applied = new Set(rows.map((row) => Number(row.created_at)));
++	// drizzle decides "already applied" by a high-water mark, not per migration.
++	// Keep that rule so this runner never re-runs history drizzle considers done.
++	const watermark = applied.size ? Math.max(...applied) : null;
++
++	const skipped: string[] = [];
++
++	for (const migration of migrations) {
++		if (watermark !== null && watermark >= migration.folderMillis) continue;
++
++		try {
++			for (const statement of migration.statements)
++				await executor.execute(statement);
++		} catch (error) {
++			const code = benignDuplicateCode(error);
++			if (!code) throw error;
++			logger.warn(
++				`⚠️  Skipping migration ${migration.tag}.sql — ${code}: the schema object it creates already exists. Recording it as applied and continuing with the remaining migrations.`,
++			);
++			skipped.push(migration.tag);
++		}
++
++		await executor.execute(
++			`insert into \`${MIGRATIONS_TABLE}\` (\`hash\`, \`created_at\`) values('${migration.hash}', ${migration.folderMillis})`,
++		);
++		applied.add(migration.folderMillis);
++	}
++
++	const missing = migrations
++		.filter((migration) => !applied.has(migration.folderMillis))
++		.map((migration) => migration.tag);
++	if (missing.length > 0)
++		logger.error(
++			`🚨 MIGRATIONS_INCOMPLETE — journal entries with no row in ${MIGRATIONS_TABLE}:`,
++			missing,
++		);
++
++	return { skipped, missing };
++}
++
++export interface MigrateOptions {
++	migrationsFolder?: string;
++	/** Seam for tests — production always uses the real pool. */
++	executor?: MigrationExecutor;
++	logger?: MigrationLogger;
++}
++
+ function errorIsOrgIdMigration(e: unknown): e is DrizzleQueryError {
+ 	return (
+ 		e instanceof DrizzleQueryError &&
+@@ -20,13 +154,23 @@ function errorIsOrgIdMigration(e: unknown): e is DrizzleQueryError {
+ 	);
+ }
+ 
+-export async function migrateDb() {
++export async function migrateDb(options: MigrateOptions = {}) {
++	const logger = options.logger ?? console;
++	const migrations = readJournalMigrations(
++		options.migrationsFolder ?? path.join(process.cwd(), "/migrations"),
++	);
++	const executor: MigrationExecutor = options.executor ?? {
++		execute: (query) => db().execute(sql.raw(query)),
++	};
++
++	const runMigrate = () => applyMigrations(executor, migrations, logger);
++
+ 	try {
+ 		await runMigrate();
+ 	} catch (e) {
+ 		if (!errorIsOrgIdMigration(e)) throw e;
+ 
+-		console.log("non-null videos.orgId migration failed, running backfill");
++		logger.log("non-null videos.orgId migration failed, running backfill");
+ 
+ 		await runOrgIdBackfill();
+ 

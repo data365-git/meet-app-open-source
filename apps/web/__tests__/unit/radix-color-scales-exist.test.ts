@@ -42,6 +42,10 @@ const RADIX_COLOR_NAMES = [
 	"crimson",
 	"pink",
 	"plum",
+	// "red" was absent, which is why this guard reported green while ~20
+	// `bg-red-3` / `text-red-11` sites rendered nothing: a name outside this
+	// list is not even scanned, so the exclusion below was never reached.
+	"red",
 ] as const;
 
 /** `bg-green-3`, `text-gray-11`, `hover:border-blue-6`, `dark:bg-green-4` … */
@@ -52,7 +56,10 @@ const NUMBERED_COLOR_CLASS = new RegExp(
 
 /** Scales in the config that are NOT Radix 1..12 — different, valid systems. */
 const NON_RADIX_SCALES = new Set([
-	"red", // overridden with a bespoke 50..400 palette
+	// "red" used to sit here: it carried a bespoke 50..400 palette only, so the
+	// ~20 `red-3` / `red-11` sites in the app were invisible to this guard AND
+	// rendered nothing. The config now merges Radix 1..12 alongside those
+	// bespoke steps, so red is a normal guarded scale again.
 	"white-transparent",
 	"blue-transparent",
 	"red-transparent",
