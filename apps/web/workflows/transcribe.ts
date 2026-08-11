@@ -17,7 +17,11 @@ import { eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
-import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import {
+	authorizePaidGeminiUse,
+	getPaidGeminiKey,
+	hasPaidGeminiKey,
+} from "@/lib/gemini-paid-key";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
@@ -909,6 +913,16 @@ export async function transcribeAudio(
 
 	const runSync = async (): Promise<string> => {
 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
+		// FACT, not a declaration (round-9 #1): true only when the free chain
+		// genuinely has no capacity — a real quota/rate-limit signal, or no
+		// free key configured at all. A revoked key, a permission error, a
+		// safety block or a malformed response is an ERROR, and treating it as
+		// exhaustion would silently bill every cheap chunk on the paid path
+		// while free quota sits untouched — the owner's original defect.
+		let freeQuotaExhausted = false;
+		if (!freeKey) {
+			freeQuotaExhausted = true;
+		}
 		if (freeKey) {
 			try {
 				const freeResult = await withCostGuard({
@@ -951,6 +965,16 @@ export async function transcribeAudio(
 				if (context.freeOnly) {
 					throw error;
 				}
+				if (context.aiSpeedMode === "cheap") {
+					if (!isQuotaLikeAiError(error)) {
+						// Cheap + a NON-quota free failure: rethrow so the chunk
+						// retry machinery handles it as the real error it is
+						// (retry, then the existing fault tolerance — a gap). Only
+						// FAST users bought "any failure falls through to paid".
+						throw error;
+					}
+					freeQuotaExhausted = true;
+				}
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 				);
@@ -961,20 +985,25 @@ export async function transcribeAudio(
 			);
 		}
 
-		// Synchronous paid call. CHEAP REACHES THIS TOO now (round-8, the
-		// owner's actual rule): the free chain above was tried (or does not
-		// exist) and failed — free is exhausted for this call, so paying is
-		// the REQUESTED behaviour, and the next chunk tries free again. The
-		// gate enforces exactly that: a cheap sync key is only handed out
-		// against an explicit freeExhausted declaration.
-		const resolvedApiKey =
-			ownerApiKey ??
-			getPaidGeminiKey({
-				operation: "transcription",
-				mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
-				route: "sync",
-				...(context.aiSpeedMode === "cheap" ? { freeExhausted: true } : {}),
-			});
+		// Synchronous paid call. CHEAP REACHES THIS TOO (round-8, the owner's
+		// actual rule): paying once free is GENUINELY out is the requested
+		// behaviour, and the next chunk tries free again. The authorization is
+		// checked BEFORE resolving any key — the owner's personal key passes
+		// the exact same gate (round-9 #1 closed the `ownerApiKey ?? gate`
+		// short-circuit that skipped the check entirely).
+		const paidUse = {
+			operation: "transcription" as const,
+			mode:
+				context.aiSpeedMode === "cheap"
+					? ("cheap" as const)
+					: ("fast" as const),
+			route: "sync" as const,
+			...(context.aiSpeedMode === "cheap"
+				? { freeExhausted: freeQuotaExhausted }
+				: {}),
+		};
+		authorizePaidGeminiUse(paidUse);
+		const resolvedApiKey = ownerApiKey ?? getPaidGeminiKey(paidUse);
 		if (!resolvedApiKey) {
 			throw new FatalError(
 				"No Gemini API key configured. Set one in Settings → Account → Transcription API Keys, or ask your admin to set GEMINI_API_KEY.",

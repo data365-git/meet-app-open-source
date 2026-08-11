@@ -56,12 +56,6 @@ export function shouldAutoFlipCheapJobToPaid(
 	return Number.isFinite(startedMs) && nowMs - startedMs > CHEAP_AUTO_PAID_AFTER_MS;
 }
 
-export function shouldCountStaleJobTowardDeath(
-	metadata: VideoMetadata,
-): boolean {
-	return !(metadata.aiMode === "cheap" && metadata.aiQuotaWaiting === true);
-}
-
 /**
  * Quota re-kick budget. A flat cap is the wrong shape: at the 30-min cron
  * cadence a 5-attempt cap expires ~2.5h into an outage, which is far sooner
@@ -141,12 +135,12 @@ export function hasPendingBatchJobs(metadata: VideoMetadata): boolean {
 	return Array.isArray(metadata.aiBatchJobs) && metadata.aiBatchJobs.length > 0;
 }
 
-/** Pure decision: does this video still get an automatic re-kick, or has it used up its retries? */
-export function shouldAutoRetry(
-	attempts: number | undefined,
-	metadata: VideoMetadata = {},
-): boolean {
-	if (!shouldCountStaleJobTowardDeath(metadata)) return true;
+/** Pure decision: does this video still get an automatic re-kick, or has it
+ * used up its retries? The old cheap+aiQuotaWaiting exemption is GONE
+ * (round-9 #2): it was only safe while the quota-ladder branch bounded those
+ * rows first, and that branch was deleted in round 8 — an unbounded
+ * exemption would let a legacy parked row re-kick forever. */
+export function shouldAutoRetry(attempts: number | undefined): boolean {
 	return (attempts ?? 0) < MAX_AUTO_RETRY_ATTEMPTS;
 }
 
@@ -164,9 +158,8 @@ export function withIncrementedAutoRecoverAttempts(
 		// re-stamp it before the re-claim reads, which is exactly the race the
 		// guard exists to catch.
 		aiProgressAt: undefined,
+		// Counts for EVERY row — quota-parked included (round-9 #2).
+		autoRecoverAttempts: (metadata.autoRecoverAttempts ?? 0) + 1,
 	};
-	if (shouldCountStaleJobTowardDeath(metadata)) {
-		next.autoRecoverAttempts = (metadata.autoRecoverAttempts ?? 0) + 1;
-	}
 	return next;
 }

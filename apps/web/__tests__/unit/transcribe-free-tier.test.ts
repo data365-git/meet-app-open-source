@@ -128,20 +128,28 @@ describe("transcribeAudio free-tier-first", () => {
 		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
 	});
 
-	it("cheap mode + free failure (any reason): falls back to the paid sync call — no parking, no Batch signal (round-8 owner rule)", async () => {
-		// The owner's ACTUAL rule: free as much as possible, paid when free is
-		// out. Free failed for this call, so paying is the requested behaviour;
-		// the next chunk tries free again.
+	it("cheap mode + NON-quota free failure (broken key / bad response): rethrows as a REAL error — the paid call is NEVER made (round-9 #1)", async () => {
+		// A revoked free key or a malformed response is NOT exhaustion. The
+		// round-8 shape treated ANY free failure as exhaustion, which would
+		// silently bill every cheap chunk on the paid path with free quota
+		// fully intact — the owner's original defect in a new shape. The error
+		// must surface so the chunk retry machinery (retry → gap) handles it.
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini
-			.mockRejectedValueOnce(new Error("free model returned malformed VTT"))
+			.mockRejectedValueOnce(new Error("400 API_KEY_INVALID"))
 			.mockResolvedValueOnce(PAID_RESULT);
 
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
+		const err = await transcribeAudio(
+			"https://a/x.mp3",
+			300,
+			null,
+			CHEAP_CTX,
+		).catch((e) => e);
 
-		expect(out).toBe("WEBVTT\n\nPAID");
-		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
-		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+		expect((err as Error).message).toContain("API_KEY_INVALID");
+		// Exactly ONE call — the free attempt. No paid fallback happened.
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect((H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey).toBe("free-key");
 	});
 
 	it("cheap + owner key + NO server key + no free key: runs on the OWNER'S OWN key — the only paid path that exists (round-7 #3)", async () => {

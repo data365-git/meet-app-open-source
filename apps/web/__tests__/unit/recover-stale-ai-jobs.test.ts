@@ -121,10 +121,12 @@ describe("shouldAutoRetry", () => {
 		expect(shouldAutoRetry(5)).toBe(false);
 	});
 
-	it("keeps retrying cheap quota waits even after the normal death limit", () => {
-		expect(
-			shouldAutoRetry(5, { aiMode: "cheap", aiQuotaWaiting: true }),
-		).toBe(true);
+	it("NO quota-wait exemption: the retry budget applies to every row (round-9 #2 — its bounding branch was deleted in round 8)", () => {
+		// The old cheap+aiQuotaWaiting carve-out returned true unconditionally,
+		// which was only safe while the quota-ladder branch bounded those rows
+		// first. With the ladder gone, an exempt legacy row would re-kick
+		// forever and never reach ERROR.
+		expect(shouldAutoRetry(5)).toBe(false);
 	});
 });
 
@@ -160,7 +162,7 @@ describe("withIncrementedAutoRecoverAttempts", () => {
 		expect(result.aiProgressAt).toBeUndefined();
 	});
 
-	it("does not increment attempts for cheap quota waits", () => {
+	it("increments attempts for cheap quota waits too — no exemption remains (round-9 #2)", () => {
 		const result = withIncrementedAutoRecoverAttempts({
 			aiMode: "cheap",
 			aiQuotaWaiting: true,
@@ -168,7 +170,7 @@ describe("withIncrementedAutoRecoverAttempts", () => {
 			processingStartedAt: "2026-01-01T00:00:00.000Z",
 		});
 
-		expect(result.autoRecoverAttempts).toBe(2);
+		expect(result.autoRecoverAttempts).toBe(3);
 		expect(result.processingStartedAt).toBeUndefined();
 	});
 });
@@ -256,7 +258,7 @@ describe("staleThresholdMsForMetadata", () => {
 		expect(
 			shouldAutoFlipCheapJobToPaid(crashedCheap, firstRecoveryTick),
 		).toBe(false);
-		expect(shouldAutoRetry(0, crashedCheap)).toBe(true);
+		expect(shouldAutoRetry(0)).toBe(true);
 	});
 });
 

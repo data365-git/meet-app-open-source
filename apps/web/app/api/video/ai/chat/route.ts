@@ -324,11 +324,7 @@ export async function POST(request: NextRequest) {
 	}
 
 	if (!apiKey) {
-		apiKey = getPaidGeminiKey({
-			operation: "chat",
-			mode: "fast",
-			route: "sync",
-		});
+		apiKey = getPaidGeminiKey({ operation: "chat", route: "sync" });
 	}
 
 	if (!apiKey) {

@@ -20,22 +20,51 @@ import type { AiSpeedMode } from "@/lib/ai-speed-mode";
  * ("cheap never bills full price") was the coordinator's extrapolation, not
  * the owner's rule, and drove seven rounds of park/collector complexity.
  */
-export type PaidGeminiUse = {
-	operation:
-		| "transcription"
-		| "generation"
-		| "translation"
-		| "chat"
-		/** The owner's explicit "continue on paid" click — his money, his call. */
-		| "owner-continue-paid"
-		/** Operator-run verification/maintenance scripts (never a request path). */
-		| "ops-script";
-	mode: AiSpeedMode;
-	route: "sync" | "batch";
-	/** REQUIRED TRUE for cheap synchronous calls: the free chain has actually
-	 * been tried and exhausted (or no free key exists) for this call. */
-	freeExhausted?: boolean;
-};
+export type PaidGeminiUse =
+	/** Job-bound operations: the mode MUST be derived from the job's own
+	 * resolved aiSpeedMode, never invented at the call site. */
+	| {
+			operation: "transcription" | "generation";
+			mode: AiSpeedMode;
+			route: "sync" | "batch";
+			/** REQUIRED TRUE for cheap synchronous calls, and it must be a FACT:
+			 * only a genuine quota/rate-limit signal from the free chain (or the
+			 * absence of any free key) counts as exhaustion. A broken key, a
+			 * safety block or a malformed response is a real ERROR, not
+			 * exhaustion — billing paid on those is the owner's original defect
+			 * in a new shape (round-9 #1). */
+			freeExhausted?: boolean;
+	  }
+	/** Job-less operations: there is no cheap notion here, so there is no
+	 * mode field to falsify — the round-8 shape let these self-declare
+	 * mode:"fast", the exact value that disables the check (round-9 #3). */
+	| {
+			operation:
+				| "translation"
+				| "chat"
+				/** The owner's explicit "continue on paid" click — his money, his
+				 * call; the click itself is the authorization. */
+				| "owner-continue-paid"
+				/** Operator-run verification/maintenance scripts (never a request
+				 * path). */
+				| "ops-script";
+			route: "sync" | "batch";
+	  };
+
+/** The authorization check, separated from the key handout so call sites
+ * that resolve their key elsewhere (the video owner's personal key) still
+ * MUST pass the same gate — round 9 #1 closed the `ownerApiKey ?? gate`
+ * short-circuit that skipped the check entirely. */
+export function authorizePaidGeminiUse(use: PaidGeminiUse): void {
+	if (
+		"mode" in use &&
+		use.mode === "cheap" &&
+		use.route === "sync" &&
+		use.freeExhausted !== true
+	) {
+		throw new CheapPaidWhileFreeAvailableError();
+	}
+}
 
 export class CheapPaidWhileFreeAvailableError extends Error {
 	constructor() {
@@ -47,9 +76,7 @@ export class CheapPaidWhileFreeAvailableError extends Error {
 }
 
 export function getPaidGeminiKey(use: PaidGeminiUse): string | undefined {
-	if (use.mode === "cheap" && use.route === "sync" && use.freeExhausted !== true) {
-		throw new CheapPaidWhileFreeAvailableError();
-	}
+	authorizePaidGeminiUse(use);
 	return serverEnv().GEMINI_API_KEY;
 }
 

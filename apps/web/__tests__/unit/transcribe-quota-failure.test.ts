@@ -211,6 +211,27 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		expect(submitChunkBatch).not.toHaveBeenCalled();
 	});
 
+	it("cheap + free key BROKEN (non-quota): fails as a REAL error — zero paid calls while free quota is intact (round-9 #1)", async () => {
+		ENV.value = {
+			GEMINI_API_KEY: "server-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		};
+		transcribeWithGemini.mockRejectedValue(genuineError());
+
+		const err = await transcribeAudioChunks(
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+		).catch((e) => e);
+
+		expect((err as Error).message).toContain("could not decode");
+		// Every call was the FREE attempt; the paid server key was never used.
+		expect(transcribeWithGemini.mock.calls.length).toBeGreaterThanOrEqual(1);
+		for (const call of transcribeWithGemini.mock.calls) {
+			expect((call[1] as { apiKey?: string }).apiKey).toBe("free-key");
+		}
+	});
+
 	it("cheap + BOTH free and paid exhausted (credits depleted): QUOTA-classified terminal error, still no parking", async () => {
 		ENV.value = {
 			GEMINI_API_KEY: "server-key",

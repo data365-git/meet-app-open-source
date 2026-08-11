@@ -229,6 +229,15 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			JSON.stringify(setArg.metadata ?? {}).includes("quotaRetryAttempts"),
 		);
 		expect(laddered).toBeUndefined();
+		// And the retry BUDGET moves (round-9 #2): with the ladder gone, the
+		// counter is this row's only terminator — an exempt row would re-kick
+		// forever.
+		const counted = state.setCalls.find(
+			(setArg) =>
+				(setArg.metadata as { autoRecoverAttempts?: number } | undefined)
+					?.autoRecoverAttempts === 1,
+		);
+		expect(counted).toBeDefined();
 	});
 
 	it("NO automatic paid flip for transcription: a 5h-old crashed cheap job is re-kicked FREE, never continued on paid (round-6 owner decision)", async () => {

@@ -214,7 +214,7 @@ export async function GET(request: Request) {
 				// case that neither aiQuotaWaiting nor aiBatchJobs marks. Never
 				// kill a job that is visibly advancing, whatever its total runtime.
 				skippedAlive++;
-			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
+			} else if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
 				const nextMetadata = withIncrementedAutoRecoverAttempts(metadata);
 				// Deliberately NOT resetting transcriptionStatus to null: the status
 				// must never pass through NULL on a re-kick — a page load in that
@@ -321,7 +321,7 @@ export async function GET(request: Request) {
 				}
 				flippedToPaid++;
 				retried++;
-			} else if (shouldAutoRetry(metadata.autoRecoverAttempts, metadata)) {
+			} else if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
 				const nextMetadata: VideoMetadata = {
 					...withIncrementedAutoRecoverAttempts(metadata),
 					aiGenerationStatus: undefined,

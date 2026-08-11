@@ -20,6 +20,7 @@ vi.mock("@cap/env", () => ({
 }));
 
 import {
+	authorizePaidGeminiUse,
 	CheapPaidWhileFreeAvailableError,
 	getPaidGeminiKey,
 	hasPaidGeminiKey,
@@ -55,7 +56,28 @@ describe("INVARIANT (owner's actual rule, round-8): a cheap job never pays WHILE
 		).toBe("server-paid-key");
 	});
 
-	it("every authorization carries mode AND route — no unchecked escape hatch, ops-script included", () => {
+	it("freeExhausted must be the FACT, not a truthy-looking value — false is refused (round-9 #1)", () => {
+		expect(() =>
+			authorizePaidGeminiUse({
+				operation: "transcription",
+				mode: "cheap",
+				route: "sync",
+				freeExhausted: false,
+			}),
+		).toThrow(CheapPaidWhileFreeAvailableError);
+		// The standalone authorization exists so OWNER-KEY call sites (which
+		// resolve their key elsewhere) pass the identical check.
+		expect(() =>
+			authorizePaidGeminiUse({
+				operation: "transcription",
+				mode: "cheap",
+				route: "sync",
+				freeExhausted: true,
+			}),
+		).not.toThrow();
+	});
+
+	it("job-bound uses carry a derived mode; job-less uses have NO mode field to falsify (round-9 #3)", () => {
 		expect(
 			getPaidGeminiKey({ operation: "transcription", mode: "fast", route: "sync" }),
 		).toBe("server-paid-key");
@@ -66,20 +88,24 @@ describe("INVARIANT (owner's actual rule, round-8): a cheap job never pays WHILE
 				route: "batch",
 			}),
 		).toBe("server-paid-key");
+		// Job-less operations: no cheap notion exists, so the round-8 shape
+		// that let them self-declare mode:"fast" (the value that disables the
+		// check) is gone from the type itself.
+		expect(getPaidGeminiKey({ operation: "ops-script", route: "sync" })).toBe(
+			"server-paid-key",
+		);
+		expect(getPaidGeminiKey({ operation: "translation", route: "sync" })).toBe(
+			"server-paid-key",
+		);
 		expect(
-			getPaidGeminiKey({ operation: "ops-script", mode: "fast", route: "sync" }),
+			getPaidGeminiKey({ operation: "owner-continue-paid", route: "sync" }),
 		).toBe("server-paid-key");
-		expect(
-			getPaidGeminiKey({
-				operation: "owner-continue-paid",
-				mode: "fast",
-				route: "sync",
-			}),
-		).toBe("server-paid-key");
-		// Even a "cheap ops-script" would be held to the same rule.
-		expect(() =>
-			getPaidGeminiKey({ operation: "ops-script", mode: "cheap", route: "sync" }),
-		).toThrow(CheapPaidWhileFreeAvailableError);
+		const src = readFileSync(
+			fileURLToPath(new URL("../../lib/gemini-paid-key.ts", import.meta.url)),
+			"utf8",
+		);
+		// The job-less arm of the union must not accept a mode at all.
+		expect(src).toMatch(/"translation"[\s\S]{0,400}route: "sync" \| "batch";\s*\}/);
 		expect(hasPaidGeminiKey()).toBe(true);
 	});
 });

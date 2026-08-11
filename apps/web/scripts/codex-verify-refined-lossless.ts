@@ -382,11 +382,7 @@ async function callGeminiDeleteIds(lines: RefinedLine[]): Promise<{
 }> {
 	// Routed through the paid-key gate (round-7 #5): even an operator-run
 	// verification script must name its use to read the paid credential.
-	const apiKey = getPaidGeminiKey({
-		operation: "ops-script",
-		mode: "fast",
-		route: "sync",
-	});
+	const apiKey = getPaidGeminiKey({ operation: "ops-script", route: "sync" });
 	if (!apiKey) {
 		return {
 			deleteIds: new Set(),
