@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ─── Mock every heavy dependency workflows/transcribe.ts imports ──────────────
 // Mirrors transcribe-batch-mode.test.ts; only the pieces this suite exercises
 // are given real behaviour.
+const ROW = vi.hoisted(() => ({
+	metadata: {} as Record<string, unknown>,
+}));
 vi.mock("@cap/database", () => ({
-	// submitCheapChunkBatch reads the row's aiBatchJobs before submitting.
+	// submitCheapChunkBatch reads the row's aiBatchJobs + cycle counters
+	// before submitting.
 	db: () => ({
 		select: () => ({
 			from: () => ({
-				where: () => ({ limit: async () => [{ metadata: {} }] }),
+				where: () => ({ limit: async () => [{ metadata: ROW.metadata }] }),
 			}),
 		}),
 	}),
@@ -155,6 +159,78 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 			fileName: "files/test",
 		});
 		ENV.value = { GEMINI_API_KEY: "server-key" };
+		ROW.metadata = {};
+		H.patchVideoMetadata.mockReset();
+	});
+
+	// ─── THE CYCLE BOUND (round-7 #1/#4): Batch↔free must not loop forever ───
+
+	it("a chunk that exhausted its Batch budget degrades to a GAP; the rest of the video completes and NO new Batch is billed", async () => {
+		ROW.metadata = { aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 3 };
+		const { AiQuotaWaitError } = await import("@/lib/ai-quota-wait");
+		const fn = chunkFn(async (startSec) => {
+			if (startSec === 0) throw new AiQuotaWaitError("free quota exhausted");
+			return "WEBVTT\n\nOK";
+		});
+
+		const out = await transcribeAudioChunks(
+			TWO_CHUNKS,
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+			fn,
+		);
+
+		expect(out).toContain("OK");
+		expect(submitChunkBatch).not.toHaveBeenCalled();
+	});
+
+	it("single-chunk video past its Batch budget throws a NON-quota error (terminal ERROR, nothing resurrects it)", async () => {
+		ROW.metadata = { aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 3 };
+		ENV.value = {
+			GEMINI_API_KEY: "server-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		};
+		transcribeWithGemini.mockRejectedValue(quotaError());
+
+		const err = await transcribeAudioChunks(
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+		).catch((e) => e);
+
+		const { isAiQuotaWaitError } = await import("@/lib/ai-quota-wait");
+		expect(isAiQuotaWaitError(err)).toBe(false);
+		expect((err as Error).message).toContain("exhausted");
+		expect(submitChunkBatch).not.toHaveBeenCalled();
+	});
+
+	it("each submit books the cycle counter: same chunk increments, a different chunk resets (progress)", async () => {
+		ROW.metadata = {};
+		const { AiQuotaWaitError } = await import("@/lib/ai-quota-wait");
+		const fn = chunkFn(async () => {
+			throw new AiQuotaWaitError("free quota exhausted");
+		});
+
+		await transcribeAudioChunks(
+			TWO_CHUNKS,
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+			fn,
+		).catch(() => {});
+
+		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
+		const patchFn = H.patchVideoMetadata.mock.calls.at(-1)?.[1] as (
+			current: Record<string, unknown>,
+		) => Record<string, unknown>;
+		expect(patchFn).toBeDefined();
+		// Same chunk again → increment.
+		expect(
+			patchFn({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 1 }),
+		).toMatchObject({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 2 });
+		// A different chunk previously → reset to 1 (progress).
+		expect(
+			patchFn({ aiBatchChunkStartSec: 600, aiBatchChunkSubmits: 3 }),
+		).toMatchObject({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 1 });
 	});
 
 	// ─── OWNER DECISION + INVARIANT (round-6): cheap never bills full price ──

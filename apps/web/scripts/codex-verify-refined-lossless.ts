@@ -3,6 +3,8 @@ import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+// Relative import: scripts may run under tsx without the "@/" alias mapping.
+import { getPaidGeminiKey } from "../lib/gemini-paid-key";
 
 const videoId = process.argv[2] ?? "151qnwcyxkarpdk";
 const GEMINI_SUMMARY_MODEL = "gemini-3-flash-preview";
@@ -378,7 +380,9 @@ async function callGeminiDeleteIds(lines: RefinedLine[]): Promise<{
 	outputTokens: number;
 	skipped: boolean;
 }> {
-	const apiKey = process.env.GEMINI_API_KEY;
+	// Routed through the paid-key gate (round-7 #5): even an operator-run
+	// verification script must name its use to read the paid credential.
+	const apiKey = getPaidGeminiKey({ operation: "ops-script" });
 	if (!apiKey) {
 		return {
 			deleteIds: new Set(),

@@ -68,11 +68,16 @@ describe("INVARIANT: a cheap job never bills the full-price path", () => {
 
 describe("BOUNDARY: only lib/gemini-paid-key.ts reads the paid env var on the AI path", () => {
 	const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-	const SCAN_DIRS = ["lib", "workflows", "app", "actions", "hooks"];
+	const SCAN_DIRS = ["lib", "workflows", "app", "actions", "hooks", "scripts"];
 	const GATE_FILE = join("lib", "gemini-paid-key.ts");
-	// Property access on the PAID key; `GEMINI_API_KEY_FREE` and message
-	// strings ("set GEMINI_API_KEY") do not match this shape.
-	const DIRECT_READ = /\.GEMINI_API_KEY(?!_)/;
+	// Every READ shape (round-7 #5) — property access, bracket access, and
+	// destructuring off serverEnv()/process.env. `GEMINI_API_KEY_FREE` and
+	// message strings ("set GEMINI_API_KEY") do not match these shapes.
+	const DIRECT_READ_PATTERNS: RegExp[] = [
+		/\.GEMINI_API_KEY(?!_)/, // env.GEMINI_API_KEY / process.env.GEMINI_API_KEY
+		/\[\s*["'`]GEMINI_API_KEY["'`]\s*\]/, // process.env["GEMINI_API_KEY"]
+		/\{[^{}]*\bGEMINI_API_KEY\b(?!_)[^{}]*\}\s*=/, // const { GEMINI_API_KEY } = ...
+	];
 
 	function walk(dir: string, out: string[] = []): string[] {
 		for (const entry of readdirSync(dir)) {
@@ -86,12 +91,13 @@ describe("BOUNDARY: only lib/gemini-paid-key.ts reads the paid env var on the AI
 		return out;
 	}
 
-	it("no direct .GEMINI_API_KEY read exists outside the gate module", () => {
+	it("no direct GEMINI_API_KEY read (dot, bracket, or destructuring) exists outside the gate module — scripts/ included", () => {
 		const offenders: string[] = [];
 		for (const dir of SCAN_DIRS) {
 			for (const file of walk(join(APP_ROOT, dir))) {
 				if (file.endsWith(GATE_FILE)) continue;
-				if (DIRECT_READ.test(readFileSync(file, "utf8"))) {
+				const source = readFileSync(file, "utf8");
+				if (DIRECT_READ_PATTERNS.some((pattern) => pattern.test(source))) {
 					offenders.push(file.slice(APP_ROOT.length));
 				}
 			}

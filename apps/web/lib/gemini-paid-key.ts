@@ -26,6 +26,8 @@ export type PaidGeminiUse =
 	| { operation: "generation"; mode: AiSpeedMode }
 	| { operation: "translation" }
 	| { operation: "chat" }
+	/** Operator-run verification/maintenance scripts (never a request path). */
+	| { operation: "ops-script" }
 	/** The owner's explicit "continue on paid" click — his money, his call. */
 	| { operation: "owner-continue-paid" };
 

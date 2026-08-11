@@ -151,6 +151,63 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
 	});
 
+	it("cheap + owner key + NO server key + no free key: runs on the OWNER'S OWN key — the only paid path that exists (round-7 #3)", async () => {
+		// Without a server key the discounted Batch route cannot exist, so
+		// parking would burn the ladder for a day and die. The owner's saved
+		// personal key is his deliberate configuration — use it.
+		H.serverEnv.mockReturnValue({});
+		H.transcribeWithGemini.mockResolvedValue(PAID_RESULT);
+
+		const out = await transcribeAudio(
+			"https://a/x.mp3",
+			300,
+			"encrypted-owner-key",
+			CHEAP_CTX,
+		);
+
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(
+			(H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey,
+		).toBe("decrypted-key");
+	});
+
+	it("cheap + owner key + NO server key + free FAILS: falls back to the owner's key, not the ladder (round-7 #3)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("429 RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(PAID_RESULT);
+
+		const out = await transcribeAudio(
+			"https://a/x.mp3",
+			300,
+			"encrypted-owner-key",
+			CHEAP_CTX,
+		);
+
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+		expect(
+			(H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey,
+		).toBe("decrypted-key");
+	});
+
+	it("cheap + SERVER key present: still goes to Batch, never the owner-key sync fallback", async () => {
+		// The owner-key path is strictly the no-server-key deployment's escape;
+		// with a server key the discounted Batch remains the cheapest paid path.
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
+
+		const err = await transcribeAudio(
+			"https://a/x.mp3",
+			300,
+			"encrypted-owner-key",
+			CHEAP_CTX,
+		).catch((e) => e);
+
+		expect((err as Error).name).toBe("AiQuotaWaitError");
+		expect(H.transcribeWithGemini).not.toHaveBeenCalled();
+	});
+
 	it("fast free probe is bounded: single attempt (maxAttempts=1) with an abort signal", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini.mockResolvedValue(FREE_RESULT);

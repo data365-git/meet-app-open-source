@@ -133,8 +133,10 @@ export function withQuotaRetryScheduled(
 }
 
 /** A cheap job with a pending durable Batch is owned by the poll-batch-jobs
- * collector, not this recovery cron. Skip the normal stale re-kick for it —
- * EXCEPT the four-hour paid flip, which is checked first and always wins. */
+ * collector, not this recovery cron — skip the normal stale re-kick for it.
+ * (The old four-hour paid flip that used to override this was removed in
+ * round 6; the Batch↔free cycle is bounded per chunk instead — see
+ * MAX_SAME_CHUNK_BATCH_SUBMITS in workflows/transcribe.ts.) */
 export function hasPendingBatchJobs(metadata: VideoMetadata): boolean {
 	return Array.isArray(metadata.aiBatchJobs) && metadata.aiBatchJobs.length > 0;
 }

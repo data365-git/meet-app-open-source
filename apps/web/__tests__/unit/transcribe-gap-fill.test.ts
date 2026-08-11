@@ -195,6 +195,36 @@ describe("fillTranscriptGaps", () => {
 		expect(out.transcription).toContain("late");
 	});
 
+	it("a QUOTA-WAIT during a span also degrades to a gap — a finished transcript is never thrown away (round-7 #2)", async () => {
+		// Gap-fill spans are never submitted to Batch, so rethrowing the cheap
+		// quota-wait here parked a FULLY TRANSCRIBED video, burned a day of
+		// ladder re-kicks (each re-extracting audio) and ended in ERROR.
+		const { AiQuotaWaitError } = await import("@/lib/ai-quota-wait");
+		const holey = vtt([[854, 860, "late"]]);
+		const out = await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null,
+				context: { ...ctx(), aiSpeedMode: "cheap" },
+				mergedVtt: holey, totalDurationSec: 900,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) =>
+					spans.map((s, i) => ({
+						key: `k${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+					})),
+				transcribeFn: async () => {
+					throw new AiQuotaWaitError("free quota exhausted mid-gap-fill");
+				},
+				cleanupFn: async () => {},
+			},
+		);
+		expect(out.remainingGaps).toEqual([{ startSec: 0, endSec: 854 }]);
+		expect(out.transcription).toContain("late");
+	});
+
 	it("survives a wholesale extraction failure (returns original + gaps)", async () => {
 		const holey = vtt([[854, 860, "late"]]);
 		const out = await fillTranscriptGaps(

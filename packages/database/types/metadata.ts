@@ -83,6 +83,16 @@ export interface VideoMetadata {
 	 */
 	aiProgressAt?: string;
 	/**
+	 * Batch↔free cycle bound (round-7 #1): the chunk startSec of the most
+	 * recent cheap Batch submit, and how many consecutive submits that SAME
+	 * chunk has had. A different chunk submitting resets the count (that is
+	 * progress); reaching MAX_SAME_CHUNK_BATCH_SUBMITS means the chunk is
+	 * unprocessable — it degrades to a transcript gap instead of billing
+	 * another Batch forever. Cleared on successful transcription.
+	 */
+	aiBatchChunkStartSec?: number;
+	aiBatchChunkSubmits?: number;
+	/**
 	 * Fine sub-phase marker inside the "transcribe" step, written by the workflow
 	 * at the moment the phase actually starts — the UI must never claim a step it
 	 * cannot prove from metadata. "extract_audio" = ffmpeg is splitting the video
