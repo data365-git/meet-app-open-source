@@ -20,22 +20,25 @@ import type { VideoMetadata } from "@cap/database/types";
  *  - a weekday followed by a comma ("Monday, ...") — locale date formatting,
  *    not a way humans start titles.
  */
-const MACHINE_TITLE_PATTERNS: RegExp[] = [
-	// Time-of-day token: "6h59m PM", "2.45 PM", "14:32", "14:32:05"
-	/\b\d{1,2}[:h.]\d{2}(?:m|:\d{2})?\s*(?:AM|PM)\b/i,
-	/\b\d{1,2}:\d{2}(?::\d{2})?\b/,
-	// ISO-ish date: "2026-08-10", "2026_08_10", "2026.08.10"
-	/\b\d{4}[-_.]\d{2}[-_.]\d{2}\b/,
-	// Camera / phone recorder defaults: "IMG_1234", "VID-20260810", "REC 003"
+// Recorder/camera default NAMES — these shapes are whole-name defaults, so a
+// prefix match is the verdict.
+const MACHINE_NAME_PREFIXES: RegExp[] = [
+	// "IMG_1234", "VID-20260810", "REC 003", "DSC_0042"
 	/^(?:IMG|VID|MOV|REC|DSC)[-_ ]?\d+/i,
-	// Screen recorder defaults
 	/^screen[-_ ]?record/i,
 	/^screenrecorder\b/i,
 	/^untitled\b/i,
-	// Locale date formatting starts with a weekday + comma ("Monday, ...") —
-	// not a way humans start titles.
-	/^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),/i,
 ];
+
+// Timestamp TOKENS. A token alone does not make a title machine-formatted —
+// humans put dates and times inside real phrases ("2026-08-10 team sync",
+// "Sprint review 10:30"). The verdict below requires that after removing the
+// tokens essentially NOTHING is left: the timestamp must BE the title, not
+// appear in it (round-5 #4 — substring matching silently renamed human
+// titles).
+const TIME_TOKEN = /\b\d{1,2}[:h.]\d{2}(?:m|:\d{2})?\s*(?:AM|PM)\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/gi;
+const DATE_TOKEN = /\b\d{4}[-_.]\d{2}[-_.]\d{2}\b/g;
+const WEEKDAY_PREFIX = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),/i;
 
 export function isMachineFormattedTitle(title: string): boolean {
 	const t = title
@@ -43,7 +46,23 @@ export function isMachineFormattedTitle(title: string): boolean {
 		// " (1)", " (12)" duplicate-file counters don't change the verdict.
 		.replace(/\s*\(\d+\)\s*$/, "");
 	if (!t) return true;
-	return MACHINE_TITLE_PATTERNS.some((pattern) => pattern.test(t));
+	if (MACHINE_NAME_PREFIXES.some((pattern) => pattern.test(t))) return true;
+
+	const hasTimestampToken =
+		WEEKDAY_PREFIX.test(t) ||
+		(t.match(TIME_TOKEN) ?? []).length > 0 ||
+		(t.match(DATE_TOKEN) ?? []).length > 0;
+	if (!hasTimestampToken) return false;
+
+	// Strip every timestamp-ish token; if any real word (2+ letters) survives,
+	// a human composed a phrase AROUND the timestamp — protect it.
+	const residue = t
+		.replace(WEEKDAY_PREFIX, " ")
+		.replace(TIME_TOKEN, " ")
+		.replace(DATE_TOKEN, " ")
+		.replace(/\b(?:AM|PM|at)\b/gi, " ");
+	const words = residue.match(/\p{L}{2,}/gu) ?? [];
+	return words.length === 0;
 }
 
 /**

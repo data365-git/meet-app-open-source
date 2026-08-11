@@ -17,6 +17,14 @@ const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
 // being load-bearing when the clock became time-since-progress.
 export const CHEAP_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
 
+/** The automatic paid continuation gets a bounded number of failures before
+ * the row is declared terminally dead (ERROR + ops alert). Without a bound, a
+ * budget-exhausted org's cheap job past 4h re-attempted the flip every tick
+ * forever: permanent spinner, no alert, no exit. 3 tolerates a transient
+ * failure (network blip) while a genuinely exhausted budget terminates within
+ * ~1.5h of ticks. */
+export const MAX_PAID_FLIP_ATTEMPTS = 3;
+
 /** The job's last evidence of life: the progress heartbeat, or the claim
  * time for rows that never got a heartbeat (pre-heartbeat claims). */
 export function lastTranscriptionProgressAt(

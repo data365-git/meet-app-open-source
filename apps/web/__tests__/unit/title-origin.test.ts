@@ -68,6 +68,21 @@ describe("isMachineFormattedTitle", () => {
 		// A year alone is not a timestamp shape — humans write these.
 		expect(isMachineFormattedTitle("Yig'ilish 2026")).toBe(false);
 	});
+
+	it("a date or time INSIDE a human phrase is not a machine name — the timestamp must BE the whole title (round-5 #4)", () => {
+		// User-picked filename with a date in it:
+		expect(isMachineFormattedTitle("2026-08-10 team sync")).toBe(false);
+		expect(
+			titleOriginMetadata(titleFromFileName("2026-08-10 team sync.mp4")),
+		).toEqual({});
+		// Loom title with a time in it (colons are legal there):
+		expect(isMachineFormattedTitle("Sprint review 10:30")).toBe(false);
+		expect(titleOriginMetadata("Sprint review 10:30")).toEqual({});
+		// While a PURE timestamp is still machine:
+		expect(isMachineFormattedTitle("2026-08-10 14:32:05")).toBe(true);
+		// ...and a human phrase around a weekday survives too:
+		expect(isMachineFormattedTitle("Monday, retro notes")).toBe(false);
+	});
 });
 
 describe("creation sites route the mark through the helper (no raw literal)", () => {

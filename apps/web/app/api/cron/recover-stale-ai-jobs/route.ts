@@ -15,6 +15,7 @@ import {
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
 	isQuotaRetryDue,
+	MAX_PAID_FLIP_ATTEMPTS,
 	isTranscriptionJobStale,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
@@ -50,6 +51,52 @@ type StaleRefinementCandidate = {
 	name: string;
 	metadata: VideoMetadata | null;
 };
+
+/**
+ * A paid-continuation FAILURE must never be an invisible no-op (round-5 #3):
+ * a budget-exhausted org's cheap job past 4h used to re-attempt the flip on
+ * every tick forever — permanent spinner, no alert, no exit. The flip now has
+ * a bounded budget: below MAX_PAID_FLIP_ATTEMPTS the failure is counted
+ * (server-side JSON_SET — no snapshot spread) and retried next tick; at the
+ * bound the row goes terminal ERROR with an ops alert, the same exit every
+ * other exhausted state has.
+ */
+async function recordPaidFlipFailure(
+	candidate: { id: Video.VideoId; name: string },
+	metadata: VideoMetadata,
+	reason: string,
+): Promise<"retry" | "dead"> {
+	const attempts = (metadata.paidFlipAttempts ?? 0) + 1;
+	if (attempts < MAX_PAID_FLIP_ATTEMPTS) {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.paidFlipAttempts', ${attempts})`,
+			})
+			.where(eq(videos.id, candidate.id));
+		return "retry";
+	}
+	await db()
+		.update(videos)
+		.set({
+			transcriptionStatus: "ERROR",
+			// FAILED (not QUOTA), so the quota loop cannot resurrect what the
+			// flip already proved unpayable.
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.transcriptionError', JSON_OBJECT(
+					'code', 'FAILED',
+					'message', ${`Paid continuation failed after ${attempts} attempts: ${reason}`.slice(0, 500)},
+					'at', ${new Date().toISOString()}
+				)
+			)`,
+		})
+		.where(eq(videos.id, candidate.id));
+	await sendOpsAlert(
+		`AI job dead after ${attempts} failed paid continuations: ${candidate.id} (${candidate.name})`,
+	);
+	return "dead";
+}
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -200,11 +247,15 @@ export async function GET(request: Request) {
 					ownerId: candidate.ownerId,
 					phase: "transcription",
 				});
-				if (!result.success) {
-					throw new Error(result.message);
+				if (result.success) {
+					flippedToPaid++;
+					retried++;
+				} else if (
+					(await recordPaidFlipFailure(candidate, metadata, result.message)) ===
+					"dead"
+				) {
+					gaveUp++;
 				}
-				flippedToPaid++;
-				retried++;
 			} else if (hasPendingBatchJobs(metadata)) {
 				// The poll-batch-jobs collector owns this cheap job's pending Batch;
 				// re-kicking here would create a duplicate non-idempotent Batch.
@@ -215,23 +266,39 @@ export async function GET(request: Request) {
 			) {
 				// Quota-parked WITHOUT a pending Batch (the branch above owns the
 				// with-Batch case). This state's owner is THIS loop and its exit is
-				// the SAME bounded backoff ladder the quota-ERROR loop uses — free
-				// re-kicks at 30m/1h/2h/... so the job can still finish FREE when
-				// quota returns, while the 4h paid flip (checked first, the UI's
-				// own "4 soatda avtomatik tezlashadi" promise) remains the ceiling.
-				// History: re-kicking every tick was hourly-ffmpeg noise (round-3
-				// #5); skipping entirely left the no-paid-key deployment with paid
-				// billing as its ONLY exit (round-4 #1). The ladder is the shape
-				// that serves both: bounded, slowing, free.
+				// the SAME backoff schedule the quota-ERROR loop uses. BE HONEST
+				// about what that buys (round-5 #2): the 4h paid flip is checked
+				// FIRST and aiJobStartedAt always exists, so a parked row only
+				// reaches the rungs inside the 4h window — in practice ~3 free
+				// re-kicks (≈1h, 1.5h, 2.5h after claim), then the flip takes every
+				// later tick. That ceiling is DELIBERATE: it is the UI's own
+				// promise ("4 soatda avtomatik tezlashadi") and changing it is an
+				// owner decision, not a cron patch. A free-quota outage longer
+				// than 4h therefore bills a cheap job — by design. The ladder's
+				// later rungs are only reachable for quota-ERROR rows, which have
+				// no flip. History: re-kicking every tick was hourly-ffmpeg noise
+				// (round-3 #5); skipping entirely made paid billing the ONLY exit
+				// (round-4 #1).
 				if (isQuotaRetryDue(metadata, now)) {
-					const nextMetadata: VideoMetadata = {
-						...withQuotaRetryScheduled(metadata, now),
-						processingStartedAt: undefined,
-						aiProgressAt: undefined,
-					};
+					// Server-side JSON_SET (round-5 #5): the `metadata` in hand is a
+					// snapshot from the SELECT at the top of this tick, and a row can
+					// legitimately gain aiBatchJobs while earlier candidates await
+					// (park sequence = submit Batch -> throw -> markQuotaWaiting). A
+					// JS spread would erase that handle and orphan a BILLED Batch.
+					const scheduled = withQuotaRetryScheduled(metadata, now);
 					await db()
 						.update(videos)
-						.set({ metadata: nextMetadata })
+						.set({
+							metadata: sql`JSON_SET(
+								JSON_REMOVE(
+									COALESCE(${videos.metadata}, JSON_OBJECT()),
+									'$.processingStartedAt',
+									'$.aiProgressAt'
+								),
+								'$.quotaRetryAttempts', ${scheduled.quotaRetryAttempts ?? 1},
+								'$.quotaRetryNextAt', ${scheduled.quotaRetryNextAt ?? new Date(now).toISOString()}
+							)`,
+						})
 						.where(eq(videos.id, candidate.id));
 					await transcribeVideo(
 						candidate.id,
@@ -287,11 +354,15 @@ export async function GET(request: Request) {
 					ownerId: candidate.ownerId,
 					phase: "transcription",
 				});
-				if (!result.success) {
-					throw new Error(result.message);
+				if (result.success) {
+					flippedToPaid++;
+					retried++;
+				} else if (
+					(await recordPaidFlipFailure(candidate, metadata, result.message)) ===
+					"dead"
+				) {
+					gaveUp++;
 				}
-				flippedToPaid++;
-				retried++;
 			} else {
 				await db()
 					.update(videos)

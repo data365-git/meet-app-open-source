@@ -71,30 +71,30 @@ describe("extract_audio marker honesty — the live line must never lie", () => 
 		expect(body).not.toMatch(/\.\.\.metadata/);
 	});
 
-	it("the workflow stamps the progress heartbeat where progress really happens", () => {
-		// Claim (validateVideo), extraction done (extractAudio), every completed
-		// chunk (savePartialTranscription) — the recovery cron judges staleness
-		// by time since this stamp.
-		expect(bodyOf("validateVideo")).toMatch(/'\$\.aiProgressAt'/);
-		expect(bodyOf("extractAudio")).toMatch(/aiProgressAt:/);
-		expect(bodyOf("savePartialTranscription")).toMatch(/aiProgressAt:/);
+	it("liveness is a TIMER, not checkpoint stamps: started at workflow start, cleared in finally (round-5 #1)", () => {
+		// extractAudioChunksFromUrl runs download + silencedetect + every
+		// transcode inside ONE await with no progress callback — there is no
+		// boundary to stamp, so stamp-at-boundary schemes always leave a blind
+		// window as long as the slowest await. The heartbeat must tick
+		// independently of the awaits and die with the process.
+		const workflow = bodyOf("transcribeVideoWorkflow");
+		expect(workflow).toMatch(/startTranscriptionHeartbeat\(/);
+		expect(workflow).toMatch(/finally\s*\{\s*stopHeartbeat\(\);/);
+
+		const helperStart = SRC.indexOf("function startTranscriptionHeartbeat");
+		expect(helperStart).toBeGreaterThan(-1);
+		const helper = SRC.slice(helperStart, helperStart + 900);
+		expect(helper).toMatch(/setInterval\(/);
+		expect(helper).toMatch(/clearInterval\(/);
+		expect(helper).toMatch(/aiProgressAt/);
 	});
 
-	it("extraction ITSELF heartbeats: at start (covers the no-chunk-boundary branches) and inside the per-chunk loop (round-4 #4)", () => {
-		// A recording whose download+transcode+upload exceeds the stale
-		// threshold showed no life for the whole extraction, so the cron killed
-		// and duplicated a healthy job. Four stamps: step start, per-chunk loop,
-		// and the two end-of-branch counter writes.
-		const body = bodyOf("extractAudio");
-		const stamps = body.match(/aiProgressAt:/g) ?? [];
-		expect(stamps.length).toBeGreaterThanOrEqual(4);
-		// The per-chunk loop specifically must contain one — the natural
-		// progress boundary for long extractions.
-		const loop = body.slice(
-			body.indexOf("for (const [index, chunk]"),
-			body.indexOf("return { chunks, totalDurationSec }"),
-		);
-		expect(loop).toMatch(/aiProgressAt:/);
+	it("the claim baseline stamp stays in validateVideo; no checkpoint stamps remain in extraction (single liveness owner)", () => {
+		expect(bodyOf("validateVideo")).toMatch(/'\$\.aiProgressAt'/);
+		// Boundary stamps were the failed mechanism (rounds 3-5 each found a
+		// blind window) — the timer owns liveness alone now.
+		expect(bodyOf("extractAudio")).not.toMatch(/aiProgressAt/);
+		expect(bodyOf("savePartialTranscription")).not.toMatch(/aiProgressAt/);
 	});
 
 	it("a SUCCESSFUL transcription refunds the free auto-recover budget (round-4 #5)", () => {

@@ -132,6 +132,34 @@ const LONG_AUDIO_CHUNK_DURATION_SEC = 3 * 60;
 const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 4 * 60;
 const ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR = 220_000;
 
+// Liveness heartbeat interval. Liveness means THE PROCESS IS STILL RUNNING,
+// not "the code reached a checkpoint": extractAudioChunksFromUrl runs a full
+// remote download + silencedetect decode + every per-chunk transcode inside
+// ONE uninterrupted await with no progress callback, so any
+// stamp-at-boundary scheme keeps a blind window as long as the slowest await
+// (rounds 3-5 of the 2026-08-10 review each found one). A timer ticks
+// independently of every await and covers phases not yet written. 5 min vs
+// the 60-min stale threshold and 30-min cron cadence: a live job is never
+// more than 5 min stale (12x margin), and a false-stale would need 11+
+// consecutive stamp writes to fail — at which point the DB is down and
+// recovery semantics are moot. Cost: 12 tiny row-locked writes per hour per
+// ACTIVE job. The timer dies with the process, so a killed container stops
+// stamping automatically — exactly the signal the recovery cron needs.
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+function startTranscriptionHeartbeat(videoId: string): () => void {
+	const stamp = () => {
+		void patchVideoMetadata(videoId, (current) => ({
+			...current,
+			aiProgressAt: new Date().toISOString(),
+		})).catch(() => {});
+	};
+	const timer = setInterval(stamp, HEARTBEAT_INTERVAL_MS);
+	// Never keep the process alive just for the heartbeat.
+	(timer as unknown as { unref?: () => void }).unref?.();
+	return () => clearInterval(timer);
+}
+
 export async function transcribeVideoWorkflow(
 	payload: TranscribeWorkflowPayload,
 ) {
@@ -145,6 +173,11 @@ export async function transcribeVideoWorkflow(
 		await markSkipped(videoId);
 		return { success: true, message: "Transcription disabled - skipped" };
 	}
+
+	// Started AFTER the claim (validateVideo stamps the baseline), cleared in
+	// the finally below whether the job completes, parks, or crashes — a
+	// parked/dead job must stop looking alive so its recovery owner can act.
+	const stopHeartbeat = startTranscriptionHeartbeat(videoId);
 
 	let tempAudioKeys: string[] = [];
 
@@ -224,6 +257,8 @@ export async function transcribeVideoWorkflow(
 		}
 		await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
 		throw error;
+	} finally {
+		stopHeartbeat();
 	}
 
 	await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
@@ -634,13 +669,9 @@ async function extractAudio(
 	// audio" while this step is REALLY running, so the marker is written here at
 	// the step's start (never guessed in the UI) and cleared once per-chunk
 	// transcription progress takes over in savePartialTranscription.
-	// Heartbeat at extraction START too: the single-file and unknown-duration
-	// branches have no chunk boundary to stamp at, so this write is their only
-	// in-extraction proof of life.
 	await patchVideoMetadata(videoId, (current) => ({
 		...current,
 		aiProcessingSubStep: "extract_audio",
-		aiProgressAt: new Date().toISOString(),
 	})).catch(() => {});
 
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
@@ -698,16 +729,6 @@ async function extractAudio(
 					speechEndSec: chunk.speechEndSec,
 					durationSec: chunk.durationSec,
 				});
-
-				// Heartbeat INSIDE the extraction loop — each transcoded+uploaded
-				// chunk is real progress. Without this, a long download/transcode
-				// showed no life for the whole extraction and the cron killed and
-				// duplicated a healthy job (round-4 #4). Cadence = one write per
-				// extracted chunk, the same natural boundary transcription uses.
-				await patchVideoMetadata(videoId, (current) => ({
-					...current,
-					aiProgressAt: new Date().toISOString(),
-				})).catch(() => {});
 			}
 
 			console.log(
@@ -725,8 +746,6 @@ async function extractAudio(
 				aiProcessingSubStep: undefined,
 				transcriptionChunksCompleted: 0,
 				transcriptionChunksTotal: chunks.length,
-				// Heartbeat: finished extraction is proof of life.
-				aiProgressAt: new Date().toISOString(),
 			})).catch(() => {});
 
 			return { chunks, totalDurationSec };
@@ -774,8 +793,6 @@ async function extractAudio(
 			aiProcessingSubStep: undefined,
 			transcriptionChunksCompleted: 0,
 			transcriptionChunksTotal: 1,
-			// Heartbeat: finished extraction is proof of life.
-			aiProgressAt: new Date().toISOString(),
 		})).catch(() => {});
 
 		return {
@@ -1875,10 +1892,6 @@ async function savePartialTranscription(
 				// Chunk progress is now the live truth — the audio-extraction
 				// sub-phase is over (undefined keys are dropped on JSON serialize).
 				aiProcessingSubStep: undefined,
-				// Progress HEARTBEAT: a completed chunk is proof of life, and the
-				// recovery cron judges staleness by time since this stamp. Rides
-				// this existing per-chunk write — zero extra write volume.
-				aiProgressAt: new Date().toISOString(),
 			} as VideoMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
@@ -1923,6 +1936,7 @@ async function saveTranscription(
 	// at attempts=2 and went straight to the paid flip with zero free
 	// re-kicks — against the owner's explicit cheap choice.
 	delete md.autoRecoverAttempts;
+	delete md.paidFlipAttempts;
 	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
 	// analysis does not inherit this completed job's timestamp and immediately
 	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.

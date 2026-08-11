@@ -229,14 +229,75 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			"cheap",
 		);
 		expect(body.quotaRetried).toBe(1);
-		// The re-kick books the next ladder slot (bounded budget), so it does
-		// NOT fire again every tick.
-		const scheduled = state.setCalls.find(
-			(setArg) =>
-				(setArg.metadata as { quotaRetryAttempts?: number } | undefined)
-					?.quotaRetryAttempts === 1,
-		);
+		// The re-kick books the next ladder slot via a server-side JSON_SET
+		// merge (round-5 #5): a plain-object spread of the tick-start snapshot
+		// could erase an aiBatchJobs handle the workflow gained meanwhile,
+		// orphaning a BILLED Batch.
+		const scheduled = state.setCalls
+			.map(
+				(setArg) =>
+					setArg.metadata as
+						| { strings?: TemplateStringsArray; values?: unknown[] }
+						| undefined,
+			)
+			.find((metadata) => {
+				const text = metadata?.strings?.join("?") ?? "";
+				return text.includes("$.quotaRetryAttempts");
+			});
 		expect(scheduled).toBeDefined();
+		const scheduledText = scheduled?.strings?.join("?") ?? "";
+		expect(scheduledText).toContain("JSON_SET");
+		expect(scheduledText).toContain("JSON_REMOVE");
+		expect(scheduled?.values).toContain(1);
+	});
+
+	it("a FAILED paid flip is counted, and at the bound the row goes terminal ERROR + ops alert (round-5 #3)", async () => {
+		// The reachable trigger: transcribeVideo inside continueAiJobOnPaid
+		// returns "AI budget exceeded" for any org over budget. Silence here
+		// meant the flip re-ran every 30-min tick forever: permanent spinner,
+		// no alert, no exit.
+		continueAiJobOnPaidMock.mockResolvedValue({
+			success: false,
+			message: "AI budget exceeded",
+		});
+		const fiveHoursAgo = new Date(
+			Date.now() - 5 * 60 * 60 * 1000,
+		).toISOString();
+
+		// First failure: counted (server-side), not silent, not yet dead.
+		armWithCandidate({
+			aiMode: "cheap",
+			processingStartedAt: fiveHoursAgo,
+			aiJobStartedAt: fiveHoursAgo,
+		});
+		await GET(cronRequest());
+		const counted = state.setCalls
+			.map(
+				(setArg) =>
+					setArg.metadata as { strings?: TemplateStringsArray } | undefined,
+			)
+			.find((metadata) =>
+				(metadata?.strings?.join("?") ?? "").includes("$.paidFlipAttempts"),
+			);
+		expect(counted).toBeDefined();
+		expect(sendOpsAlertMock).not.toHaveBeenCalled();
+
+		// At the bound: terminal ERROR + ops alert — the same exit every other
+		// exhausted state has.
+		state.selectCall = 0;
+		state.setCalls = [];
+		armWithCandidate({
+			aiMode: "cheap",
+			paidFlipAttempts: 2,
+			processingStartedAt: fiveHoursAgo,
+			aiJobStartedAt: fiveHoursAgo,
+		});
+		await GET(cronRequest());
+		const dead = state.setCalls.find(
+			(setArg) => setArg.transcriptionStatus === "ERROR",
+		);
+		expect(dead).toBeDefined();
+		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("a quota-PARKED cheap job whose ladder slot is NOT due yet is left alone (no hourly ffmpeg, no flag flicker)", async () => {
