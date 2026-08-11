@@ -4,60 +4,51 @@ import type { AiSpeedMode } from "@/lib/ai-speed-mode";
 /**
  * THE single owner of the PAID Gemini credential on the AI path.
  *
- * Judge's verdict after five review rounds (2026-08-11): the recurring money
- * defect was never a race, a snapshot or a heartbeat — it was the ABSENCE OF
- * A BOUNDARY. With `serverEnv().GEMINI_API_KEY` ambiently in scope, every
- * error path's default was the full-price paid call. Now every paid use must
- * name WHAT it is (operation, mode, route) to receive the key, and a
- * source-scan test fails the build if any AI-path file reads the env var
- * directly.
+ * The boundary is the structural fix (judge, 2026-08-11): with the key
+ * ambiently in scope, every error path's default was a paid call. Every use
+ * must name WHAT it is — operation, mode AND route, no unchecked escape
+ * hatch — and a source-scan test fails the build if any AI-path file reads
+ * the env var directly.
  *
- * THE INVARIANT (owner decision, his words: "imkon qadar bepuldan
- * foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"): cheap mode uses
- * free as much as possible and, when free is exhausted, the CHEAPEST paid
- * path available — for transcription that is the durable Batch route
- * (~half price). Cheap transcription must therefore NEVER receive the key
- * for the full-price synchronous route; requesting it throws. For
- * generation/translation/chat no discounted route exists, so the synchronous
- * call IS the cheapest available paid path and is allowed in any mode.
+ * THE INVARIANT, corrected in round 8 to the owner's ACTUAL rule ("imkon
+ * qadar bepuldan foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"):
+ * a cheap job never calls a paid API WHILE FREE QUOTA IS AVAILABLE. Paying —
+ * on whatever the cheapest available route is — once free is exhausted is
+ * the REQUESTED behaviour, not a defect. So a cheap synchronous paid call
+ * must declare `freeExhausted: true`, meaning the free chain was actually
+ * tried (or does not exist) for THIS call. The earlier absolute form
+ * ("cheap never bills full price") was the coordinator's extrapolation, not
+ * the owner's rule, and drove seven rounds of park/collector complexity.
  */
-export type PaidGeminiUse =
-	| { operation: "transcription"; mode: AiSpeedMode; route: "sync" | "batch" }
-	| { operation: "generation"; mode: AiSpeedMode }
-	| { operation: "translation" }
-	| { operation: "chat" }
-	/** Operator-run verification/maintenance scripts (never a request path). */
-	| { operation: "ops-script" }
-	/** The owner's explicit "continue on paid" click — his money, his call. */
-	| { operation: "owner-continue-paid" };
+export type PaidGeminiUse = {
+	operation:
+		| "transcription"
+		| "generation"
+		| "translation"
+		| "chat"
+		/** The owner's explicit "continue on paid" click — his money, his call. */
+		| "owner-continue-paid"
+		/** Operator-run verification/maintenance scripts (never a request path). */
+		| "ops-script";
+	mode: AiSpeedMode;
+	route: "sync" | "batch";
+	/** REQUIRED TRUE for cheap synchronous calls: the free chain has actually
+	 * been tried and exhausted (or no free key exists) for this call. */
+	freeExhausted?: boolean;
+};
 
-export class CheapFullPriceViolationError extends Error {
+export class CheapPaidWhileFreeAvailableError extends Error {
 	constructor() {
 		super(
-			"INVARIANT VIOLATION: cheap transcription must never use the full-price synchronous Gemini path (owner decision 2026-08-11: free first, then the discounted Batch route)",
+			"INVARIANT VIOLATION: a cheap job must not call a paid Gemini API while free quota is available — the caller did not declare freeExhausted (owner rule 2026-08-11: free first, paid only when free is out)",
 		);
-		this.name = "CheapFullPriceViolationError";
-	}
-}
-
-/** Runtime backstop for the invariant, usable at call sites that resolve
- * their key from elsewhere too (e.g. the video owner's personal key — his
- * money deserves the same protection). */
-export function assertCheapNeverUsesFullPriceSync(
-	mode: AiSpeedMode | undefined,
-): void {
-	if (mode === "cheap") {
-		throw new CheapFullPriceViolationError();
+		this.name = "CheapPaidWhileFreeAvailableError";
 	}
 }
 
 export function getPaidGeminiKey(use: PaidGeminiUse): string | undefined {
-	if (
-		use.operation === "transcription" &&
-		use.mode === "cheap" &&
-		use.route === "sync"
-	) {
-		throw new CheapFullPriceViolationError();
+	if (use.mode === "cheap" && use.route === "sync" && use.freeExhausted !== true) {
+		throw new CheapPaidWhileFreeAvailableError();
 	}
 	return serverEnv().GEMINI_API_KEY;
 }

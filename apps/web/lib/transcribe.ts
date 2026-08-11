@@ -269,19 +269,32 @@ export async function transcribeVideo(
 		// start WITHOUT an override must defer, server-side, to whatever mode is
 		// already claimed in the row and only fall back to the resolved default
 		// when the row has none.
+		// A FRESH (owner-initiated) start gets a fresh recovery budget: without
+		// this, a video that ever burned its auto-recover or quota-retry budget
+		// could never be successfully retried after a terminal state — only
+		// saveTranscription cleared the counters, and it only runs on success
+		// (round-8 re-verification (b)). A cron RETRY must NOT refund itself.
+		const claimBase = isRetry
+			? sql`COALESCE(${videos.metadata}, JSON_OBJECT())`
+			: sql`JSON_REMOVE(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.autoRecoverAttempts',
+					'$.quotaRetryAttempts',
+					'$.quotaRetryNextAt'
+				)`;
 		await db()
 			.update(videos)
 			.set({
 				transcriptionStatus: "PROCESSING",
 				metadata: speedModeOverride
 					? sql`JSON_SET(
-						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						${claimBase},
 						'$.processingStartedAt', ${new Date().toISOString()},
 						'$.aiProgressAt', ${new Date().toISOString()},
 						'$.aiMode', ${speedModeOverride}
 					)`
 					: sql`JSON_SET(
-						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						${claimBase},
 						'$.processingStartedAt', ${new Date().toISOString()},
 						'$.aiProgressAt', ${new Date().toISOString()},
 						'$.aiMode', COALESCE(

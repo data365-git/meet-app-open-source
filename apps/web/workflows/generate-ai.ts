@@ -972,12 +972,6 @@ export async function callAiApi(
 ): Promise<AiApiResult> {
 	const { json = true, maxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS } = options;
 	const env = serverEnv();
-	// Generation has no discounted route, so the synchronous paid call IS the
-	// cheapest available paid path in every mode — allowed by the gate.
-	const apiKey = getPaidGeminiKey({
-		operation: "generation",
-		mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
-	});
 	const freeKey = env.GEMINI_API_KEY_FREE;
 	let freeInputTokens = 0;
 	let freeOutputTokens = 0;
@@ -1057,6 +1051,15 @@ export async function callAiApi(
 		}
 	}
 
+	// Paid key resolved only HERE, after the free chain above has run — so a
+	// cheap generation call can truthfully declare its free chain exhausted
+	// (generation has no discounted route; sync IS its cheapest paid path).
+	const apiKey = getPaidGeminiKey({
+		operation: "generation",
+		mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
+		route: "sync",
+		...(context.aiSpeedMode === "cheap" ? { freeExhausted: true } : {}),
+	});
 	if (!apiKey) {
 		console.warn("[generate-ai] GEMINI_API_KEY not set, skipping AI call");
 		return {

@@ -225,6 +225,36 @@ describe("fillTranscriptGaps", () => {
 		expect(out.transcription).toContain("late");
 	});
 
+	it("cheap gap-fill is FREE-ONLY: spans are transcribed with freeOnly=true so the paid path is never billed for polish (round-8)", async () => {
+		const holey = vtt([[854, 860, "late"]]);
+		const seenContexts: Array<{ freeOnly?: boolean }> = [];
+		await fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null,
+				context: { ...ctx(), aiSpeedMode: "cheap" },
+				mergedVtt: holey, totalDurationSec: 900,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) =>
+					spans.map((s, i) => ({
+						key: `k${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+					})),
+				transcribeFn: async (_url, _dur, _key, spanContext) => {
+					seenContexts.push(spanContext as { freeOnly?: boolean });
+					return "WEBVTT\n\n";
+				},
+				cleanupFn: async () => {},
+			},
+		);
+		expect(seenContexts.length).toBeGreaterThan(0);
+		for (const c of seenContexts) {
+			expect(c.freeOnly).toBe(true);
+		}
+	});
+
 	it("survives a wholesale extraction failure (returns original + gaps)", async () => {
 		const holey = vtt([[854, 860, "late"]]);
 		const out = await fillTranscriptGaps(

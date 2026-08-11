@@ -116,7 +116,11 @@ async function callGeminiJson(
 	prompt: string,
 	context: AiCallContext,
 ): Promise<string> {
-	const apiKey = getPaidGeminiKey({ operation: "translation" });
+	const apiKey = getPaidGeminiKey({
+		operation: "translation",
+		mode: "fast",
+		route: "sync",
+	});
 	if (!apiKey) {
 		throw new Error("Missing GEMINI_API_KEY");
 	}

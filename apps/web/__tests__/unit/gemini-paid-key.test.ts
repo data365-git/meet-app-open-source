@@ -20,32 +20,42 @@ vi.mock("@cap/env", () => ({
 }));
 
 import {
-	assertCheapNeverUsesFullPriceSync,
-	CheapFullPriceViolationError,
+	CheapPaidWhileFreeAvailableError,
 	getPaidGeminiKey,
 	hasPaidGeminiKey,
 } from "@/lib/gemini-paid-key";
 
-describe("INVARIANT: a cheap job never bills the full-price path", () => {
-	it("cheap transcription can NOT obtain the key for the synchronous route", () => {
+describe("INVARIANT (owner's actual rule, round-8): a cheap job never pays WHILE FREE IS AVAILABLE", () => {
+	it("a cheap sync call WITHOUT the freeExhausted declaration is refused", () => {
 		expect(() =>
 			getPaidGeminiKey({
 				operation: "transcription",
 				mode: "cheap",
 				route: "sync",
 			}),
-		).toThrow(CheapFullPriceViolationError);
+		).toThrow(CheapPaidWhileFreeAvailableError);
 	});
 
-	it("the runtime backstop protects owner-key call sites too", () => {
-		expect(() => assertCheapNeverUsesFullPriceSync("cheap")).toThrow(
-			CheapFullPriceViolationError,
-		);
-		expect(() => assertCheapNeverUsesFullPriceSync("fast")).not.toThrow();
-		expect(() => assertCheapNeverUsesFullPriceSync(undefined)).not.toThrow();
+	it("a cheap sync call AFTER the free chain is exhausted receives the key — paying then is the REQUESTED behaviour", () => {
+		expect(
+			getPaidGeminiKey({
+				operation: "transcription",
+				mode: "cheap",
+				route: "sync",
+				freeExhausted: true,
+			}),
+		).toBe("server-paid-key");
+		expect(
+			getPaidGeminiKey({
+				operation: "generation",
+				mode: "cheap",
+				route: "sync",
+				freeExhausted: true,
+			}),
+		).toBe("server-paid-key");
 	});
 
-	it("authorized uses receive the key: fast sync, cheap Batch (the discounted route), generation, owner's explicit click", () => {
+	it("every authorization carries mode AND route — no unchecked escape hatch, ops-script included", () => {
 		expect(
 			getPaidGeminiKey({ operation: "transcription", mode: "fast", route: "sync" }),
 		).toBe("server-paid-key");
@@ -56,12 +66,20 @@ describe("INVARIANT: a cheap job never bills the full-price path", () => {
 				route: "batch",
 			}),
 		).toBe("server-paid-key");
-		expect(getPaidGeminiKey({ operation: "generation", mode: "cheap" })).toBe(
-			"server-paid-key",
-		);
-		expect(getPaidGeminiKey({ operation: "owner-continue-paid" })).toBe(
-			"server-paid-key",
-		);
+		expect(
+			getPaidGeminiKey({ operation: "ops-script", mode: "fast", route: "sync" }),
+		).toBe("server-paid-key");
+		expect(
+			getPaidGeminiKey({
+				operation: "owner-continue-paid",
+				mode: "fast",
+				route: "sync",
+			}),
+		).toBe("server-paid-key");
+		// Even a "cheap ops-script" would be held to the same rule.
+		expect(() =>
+			getPaidGeminiKey({ operation: "ops-script", mode: "cheap", route: "sync" }),
+		).toThrow(CheapPaidWhileFreeAvailableError);
 		expect(hasPaidGeminiKey()).toBe(true);
 	});
 });

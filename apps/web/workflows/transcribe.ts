@@ -17,16 +17,10 @@ import { eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
-import {
-	assertCheapNeverUsesFullPriceSync,
-	getPaidGeminiKey,
-	hasPaidGeminiKey,
-} from "@/lib/gemini-paid-key";
+import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
-	AiQuotaWaitError,
-	isAiQuotaWaitError,
 	isQuotaLikeAiError,
 	isTranscriptionQuotaFailureError,
 	TranscriptionQuotaFailureError,
@@ -44,7 +38,6 @@ import {
 	extractAudioFromUrl,
 	extractAudioSpanFromUrl,
 } from "@/lib/audio-extract";
-import { submitChunkBatch } from "@/lib/gemini-batch-transcribe";
 import {
 	extractSpeakerLabels,
 	mergeChunkedWebVtt,
@@ -58,7 +51,6 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { restoreRussianScript } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
-import { sendOpsAlert } from "@/lib/ops-alert";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
 import {
 	copyCueTimingsByIndex,
@@ -249,18 +241,18 @@ export async function transcribeVideoWorkflow(
 			audio.totalDurationSec == null,
 		);
 	} catch (error) {
-		if (isAiQuotaWaitError(error) && videoData.aiSpeedMode === "cheap") {
-			await markQuotaWaiting(videoId);
-		} else {
-			// QUOTA only when the failure was TAGGED as such at its source. No
-			// loose message sniffing here: this catch also sees fs/storage errors
-			// (e.g. "EDQUOT: disk quota exceeded") that would match a text regex
-			// and get auto-retried forever.
-			await markError(videoId, {
-				code: isTranscriptionQuotaFailureError(error) ? "QUOTA" : "FAILED",
-				message: error instanceof Error ? error.message : String(error),
-			});
-		}
+		// No quota-parking anymore (round-8): cheap no longer throws a
+		// quota-wait — each chunk falls back to paid when free is out, so any
+		// error landing here is a real failure. QUOTA only when the failure was
+		// TAGGED as such at its source (both free AND paid exhausted — the
+		// credits-depleted case the ERROR/QUOTA backoff loop recovers). No
+		// loose message sniffing: this catch also sees fs/storage errors
+		// (e.g. "EDQUOT: disk quota exceeded") that would match a text regex
+		// and get auto-retried forever.
+		await markError(videoId, {
+			code: isTranscriptionQuotaFailureError(error) ? "QUOTA" : "FAILED",
+			message: error instanceof Error ? error.message : String(error),
+		});
 		await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
 		throw error;
 	} finally {
@@ -643,27 +635,6 @@ async function markError(
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function markQuotaWaiting(videoId: string): Promise<void> {
-	"use step";
-
-	const [row] = await db()
-		.select({ metadata: videos.metadata })
-		.from(videos)
-		.where(eq(videos.id, videoId as Video.VideoId))
-		.limit(1);
-	const metadata = (row?.metadata as VideoMetadata) || {};
-
-	await db()
-		.update(videos)
-		.set({
-			metadata: {
-				...metadata,
-				aiQuotaWaiting: true,
-			} as VideoMetadata,
-		})
-		.where(eq(videos.id, videoId as Video.VideoId));
-}
-
 async function extractAudio(
 	videoId: string,
 	userId: string,
@@ -869,7 +840,14 @@ export async function transcribeAudio(
 	audioUrl: string,
 	audioDurationSec: number | null,
 	ownerEncryptedGeminiKey: string | null,
-	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
+	context: {
+		userId: string;
+		orgId: string;
+		videoId: string;
+		aiSpeedMode?: AiSpeedMode;
+		/** Free chain only — no paid fallback (cheap gap-fill). */
+		freeOnly?: boolean;
+	},
 	knownSpeakers: string[] = [],
 ): Promise<string> {
 	"use step";
@@ -892,28 +870,15 @@ export async function transcribeAudio(
 		);
 	}
 
-	// Synchronous path. Fast mode: free probe, then the full-price paid call.
-	// Cheap mode (OWNER DECISION 2026-08-11, his words: "imkon qadar bepuldan
-	// foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"): free as much
-	// as possible; when free fails FOR ANY REASON, continue on the CHEAPEST
-	// paid path — the durable Batch (~half price) — and NEVER fall through to
-	// the full-price sync call below. The AiQuotaWaitError throw is the signal
-	// the chunk layer turns into a Batch submission; each new chunk still
-	// tries free first, so the job returns to free as soon as quota is back.
-	// Round-7 #3: when the deployment has NO server paid key, the discounted
-	// Batch route does not exist at all (the collector needs the server key),
-	// so the VIDEO OWNER'S own saved key on the sync call is the cheapest —
-	// indeed the ONLY — paid path available, exactly what his rule asks for.
-	// The gate's invariant protects the SERVER key from ambient full-price
-	// use; the owner's personal key here is his own deliberate configuration.
-	// With a server key present this branch never fires and cheap goes to
-	// Batch as usual.
-	const ownerKeyIsOnlyPaidPath =
-		context.aiSpeedMode === "cheap" &&
-		!hasPaidGeminiKey() &&
-		Boolean(ownerApiKey);
-
-	const runFullPriceSync = async (syncKey: string): Promise<string> => {
+	// One synchronous path for BOTH modes (round-8 deletion round). Fast: a
+	// bounded free probe, then paid. Cheap (the owner's ACTUAL rule, "imkon
+	// qadar bepuldan foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"):
+	// a PATIENT free attempt, and when free fails, the SAME paid call
+	// immediately — no parking, no Batch, no collector. The next chunk tries
+	// free again, so the job returns to free the moment quota comes back. The
+	// old submit→park→collector→re-kick machinery manufactured unowned states
+	// and 29 defects across 7 rounds for a ~2x discount worth cents.
+	const runPaidSync = async (syncKey: string): Promise<string> => {
 		const result = await withCostGuard({
 			orgId: context.orgId,
 			userId: context.userId,
@@ -944,14 +909,6 @@ export async function transcribeAudio(
 
 	const runSync = async (): Promise<string> => {
 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
-		if (!freeKey && context.aiSpeedMode === "cheap") {
-			if (ownerKeyIsOnlyPaidPath && ownerApiKey) {
-				return runFullPriceSync(ownerApiKey);
-			}
-			throw new AiQuotaWaitError(
-				`No free-tier key configured for cheap video=${context.videoId} — continuing on the discounted Batch path`,
-			);
-		}
 		if (freeKey) {
 			try {
 				const freeResult = await withCostGuard({
@@ -988,186 +945,47 @@ export async function transcribeAudio(
 				});
 				return freeResult.transcriptVtt;
 			} catch (error) {
-				if (context.aiSpeedMode === "cheap") {
-					// ANY free failure in cheap mode — quota or a transient network
-					// error — continues on the discounted Batch, never full price.
-					// (Falling through on non-quota errors was the last live path
-					// from cheap to the full-price sync call — round-6 owner brief.)
-					// Owner-key-only deployment (round-7 #3): Batch cannot exist
-					// without the server key, so the owner's own key IS the
-					// cheapest available paid path — use it rather than parking
-					// the job to death on a ladder that has no exit to paid.
-					if (ownerKeyIsOnlyPaidPath && ownerApiKey) {
-						console.warn(
-							`[transcribe] cheap free failure with no server key for video=${context.videoId}; continuing on the video owner's own key`,
-						);
-						return runFullPriceSync(ownerApiKey);
-					}
-					throw new AiQuotaWaitError(
-						isQuotaLikeAiError(error)
-							? `Free-tier transcription quota exhausted for video=${context.videoId}`
-							: `Free-tier transcription failed (non-quota) for video=${context.videoId}: ${error instanceof Error ? error.message : String(error)} — continuing on the discounted Batch path`,
-					);
+				// Gap-fill runs FREE-ONLY in cheap mode (round-8, correction 1):
+				// polishing an already-complete transcript must not spend paid
+				// money — a failed span simply stays a gap in the caller.
+				if (context.freeOnly) {
+					throw error;
 				}
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
+		} else if (context.freeOnly) {
+			throw new Error(
+				`No free-tier key configured; free-only call skipped for video=${context.videoId}`,
+			);
 		}
 
-		// Full-price synchronous paid call — FAST mode only from here on (the
-		// owner-key-only cheap branches above return before this point). The
-		// assert is the runtime backstop of the invariant and also covers the
-		// owner's PERSONAL key on the fast path.
-		assertCheapNeverUsesFullPriceSync(context.aiSpeedMode);
+		// Synchronous paid call. CHEAP REACHES THIS TOO now (round-8, the
+		// owner's actual rule): the free chain above was tried (or does not
+		// exist) and failed — free is exhausted for this call, so paying is
+		// the REQUESTED behaviour, and the next chunk tries free again. The
+		// gate enforces exactly that: a cheap sync key is only handed out
+		// against an explicit freeExhausted declaration.
 		const resolvedApiKey =
 			ownerApiKey ??
 			getPaidGeminiKey({
 				operation: "transcription",
-				mode: "fast",
+				mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
 				route: "sync",
+				...(context.aiSpeedMode === "cheap" ? { freeExhausted: true } : {}),
 			});
 		if (!resolvedApiKey) {
 			throw new FatalError(
 				"No Gemini API key configured. Set one in Settings → Account → Transcription API Keys, or ask your admin to set GEMINI_API_KEY.",
 			);
 		}
-		return runFullPriceSync(resolvedApiKey);
+		return runPaidSync(resolvedApiKey);
 	};
 
 	return runSync();
 }
 
-/**
- * One-at-a-time cheap-mode durable Batch submit (spec §5 C2). On a cheap free
- * failure for a chunk, submit that ONE uncovered chunk to the paid Gemini
- * Batch API using the SERVER paid key (never an owner key — the collector must
- * resolve the same project), persist the job with a read-modify-write so
- * unrelated metadata survives, and report the OUTCOME so the caller can park
- * (submitted/pending/unavailable) or degrade the chunk to a gap
- * (cycle-exhausted). Submits at most one job per video.
- */
-/** Bounded per-chunk Batch budget (round-7 #1): each submit is real money and
- * a full ffmpeg re-extract; 3 failed Batch runs on the SAME chunk means the
- * chunk is unprocessable, matching the shape of the 2 auto-recover attempts
- * and the 4 sync retry attempts elsewhere. */
-export const MAX_SAME_CHUNK_BATCH_SUBMITS = 3;
-
-export type CheapBatchSubmitOutcome =
-	| "submitted" // parked; the collector owns the row
-	| "pending" // a Batch is already in flight; parked
-	| "unavailable" // no key / transient failure; parked on the free ladder
-	| "cycle-exhausted"; // chunk burned its Batch budget; degrade to a gap
-
-async function submitCheapChunkBatch(
-	chunk: {
-		url: string;
-		startSec: number;
-		durationSec: number | null;
-		speechEndSec?: number;
-	},
-	videoId: string,
-	knownSpeakers: string[],
-): Promise<CheapBatchSubmitOutcome> {
-	// This helper must NEVER throw: the caller decides from the OUTCOME whether
-	// to park (rethrow the original quota wait) or degrade the chunk to a gap.
-	// Any infrastructure failure here (no key, db hiccup, submit error) is
-	// logged and reported as "unavailable" so the patient free retry stays
-	// live and a transient problem never escalates a quota wait to ERROR.
-	try {
-		const paidKey = getPaidGeminiKey({
-			operation: "transcription",
-			mode: "cheap",
-			route: "batch",
-		});
-		if (!paidKey) {
-			console.warn(
-				`[transcribe] cheap quota but no paid GEMINI_API_KEY set; staying on patient free wait for video=${videoId}`,
-			);
-			return "unavailable";
-		}
-
-		// One Batch job at a time per video — never submit while one is pending.
-		const [row] = await db()
-			.select({ metadata: videos.metadata })
-			.from(videos)
-			.where(eq(videos.id, videoId as Video.VideoId))
-			.limit(1);
-		const rowMetadata = (row?.metadata as VideoMetadata) ?? {};
-		const existingJobs = rowMetadata.aiBatchJobs;
-		if (Array.isArray(existingJobs) && existingJobs.length > 0) {
-			return "pending";
-		}
-
-		// THE CYCLE BOUND (round-7 #1/#4): free fails → Batch → collector
-		// re-kicks → chunk STILL uncovered → free fails → new Batch… nothing
-		// else bounds that loop, and every cycle bills a Batch submit plus a
-		// full ffmpeg re-extract. A chunk that has already burned its whole
-		// Batch budget without ever getting covered is UNPROCESSABLE (corrupt
-		// segment, safety block), not unlucky — stop paying for it and let the
-		// caller degrade it to a transcript gap. Submitting a DIFFERENT chunk
-		// resets the count: that is real progress.
-		if (
-			rowMetadata.aiBatchChunkStartSec === chunk.startSec &&
-			(rowMetadata.aiBatchChunkSubmits ?? 0) >= MAX_SAME_CHUNK_BATCH_SUBMITS
-		) {
-			console.warn(
-				`[transcribe] cheap chunk @${chunk.startSec}s for video=${videoId} exhausted its ${MAX_SAME_CHUNK_BATCH_SUBMITS} Batch attempts; degrading to a gap`,
-			);
-			await sendOpsAlert(
-				`Cheap chunk @${chunk.startSec}s exhausted its ${MAX_SAME_CHUNK_BATCH_SUBMITS} Batch attempts for video=${videoId}; degrading to a transcript gap`,
-			).catch(() => {});
-			return "cycle-exhausted";
-		}
-
-		const submitted = await submitChunkBatch(chunk.url, {
-			apiKey: paidKey,
-			knownSpeakers,
-			videoId,
-		});
-		await patchVideoMetadata(videoId, (current) => {
-			const jobs = Array.isArray(current.aiBatchJobs)
-				? current.aiBatchJobs
-				: [];
-			// Race guard (should not trigger at cheap concurrency 1): if another
-			// job appeared under the row lock, leave it — one at a time.
-			if (jobs.length > 0) return current;
-			return {
-				...current,
-				// Cycle accounting for the bound above.
-				aiBatchChunkStartSec: chunk.startSec,
-				aiBatchChunkSubmits:
-					current.aiBatchChunkStartSec === chunk.startSec
-						? (current.aiBatchChunkSubmits ?? 0) + 1
-						: 1,
-				aiBatchJobs: [
-					{
-						batchName: submitted.batchName,
-						fileName: submitted.fileName,
-						startSec: chunk.startSec,
-						durationSec: chunk.durationSec ?? 0,
-						// The SAME anchor formula the Standard path feeds
-						// rescaleChunkVtt — captured now because the collector has no
-						// access to the silence analysis later. Without it, collected
-						// Batch chunks merged with Gemini's raw clock while Standard
-						// chunks were rescaled: two clocks in one recording.
-						speechSpanSec:
-							chunk.speechEndSec != null
-								? chunk.speechEndSec - chunk.startSec
-								: (chunk.durationSec ?? 0),
-						submittedAt: new Date().toISOString(),
-					},
-				],
-			};
-		});
-		return "submitted";
-	} catch (error) {
-		console.warn(
-			`[transcribe] cheap-mode Batch submit failed for video=${videoId}; keeping patient free wait: ${error instanceof Error ? error.message : String(error)}`,
-		);
-		return "unavailable";
-	}
-}
 
 export async function transcribeAudioChunks(
 	audio: ExtractedAudio,
@@ -1210,21 +1028,6 @@ export async function transcribeAudioChunks(
 				),
 			);
 		} catch (error) {
-			// Cheap-mode quota: submit this chunk to the durable paid Batch and
-			// rethrow so the workflow parks in PROCESSING + aiQuotaWaiting —
-			// UNLESS the chunk has burned its whole bounded Batch budget
-			// (round-7 #1): then it is unprocessable, and for a single-chunk
-			// video that is terminal — throw a NON-quota error so markError
-			// records FAILED (nothing resurrects it) instead of feeding the loop.
-			if (context.aiSpeedMode === "cheap" && isAiQuotaWaitError(error)) {
-				const outcome = await submitCheapChunkBatch(chunk, context.videoId, []);
-				if (outcome !== "cycle-exhausted") {
-					throw error;
-				}
-				throw new Error(
-					`Cheap chunk at ${chunk.startSec}s exhausted its ${MAX_SAME_CHUNK_BATCH_SUBMITS} Batch attempts for ${context.videoId}; giving up on this recording`,
-				);
-			}
 			// Fast mode, single chunk: this path never reaches the per-chunk catch
 			// or the all-failed throw below, so it must tag the quota case itself —
 			// otherwise short videos (the common case) lose their reason.
@@ -1345,24 +1148,6 @@ export async function transcribeAudioChunks(
 			}
 			result = { vtt: rescaled.vtt, offsetSec: chunk.startSec };
 		} catch (error) {
-			// Cheap-mode quota is NOT a missing chunk (spec §5 C2, bug #1): submit
-			// this ONE chunk to the durable paid Batch, then rethrow so the whole
-			// workflow parks in PROCESSING + aiQuotaWaiting and the collector cron
-			// finishes it. Must run BEFORE the generic fault tolerance below, which
-			// would otherwise swallow the quota wait into an empty gap.
-			// EXCEPTION (round-7 #1/#4): a chunk that already burned its bounded
-			// Batch budget is unprocessable — fall THROUGH to the fault tolerance
-			// so it becomes a gap and the rest of the video still completes.
-			if (context.aiSpeedMode === "cheap" && isAiQuotaWaitError(error)) {
-				const outcome = await submitCheapChunkBatch(
-					chunk,
-					context.videoId,
-					knownSpeakers,
-				);
-				if (outcome !== "cycle-exhausted") {
-					throw error;
-				}
-			}
 			// FAULT TOLERANCE (long-video fix): a single bad chunk must NOT discard the
 			// whole transcript. Previously one failed chunk threw -> the outer catch marked
 			// the ENTIRE video ERROR and dropped every successful chunk (root cause of
@@ -1401,9 +1186,10 @@ export async function transcribeAudioChunks(
 		}
 	}
 
-	// Cheap mode transcribes one chunk at a time (spec §5 C2): the first quota
-	// failure submits exactly one Batch job and rethrows, so parallel chunks must
-	// not race to submit several. Fast mode keeps the normal concurrency.
+	// Cheap mode transcribes one chunk at a time: serial chunks maximize FREE
+	// usage — each chunk sees the freshest quota state, so a quota that
+	// returns mid-job is used immediately instead of several parallel chunks
+	// all falling to paid at once. Fast mode keeps the normal concurrency.
 	const chunkConcurrency =
 		context.aiSpeedMode === "cheap" ? 1 : AI_CHUNK_CONCURRENCY;
 	await mapWithConcurrency(
@@ -1840,7 +1626,14 @@ export async function fillTranscriptGaps(
 				span.url,
 				span.durationSec,
 				ownerEncryptedGeminiKey,
-				context,
+				// Gap-fill is an OPTIONAL cosmetic pass over a complete transcript
+				// — in cheap mode it may only use the FREE chain (round-8,
+				// correction 1: up to 12 spans x 300s of paid audio to polish a
+				// finished transcript is disproportionate spend). A free failure
+				// lands in the catch below and the span stays a gap.
+				context.aiSpeedMode === "cheap"
+					? { ...context, freeOnly: true }
+					: context,
 			);
 			// Boundary protection: an internal gap's startSec IS the previous good
 			// cue's start (gaps are measured cue-START to cue-START), so a
@@ -1946,9 +1739,6 @@ export async function transcribeAudioChunkWithRetry(
 			);
 		} catch (error) {
 			lastError = error;
-			if (isAiQuotaWaitError(error)) {
-				throw error;
-			}
 			if (error instanceof FatalError || attempt === maxAttempts) {
 				break;
 			}
@@ -2063,9 +1853,6 @@ async function saveTranscription(
 	// at attempts=2 and went straight to the paid flip with zero free
 	// re-kicks — against the owner's explicit cheap choice.
 	delete md.autoRecoverAttempts;
-	// Batch cycle accounting ends with the job (round-7 #1).
-	delete md.aiBatchChunkStartSec;
-	delete md.aiBatchChunkSubmits;
 	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
 	// analysis does not inherit this completed job's timestamp and immediately
 	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.

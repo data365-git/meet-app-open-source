@@ -14,9 +14,7 @@ import {
 	CHEAP_STALE_JOB_THRESHOLD_MS,
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
-	isQuotaRetryDue,
 	isTranscriptionJobStale,
-	MAX_QUOTA_RETRY_ATTEMPTS,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
@@ -52,38 +50,12 @@ type StaleRefinementCandidate = {
 	metadata: VideoMetadata | null;
 };
 
-/**
- * Terminal exit shared by the exhausted quota ladder (round-6): when a
- * quota-parked cheap row has used its whole bounded free-retry budget and
- * still cannot proceed, it must END — visibly — rather than sit parked
- * forever behind a spinner. QUOTA code (not FAILED): the recording is fine,
- * the account/quota is the problem, and the share panel already shows the
- * calmer "credits" message with a retry button for that code. The same
- * quotaRetryAttempts budget blocks the quota-ERROR loop from resurrecting it.
- */
-async function markQuotaLadderExhausted(candidate: {
-	id: Video.VideoId;
-	name: string;
-}): Promise<void> {
-	await db()
-		.update(videos)
-		.set({
-			transcriptionStatus: "ERROR",
-			metadata: sql`JSON_SET(
-				COALESCE(${videos.metadata}, JSON_OBJECT()),
-				'$.transcriptionError', JSON_OBJECT(
-					'code', 'QUOTA',
-					'message', ${"Free-quota retry budget exhausted while parked; no discounted Batch was available"},
-					'at', ${new Date().toISOString()}
-				)
-			)`,
-		})
-		.where(eq(videos.id, candidate.id));
-	await sendOpsAlert(
-		`Cheap AI job exhausted its free-quota retry budget: ${candidate.id} (${candidate.name})`,
-	);
-}
-
+// NOTE (round-8 deletion): the quota-park ladder branch is GONE from this
+// loop. Cheap transcription no longer parks — each chunk falls back to the
+// paid sync call when free is out — so PROCESSING + aiQuotaWaiting can no
+// longer be produced by transcription. A LEGACY parked row simply goes
+// stale (its heartbeat stopped) and takes the normal bounded re-kick path
+// below, which completes it under the new semantics or ends it in ERROR.
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
 	if (!cronSecret) {
@@ -216,7 +188,6 @@ export async function GET(request: Request) {
 	let gaveUp = 0;
 	let flippedToPaid = 0;
 	let skippedForBatch = 0;
-	let skippedQuotaWaiting = 0;
 	let skippedAlive = 0;
 	let quotaRetried = 0;
 	let refinementReset = 0;
@@ -237,66 +208,6 @@ export async function GET(request: Request) {
 				// The poll-batch-jobs collector owns this cheap job's pending Batch;
 				// re-kicking here would create a duplicate non-idempotent Batch.
 				skippedForBatch++;
-			} else if (
-				metadata.aiMode === "cheap" &&
-				metadata.aiQuotaWaiting === true
-			) {
-				// Quota-parked WITHOUT a pending Batch (the branch above owns the
-				// with-Batch case). This state's owner is THIS loop and its exit is
-				// the SAME backoff schedule the quota-ERROR loop uses. BE HONEST
-				// about what that buys (round-5 #2): the 4h paid flip is checked
-				// FIRST and aiJobStartedAt always exists, so a parked row only
-				// reaches the rungs inside the 4h window — in practice ~3 free
-				// re-kicks (≈1h, 1.5h, 2.5h after claim), then the flip takes every
-				// later tick. That ceiling is DELIBERATE: it is the UI's own
-				// promise ("4 soatda avtomatik tezlashadi") and changing it is an
-				// owner decision, not a cron patch. A free-quota outage longer
-				// than 4h therefore bills a cheap job — by design. The ladder's
-				// later rungs are only reachable for quota-ERROR rows, which have
-				// no flip. History: re-kicking every tick was hourly-ffmpeg noise
-				// (round-3 #5); skipping entirely made paid billing the ONLY exit
-				// (round-4 #1).
-				if (isQuotaRetryDue(metadata, now)) {
-					// Server-side JSON_SET (round-5 #5): the `metadata` in hand is a
-					// snapshot from the SELECT at the top of this tick, and a row can
-					// legitimately gain aiBatchJobs while earlier candidates await
-					// (park sequence = submit Batch -> throw -> markQuotaWaiting). A
-					// JS spread would erase that handle and orphan a BILLED Batch.
-					const scheduled = withQuotaRetryScheduled(metadata, now);
-					await db()
-						.update(videos)
-						.set({
-							metadata: sql`JSON_SET(
-								JSON_REMOVE(
-									COALESCE(${videos.metadata}, JSON_OBJECT()),
-									'$.processingStartedAt',
-									'$.aiProgressAt'
-								),
-								'$.quotaRetryAttempts', ${scheduled.quotaRetryAttempts ?? 1},
-								'$.quotaRetryNextAt', ${scheduled.quotaRetryNextAt ?? new Date(now).toISOString()}
-							)`,
-						})
-						.where(eq(videos.id, candidate.id));
-					await transcribeVideo(
-						candidate.id,
-						candidate.ownerId,
-						true,
-						true,
-						"cheap",
-					);
-					quotaRetried++;
-				} else if (
-					(metadata.quotaRetryAttempts ?? 0) >= MAX_QUOTA_RETRY_ATTEMPTS
-				) {
-					// The whole bounded free budget is spent and the row is still
-					// parked (no Batch was ever available — e.g. no server paid
-					// key). Terminal exit; replaces the removed 4h flip as this
-					// state's guaranteed terminator.
-					await markQuotaLadderExhausted(candidate);
-					gaveUp++;
-				} else {
-					skippedQuotaWaiting++;
-				}
 			} else if (!isTranscriptionJobStale(metadata, now)) {
 				// Freshness re-check in JS on the row we actually hold: the job has
 				// proven life (heartbeat) — chunk progress is the third liveness
@@ -490,7 +401,6 @@ export async function GET(request: Request) {
 		gaveUp,
 		flippedToPaid,
 		skippedForBatch,
-		skippedQuotaWaiting,
 		skippedAlive,
 		quotaRetried,
 		refinementReset,

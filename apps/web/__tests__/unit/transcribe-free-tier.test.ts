@@ -114,41 +114,34 @@ describe("transcribeAudio free-tier-first", () => {
 		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBeFalsy();
 	});
 
-	it("cheap mode + free quota failure: throws instead of falling back to paid", async () => {
+	it("cheap mode + free quota failure: tries free FIRST, then pays for this call (round-8 owner rule — no parking)", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
-		H.transcribeWithGemini.mockRejectedValueOnce(
-			new Error("429 RESOURCE_EXHAUSTED"),
-		);
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("429 RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(PAID_RESULT);
 
-		await expect(
-			transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX),
-		).rejects.toMatchObject({ name: "AiQuotaWaitError" });
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
 
-		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
 		expect((H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey).toBe("free-key");
-		expect(H.withCostGuard).toHaveBeenCalledTimes(1);
+		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
 	});
 
-	it("cheap mode + non-quota free error: signals the Batch continuation, NEVER the full-price paid call (round-6 owner decision)", async () => {
-		// OLD contract (owner overturned it 2026-08-11): any non-quota free
-		// failure fell through to the full-price sync call — cheap silently
-		// billing full price. NEW contract: cheap continues on the discounted
-		// Batch via the quota-wait signal; the paid key is never used here.
+	it("cheap mode + free failure (any reason): falls back to the paid sync call — no parking, no Batch signal (round-8 owner rule)", async () => {
+		// The owner's ACTUAL rule: free as much as possible, paid when free is
+		// out. Free failed for this call, so paying is the requested behaviour;
+		// the next chunk tries free again.
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini
 			.mockRejectedValueOnce(new Error("free model returned malformed VTT"))
 			.mockResolvedValueOnce(PAID_RESULT);
 
-		const err = await transcribeAudio(
-			"https://a/x.mp3",
-			300,
-			null,
-			CHEAP_CTX,
-		).catch((e) => e);
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
 
-		expect((err as Error).name).toBe("AiQuotaWaitError");
-		// Only the free attempt ran — a second call would be full price.
-		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
 	});
 
 	it("cheap + owner key + NO server key + no free key: runs on the OWNER'S OWN key — the only paid path that exists (round-7 #3)", async () => {
@@ -192,20 +185,23 @@ describe("transcribeAudio free-tier-first", () => {
 		).toBe("decrypted-key");
 	});
 
-	it("cheap + SERVER key present: still goes to Batch, never the owner-key sync fallback", async () => {
-		// The owner-key path is strictly the no-server-key deployment's escape;
-		// with a server key the discounted Batch remains the cheapest paid path.
-		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
+	it("cheap + server key AND owner key: the owner's saved key is preferred on the paid fallback (pre-existing precedence)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("429 RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(PAID_RESULT);
 
-		const err = await transcribeAudio(
+		const out = await transcribeAudio(
 			"https://a/x.mp3",
 			300,
 			"encrypted-owner-key",
 			CHEAP_CTX,
-		).catch((e) => e);
+		);
 
-		expect((err as Error).name).toBe("AiQuotaWaitError");
-		expect(H.transcribeWithGemini).not.toHaveBeenCalled();
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect(
+			(H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey,
+		).toBe("decrypted-key");
 	});
 
 	it("fast free probe is bounded: single attempt (maxAttempts=1) with an abort signal", async () => {

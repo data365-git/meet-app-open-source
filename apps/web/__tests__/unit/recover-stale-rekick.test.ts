@@ -202,24 +202,20 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		expect(body.skippedAlive).toBe(1);
 	});
 
-	it("a quota-PARKED cheap job with NO Batch gets a FREE ladder re-kick when due (round-4 #1)", async () => {
-		// The no-paid-key deployment: submitCheapChunkBatch could not submit, so
-		// the row parked with aiQuotaWaiting and no aiBatchJobs. Skipping it
-		// entirely (round-3 shape) made the 4h PAID flip its only exit — the
-		// owner's original "cheap billed as paid" complaint reintroduced. The
-		// exit is the same bounded free backoff ladder the quota-ERROR loop
-		// uses; the 4h flip stays the ceiling.
+	it("a LEGACY quota-parked row (pre-round-8) takes the NORMAL stale re-kick — the quota ladder branch is gone", async () => {
+		// Cheap no longer parks (each chunk falls back to paid when free is
+		// out), so PROCESSING + aiQuotaWaiting only exists on legacy rows.
+		// They drain through the ordinary bounded re-kick, which completes them
+		// under the new semantics — no ladder booking, no special schedule.
 		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 		armWithCandidate({
 			aiMode: "cheap",
 			aiQuotaWaiting: true,
 			processingStartedAt: twoHoursAgo,
 			aiJobStartedAt: twoHoursAgo,
-			// No quotaRetryNextAt yet -> first ladder attempt is due now.
 		});
 
-		const res = await GET(cronRequest());
-		const body = (await res.json()) as { quotaRetried?: number };
+		await GET(cronRequest());
 
 		expect(transcribeVideoMock).toHaveBeenCalledWith(
 			"vid-cheap-1",
@@ -228,27 +224,11 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			true,
 			"cheap",
 		);
-		expect(body.quotaRetried).toBe(1);
-		// The re-kick books the next ladder slot via a server-side JSON_SET
-		// merge (round-5 #5): a plain-object spread of the tick-start snapshot
-		// could erase an aiBatchJobs handle the workflow gained meanwhile,
-		// orphaning a BILLED Batch.
-		const scheduled = state.setCalls
-			.map(
-				(setArg) =>
-					setArg.metadata as
-						| { strings?: TemplateStringsArray; values?: unknown[] }
-						| undefined,
-			)
-			.find((metadata) => {
-				const text = metadata?.strings?.join("?") ?? "";
-				return text.includes("$.quotaRetryAttempts");
-			});
-		expect(scheduled).toBeDefined();
-		const scheduledText = scheduled?.strings?.join("?") ?? "";
-		expect(scheduledText).toContain("JSON_SET");
-		expect(scheduledText).toContain("JSON_REMOVE");
-		expect(scheduled?.values).toContain(1);
+		// No ladder slot is booked anymore.
+		const laddered = state.setCalls.find((setArg) =>
+			JSON.stringify(setArg.metadata ?? {}).includes("quotaRetryAttempts"),
+		);
+		expect(laddered).toBeUndefined();
 	});
 
 	it("NO automatic paid flip for transcription: a 5h-old crashed cheap job is re-kicked FREE, never continued on paid (round-6 owner decision)", async () => {
@@ -294,50 +274,6 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		);
 		expect(dead).toBeDefined();
 		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
-	});
-
-	it("a quota-parked row whose bounded free budget is spent goes terminal ERROR(QUOTA) + alert - the removed flip's replacement terminator (round-6)", async () => {
-		const fiveHoursAgo = new Date(
-			Date.now() - 5 * 60 * 60 * 1000,
-		).toISOString();
-		const inTwoHours = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-		armWithCandidate({
-			aiMode: "cheap",
-			aiQuotaWaiting: true,
-			quotaRetryAttempts: 12, // MAX_QUOTA_RETRY_ATTEMPTS
-			quotaRetryNextAt: inTwoHours,
-			processingStartedAt: fiveHoursAgo,
-			aiJobStartedAt: fiveHoursAgo,
-		});
-
-		await GET(cronRequest());
-
-		const dead = state.setCalls.find(
-			(setArg) => setArg.transcriptionStatus === "ERROR",
-		) as { metadata?: { strings?: TemplateStringsArray } } | undefined;
-		expect(dead).toBeDefined();
-		expect(dead?.metadata?.strings?.join("?") ?? "").toContain("QUOTA");
-		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
-		expect(transcribeVideoMock).not.toHaveBeenCalled();
-	});
-
-	it("a quota-PARKED cheap job whose ladder slot is NOT due yet is left alone (no hourly ffmpeg, no flag flicker)", async () => {
-		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-		const inOneHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-		armWithCandidate({
-			aiMode: "cheap",
-			aiQuotaWaiting: true,
-			quotaRetryAttempts: 1,
-			quotaRetryNextAt: inOneHour,
-			processingStartedAt: twoHoursAgo,
-			aiJobStartedAt: twoHoursAgo,
-		});
-
-		const res = await GET(cronRequest());
-		const body = (await res.json()) as { skippedQuotaWaiting?: number };
-
-		expect(transcribeVideoMock).not.toHaveBeenCalled();
-		expect(body.skippedQuotaWaiting).toBe(1);
 	});
 
 	it("the candidate SQL treats a row with NO liveness markers as infinitely stale (round-4 #2)", async () => {

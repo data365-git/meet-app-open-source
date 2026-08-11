@@ -163,29 +163,55 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		H.patchVideoMetadata.mockReset();
 	});
 
-	// ─── THE CYCLE BOUND (round-7 #1/#4): Batch↔free must not loop forever ───
+	// ─── ROUND-8 (deletion round): cheap = free first, then the SAME sync ───
+	// ─── paid path, no parking, no Batch, no collector ──────────────────────
 
-	it("a chunk that exhausted its Batch budget degrades to a GAP; the rest of the video completes and NO new Batch is billed", async () => {
-		ROW.metadata = { aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 3 };
-		const { AiQuotaWaitError } = await import("@/lib/ai-quota-wait");
-		const fn = chunkFn(async (startSec) => {
-			if (startSec === 0) throw new AiQuotaWaitError("free quota exhausted");
-			return "WEBVTT\n\nOK";
-		});
+	it("cheap + free quota exhausted: falls back to the PAID sync call immediately — no park, no Batch submit", async () => {
+		ENV.value = {
+			GEMINI_API_KEY: "server-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		};
+		transcribeWithGemini
+			.mockRejectedValueOnce(quotaError())
+			.mockResolvedValueOnce({
+				transcriptVtt: "WEBVTT\n\nPAID",
+				inputTokens: 1,
+				outputTokens: 1,
+				audioInTokens: 1,
+			});
 
 		const out = await transcribeAudioChunks(
-			TWO_CHUNKS,
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
 			{ ...CTX, aiSpeedMode: "cheap" },
-			fn,
 		);
 
-		expect(out).toContain("OK");
+		expect(out).toContain("PAID");
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(2);
 		expect(submitChunkBatch).not.toHaveBeenCalled();
 	});
 
-	it("single-chunk video past its Batch budget throws a NON-quota error (terminal ERROR, nothing resurrects it)", async () => {
-		ROW.metadata = { aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 3 };
+	it("cheap + NO free key: free is exhausted by definition — the paid sync call runs directly", async () => {
+		ENV.value = { GEMINI_API_KEY: "server-key" };
+		transcribeWithGemini.mockResolvedValue({
+			transcriptVtt: "WEBVTT\n\nPAID",
+			inputTokens: 1,
+			outputTokens: 1,
+			audioInTokens: 1,
+		});
+
+		const out = await transcribeAudioChunks(
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+		);
+
+		expect(out).toContain("PAID");
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(submitChunkBatch).not.toHaveBeenCalled();
+	});
+
+	it("cheap + BOTH free and paid exhausted (credits depleted): QUOTA-classified terminal error, still no parking", async () => {
 		ENV.value = {
 			GEMINI_API_KEY: "server-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -198,77 +224,9 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 			{ ...CTX, aiSpeedMode: "cheap" },
 		).catch((e) => e);
 
-		const { isAiQuotaWaitError } = await import("@/lib/ai-quota-wait");
+		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
 		expect(isAiQuotaWaitError(err)).toBe(false);
-		expect((err as Error).message).toContain("exhausted");
 		expect(submitChunkBatch).not.toHaveBeenCalled();
-	});
-
-	it("each submit books the cycle counter: same chunk increments, a different chunk resets (progress)", async () => {
-		ROW.metadata = {};
-		const { AiQuotaWaitError } = await import("@/lib/ai-quota-wait");
-		const fn = chunkFn(async () => {
-			throw new AiQuotaWaitError("free quota exhausted");
-		});
-
-		await transcribeAudioChunks(
-			TWO_CHUNKS,
-			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
-			fn,
-		).catch(() => {});
-
-		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
-		const patchFn = H.patchVideoMetadata.mock.calls.at(-1)?.[1] as (
-			current: Record<string, unknown>,
-		) => Record<string, unknown>;
-		expect(patchFn).toBeDefined();
-		// Same chunk again → increment.
-		expect(
-			patchFn({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 1 }),
-		).toMatchObject({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 2 });
-		// A different chunk previously → reset to 1 (progress).
-		expect(
-			patchFn({ aiBatchChunkStartSec: 600, aiBatchChunkSubmits: 3 }),
-		).toMatchObject({ aiBatchChunkStartSec: 0, aiBatchChunkSubmits: 1 });
-	});
-
-	// ─── OWNER DECISION + INVARIANT (round-6): cheap never bills full price ──
-
-	it("cheap + NO free key: goes STRAIGHT to the discounted Batch — the full-price sync call is never made", async () => {
-		// The full-price call would show up as a transcribeWithGemini invocation
-		// with the paid server key; there must be ZERO calls.
-		const err = await transcribeAudioChunks(
-			{ chunks: [chunk(0)], totalDurationSec: 600 },
-			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
-		).catch((e) => e);
-
-		expect(isAiQuotaWaitError(err)).toBe(true);
-		expect(transcribeWithGemini).not.toHaveBeenCalled();
-		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
-	});
-
-	it("cheap + free fails NON-quota (transient error): continues on Batch, never falls through to full price", async () => {
-		// Pre-round-6, this was the last live path from cheap to the full-price
-		// sync call: any non-quota free failure fell straight through to paid.
-		ENV.value = {
-			GEMINI_API_KEY: "server-key",
-			GEMINI_API_KEY_FREE: "free-key",
-		};
-		transcribeWithGemini.mockRejectedValue(genuineError());
-
-		const err = await transcribeAudioChunks(
-			{ chunks: [chunk(0)], totalDurationSec: 600 },
-			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
-		).catch((e) => e);
-
-		expect(isAiQuotaWaitError(err)).toBe(true);
-		// Exactly ONE call — the free attempt. A second call would be the
-		// full-price fallback the owner forbade.
-		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
-		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
 	});
 
 	it("fast + EVERY chunk 429s: throws a QUOTA-classified error", async () => {

@@ -486,6 +486,31 @@ describe("transcribeVideo", () => {
 			expect(transcribeVideoWorkflow).not.toHaveBeenCalled();
 		});
 
+		it("a FRESH owner start refunds the recovery budgets; a cron retry does not (round-8 (b))", async () => {
+			// Only saveTranscription cleared autoRecoverAttempts/quotaRetry*, and
+			// it only runs on success — so a video that ever burned its budgets
+			// could never be successfully retried after a terminal state.
+			await transcribeVideo("video-123" as Video.VideoId, "user-456", true);
+			const freshClaim = updateSetCalls.find(
+				(setArg) => setArg.transcriptionStatus === "PROCESSING",
+			);
+			expect(JSON.stringify(freshClaim)).toContain("$.autoRecoverAttempts");
+			expect(JSON.stringify(freshClaim)).toContain("$.quotaRetryAttempts");
+
+			updateSetCalls = [];
+			await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+				true,
+				true,
+				"cheap",
+			);
+			const retryClaim = updateSetCalls.find(
+				(setArg) => setArg.transcriptionStatus === "PROCESSING",
+			);
+			expect(JSON.stringify(retryClaim)).not.toContain("$.autoRecoverAttempts");
+		});
+
 		it("a retry REFUSES a long-running row whose progress HEARTBEAT is fresh (round-3 #1)", async () => {
 			// The claim marker is hours old — a 2-3h recording legitimately runs
 			// that long — but the last chunk completed minutes ago. Liveness is
