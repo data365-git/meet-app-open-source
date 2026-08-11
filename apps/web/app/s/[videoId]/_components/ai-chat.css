@@ -2,10 +2,13 @@
    Meeting AI — calm / flat redesign (ADHD-friendly, Wave 2.5)
    - Follows the app theme automatically: every colour below is one
      of the app's shared Radix tokens (var(--gray-*), var(--blue-*),
-     var(--green-9)) or var(--text-secondary), all defined once in
-     app/globals.css. There is no popup-level theme mechanism — the
-     tokens themselves switch when the app's `.dark` class toggles,
-     the same way every other themed surface in the app does.
+     var(--green-9)), all defined once in app/globals.css. There is no
+     popup-level theme mechanism — the tokens themselves switch when
+     the app's `.dark` class toggles, the same way every other themed
+     surface in the app does. Text/icons on an accent (blue) fill use
+     --on-accent (= gray-1), paired deliberately with an accent step
+     from the SAME side (blue-11/blue-12, not blue-9) so contrast
+     holds in both themes — see the --on-accent comment below.
    - No glass / noise / heavy blur — quiet, high-legibility.
    Drop-in replacement for the old ai-chat.css.
    Optional: load Atkinson Hyperlegible for max legibility:
@@ -20,6 +23,14 @@
 	--ai-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 		sans-serif;
 	--ai-font-read: "Atkinson Hyperlegible", var(--ai-font-ui);
+	/* Text/icon colour for anything sitting ON an accent (blue) fill. Paired
+	   with blue-11 (never gray-1 with blue-9 or blue-12): blue-11 and gray-1
+	   move in OPPOSITE directions with the app theme — light makes blue-11
+	   dark-ish and gray-1 near-white, dark makes blue-11 light-ish and gray-1
+	   near-black — so the pair stays high-contrast in both without a
+	   component-level .dark rule. Shared here (not just inside .ai-popup) so
+	   .ai-fab, which renders outside the popup, can use it too. */
+	--on-accent: var(--gray-1);
 }
 
 /* ---------- Launcher button (kept simple + calm) ---------- */
@@ -45,13 +56,13 @@
 	border: none;
 	cursor: pointer;
 	padding: 0;
-	background: var(--blue-9);
-	box-shadow: 0 8px 22px -6px color-mix(in srgb, var(--blue-9) 50%, transparent),
+	background: var(--blue-11);
+	box-shadow: 0 8px 22px -6px color-mix(in srgb, var(--blue-11) 50%, transparent),
 		0 2px 6px color-mix(in srgb, var(--gray-12) 20%, transparent);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--text-secondary);
+	color: var(--on-accent);
 	transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
 		bottom 280ms var(--ease), opacity 220ms var(--ease);
 }
@@ -78,7 +89,7 @@ body[data-mini-docked="true"] .ai-fab {
 	position: absolute;
 	inset: 0;
 	border-radius: 50%;
-	border: 2px solid color-mix(in srgb, var(--blue-9) 40%, transparent);
+	border: 2px solid color-mix(in srgb, var(--blue-11) 40%, transparent);
 	animation: aiPulse 2.8s var(--ease) infinite;
 }
 .ai-fab.is-open::before {
@@ -148,12 +159,20 @@ body[data-mini-docked="true"] .ai-fab {
 	--txt: var(--gray-12);
 	--txt-2: var(--gray-11);
 	--txt-3: var(--gray-9);
-	--accent: var(--blue-9);
-	--accent-ink: var(--blue-11);
-	--accent-soft: color-mix(in srgb, var(--blue-9) 12%, transparent);
+	/* --accent/--accent-ink run blue-11 -> blue-12 (same side of the scale) so
+	   the launcher/orb/avatar/send gradients and the user bubble pair with
+	   --on-accent (gray-1) at a passing contrast in both themes — see the
+	   --on-accent comment above for why that specific pairing self-flips.
+	   blue-9 was dropped here because Radix ships that step at the SAME
+	   brightness in both blue.css and blue-dark.css, so white-on-blue-9 was
+	   only ~3.3:1 in EITHER theme, below the 4.5:1 body-text floor (measured;
+	   caught in review after the first token pass shipped it). */
+	--accent: var(--blue-11);
+	--accent-ink: var(--blue-12);
+	--accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
 	--shadow: 0 18px 48px -16px color-mix(in srgb, var(--gray-a12) 32%, transparent),
 		0 4px 12px -6px color-mix(in srgb, var(--gray-a12) 14%, transparent);
-	--user-bubble: var(--blue-9);
+	--user-bubble: var(--blue-11);
 	--radius: 15px;
 
 	position: fixed;
@@ -226,7 +245,7 @@ body[data-mini-docked="true"] .ai-fab {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--text-secondary);
+	color: var(--on-accent);
 }
 .ai-orb svg {
 	width: 18px;
@@ -442,7 +461,7 @@ body[data-mini-docked="true"] .ai-fab {
 }
 .ai-avatar.ai {
 	background: linear-gradient(135deg, var(--accent), var(--accent-ink));
-	color: var(--text-secondary);
+	color: var(--on-accent);
 }
 .ai-avatar.ai svg {
 	width: 17px;
@@ -462,7 +481,7 @@ body[data-mini-docked="true"] .ai-fab {
 .ai-msg.user .bubble {
 	max-width: 80%;
 	background: var(--user-bubble);
-	color: var(--text-secondary);
+	color: var(--on-accent);
 	padding: 10px 14px;
 	border-radius: 14px;
 	border-top-right-radius: 4px;
@@ -669,7 +688,7 @@ body[data-mini-docked="true"] .ai-fab {
 	cursor: pointer;
 	flex: none;
 	background: linear-gradient(180deg, var(--accent), var(--accent-ink));
-	color: var(--text-secondary);
+	color: var(--on-accent);
 	display: flex;
 	align-items: center;
 	justify-content: center;
