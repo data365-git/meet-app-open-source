@@ -1,6 +1,5 @@
 "use client";
 
-import Cookies from "js-cookie";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./ai-chat.css";
@@ -8,8 +7,10 @@ import "./ai-chat.css";
 /* ============================================================
    Meeting AI popup — calm / flat, ADHD-friendly redesign
    (owner-delivered design, Wave 2.5).
-   - Follows the app theme automatically (body class "dark"/"light",
-     "theme" cookie, or prefers-color-scheme) -> data-theme on popup.
+   - Follows the app theme automatically: ai-chat.css uses the app's
+     shared Radix tokens (var(--gray-*), var(--blue-*)), which already
+     switch with the app's `.dark` class on <body>. There is no
+     popup-level theme detection any more — one mechanism, not two.
    - Adaptive rendering: short answers stay a plain bubble; longer
      answers get a TL;DR band + labelled sections + bullet lists.
    - Reading-size control (persisted).
@@ -61,43 +62,6 @@ function parseMmSsToSeconds(mmss: string): number {
 		);
 	}
 	return 0;
-}
-
-/* ---- Theme: follow the app ---- */
-type Theme = "light" | "dark";
-function readAppTheme(): Theme {
-	if (typeof document !== "undefined") {
-		if (document.body.classList.contains("dark")) return "dark";
-		if (document.body.classList.contains("light")) return "light";
-	}
-	const cookie = Cookies.get("theme");
-	if (cookie === "dark" || cookie === "light") return cookie;
-	if (
-		typeof window !== "undefined" &&
-		window.matchMedia?.("(prefers-color-scheme: dark)").matches
-	) {
-		return "dark";
-	}
-	return "light";
-}
-function useAppTheme(): Theme {
-	const [theme, setTheme] = useState<Theme>("light");
-	useEffect(() => {
-		const update = () => setTheme(readAppTheme());
-		update();
-		const observer = new MutationObserver(update);
-		observer.observe(document.body, {
-			attributes: true,
-			attributeFilter: ["class"],
-		});
-		const mq = window.matchMedia("(prefers-color-scheme: dark)");
-		mq.addEventListener("change", update);
-		return () => {
-			observer.disconnect();
-			mq.removeEventListener("change", update);
-		};
-	}, []);
-	return theme;
 }
 
 /* ---- Inline: **bold** + [mm:ss] citations ---- */
@@ -377,7 +341,6 @@ export function AIChatPopup({
 	// Auth/quota error copy stays on the "share" namespace — the delivered
 	// aiChat i18n block only covers the calm UI shell, not backend error cases.
 	const tShare = useTranslations("share");
-	const theme = useAppTheme();
 
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
@@ -706,7 +669,6 @@ export function AIChatPopup({
 	return (
 		<div
 			ref={popupRef}
-			data-theme={theme}
 			className={`ai-popup${isOpen ? " open" : ""}${
 				isExpanded ? " expanded" : ""
 			}`}
