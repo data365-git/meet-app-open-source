@@ -15,6 +15,7 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, serverEnv } from "@cap/env";
+import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -549,8 +550,8 @@ async function AuthorizedContent({
 	});
 	const env = serverEnv();
 	const transcriptionGenerationAvailable =
-		Boolean(env.GEMINI_API_KEY) && !rules.settings.disableTranscript;
-	const aiProviderAvailable = Boolean(env.GEMINI_API_KEY);
+		hasPaidGeminiKey() && !rules.settings.disableTranscript;
+	const aiProviderAvailable = hasPaidGeminiKey();
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()

@@ -251,53 +251,74 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		expect(scheduled?.values).toContain(1);
 	});
 
-	it("a FAILED paid flip is counted, and at the bound the row goes terminal ERROR + ops alert (round-5 #3)", async () => {
-		// The reachable trigger: transcribeVideo inside continueAiJobOnPaid
-		// returns "AI budget exceeded" for any org over budget. Silence here
-		// meant the flip re-ran every 30-min tick forever: permanent spinner,
-		// no alert, no exit.
-		continueAiJobOnPaidMock.mockResolvedValue({
-			success: false,
-			message: "AI budget exceeded",
-		});
+	it("NO automatic paid flip for transcription: a 5h-old crashed cheap job is re-kicked FREE, never continued on paid (round-6 owner decision)", async () => {
+		// The 4h flip is removed: cheap continues on the discounted Batch the
+		// moment free fails, so age alone must never buy a full-price rescue.
 		const fiveHoursAgo = new Date(
 			Date.now() - 5 * 60 * 60 * 1000,
 		).toISOString();
-
-		// First failure: counted (server-side), not silent, not yet dead.
 		armWithCandidate({
 			aiMode: "cheap",
 			processingStartedAt: fiveHoursAgo,
 			aiJobStartedAt: fiveHoursAgo,
 		});
-		await GET(cronRequest());
-		const counted = state.setCalls
-			.map(
-				(setArg) =>
-					setArg.metadata as { strings?: TemplateStringsArray } | undefined,
-			)
-			.find((metadata) =>
-				(metadata?.strings?.join("?") ?? "").includes("$.paidFlipAttempts"),
-			);
-		expect(counted).toBeDefined();
-		expect(sendOpsAlertMock).not.toHaveBeenCalled();
 
-		// At the bound: terminal ERROR + ops alert — the same exit every other
-		// exhausted state has.
-		state.selectCall = 0;
-		state.setCalls = [];
+		await GET(cronRequest());
+
+		expect(continueAiJobOnPaidMock).not.toHaveBeenCalled();
+		expect(transcribeVideoMock).toHaveBeenCalledWith(
+			"vid-cheap-1",
+			"owner-1",
+			true,
+			true,
+			"cheap",
+		);
+	});
+
+	it("a cheap job OUT of free retries goes terminal ERROR + ops alert - no automatic full-price rescue (round-6)", async () => {
+		const fiveHoursAgo = new Date(
+			Date.now() - 5 * 60 * 60 * 1000,
+		).toISOString();
 		armWithCandidate({
 			aiMode: "cheap",
-			paidFlipAttempts: 2,
+			autoRecoverAttempts: 2,
 			processingStartedAt: fiveHoursAgo,
 			aiJobStartedAt: fiveHoursAgo,
 		});
+
 		await GET(cronRequest());
+
+		expect(continueAiJobOnPaidMock).not.toHaveBeenCalled();
 		const dead = state.setCalls.find(
 			(setArg) => setArg.transcriptionStatus === "ERROR",
 		);
 		expect(dead).toBeDefined();
 		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("a quota-parked row whose bounded free budget is spent goes terminal ERROR(QUOTA) + alert - the removed flip's replacement terminator (round-6)", async () => {
+		const fiveHoursAgo = new Date(
+			Date.now() - 5 * 60 * 60 * 1000,
+		).toISOString();
+		const inTwoHours = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+		armWithCandidate({
+			aiMode: "cheap",
+			aiQuotaWaiting: true,
+			quotaRetryAttempts: 12, // MAX_QUOTA_RETRY_ATTEMPTS
+			quotaRetryNextAt: inTwoHours,
+			processingStartedAt: fiveHoursAgo,
+			aiJobStartedAt: fiveHoursAgo,
+		});
+
+		await GET(cronRequest());
+
+		const dead = state.setCalls.find(
+			(setArg) => setArg.transcriptionStatus === "ERROR",
+		) as { metadata?: { strings?: TemplateStringsArray } } | undefined;
+		expect(dead).toBeDefined();
+		expect(dead?.metadata?.strings?.join("?") ?? "").toContain("QUOTA");
+		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
+		expect(transcribeVideoMock).not.toHaveBeenCalled();
 	});
 
 	it("a quota-PARKED cheap job whose ladder slot is NOT due yet is left alone (no hourly ffmpeg, no flag flicker)", async () => {
@@ -343,24 +364,7 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		expect(stalenessFragment).toContain("''");
 	});
 
-	it("a cheap job out of free retries is offered the PAID path before being declared dead (round-3 #2)", async () => {
-		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-		armWithCandidate({
-			aiMode: "cheap",
-			autoRecoverAttempts: 2, // free retries exhausted
-			processingStartedAt: twoHoursAgo,
-			aiJobStartedAt: twoHoursAgo, // < 4h, so the time-based flip is not due
-		});
-
-		await GET(cronRequest());
-
-		expect(continueAiJobOnPaidMock).toHaveBeenCalledWith({
-			videoId: "vid-cheap-1",
-			ownerId: "owner-1",
-			phase: "transcription",
-		});
-		// NOT declared dead, no ops death alert.
-		expect(sendOpsAlertMock).not.toHaveBeenCalled();
-		expect(transcribeVideoMock).not.toHaveBeenCalled();
-	});
+	// (round-3's "offered the PAID path before death" test was deliberately
+	// REMOVED in round 6: the owner's decision forbids any automatic
+	// cheap→full-price continuation — see the terminal-ERROR tests above.)
 });

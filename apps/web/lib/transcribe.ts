@@ -15,6 +15,7 @@ import {
 	BudgetExceededError,
 } from "@/lib/ai-cost-guard";
 import { isTranscriptionJobStale } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
+import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
@@ -112,7 +113,7 @@ export async function transcribeVideo(
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
-	let hasUsableGeminiKey = Boolean(serverEnv().GEMINI_API_KEY);
+	let hasUsableGeminiKey = hasPaidGeminiKey();
 	if (!hasUsableGeminiKey && owner?.geminiApiKey) {
 		try {
 			hasUsableGeminiKey = Boolean(await decrypt(owner.geminiApiKey));

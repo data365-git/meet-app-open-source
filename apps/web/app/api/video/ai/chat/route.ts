@@ -4,6 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { aiChatUsage, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -323,7 +324,7 @@ export async function POST(request: NextRequest) {
 	}
 
 	if (!apiKey) {
-		apiKey = serverEnv().GEMINI_API_KEY;
+		apiKey = getPaidGeminiKey({ operation: "chat" });
 	}
 
 	if (!apiKey) {

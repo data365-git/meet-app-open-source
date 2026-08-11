@@ -97,6 +97,10 @@ export async function GET(request: NextRequest) {
 			// by the workflow at the moment the phase starts — same honesty rule
 			// as the chunk counters below.
 			aiProcessingSubStep: metadata.aiProcessingSubStep ?? null,
+			// Cheap mode: a pending durable Batch means "discounted paid queue is
+			// working", not "waiting for free quota" — the panel words differ.
+			aiBatchPending:
+				Array.isArray(metadata.aiBatchJobs) && metadata.aiBatchJobs.length > 0,
 			transcriptionChunksCompleted:
 				metadata.transcriptionChunksCompleted ?? null,
 			transcriptionChunksTotal: metadata.transcriptionChunksTotal ?? null,

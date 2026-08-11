@@ -129,17 +129,26 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(H.withCostGuard).toHaveBeenCalledTimes(1);
 	});
 
-	it("cheap mode + non-quota free error: falls back to the paid key/model", async () => {
+	it("cheap mode + non-quota free error: signals the Batch continuation, NEVER the full-price paid call (round-6 owner decision)", async () => {
+		// OLD contract (owner overturned it 2026-08-11): any non-quota free
+		// failure fell through to the full-price sync call — cheap silently
+		// billing full price. NEW contract: cheap continues on the discounted
+		// Batch via the quota-wait signal; the paid key is never used here.
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini
 			.mockRejectedValueOnce(new Error("free model returned malformed VTT"))
 			.mockResolvedValueOnce(PAID_RESULT);
 
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, CHEAP_CTX);
+		const err = await transcribeAudio(
+			"https://a/x.mp3",
+			300,
+			null,
+			CHEAP_CTX,
+		).catch((e) => e);
 
-		expect(out).toBe("WEBVTT\n\nPAID");
-		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
-		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+		expect((err as Error).name).toBe("AiQuotaWaitError");
+		// Only the free attempt ran — a second call would be full price.
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
 	});
 
 	it("fast free probe is bounded: single attempt (maxAttempts=1) with an abort signal", async () => {

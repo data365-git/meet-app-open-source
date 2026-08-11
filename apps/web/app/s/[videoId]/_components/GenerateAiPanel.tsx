@@ -57,6 +57,9 @@ interface GenerateAiPanelProps {
 	aiProcessingSubStep?: AiProcessingSubStep | null;
 	aiMode?: AiSpeedMode | null;
 	aiQuotaWaiting?: boolean;
+	/** Cheap mode: a durable Batch is pending on the discounted paid queue —
+	 * the honest wording differs from "waiting for free quota". */
+	aiBatchPending?: boolean;
 	/** Why transcription failed. QUOTA = the AI account ran out of credits —
 	 * the recording is safe and the recovery cron will re-run it. */
 	transcriptionErrorCode?: "QUOTA" | "FAILED" | null;
@@ -122,6 +125,7 @@ export function GenerateAiPanel({
 	aiProcessingSubStep,
 	aiMode,
 	aiQuotaWaiting = false,
+	aiBatchPending = false,
 	transcriptionErrorCode = null,
 	duration,
 	aiIncomplete = false,
@@ -433,7 +437,9 @@ export function GenerateAiPanel({
 		// label or a fake percentage.
 		const liveDetailLine =
 			currentMode === "cheap" && aiQuotaWaiting
-				? tShare("aiLiveWaitingFreeQuota")
+				? tShare(
+						aiBatchPending ? "aiLiveDiscountedQueue" : "aiLiveWaitingFreeQuota",
+					)
 				: (activeDetail ??
 					(currentStep === "transcribe" &&
 					aiProcessingSubStep === "extract_audio"
@@ -608,7 +614,11 @@ export function GenerateAiPanel({
 
 				{currentMode === "cheap" && aiQuotaWaiting && (
 					<p className="text-[12px] text-amber-11">
-						{tShare("aiModeCheapQuotaWaiting")}
+						{tShare(
+							aiBatchPending
+								? "aiModeCheapBatchRunning"
+								: "aiModeCheapQuotaWaiting",
+						)}
 					</p>
 				)}
 

@@ -6,6 +6,7 @@ import type {
 	VideoMetadata,
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
@@ -115,7 +116,7 @@ async function callGeminiJson(
 	prompt: string,
 	context: AiCallContext,
 ): Promise<string> {
-	const apiKey = serverEnv().GEMINI_API_KEY;
+	const apiKey = getPaidGeminiKey({ operation: "translation" });
 	if (!apiKey) {
 		throw new Error("Missing GEMINI_API_KEY");
 	}

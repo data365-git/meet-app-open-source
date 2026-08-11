@@ -83,14 +83,6 @@ export interface VideoMetadata {
 	 */
 	aiProgressAt?: string;
 	/**
-	 * How many times the automatic paid continuation (the 4h flip / the
-	 * out-of-free-retries flip) has FAILED for this job — e.g. the org's AI
-	 * budget is exhausted. Bounded by MAX_PAID_FLIP_ATTEMPTS; reaching the
-	 * bound turns the row terminal ERROR with an ops alert instead of
-	 * re-attempting the flip every cron tick forever. Cleared on success.
-	 */
-	paidFlipAttempts?: number;
-	/**
 	 * Fine sub-phase marker inside the "transcribe" step, written by the workflow
 	 * at the moment the phase actually starts — the UI must never claim a step it
 	 * cannot prove from metadata. "extract_audio" = ffmpeg is splitting the video

@@ -17,6 +17,11 @@ import { eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
 import { withCostGuard } from "@/lib/ai-cost-guard";
+import {
+	assertCheapNeverUsesFullPriceSync,
+	getPaidGeminiKey,
+	hasPaidGeminiKey,
+} from "@/lib/gemini-paid-key";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
@@ -868,11 +873,11 @@ export async function transcribeAudio(
 ): Promise<string> {
 	"use step";
 
-	let apiKey: string | undefined;
+	let ownerApiKey: string | undefined;
 
 	if (ownerEncryptedGeminiKey) {
 		try {
-			apiKey = await decrypt(ownerEncryptedGeminiKey);
+			ownerApiKey = await decrypt(ownerEncryptedGeminiKey);
 		} catch {
 			console.error(
 				"[transcribe] Failed to decrypt user Gemini key, falling back to server key",
@@ -880,25 +885,27 @@ export async function transcribeAudio(
 		}
 	}
 
-	if (!apiKey) {
-		apiKey = serverEnv().GEMINI_API_KEY;
-	}
-
-	if (!apiKey) {
+	if (!ownerApiKey && !hasPaidGeminiKey()) {
 		throw new FatalError(
 			"No Gemini API key configured. Set one in Settings → Account → Transcription API Keys, or ask your admin to set GEMINI_API_KEY.",
 		);
 	}
 
-	const resolvedApiKey = apiKey;
-
-	// Synchronous path — the default. UNCHANGED from before batch mode existed;
-	// this is the regression line that must behave identically when mode=fast.
+	// Synchronous path. Fast mode: free probe, then the full-price paid call.
+	// Cheap mode (OWNER DECISION 2026-08-11, his words: "imkon qadar bepuldan
+	// foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"): free as much
+	// as possible; when free fails FOR ANY REASON, continue on the CHEAPEST
+	// paid path — the durable Batch (~half price) — and NEVER fall through to
+	// the full-price sync call below. The AiQuotaWaitError throw is the signal
+	// the chunk layer turns into a Batch submission; each new chunk still
+	// tries free first, so the job returns to free as soon as quota is back.
 	const runSync = async (): Promise<string> => {
-		// Free-tier first (auto-smart cost saver): fast mode falls back to the paid
-		// key/model on any free-key failure. Cheap mode is patient: free-key quota
-		// failures throw so cron can retry from the partial checkpoint later.
 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
+		if (!freeKey && context.aiSpeedMode === "cheap") {
+			throw new AiQuotaWaitError(
+				`No free-tier key configured for cheap video=${context.videoId} — continuing on the discounted Batch path`,
+			);
+		}
 		if (freeKey) {
 			try {
 				const freeResult = await withCostGuard({
@@ -935,18 +942,38 @@ export async function transcribeAudio(
 				});
 				return freeResult.transcriptVtt;
 			} catch (error) {
-				if (
-					context.aiSpeedMode === "cheap" &&
-					isQuotaLikeAiError(error)
-				) {
+				if (context.aiSpeedMode === "cheap") {
+					// ANY free failure in cheap mode — quota or a transient network
+					// error — continues on the discounted Batch, never full price.
+					// (Falling through on non-quota errors was the last live path
+					// from cheap to the full-price sync call — round-6 owner brief.)
 					throw new AiQuotaWaitError(
-						`Free-tier transcription quota exhausted for video=${context.videoId}`,
+						isQuotaLikeAiError(error)
+							? `Free-tier transcription quota exhausted for video=${context.videoId}`
+							: `Free-tier transcription failed (non-quota) for video=${context.videoId}: ${error instanceof Error ? error.message : String(error)} — continuing on the discounted Batch path`,
 					);
 				}
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
+		}
+
+		// Full-price synchronous paid call — FAST mode only from here on. The
+		// assert is the runtime backstop of the invariant and also covers the
+		// owner's PERSONAL key (his money gets the same protection as ours).
+		assertCheapNeverUsesFullPriceSync(context.aiSpeedMode);
+		const resolvedApiKey =
+			ownerApiKey ??
+			getPaidGeminiKey({
+				operation: "transcription",
+				mode: "fast",
+				route: "sync",
+			});
+		if (!resolvedApiKey) {
+			throw new FatalError(
+				"No Gemini API key configured. Set one in Settings → Account → Transcription API Keys, or ask your admin to set GEMINI_API_KEY.",
+			);
 		}
 
 		const result = await withCostGuard({
@@ -1004,7 +1031,11 @@ async function submitCheapChunkBatch(
 	// db hiccup, submit error) is logged and swallowed so the patient free retry
 	// stays live and a transient problem never escalates a quota wait to ERROR.
 	try {
-		const paidKey = serverEnv().GEMINI_API_KEY;
+		const paidKey = getPaidGeminiKey({
+			operation: "transcription",
+			mode: "cheap",
+			route: "batch",
+		});
 		if (!paidKey) {
 			console.warn(
 				`[transcribe] cheap quota but no paid GEMINI_API_KEY set; staying on patient free wait for video=${videoId}`,
@@ -1936,7 +1967,6 @@ async function saveTranscription(
 	// at attempts=2 and went straight to the paid flip with zero free
 	// re-kicks — against the owner's explicit cheap choice.
 	delete md.autoRecoverAttempts;
-	delete md.paidFlipAttempts;
 	// Terminal transcription: drop the job's 4h clock so a LATER brand-new
 	// analysis does not inherit this completed job's timestamp and immediately
 	// flip to paid (spec §5 C6, bug #8). A retry keeps it via resolveAiJobStartedAt.

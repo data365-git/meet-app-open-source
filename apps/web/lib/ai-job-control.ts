@@ -1,9 +1,9 @@
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
 import {
 	cancelBatch,
 	deleteBatchFile,
@@ -24,7 +24,13 @@ export async function abandonPendingBatchJobs(
 ): Promise<void> {
 	const jobs = metadata.aiBatchJobs;
 	if (!Array.isArray(jobs) || jobs.length === 0) return;
-	const paidKey = serverEnv().GEMINI_API_KEY;
+	// Cancelling/deleting a cheap job's Batch artifacts is Batch-route
+	// administration — same authorization as submitting them.
+	const paidKey = getPaidGeminiKey({
+		operation: "transcription",
+		mode: "cheap",
+		route: "batch",
+	});
 	if (!paidKey) return;
 	await Promise.allSettled(
 		jobs.flatMap((job) => [

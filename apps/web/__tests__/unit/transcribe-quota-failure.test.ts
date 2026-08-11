@@ -3,9 +3,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ─── Mock every heavy dependency workflows/transcribe.ts imports ──────────────
 // Mirrors transcribe-batch-mode.test.ts; only the pieces this suite exercises
 // are given real behaviour.
-vi.mock("@cap/database", () => ({ db: vi.fn() }));
+vi.mock("@cap/database", () => ({
+	// submitCheapChunkBatch reads the row's aiBatchJobs before submitting.
+	db: () => ({
+		select: () => ({
+			from: () => ({
+				where: () => ({ limit: async () => [{ metadata: {} }] }),
+			}),
+		}),
+	}),
+}));
+const ENV = vi.hoisted(() => ({
+	value: { GEMINI_API_KEY: "server-key" } as Record<string, string | undefined>,
+}));
 vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ GEMINI_API_KEY: "server-key" }),
+	serverEnv: () => ENV.value,
 }));
 vi.mock("@cap/web-backend", () => ({ Storage: {} }));
 vi.mock("@cap/database/crypto", () => ({
@@ -94,7 +106,10 @@ const { withCostGuard, transcribeWithGemini, submitChunkBatch } = H;
 
 // ─── Import AFTER mocks ───────────────────────────────────────────────────────
 import { transcribeAudioChunks } from "@/workflows/transcribe";
-import { isTranscriptionQuotaFailureError } from "@/lib/ai-quota-wait";
+import {
+	isAiQuotaWaitError,
+	isTranscriptionQuotaFailureError,
+} from "@/lib/ai-quota-wait";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
 
@@ -135,6 +150,49 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		withCostGuard.mockImplementation(
 			async (opts: { fn: () => Promise<unknown> }) => opts.fn(),
 		);
+		submitChunkBatch.mockResolvedValue({
+			batchName: "batches/test",
+			fileName: "files/test",
+		});
+		ENV.value = { GEMINI_API_KEY: "server-key" };
+	});
+
+	// ─── OWNER DECISION + INVARIANT (round-6): cheap never bills full price ──
+
+	it("cheap + NO free key: goes STRAIGHT to the discounted Batch — the full-price sync call is never made", async () => {
+		// The full-price call would show up as a transcribeWithGemini invocation
+		// with the paid server key; there must be ZERO calls.
+		const err = await transcribeAudioChunks(
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+		).catch((e) => e);
+
+		expect(isAiQuotaWaitError(err)).toBe(true);
+		expect(transcribeWithGemini).not.toHaveBeenCalled();
+		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
+	});
+
+	it("cheap + free fails NON-quota (transient error): continues on Batch, never falls through to full price", async () => {
+		// Pre-round-6, this was the last live path from cheap to the full-price
+		// sync call: any non-quota free failure fell straight through to paid.
+		ENV.value = {
+			GEMINI_API_KEY: "server-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		};
+		transcribeWithGemini.mockRejectedValue(genuineError());
+
+		const err = await transcribeAudioChunks(
+			{ chunks: [chunk(0)], totalDurationSec: 600 },
+			null,
+			{ ...CTX, aiSpeedMode: "cheap" },
+		).catch((e) => e);
+
+		expect(isAiQuotaWaitError(err)).toBe(true);
+		// Exactly ONE call — the free attempt. A second call would be the
+		// full-price fallback the owner forbade.
+		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect(submitChunkBatch).toHaveBeenCalledTimes(1);
 	});
 
 	it("fast + EVERY chunk 429s: throws a QUOTA-classified error", async () => {

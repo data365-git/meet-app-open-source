@@ -141,19 +141,23 @@ describe("transcribeAudio speed-mode routing", () => {
 		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 
-	it("mode=cheap: uses the synchronous patient-free path and does NOT pass batch:true", async () => {
+	it("mode=cheap with NO free key: signals the Batch continuation instead of running the full-price sync call (round-6 owner decision)", async () => {
+		// This harness configures no GEMINI_API_KEY_FREE, so cheap has no free
+		// lane here. The OLD contract sent it to the synchronous paid path —
+		// full price against an explicit cheap choice. The new contract throws
+		// the quota-wait signal so the chunk layer submits a discounted Batch.
 		costGuardRunsFn();
 		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
 
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
+		const err = await transcribeAudio("https://a/x.mp3", 300, null, {
 			...CTX_BASE,
 			aiSpeedMode: "cheap",
-		});
+		}).catch((e) => e);
 
-		expect(out).toBe("WEBVTT\n\nSYNC");
-		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect((err as Error).name).toBe("AiQuotaWaitError");
+		// The full-price sync machinery is never touched.
+		expect(transcribeWithGemini).not.toHaveBeenCalled();
+		expect(withCostGuard).not.toHaveBeenCalled();
 		expect(transcribeChunkWithBatch).not.toHaveBeenCalled();
-		expect(withCostGuard).toHaveBeenCalledTimes(1);
-		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 });

@@ -15,8 +15,8 @@ import {
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
 	isQuotaRetryDue,
-	MAX_PAID_FLIP_ATTEMPTS,
 	isTranscriptionJobStale,
+	MAX_QUOTA_RETRY_ATTEMPTS,
 	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
@@ -53,49 +53,35 @@ type StaleRefinementCandidate = {
 };
 
 /**
- * A paid-continuation FAILURE must never be an invisible no-op (round-5 #3):
- * a budget-exhausted org's cheap job past 4h used to re-attempt the flip on
- * every tick forever — permanent spinner, no alert, no exit. The flip now has
- * a bounded budget: below MAX_PAID_FLIP_ATTEMPTS the failure is counted
- * (server-side JSON_SET — no snapshot spread) and retried next tick; at the
- * bound the row goes terminal ERROR with an ops alert, the same exit every
- * other exhausted state has.
+ * Terminal exit shared by the exhausted quota ladder (round-6): when a
+ * quota-parked cheap row has used its whole bounded free-retry budget and
+ * still cannot proceed, it must END — visibly — rather than sit parked
+ * forever behind a spinner. QUOTA code (not FAILED): the recording is fine,
+ * the account/quota is the problem, and the share panel already shows the
+ * calmer "credits" message with a retry button for that code. The same
+ * quotaRetryAttempts budget blocks the quota-ERROR loop from resurrecting it.
  */
-async function recordPaidFlipFailure(
-	candidate: { id: Video.VideoId; name: string },
-	metadata: VideoMetadata,
-	reason: string,
-): Promise<"retry" | "dead"> {
-	const attempts = (metadata.paidFlipAttempts ?? 0) + 1;
-	if (attempts < MAX_PAID_FLIP_ATTEMPTS) {
-		await db()
-			.update(videos)
-			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.paidFlipAttempts', ${attempts})`,
-			})
-			.where(eq(videos.id, candidate.id));
-		return "retry";
-	}
+async function markQuotaLadderExhausted(candidate: {
+	id: Video.VideoId;
+	name: string;
+}): Promise<void> {
 	await db()
 		.update(videos)
 		.set({
 			transcriptionStatus: "ERROR",
-			// FAILED (not QUOTA), so the quota loop cannot resurrect what the
-			// flip already proved unpayable.
 			metadata: sql`JSON_SET(
 				COALESCE(${videos.metadata}, JSON_OBJECT()),
 				'$.transcriptionError', JSON_OBJECT(
-					'code', 'FAILED',
-					'message', ${`Paid continuation failed after ${attempts} attempts: ${reason}`.slice(0, 500)},
+					'code', 'QUOTA',
+					'message', ${"Free-quota retry budget exhausted while parked; no discounted Batch was available"},
 					'at', ${new Date().toISOString()}
 				)
 			)`,
 		})
 		.where(eq(videos.id, candidate.id));
 	await sendOpsAlert(
-		`AI job dead after ${attempts} failed paid continuations: ${candidate.id} (${candidate.name})`,
+		`Cheap AI job exhausted its free-quota retry budget: ${candidate.id} (${candidate.name})`,
 	);
-	return "dead";
 }
 
 export async function GET(request: Request) {
@@ -238,25 +224,16 @@ export async function GET(request: Request) {
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
 		try {
-			if (shouldAutoFlipCheapJobToPaid(metadata, now)) {
-				console.warn(
-					`[recover-stale-ai-jobs] Cheap transcription job exceeded 4h; continuing on paid: ${candidate.id}`,
-				);
-				const result = await continueAiJobOnPaid({
-					videoId: candidate.id,
-					ownerId: candidate.ownerId,
-					phase: "transcription",
-				});
-				if (result.success) {
-					flippedToPaid++;
-					retried++;
-				} else if (
-					(await recordPaidFlipFailure(candidate, metadata, result.message)) ===
-					"dead"
-				) {
-					gaveUp++;
-				}
-			} else if (hasPendingBatchJobs(metadata)) {
+			// NOTE: no automatic 4h paid flip for TRANSCRIPTION anymore (owner
+			// decision 2026-08-11): cheap now continues on the discounted Batch
+			// the moment free fails, so "stuck on free for 4h" is not a state a
+			// healthy cheap job can be in. Termination is guaranteed by: the
+			// Batch collector (with-Batch rows), the bounded free ladder ending
+			// in terminal ERROR below (no-Batch rows), and the bounded stale
+			// re-kicks ending in the death branch (crashed rows). The owner's
+			// manual "continue on paid" button remains the only cheap→full-price
+			// path.
+			if (hasPendingBatchJobs(metadata)) {
 				// The poll-batch-jobs collector owns this cheap job's pending Batch;
 				// re-kicking here would create a duplicate non-idempotent Batch.
 				skippedForBatch++;
@@ -308,6 +285,15 @@ export async function GET(request: Request) {
 						"cheap",
 					);
 					quotaRetried++;
+				} else if (
+					(metadata.quotaRetryAttempts ?? 0) >= MAX_QUOTA_RETRY_ATTEMPTS
+				) {
+					// The whole bounded free budget is spent and the row is still
+					// parked (no Batch was ever available — e.g. no server paid
+					// key). Terminal exit; replaces the removed 4h flip as this
+					// state's guaranteed terminator.
+					await markQuotaLadderExhausted(candidate);
+					gaveUp++;
 				} else {
 					skippedQuotaWaiting++;
 				}
@@ -337,33 +323,11 @@ export async function GET(request: Request) {
 					resolveAiSpeedMode(nextMetadata.aiMode),
 				);
 				retried++;
-			} else if (metadata.aiMode === "cheap") {
-				// Free retries exhausted on a CHEAP job: offer the paid path BEFORE
-				// declaring it dead — that is the original 4h-flip design intent
-				// (a cheap job that cannot finish free finishes on paid), which a
-				// pure time-based flip could never reach once the row went ERROR.
-				// Fires here at ~(2 retries x stale threshold) of no-progress wall
-				// time. If the paid continuation also crashes, attempts are already
-				// exhausted and aiMode is "fast", so the next tick lands in the
-				// death branch below — bounded.
-				console.warn(
-					`[recover-stale-ai-jobs] Cheap transcription out of free retries; continuing on paid before death: ${candidate.id}`,
-				);
-				const result = await continueAiJobOnPaid({
-					videoId: candidate.id,
-					ownerId: candidate.ownerId,
-					phase: "transcription",
-				});
-				if (result.success) {
-					flippedToPaid++;
-					retried++;
-				} else if (
-					(await recordPaidFlipFailure(candidate, metadata, result.message)) ===
-					"dead"
-				) {
-					gaveUp++;
-				}
 			} else {
+				// Retries exhausted (cheap or fast alike): terminal ERROR + ops
+				// alert. No automatic paid rescue for cheap — the owner's rule
+				// allows paid only via the discounted Batch (already attempted on
+				// every re-kick) or his own explicit "continue on paid" click.
 				await db()
 					.update(videos)
 					.set({

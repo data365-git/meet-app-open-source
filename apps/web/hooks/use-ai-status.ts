@@ -20,6 +20,8 @@ type AiStatusResult = {
 	aiProcessingSubStep: AiProcessingSubStep | null;
 	aiMode: AiSpeedMode | null;
 	aiQuotaWaiting: boolean;
+	/** Cheap mode: a durable Batch is pending on the discounted paid queue. */
+	aiBatchPending: boolean;
 	hasContent: boolean;
 	/** Fine-grained transcription chunk progress ("Gemini'ga N/M audio yuborildi"). */
 	transcriptionChunksCompleted: number | null;
@@ -52,6 +54,7 @@ export const useAiStatus = (
 				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
 				aiMode: body.aiMode ?? null,
 				aiQuotaWaiting: body.aiQuotaWaiting === true,
+				aiBatchPending: body.aiBatchPending === true,
 				hasContent: !!(body.summary || body.chapters),
 				transcriptionChunksCompleted:
 					body.transcriptionChunksCompleted ?? null,

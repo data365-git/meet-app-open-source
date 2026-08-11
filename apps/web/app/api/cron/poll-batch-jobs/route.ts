@@ -3,6 +3,7 @@ import { db } from "@cap/database";
 import { aiUsageEvents, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { priceForMicros } from "@cap/utils";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -58,7 +59,12 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const paidKey = serverEnv().GEMINI_API_KEY;
+	// Polling/collecting cheap Batch jobs is Batch-route administration.
+	const paidKey = getPaidGeminiKey({
+		operation: "transcription",
+		mode: "cheap",
+		route: "batch",
+	});
 	if (!paidKey) {
 		return NextResponse.json(
 			{ error: "No paid GEMINI_API_KEY configured" },

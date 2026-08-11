@@ -3,6 +3,7 @@ import { decrypt } from "@cap/database/crypto";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
@@ -49,7 +50,7 @@ export async function startAiGeneration(
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
-	let hasUsableGeminiKey = Boolean(serverEnv().GEMINI_API_KEY);
+	let hasUsableGeminiKey = hasPaidGeminiKey();
 	if (!hasUsableGeminiKey && owner?.geminiApiKey) {
 		try {
 			hasUsableGeminiKey = Boolean(await decrypt(owner.geminiApiKey));
