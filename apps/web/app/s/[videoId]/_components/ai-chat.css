@@ -600,7 +600,12 @@ body[data-mini-docked="true"] .ai-fab {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 0.76em;
 	font-weight: 700;
-	color: var(--accent);
+	/* --accent-ink (blue-12), not --accent (blue-11): this is a BUTTON the user
+	   reads and clicks to jump the video, so it owes the 4.5:1 body-text floor,
+	   not the 3:1 graphics floor. On --accent-soft in light mode --accent
+	   measured 3.87:1 — pale blue on pale blue, exactly the "hunt for the
+	   timestamp" complaint. blue-12 clears it in both themes. */
+	color: var(--accent-ink);
 	background: var(--accent-soft);
 	border: 1px solid transparent;
 	border-radius: 6px;
