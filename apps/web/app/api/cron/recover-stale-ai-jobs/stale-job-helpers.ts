@@ -1,7 +1,10 @@
 import type { VideoMetadata } from "@cap/database/types";
 
 export const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
-const CHEAP_AUTO_PAID_AFTER_MS = 4 * 60 * 60 * 1000;
+// (round-10: the 4h auto-flip helper and its constant are deleted — neither
+// phase parks anymore, so no automatic paid escalation exists; cheap pays
+// inline per call the moment its free chain is genuinely exhausted, and the
+// owner's manual "continue on paid" button is the only other paid path.)
 // These thresholds are TIME SINCE LAST PROGRESS (the aiProgressAt heartbeat,
 // falling back to processingStartedAt for rows claimed before the heartbeat
 // existed), NOT time since the job started. That distinction is the whole
@@ -44,16 +47,6 @@ export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {
 	return metadata.aiMode === "cheap"
 		? CHEAP_STALE_JOB_THRESHOLD_MS
 		: FAST_STALE_JOB_THRESHOLD_MS;
-}
-
-export function shouldAutoFlipCheapJobToPaid(
-	metadata: VideoMetadata,
-	nowMs = Date.now(),
-): boolean {
-	if (metadata.aiMode !== "cheap") return false;
-	if (!metadata.aiJobStartedAt) return false;
-	const startedMs = Date.parse(metadata.aiJobStartedAt);
-	return Number.isFinite(startedMs) && nowMs - startedMs > CHEAP_AUTO_PAID_AFTER_MS;
 }
 
 /**
@@ -128,9 +121,8 @@ export function withQuotaRetryScheduled(
 
 /** A cheap job with a pending durable Batch is owned by the poll-batch-jobs
  * collector, not this recovery cron — skip the normal stale re-kick for it.
- * (The old four-hour paid flip that used to override this was removed in
- * round 6; the Batch↔free cycle is bounded per chunk instead — see
- * MAX_SAME_CHUNK_BATCH_SUBMITS in workflows/transcribe.ts.) */
+ * (Legacy-only since round 8: nothing submits new Batch jobs; the collector
+ * exists solely to drain in-flight ones.) */
 export function hasPendingBatchJobs(metadata: VideoMetadata): boolean {
 	return Array.isArray(metadata.aiBatchJobs) && metadata.aiBatchJobs.length > 0;
 }

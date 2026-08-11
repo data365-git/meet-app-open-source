@@ -19,7 +19,6 @@ import { FatalError } from "workflow";
 import { z } from "zod";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
 import {
-	AiQuotaWaitError,
 	isAiQuotaWaitError,
 	isQuotaLikeAiError,
 } from "@/lib/ai-quota-wait";
@@ -695,6 +694,11 @@ export function buildSaveResultsPatch(
 		aiGenerationError: finalUsable ? undefined : AI_EMPTY_RESULT_ERROR,
 		aiProcessingStep: finalUsable ? "done" : current.aiProcessingStep,
 		aiQuotaWaiting: undefined,
+		// Success refunds the free auto-recover budget (round-10 #3, mirroring
+		// saveTranscription): the counter's only writer is the recovery cron,
+		// and without a refund a video that once used its retries starts every
+		// LATER generation at attempts=2 — zero re-kicks, straight to ERROR.
+		...(finalUsable ? { autoRecoverAttempts: undefined } : {}),
 		// Terminal success drops the job's 4h clock so a later brand-new analysis
 		// starts fresh (spec §5 C6, bug #8); an ERROR keeps it so a retry/flip
 		// still counts from the original start.
@@ -973,6 +977,10 @@ export async function callAiApi(
 	const { json = true, maxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS } = options;
 	const env = serverEnv();
 	const freeKey = env.GEMINI_API_KEY_FREE;
+	// FACT, not a declaration (round-10 #1, mirroring transcription): true only
+	// when the free chain genuinely has no capacity — every model quota-failed,
+	// or no free key exists at all.
+	let freeQuotaExhausted = !freeKey;
 	let freeInputTokens = 0;
 	let freeOutputTokens = 0;
 
@@ -980,10 +988,10 @@ export async function callAiApi(
 		// Tez: the whole free CHAIN shares one bounded probe deadline (a quota 429
 		// answers instantly, so trying the second model still fits); the abort
 		// signal stops the chain, never letting a hung call spill past the budget.
-		// Arzon: patient — default retries per model, no deadline (the recover
-		// cron handles the quota wait). The chain parks (AiQuotaWaitError) only
-		// when EVERY free model failed for quota — if one merely errored, paid is
-		// the right fallback, and if one succeeded there is nothing to park.
+		// Arzon: patient — default retries per model, no deadline. Since round
+		// 10 nothing parks: EVERY model quota-failing = genuine exhaustion and
+		// the call pays inline; any NON-quota failure is a real error and
+		// surfaces instead of silently billing paid with free quota intact.
 		const isFast = context.aiSpeedMode !== "cheap";
 		const freeErrors: unknown[] = [];
 		const tryFreeChain = async (
@@ -1031,34 +1039,60 @@ export async function callAiApi(
 				? await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain)
 				: await tryFreeChain();
 			if (freeResult) return freeResult;
-			if (
-				context.aiSpeedMode === "cheap" &&
-				freeErrors.length > 0 &&
-				freeErrors.every((e) => isQuotaLikeAiError(e))
-			) {
-				throw new AiQuotaWaitError(
-					`Free-tier summary quota exhausted for video=${context.videoId}`,
-				);
+			if (context.aiSpeedMode === "cheap") {
+				if (
+					freeErrors.length > 0 &&
+					freeErrors.every((e) => isQuotaLikeAiError(e))
+				) {
+					// Genuine exhaustion: EVERY free model answered with a quota
+					// signal. Under the owner's rule the job now pays INLINE and
+					// carries on — no parking, no aiQuotaWaiting, no 4h flip
+					// (round-10 #1/#2: generation gets the same shape as
+					// transcription; the park+flip pair is deleted).
+					freeQuotaExhausted = true;
+				} else {
+					// At least one free failure was NOT a quota signal (revoked
+					// key, permission denied, empty/unparseable response). That is
+					// a real ERROR, not exhaustion — billing the paid API here
+					// with free daily quota intact is the owner's original defect
+					// in the generation phase (round-10 #1, the twin).
+					throw (
+						freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
+						new Error(
+							`Free-tier summary chain failed for video=${context.videoId}`,
+						)
+					);
+				}
 			}
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
 		} catch (error) {
-			if (error instanceof AiQuotaWaitError) throw error;
+			if (context.aiSpeedMode === "cheap" && !isQuotaLikeAiError(error)) {
+				// Cheap free-chain real errors surface (they end in the bounded
+				// re-kick -> ERROR machinery); only the fast probe deadline may
+				// fall through to paid here.
+				throw error;
+			}
+			if (context.aiSpeedMode === "cheap") {
+				freeQuotaExhausted = true;
+			}
 			console.warn(
 				`[generate-ai] free-tier probe ended (${error instanceof Error ? error.message : String(error)}) for video=${context.videoId}, falling back to paid`,
 			);
 		}
 	}
 
-	// Paid key resolved only HERE, after the free chain above has run — so a
-	// cheap generation call can truthfully declare its free chain exhausted
+	// Paid key resolved only HERE, after the free chain above has run — so the
+	// cheap declaration is the classified FACT computed above, never a literal
 	// (generation has no discounted route; sync IS its cheapest paid path).
 	const apiKey = getPaidGeminiKey({
 		operation: "generation",
 		mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
 		route: "sync",
-		...(context.aiSpeedMode === "cheap" ? { freeExhausted: true } : {}),
+		...(context.aiSpeedMode === "cheap"
+			? { freeExhausted: freeQuotaExhausted }
+			: {}),
 	});
 	if (!apiKey) {
 		console.warn("[generate-ai] GEMINI_API_KEY not set, skipping AI call");

@@ -8,7 +8,6 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
 import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
-import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -20,7 +19,12 @@ type GenerateAiResult = {
 export async function startAiGeneration(
 	videoId: Video.VideoId,
 	userId: string,
-	opts?: { force?: boolean; speedModeOverride?: AiSpeedMode },
+	opts?: {
+		force?: boolean;
+		speedModeOverride?: AiSpeedMode;
+		/** A cron/recovery re-kick — must NOT refund the recovery budget. */
+		isRetry?: boolean;
+	},
 ): Promise<GenerateAiResult> {
 	const force = opts?.force ?? false;
 	if (!userId || !videoId) {
@@ -118,6 +122,12 @@ export async function startAiGeneration(
 					aiQuotaWaiting: false,
 					aiGenerationStatus: "QUEUED",
 					aiProcessingStartedAt: new Date().toISOString(),
+					// A FRESH (owner-initiated) start gets a fresh recovery budget
+					// (round-10 #3, mirroring transcription): without this, two
+					// stalls pinned the video at attempts=2 forever and every later
+					// generation went straight to ERROR with zero re-kicks. A cron
+					// RETRY must NOT refund itself.
+					...(opts?.isRetry ? {} : { autoRecoverAttempts: undefined }),
 				} as VideoMetadata,
 			})
 			.where(eq(videos.id, videoId));
@@ -128,19 +138,13 @@ export async function startAiGeneration(
 			force,
 			speedModeOverride: aiSpeedMode,
 		}).catch(async (err) => {
-			if (isAiQuotaWaitError(err)) {
-				console.warn(
-					`[startAiGeneration] Cheap AI generation waiting for free quota for video ${videoId}:`,
-					err,
-				);
-			} else {
-				console.error(
-					`[startAiGeneration] Inline workflow failed for video ${videoId}:`,
-					err,
-				);
-			}
-			// Mark ERROR for real failures so the UI shows a retryable error instead
-			// of a forever spinner. Cheap quota waits intentionally stay PROCESSING.
+			console.error(
+				`[startAiGeneration] Inline workflow failed for video ${videoId}:`,
+				err,
+			);
+			// Mark ERROR so the UI shows a retryable error instead of a forever
+			// spinner. (Since round 10 there are no cheap quota-parks: every
+			// failure landing here is a real one.)
 			try {
 				const [current] = await db()
 					.select({ metadata: videos.metadata })
@@ -153,21 +157,10 @@ export async function startAiGeneration(
 				if (currentMeta.aiGenerationStatus === "COMPLETE") {
 					return;
 				}
-				if (
-					isAiQuotaWaitError(err) &&
-					currentMeta.aiMode === "cheap"
-				) {
-					await db()
-						.update(videos)
-						.set({
-							metadata: {
-								...currentMeta,
-								aiQuotaWaiting: true,
-							} as VideoMetadata,
-						})
-						.where(eq(videos.id, videoId));
-					return;
-				}
+				// (round-10 #2: the quota-park writer is gone — cheap generation
+				// pays inline when its free chain is genuinely exhausted, so an
+				// AiQuotaWaitError can no longer reach this catch. Any failure
+				// here is a real error and gets the visible, retryable ERROR.)
 				await db()
 					.update(videos)
 					.set({

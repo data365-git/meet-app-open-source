@@ -5,7 +5,6 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { continueAiJobOnPaid } from "@/lib/ai-job-control";
 import { resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -15,7 +14,6 @@ import {
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
-	shouldAutoFlipCheapJobToPaid,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
 	withIncrementedAutoRecoverAttempts,
@@ -186,7 +184,6 @@ export async function GET(request: Request) {
 
 	let retried = 0;
 	let gaveUp = 0;
-	let flippedToPaid = 0;
 	let skippedForBatch = 0;
 	let skippedAlive = 0;
 	let quotaRetried = 0;
@@ -304,24 +301,15 @@ export async function GET(request: Request) {
 		}
 	}
 
+	// NOTE (round-10 #2): the generation 4h paid flip is GONE, because cheap
+	// generation no longer parks — like transcription since round 8, it pays
+	// INLINE the moment its free chain is genuinely exhausted, so "stuck on
+	// free for 4h" is not a state a healthy cheap generation can be in. A
+	// stale generation row is a crash, owned by the bounded re-kick below.
 	for (const candidate of aiGenerationCandidates) {
 		const metadata = candidate.metadata ?? {};
 		try {
-			if (shouldAutoFlipCheapJobToPaid(metadata, now)) {
-				console.warn(
-					`[recover-stale-ai-jobs] Cheap AI generation job exceeded 4h; continuing on paid: ${candidate.id}`,
-				);
-				const result = await continueAiJobOnPaid({
-					videoId: candidate.id,
-					ownerId: candidate.ownerId,
-					phase: "generation",
-				});
-				if (!result.success) {
-					throw new Error(result.message);
-				}
-				flippedToPaid++;
-				retried++;
-			} else if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
+			if (shouldAutoRetry(metadata.autoRecoverAttempts)) {
 				const nextMetadata: VideoMetadata = {
 					...withIncrementedAutoRecoverAttempts(metadata),
 					aiGenerationStatus: undefined,
@@ -332,6 +320,7 @@ export async function GET(request: Request) {
 					.where(eq(videos.id, candidate.id));
 				await startAiGeneration(candidate.id, candidate.ownerId, {
 					force: true,
+					isRetry: true,
 				});
 				retried++;
 			} else {
@@ -399,7 +388,6 @@ export async function GET(request: Request) {
 		refineStaleBefore: refineStaleBefore.toISOString(),
 		retried,
 		gaveUp,
-		flippedToPaid,
 		skippedForBatch,
 		skippedAlive,
 		quotaRetried,

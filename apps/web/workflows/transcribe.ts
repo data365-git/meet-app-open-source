@@ -55,6 +55,7 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { restoreRussianScript } from "@/lib/restore-russian-script";
 import { runPromise } from "@/lib/server";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
+import { sendOpsAlert } from "@/lib/ops-alert";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
 import {
 	copyCueTimingsByIndex,
@@ -1259,6 +1260,15 @@ export async function transcribeAudioChunks(
 		console.warn(
 			`[transcribe] ${failedChunkCount}/${audio.chunks.length} chunks failed for ${context.videoId}; saved a partial transcript.`,
 		);
+		// VISIBLE, not silent (round-10 #4): a cheap job with a broken free key
+		// and a resumed partial otherwise COMPLETEs looking finished while every
+		// un-transcribed chunk is a permanent gap (cheap gap-fill is free-only).
+		// The gaps are already recorded in metadata.transcriptionGaps; this
+		// alert is the human-facing signal that a "finished" transcript shipped
+		// with holes and why.
+		await sendOpsAlert(
+			`Transcription for ${context.videoId} completed PARTIALLY: ${failedChunkCount}/${audio.chunks.length} chunk(s) failed and remain as gaps`,
+		).catch(() => {});
 	}
 
 	return restoreRussianScript(mergeChunkedWebVtt(transcribedChunks));

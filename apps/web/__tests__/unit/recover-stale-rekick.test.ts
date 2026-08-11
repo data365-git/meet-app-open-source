@@ -90,8 +90,11 @@ vi.mock("@/lib/ai-job-control", () => ({
 	continueAiJobOnPaid: continueAiJobOnPaidMock,
 }));
 
+const startAiGenerationMock = vi.hoisted(() =>
+	vi.fn(() => Promise.resolve({ success: true })),
+);
 vi.mock("@/lib/generate-ai", () => ({
-	startAiGeneration: vi.fn(() => Promise.resolve({ success: true })),
+	startAiGeneration: startAiGenerationMock,
 }));
 
 const transcribeVideoMock = vi.hoisted(() =>
@@ -283,6 +286,42 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		);
 		expect(dead).toBeDefined();
 		expect(sendOpsAlertMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("a stale cheap GENERATION row past 4h is re-kicked as a retry, NEVER auto-flipped to paid (round-10 #2)", async () => {
+		// The generation flip died with the parks: cheap generation pays inline
+		// when free is genuinely out, so age must never buy a paid escalation —
+		// and the re-kick must not refund its own budget (isRetry: true).
+		const fiveHoursAgo = new Date(
+			Date.now() - 5 * 60 * 60 * 1000,
+		).toISOString();
+		state.selectResults = [
+			[],
+			[],
+			[
+				{
+					id: "vid-cheap-1",
+					ownerId: "owner-1",
+					name: "68-min recording",
+					metadata: {
+						aiMode: "cheap",
+						aiGenerationStatus: "PROCESSING",
+						aiJobStartedAt: fiveHoursAgo,
+						aiProcessingStartedAt: fiveHoursAgo,
+					},
+				},
+			],
+			[],
+		];
+
+		await GET(cronRequest());
+
+		expect(continueAiJobOnPaidMock).not.toHaveBeenCalled();
+		expect(startAiGenerationMock).toHaveBeenCalledWith(
+			"vid-cheap-1",
+			"owner-1",
+			{ force: true, isRetry: true },
+		);
 	});
 
 	it("the candidate SQL treats a row with NO liveness markers as infinitely stale (round-4 #2)", async () => {
