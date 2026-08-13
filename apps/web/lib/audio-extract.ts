@@ -499,6 +499,44 @@ export async function extractAudioChunksFromUrl(
 }
 
 /**
+ * Measure how much SPEECH a local audio file contains, using the exact
+ * silencedetect parameters the chunk extractor already trusts for its
+ * silence-anchored cuts. Returns `durationSec` minus the total detected
+ * silence, or null when the measurement itself fails (spawn error, non-zero
+ * exit) — the CALLER decides what unknown means; this function never guesses.
+ * Used by the gap-fill pass to tell a gap full of real speech (worth paid
+ * money, owner decision 2026-08-13) from a silence/hum stretch (not).
+ */
+export async function measureSpeechSeconds(
+	filePath: string,
+	durationSec: number,
+): Promise<number | null> {
+	const ffmpeg = getFfmpegPath();
+	let result: { code: number | null; stderr: string } | null = null;
+	try {
+		result = await runFfmpegCapture(ffmpeg, [
+			"-i",
+			filePath,
+			"-vn",
+			"-af",
+			"silencedetect=noise=-30dB:d=0.35",
+			"-f",
+			"null",
+			"-",
+		]);
+	} catch {
+		return null;
+	}
+	if (!result || result.code !== 0) return null;
+	const silences = parseSilenceIntervals(result.stderr, durationSec);
+	const totalSilence = silences.reduce(
+		(sum, s2) => sum + Math.max(0, Math.min(s2.end, durationSec) - Math.max(0, s2.start)),
+		0,
+	);
+	return Math.max(0, durationSec - totalSilence);
+}
+
+/**
  * Extract ONE audio span [startSec, startSec+durationSec) from a video URL as
  * mono mp3 — used by the transcript gap-fill pass to re-transcribe just the
  * missing stretch. `-ss` before `-i` = fast keyframe seek; the ± keyframe

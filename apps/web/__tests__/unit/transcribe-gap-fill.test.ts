@@ -147,6 +147,7 @@ describe("fillTranscriptGaps", () => {
 						key: `k${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					}));
 				},
 				// Each span returns a cue every 60s so the hole disappears. Text is
@@ -184,6 +185,7 @@ describe("fillTranscriptGaps", () => {
 						key: `k${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					})),
 				transcribeFn: async () => {
 					throw new Error("empty transcript from Gemini");
@@ -214,6 +216,7 @@ describe("fillTranscriptGaps", () => {
 						key: `k${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					})),
 				transcribeFn: async () => {
 					throw new AiQuotaWaitError("free quota exhausted mid-gap-fill");
@@ -258,6 +261,7 @@ describe("fillTranscriptGaps", () => {
 						key: `gap-key-${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					})),
 				transcribeFn: async () => vtt([[0, 5, "ok"]]),
 				cleanupFn: async (keys) => { cleaned.push(...keys); },
@@ -313,6 +317,7 @@ describe("fillTranscriptGaps — boundary cue protection (Finding 1)", () => {
 						key: `k${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					})),
 				transcribeFn: async (url) =>
 					url === "u0"
@@ -354,6 +359,7 @@ describe("fillTranscriptGaps — boundary cue protection (Finding 1)", () => {
 						key: `k${i}`, url: `u${i}`,
 						startSec: s.startSec, durationSec: s.durationSec,
 						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec: null,
 					})),
 				transcribeFn: async () => vtt([[0, 4, "recovered-at-abs-zero"]]),
 				cleanupFn: async () => {},
@@ -368,5 +374,68 @@ describe("findVttGaps — unknown-duration blind spot (Finding 2)", () => {
 	it("returns no gaps for a short VTT when duration is null (documents the blind spot transcriptionCoverageUnknown covers)", () => {
 		const v = vtt([[0, 5, "only"]]);
 		expect(findVttGaps(v, null)).toEqual([]);
+	});
+
+});
+
+describe("fillTranscriptGaps — paid spend only for meaningful speech (owner 2026-08-13)", () => {
+	// ── Owner decision 2026-08-13 ("agar muhim narsa bo'lsa ha pul sarflansin"):
+	// paid gap-fill is allowed ONLY for spans with meaningful detected speech.
+	// A silence/hum span must not spend anything: it runs free-only and a
+	// failure simply stays a gap.
+	async function runWithSpeech(
+		speechSec: number | null,
+		transcribeFn: (u: string, d: number | null, k: string | null, c: unknown) => Promise<string>,
+	) {
+		const holey = vtt([[854, 860, "late"]]);
+		return fillTranscriptGaps(
+			{
+				videoId: "v1", userId: "u1", video: fakeVideo,
+				ownerEncryptedGeminiKey: null,
+				context: ctx(),
+				mergedVtt: holey, totalDurationSec: 900,
+			},
+			{
+				extractSpans: async (_v, _u, _vid, spans) =>
+					spans.map((s, i) => ({
+						key: `k${i}`, url: `u${i}`,
+						startSec: s.startSec, durationSec: s.durationSec,
+						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
+						speechSec,
+					})),
+				transcribeFn: transcribeFn as never,
+				cleanupFn: async () => {},
+			},
+		);
+	}
+
+	it("a SILENCE span (speech below the bar) is transcribed FREE-ONLY — the paid path may never be billed for it", async () => {
+		const seen: Array<{ freeOnly?: boolean }> = [];
+		await runWithSpeech(3, async (_u, _d, _k, c) => {
+			seen.push(c as { freeOnly?: boolean });
+			return "WEBVTT\n\n";
+		});
+		expect(seen.length).toBeGreaterThan(0);
+		for (const c of seen) expect(c.freeOnly).toBe(true);
+	});
+
+	it("a SPEECH span (>= the bar) keeps the full free-then-paid path", async () => {
+		const seen: Array<{ freeOnly?: boolean }> = [];
+		await runWithSpeech(200, async (_u, _d, _k, c) => {
+			seen.push(c as { freeOnly?: boolean });
+			return "WEBVTT\n\n";
+		});
+		expect(seen.length).toBeGreaterThan(0);
+		for (const c of seen) expect(c.freeOnly).toBeFalsy();
+	});
+
+	it("an UNKNOWN speech measurement counts as worth filling — a >=2-min transcript hole is important until silence PROVES otherwise", async () => {
+		const seen: Array<{ freeOnly?: boolean }> = [];
+		await runWithSpeech(null, async (_u, _d, _k, c) => {
+			seen.push(c as { freeOnly?: boolean });
+			return "WEBVTT\n\n";
+		});
+		expect(seen.length).toBeGreaterThan(0);
+		for (const c of seen) expect(c.freeOnly).toBeFalsy();
 	});
 });

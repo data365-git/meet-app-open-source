@@ -45,6 +45,7 @@ import {
 	extractAudioChunksFromUrl,
 	extractAudioFromUrl,
 	extractAudioSpanFromUrl,
+	measureSpeechSeconds,
 } from "@/lib/audio-extract";
 import {
 	extractSpeakerLabels,
@@ -833,6 +834,10 @@ export async function transcribeAudio(
 		userId: string;
 		orgId: string;
 		videoId: string;
+		/** Free chain only — no paid fallback. Set by gap-fill for spans whose
+		 * detected speech is below the paid-worthiness bar (owner 2026-08-13:
+		 * paid money only for gaps that MATTER). A failure stays a gap. */
+		freeOnly?: boolean;
 	},
 	knownSpeakers: string[] = [],
 ): Promise<string> {
@@ -899,6 +904,13 @@ export async function transcribeAudio(
 		// other true cases: a genuine quota signal, the probe deadline, or the
 		// failure that crosses the broken-key bound.
 		let freeAttempted = !freeKey || isFreeTierUnusable(context.videoId);
+		if (context.freeOnly && freeAttempted) {
+			// A free-only span with no usable free tier must not fall through
+			// to paid — it simply stays a gap in the caller.
+			throw new Error(
+				`free-only call skipped for video=${context.videoId}: free tier unavailable`,
+			);
+		}
 		if (freeKey && !freeAttempted) {
 			try {
 				const freeResult = await withCostGuard({
@@ -933,6 +945,11 @@ export async function transcribeAudio(
 				recordFreeTierSuccess(context.videoId);
 				return freeResult.transcriptVtt;
 			} catch (error) {
+				if (context.freeOnly) {
+					// Free-only span: EVERY free failure — quota included — stays
+					// a gap. Never opens the paid path, never moves the streak.
+					throw error;
+				}
 				if (isQuotaLikeAiError(error) || isDeadlineError(error)) {
 					// Quota answer or probe deadline: continue on paid, no
 					// waiting. Neither is evidence of a broken key, so the
@@ -1473,6 +1490,15 @@ export function filterVttCuesByAbsoluteStart(
 export const GAP_FILL_SPAN_SEC = 5 * 60;
 /** Upper bound on gap-fill work per video (12 spans = 1h of re-transcription). */
 export const MAX_GAP_FILL_SPANS = 12;
+/**
+ * Paid-worthiness bar for one gap-fill span (owner 2026-08-13: "agar muhim
+ * narsa bo'lsa ha pul sarflansin"). A gap already means >=MAX_CHUNK_GAP_SEC
+ * (2 min) of missing transcript; this bar asks whether the AUDIO under it is
+ * actually speech. 60s of detected speech (~150 spoken words) is unmistakably
+ * content worth paying for, while a silence/screen-share-hum span measures
+ * near zero. Spans below the bar run FREE-ONLY.
+ */
+export const MIN_PAID_GAP_SPEECH_SEC = 60;
 
 interface GapSpanAudio {
 	key: string;
@@ -1481,6 +1507,9 @@ interface GapSpanAudio {
 	durationSec: number;
 	gapStartSec: number;
 	gapEndSec: number;
+	/** Detected speech inside the span (silencedetect), null = measurement
+	 * failed / unknown. Decides whether the span may spend PAID money. */
+	speechSec: number | null;
 }
 
 async function extractGapSpanAudio(
@@ -1510,6 +1539,10 @@ async function extractGapSpanAudio(
 				span.durationSec,
 			);
 			try {
+				const speechSec = await measureSpeechSeconds(
+					result.filePath,
+					span.durationSec,
+				);
 				const audioBuffer = await fs.readFile(result.filePath);
 				const key = `${userId}/${videoId}/audio-gap-${Math.round(span.startSec)}.mp3`;
 				await bucket
@@ -1526,6 +1559,7 @@ async function extractGapSpanAudio(
 					durationSec: span.durationSec,
 					gapStartSec: span.gapStartSec,
 					gapEndSec: span.gapEndSec,
+					speechSec,
 				});
 			} finally {
 				await result.cleanup();
@@ -1625,14 +1659,18 @@ export async function fillTranscriptGaps(
 	];
 	await mapWithConcurrency(spanAudios, AI_CHUNK_CONCURRENCY, async (span) => {
 		try {
+			// Paid money only for spans whose measured speech clears the bar; an
+			// UNKNOWN measurement counts as worthy — a >=2-min transcript hole is
+			// important until silence detection PROVES it empty. Below the bar the
+			// span still gets its free attempt; a failure stays a gap.
+			const paidWorthy =
+				span.speechSec == null ||
+				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC;
 			const vtt = await transcribeFn(
 				span.url,
 				span.durationSec,
 				ownerEncryptedGeminiKey,
-				// Gap-fill takes the same single path as every chunk: free probe
-				// first, paid continuation on exhaustion or the deadline. A real
-				// failure lands in the catch below and the span stays a gap.
-				context,
+				paidWorthy ? context : { ...context, freeOnly: true },
 			);
 			// Boundary protection: an internal gap's startSec IS the previous good
 			// cue's start (gaps are measured cue-START to cue-START), so a

@@ -300,6 +300,32 @@ describe("transcribeAudio free-tier-first", () => {
 		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(4);
 	});
 
+	it("freeOnly (silence gap-fill span): a free failure rethrows — the paid path is NEVER entered", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini.mockRejectedValue(new Error("429 RESOURCE_EXHAUSTED"));
+
+		const err = await transcribeAudio("https://a/x.mp3", 300, null, {
+			...CTX,
+			freeOnly: true,
+		}).catch((e) => e);
+
+		expect(err).toBeInstanceOf(Error);
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect((H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey).toBe("free-key");
+	});
+
+	it("freeOnly + NO free key: throws without any API call — a silence span never spends", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
+
+		const err = await transcribeAudio("https://a/x.mp3", 300, null, {
+			...CTX,
+			freeOnly: true,
+		}).catch((e) => e);
+
+		expect(err).toBeInstanceOf(Error);
+		expect(H.transcribeWithGemini).not.toHaveBeenCalled();
+	});
+
 	it("no free key: paid path only, never a free attempt (regression)", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
 		H.transcribeWithGemini.mockResolvedValue(PAID_RESULT);

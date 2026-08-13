@@ -564,8 +564,6 @@
 		"aiNotRunYet": "AI analysis has not been run for this video yet.",
 		"aiStartAnalysis": "Start AI analysis",
 		"aiFreeFirstHint": "Uses the free AI allowance first; once it runs out, the analysis continues on the paid path immediately, without waiting.",
-		"aiCostWarning": "Careful — AI analysis is paid: it spends real Gemini API credit. Start?",
-		"aiConfirmStart": "Yes, start",
 		"aiCostEstimate": "Estimated cost: ~{amount}",
 		"aiReanalyze": "Re-analyze",
 		"aiReanalyzeHint": "Re-run AI analysis on the existing transcript (uses AI credits).",

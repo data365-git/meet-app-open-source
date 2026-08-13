@@ -564,8 +564,6 @@
 		"aiNotRunYet": "Bu video uchun AI tahlili hali bajarilmagan.",
 		"aiStartAnalysis": "AI tahlilini boshlash",
 		"aiFreeFirstHint": "Avval bepul AI limitidan foydalanadi; u tugasa, kutmasdan darhol pullik yo'lda davom etadi.",
-		"aiCostWarning": "Diqqat — AI tahlil pullik: Gemini API hisobidan real mablag' sarflanadi. Boshlaymizmi?",
-		"aiConfirmStart": "Ha, boshlash",
 		"aiCostEstimate": "Taxminiy narx: ~{amount}",
 		"aiReanalyze": "Qayta analiz",
 		"aiReanalyzeHint": "AI tahlilni mavjud transkript asosida qayta ishga tushirish (AI krediti sarflanadi).",
