@@ -12,13 +12,18 @@
  *    re-kicks into the same wall, terminal ERROR, and the user's Retry
  *    repeats it forever.
  *
- * The rule: a single genuine (non-quota, non-deadline) free failure still
- * surfaces as the real error it is — no paid billing. Only after
- * MAX_CONSECUTIVE_GENUINE_FREE_FAILURES in a row for the SAME job is the
- * free key treated as unusable FOR THAT JOB, which is a classified fact the
- * paid-key gate accepts (`freeAttempted: true` — the free chain genuinely
- * had its chance). A free success clears the streak. Quota answers and
- * probe deadlines are neutral: they are not evidence of a broken key.
+ * The rule (tightened in round-12 #1): ONLY the permanent auth family —
+ * HTTP 400/401/403, API_KEY_INVALID, PERMISSION_DENIED, the same errors
+ * gemini-transcribe classifies `permanent` — counts as evidence of a broken
+ * key. A 503 overload, a socket reset or an empty/unusable result NEVER
+ * moves the streak: those surface as the real errors they are and the paid
+ * path stays closed. Even a permanent-family error surfaces until
+ * MAX_CONSECUTIVE_GENUINE_FREE_FAILURES accumulate for the SAME job; only
+ * then is the free key treated as unusable FOR THAT JOB — a classified fact
+ * the paid-key gate accepts (`freeAttempted: true`). A free success clears
+ * the streak, and BOTH phase launchers clear it at job start, so a Retry
+ * after the key is fixed always begins on free. Quota answers and probe
+ * deadlines are neutral throughout.
  *
  * In-memory by design: the workflow runs inline in one process, so the
  * streak spans a job's chunk retries; a cron re-kick in a fresh process
@@ -30,6 +35,20 @@ const MAX_CONSECUTIVE_GENUINE_FREE_FAILURES = 3;
 
 const genuineFailureStreak = new Map<string, number>();
 
+/**
+ * Evidence of a BROKEN/REVOKED free key: the permanent auth family only.
+ * Transcription tags these errors `permanent` upstream, but both phases'
+ * messages carry the status, so the message is the shared signal. Everything
+ * else — 5xx overloads, socket errors, deadline aborts, empty or unusable
+ * output — is NOT evidence and must never move the streak.
+ */
+export function isBrokenFreeKeyError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /HTTP (400|401|403)\b|\b40[013] |API[_ ]?KEY[_ ]?INVALID|API key not valid|PERMISSION_DENIED/i.test(
+		message,
+	);
+}
+
 /** True when this job's free chain has proven persistently broken. */
 export function isFreeTierUnusable(videoId: string): boolean {
 	return (
@@ -39,11 +58,12 @@ export function isFreeTierUnusable(videoId: string): boolean {
 }
 
 /**
- * Record one genuine (non-quota, non-deadline) free failure for this job.
- * Returns true when the streak has now crossed the bound — i.e. the caller
- * may continue on paid with `freeAttempted: true` as a classified fact.
+ * Record one broken-key signal (an isBrokenFreeKeyError failure) for this
+ * job. Returns true when the streak has now crossed the bound — i.e. the
+ * caller may continue on paid with `freeAttempted: true` as a classified
+ * fact. The CALLER classifies; this function only counts.
  */
-export function recordGenuineFreeFailure(videoId: string): boolean {
+export function recordBrokenFreeKeySignal(videoId: string): boolean {
 	const next = (genuineFailureStreak.get(videoId) ?? 0) + 1;
 	genuineFailureStreak.set(videoId, next);
 	return next >= MAX_CONSECUTIVE_GENUINE_FREE_FAILURES;
@@ -51,6 +71,13 @@ export function recordGenuineFreeFailure(videoId: string): boolean {
 
 /** A free success proves the key works — clear the streak for this job. */
 export function recordFreeTierSuccess(videoId: string): void {
+	genuineFailureStreak.delete(videoId);
+}
+
+/** Job-start reset (round-12 #1b): a fresh start — the owner's Retry, a cron
+ * re-kick — must give a possibly-fixed free key its chance again instead of
+ * inheriting a stale verdict from a previous run. */
+export function clearFreeTierStreak(videoId: string): void {
 	genuineFailureStreak.delete(videoId);
 }
 

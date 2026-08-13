@@ -24,10 +24,12 @@ import {
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
+import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import {
+	isBrokenFreeKeyError,
 	isFreeTierUnusable,
+	recordBrokenFreeKeySignal,
 	recordFreeTierSuccess,
-	recordGenuineFreeFailure,
 } from "@/lib/free-tier-health";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { withGeminiRetry } from "@/lib/gemini-retry";
@@ -233,37 +235,45 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 
 	const videoData = await validateAndSetProcessing(videoId, force ?? false);
 
-	const transcript = await fetchTranscript(videoId, userId, videoData.video);
-
-	if (!transcript) {
-		await markSkipped(videoId, videoData.metadata);
-		return {
-			success: true,
-			message: "Transcript empty or too short - skipped",
-		};
-	}
-
-	let result: AiResult;
+	// Same liveness clock as transcription (round-12 #3): without it the cron
+	// judged generation by its start time alone and re-kicked a HEALTHY
+	// long generation into a second, concurrent, paid run.
+	const stopHeartbeat = startAiJobHeartbeat(videoId);
 	try {
-		result = await generateWithAi(transcript, videoData.aiGenerationLanguage, {
-			orgId: videoData.video.orgId,
-			userId,
-			videoId,
-		});
-	} catch (error) {
-		if (error instanceof BudgetExceededError) {
-			await markBudgetExceeded(videoId, videoData.metadata);
+		const transcript = await fetchTranscript(videoId, userId, videoData.video);
+
+		if (!transcript) {
+			await markSkipped(videoId, videoData.metadata);
 			return {
-				success: false,
-				message: "AI budget exceeded",
+				success: true,
+				message: "Transcript empty or too short - skipped",
 			};
 		}
-		throw error;
+
+		let result: AiResult;
+		try {
+			result = await generateWithAi(transcript, videoData.aiGenerationLanguage, {
+				orgId: videoData.video.orgId,
+				userId,
+				videoId,
+			});
+		} catch (error) {
+			if (error instanceof BudgetExceededError) {
+				await markBudgetExceeded(videoId, videoData.metadata);
+				return {
+					success: false,
+					message: "AI budget exceeded",
+				};
+			}
+			throw error;
+		}
+
+		await saveResults(videoId, videoData, result);
+
+		return { success: true, message: "AI generation completed successfully" };
+	} finally {
+		stopHeartbeat();
 	}
-
-	await saveResults(videoId, videoData, result);
-
-	return { success: true, message: "AI generation completed successfully" };
 }
 
 async function validateAndSetProcessing(
@@ -1046,12 +1056,15 @@ export async function callAiApi(
 			if (
 				!isQuotaLikeAiError(probeError) &&
 				!isDeadlineError(probeError) &&
-				!recordGenuineFreeFailure(context.videoId)
+				!(
+					isBrokenFreeKeyError(probeError) &&
+					recordBrokenFreeKeySignal(context.videoId)
+				)
 			) {
-				// A real free-chain error below the broken-key bound surfaces
-				// (it ends in the bounded re-kick -> ERROR machinery); only a
-				// quota answer, the probe deadline, or a persistently broken
-				// key may fall through to paid here.
+				// A real free-chain error surfaces (it ends in the bounded
+				// re-kick -> ERROR machinery); only a quota answer, the probe
+				// deadline, or a persistently broken key (auth family at the
+				// bound) may fall through to paid here.
 				throw probeError;
 			}
 			// Quota, the probe deadline, or the broken-key bound: continue on
@@ -1071,25 +1084,27 @@ export async function callAiApi(
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
-		} else if (!recordGenuineFreeFailure(context.videoId)) {
-			// At least one free failure was NOT a quota signal (revoked key,
-			// permission denied, empty/unparseable response) and the streak is
-			// below the bound. That is a real ERROR, not exhaustion — billing
-			// the paid API here with free daily quota intact is the owner's
-			// original defect.
+		} else if (
+			freeErrors.some((e) => isBrokenFreeKeyError(e)) &&
+			recordBrokenFreeKeySignal(context.videoId)
+		) {
+			// A 400/401/403 auth-family answer AND the bound crossed: the free
+			// key is persistently broken FOR THIS JOB — continue on paid instead
+			// of dying unrecoverably (round-11 ship-blocker).
+			freeAttempted = true;
+			console.warn(
+				`[generate-ai] free key persistently broken for video=${context.videoId}, continuing on paid`,
+			);
+		} else {
+			// Everything else — a 5xx overload, an empty/unparseable response,
+			// or an auth error still below the bound — is a real ERROR, not
+			// exhaustion (round-12 #1). Billing the paid API here with free
+			// daily quota intact is the owner's original defect.
 			throw (
 				freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
 				new Error(
 					`Free-tier summary chain failed for video=${context.videoId}`,
 				)
-			);
-		} else {
-			// Bound crossed: the free key is persistently broken FOR THIS JOB —
-			// continue on paid instead of dying unrecoverably (round-11
-			// ship-blocker).
-			freeAttempted = true;
-			console.warn(
-				`[generate-ai] free tier persistently failing for video=${context.videoId}, continuing on paid`,
 			);
 		}
 	}

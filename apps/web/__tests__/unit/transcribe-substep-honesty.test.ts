@@ -78,15 +78,18 @@ describe("extract_audio marker honesty — the live line must never lie", () => 
 		// window as long as the slowest await. The heartbeat must tick
 		// independently of the awaits and die with the process.
 		const workflow = bodyOf("transcribeVideoWorkflow");
-		expect(workflow).toMatch(/startTranscriptionHeartbeat\(/);
+		expect(workflow).toMatch(/startAiJobHeartbeat\(/);
 		expect(workflow).toMatch(/finally\s*\{\s*stopHeartbeat\(\);/);
 
-		const helperStart = SRC.indexOf("function startTranscriptionHeartbeat");
-		expect(helperStart).toBeGreaterThan(-1);
-		const helper = SRC.slice(helperStart, helperStart + 900);
-		expect(helper).toMatch(/setInterval\(/);
-		expect(helper).toMatch(/clearInterval\(/);
-		expect(helper).toMatch(/aiProgressAt/);
+		// The helper moved to lib/ai-job-heartbeat.ts (round-12 #3: shared with
+		// generation) — same timer semantics, now pinned there.
+		const HEARTBEAT_SRC = readFileSync(
+			fileURLToPath(new URL("../../lib/ai-job-heartbeat.ts", import.meta.url)),
+			"utf8",
+		);
+		expect(HEARTBEAT_SRC).toMatch(/setInterval\(/);
+		expect(HEARTBEAT_SRC).toMatch(/clearInterval\(/);
+		expect(HEARTBEAT_SRC).toMatch(/aiProgressAt/);
 	});
 
 	it("the claim baseline stamp stays in validateVideo; no checkpoint stamps remain in extraction (single liveness owner)", () => {

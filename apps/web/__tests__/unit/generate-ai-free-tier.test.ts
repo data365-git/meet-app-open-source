@@ -293,12 +293,12 @@ describe("callAiApi free-tier-first", () => {
 			GEMINI_API_KEY_FREE: "free-key",
 		});
 
-		// Calls 1-2: both free models return unusable output — a real error
-		// surfaces and the paid key is never used.
+		// Calls 1-2: both free models answer with the 400 invalid-key family —
+		// the real error surfaces and the paid key is never used.
 		for (let i = 0; i < 2; i++) {
 			H.fetch
-				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
-				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1));
+				.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
+				.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."));
 			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
 		}
 		for (const call of H.fetch.mock.calls) {
@@ -308,8 +308,8 @@ describe("callAiApi free-tier-first", () => {
 		// Call 3: the streak crosses the bound — the SAME call continues on
 		// paid instead of dying.
 		H.fetch
-			.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
-			.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
+			.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
+			.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 		const out = await callAiApi("prompt", {}, CTX);
 		expect(out.content).toBe('{"paid":true}');
@@ -321,6 +321,38 @@ describe("callAiApi free-tier-first", () => {
 		expect(out2.content).toBe('{"paid":true}');
 		expect(H.fetch).toHaveBeenCalledTimes(1);
 		expect(String(H.fetch.mock.calls[0]?.[0])).toContain("key=paid-key");
+	});
+
+	it("a burst of transient 503s NEVER opens the paid path — overload is not a broken key (round-12 #1)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		for (let i = 0; i < 3; i++) {
+			H.fetch
+				.mockResolvedValueOnce(geminiError(503, "The model is overloaded"))
+				.mockResolvedValueOnce(geminiError(503, "The model is overloaded"));
+			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		}
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+	});
+
+	it("repeated UNUSABLE free output never opens the paid path — a bad result is not a broken key (round-12 #1)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		for (let i = 0; i < 3; i++) {
+			H.fetch
+				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
+				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1));
+			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		}
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
 	});
 
 	it("no free key: paid path only, exactly one call", async () => {

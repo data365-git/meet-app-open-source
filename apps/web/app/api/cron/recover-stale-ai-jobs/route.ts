@@ -142,7 +142,17 @@ export async function GET(request: Request) {
 			and(
 				isNull(videos.deletedAt),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) IN ('PROCESSING', 'QUEUED')`,
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${fastStaleBeforeIso}`,
+				// Staleness = time since LAST PROGRESS (the aiProgressAt heartbeat,
+				// stamped every 5 min by the generation workflow since round-12 #3),
+				// falling back to the claim time for pre-heartbeat rows. Judging by
+				// aiProcessingStartedAt alone re-kicked a HEALTHY generation longer
+				// than the window into a second concurrent paid run. The '' arm
+				// makes a row with NO markers compare as infinitely stale.
+				sql`COALESCE(
+					JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
+					JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')),
+					''
+				) <= ${fastStaleBeforeIso}`,
 			),
 		);
 

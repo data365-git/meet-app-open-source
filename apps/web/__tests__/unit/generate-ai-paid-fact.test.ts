@@ -30,6 +30,7 @@ const HELPERS = read(
 	"../../app/api/cron/recover-stale-ai-jobs/stale-job-helpers.ts",
 );
 const TRANSCRIBE_WORKFLOW = read("../../workflows/transcribe.ts");
+const TRANSCRIBE_LIB = read("../../lib/transcribe.ts");
 
 describe("round-10 #1 — generation freeAttempted is a classified fact", () => {
 	it("callAiApi passes the computed fact, never the literal", () => {
@@ -75,6 +76,25 @@ describe("round-10 #3 — the generation recovery budget is refundable", () => {
 	it("a successful generation clears the budget", () => {
 		expect(GEN_WORKFLOW).toMatch(
 			/finalUsable \? \{ autoRecoverAttempts: undefined \} : \{\}/,
+		);
+	});
+});
+
+describe("round-12 #1b — the free-tier streak is cleared at every job start", () => {
+	it("both phase launchers clear the streak so a Retry after a fixed key starts on free", () => {
+		expect(TRANSCRIBE_LIB).toContain("clearFreeTierStreak(");
+		expect(GEN_LIB).toContain("clearFreeTierStreak(");
+	});
+});
+
+describe("round-12 #3 — generation liveness is a heartbeat, not the start time", () => {
+	it("the generation workflow runs the shared job heartbeat", () => {
+		expect(GEN_WORKFLOW).toContain("startAiJobHeartbeat(");
+	});
+
+	it("the cron judges generation staleness by time since last PROGRESS", () => {
+		expect(CRON).toMatch(
+			/IN \('PROCESSING', 'QUEUED'\)`,[\s\S]{0,900}\$\.aiProgressAt/,
 		);
 	});
 });

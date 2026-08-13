@@ -17,6 +17,7 @@ import {
 import { isTranscriptionJobStale } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
+import { clearFreeTierStreak } from "@/lib/free-tier-health";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
@@ -258,6 +259,10 @@ export async function transcribeVideo(
 					'$.quotaRetryAttempts',
 					'$.quotaRetryNextAt'
 				)`;
+		// Job start = a fresh verdict on the free tier (round-12 #1b): a Retry
+		// after the free key was fixed must not inherit a previous run's
+		// broken-key streak and silently start on paid.
+		clearFreeTierStreak(videoId);
 		await db()
 			.update(videos)
 			.set({

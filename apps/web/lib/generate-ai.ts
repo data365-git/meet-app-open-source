@@ -7,6 +7,7 @@ import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
+import { clearFreeTierStreak } from "@/lib/free-tier-health";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -107,6 +108,9 @@ export async function startAiGeneration(
 			videoId,
 		});
 
+		// Job start = a fresh verdict on the free tier (round-12 #1b), same as
+		// transcription's claim.
+		clearFreeTierStreak(videoId);
 		await db()
 			.update(videos)
 			.set({

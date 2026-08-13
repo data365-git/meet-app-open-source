@@ -429,13 +429,13 @@ describe("fillTranscriptGaps — paid spend only for meaningful speech (owner 20
 		for (const c of seen) expect(c.freeOnly).toBeFalsy();
 	});
 
-	it("an UNKNOWN speech measurement counts as worth filling — a >=2-min transcript hole is important until silence PROVES otherwise", async () => {
+	it("a FAILED speech measurement is NOT license to pay — a probe error is not evidence of speech, the span runs free-only (round-12 #2)", async () => {
 		const seen: Array<{ freeOnly?: boolean }> = [];
 		await runWithSpeech(null, async (_u, _d, _k, c) => {
 			seen.push(c as { freeOnly?: boolean });
 			return "WEBVTT\n\n";
 		});
 		expect(seen.length).toBeGreaterThan(0);
-		for (const c of seen) expect(c.freeOnly).toBeFalsy();
+		for (const c of seen) expect(c.freeOnly).toBe(true);
 	});
 });

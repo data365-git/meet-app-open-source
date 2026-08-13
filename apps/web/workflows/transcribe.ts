@@ -29,11 +29,13 @@ import {
 	TranscriptionQuotaFailureError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
+import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import {
+	isBrokenFreeKeyError,
 	isFreeTierUnusable,
+	recordBrokenFreeKeySignal,
 	recordFreeTierSuccess,
-	recordGenuineFreeFailure,
 } from "@/lib/free-tier-health";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -135,34 +137,6 @@ const LONG_AUDIO_CHUNK_DURATION_SEC = 3 * 60;
 const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 4 * 60;
 const ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR = 220_000;
 
-// Liveness heartbeat interval. Liveness means THE PROCESS IS STILL RUNNING,
-// not "the code reached a checkpoint": extractAudioChunksFromUrl runs a full
-// remote download + silencedetect decode + every per-chunk transcode inside
-// ONE uninterrupted await with no progress callback, so any
-// stamp-at-boundary scheme keeps a blind window as long as the slowest await
-// (rounds 3-5 of the 2026-08-10 review each found one). A timer ticks
-// independently of every await and covers phases not yet written. 5 min vs
-// the 60-min stale threshold and 30-min cron cadence: a live job is never
-// more than 5 min stale (12x margin), and a false-stale would need 11+
-// consecutive stamp writes to fail — at which point the DB is down and
-// recovery semantics are moot. Cost: 12 tiny row-locked writes per hour per
-// ACTIVE job. The timer dies with the process, so a killed container stops
-// stamping automatically — exactly the signal the recovery cron needs.
-const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
-
-function startTranscriptionHeartbeat(videoId: string): () => void {
-	const stamp = () => {
-		void patchVideoMetadata(videoId, (current) => ({
-			...current,
-			aiProgressAt: new Date().toISOString(),
-		})).catch(() => {});
-	};
-	const timer = setInterval(stamp, HEARTBEAT_INTERVAL_MS);
-	// Never keep the process alive just for the heartbeat.
-	(timer as unknown as { unref?: () => void }).unref?.();
-	return () => clearInterval(timer);
-}
-
 export async function transcribeVideoWorkflow(
 	payload: TranscribeWorkflowPayload,
 ) {
@@ -180,7 +154,7 @@ export async function transcribeVideoWorkflow(
 	// Started AFTER the claim (validateVideo stamps the baseline), cleared in
 	// the finally below whether the job completes, parks, or crashes — a
 	// parked/dead job must stop looking alive so its recovery owner can act.
-	const stopHeartbeat = startTranscriptionHeartbeat(videoId);
+	const stopHeartbeat = startAiJobHeartbeat(videoId);
 
 	let tempAudioKeys: string[] = [];
 
@@ -953,21 +927,26 @@ export async function transcribeAudio(
 				if (isQuotaLikeAiError(error) || isDeadlineError(error)) {
 					// Quota answer or probe deadline: continue on paid, no
 					// waiting. Neither is evidence of a broken key, so the
-					// genuine-failure streak is untouched.
+					// broken-key streak is untouched.
 					freeAttempted = true;
-				} else if (!recordGenuineFreeFailure(context.videoId)) {
-					// A genuine (non-quota, non-deadline) free failure below the
-					// bound — revoked key, safety block, malformed response — is
-					// a real ERROR: rethrow so the chunk retry machinery handles
-					// it. Free quota is intact and one hiccup must not open the
-					// paid path (the owner's original money defect, three times).
-					throw error;
+				} else if (
+					isBrokenFreeKeyError(error) &&
+					recordBrokenFreeKeySignal(context.videoId)
+				) {
+					// The 400/401/403 auth family, AND the bound crossed: the
+					// free key is persistently broken FOR THIS JOB. Continuing
+					// on paid is the classified fact the gate accepts — the
+					// alternative is a product-unrecoverable permanent ERROR
+					// (round-11 ship-blocker).
+					freeAttempted = true;
 				} else {
-					// The bound crossed: the free key is persistently broken FOR
-					// THIS JOB. Continuing on paid is the classified fact the
-					// gate accepts — the alternative is a product-unrecoverable
-					// permanent ERROR (round-11 ship-blocker).
-					freeAttempted = true;
+					// Everything else — a 503 overload, a socket reset, an
+					// empty/unusable result, or an auth error still below the
+					// bound — is a real ERROR: rethrow so the chunk retry
+					// machinery handles it. Free quota is intact and a transient
+					// hiccup must never open the paid path (round-12 #1: the
+					// owner's original money defect, in burst form).
+					throw error;
 				}
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
@@ -1659,12 +1638,14 @@ export async function fillTranscriptGaps(
 	];
 	await mapWithConcurrency(spanAudios, AI_CHUNK_CONCURRENCY, async (span) => {
 		try {
-			// Paid money only for spans whose measured speech clears the bar; an
-			// UNKNOWN measurement counts as worthy — a >=2-min transcript hole is
-			// important until silence detection PROVES it empty. Below the bar the
-			// span still gets its free attempt; a failure stays a gap.
+			// Paid money only for spans whose measured speech clears the bar. A
+			// FAILED measurement (null) is NOT evidence of speech — one broken
+			// ffmpeg probe must not convert up to 12 x 5 min of possibly-silent
+			// audio into paid re-transcription (round-12 #2) — so it runs
+			// free-only too. Below the bar the span still gets its free attempt;
+			// a failure stays a recorded gap.
 			const paidWorthy =
-				span.speechSec == null ||
+				span.speechSec != null &&
 				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC;
 			const vtt = await transcribeFn(
 				span.url,
