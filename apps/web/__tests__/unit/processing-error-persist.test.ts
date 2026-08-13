@@ -18,9 +18,11 @@ const S3_PRESIGNED_ERROR = new Error(
 );
 
 describe("persistableProcessingError — allowlist, never the raw message", () => {
-	it("an S3 error carrying a presigned URL persists as a bare token: no http, no signature, no query string", () => {
+	it("an S3 error carrying a presigned URL persists as EMPTY: no http, no signature, no query string — and FALSY, so the share page falls back to its own localized copy (round-19 #1)", () => {
 		const out = persistableProcessingError(S3_PRESIGNED_ERROR);
-		expect(out).toBe("failed");
+		// "" and not "failed": ProgressCircle reads `errorMessage || t(...)`,
+		// and a truthy bare word suppressed the actionable localized sentence.
+		expect(out).toBe("");
 		expect(out).not.toContain("http");
 		expect(out).not.toContain("X-Amz-Signature");
 		expect(out).not.toContain("?");
@@ -47,7 +49,7 @@ describe("persistableProcessingError — allowlist, never the raw message", () =
 		];
 		for (const raw of retryables) {
 			const persisted = persistableProcessingError(new Error(raw));
-			expect(persisted).not.toBe("failed");
+			expect(persisted).not.toBe("");
 			expect(isRetryableDesktopSegmentsFinalizationError(persisted)).toBe(true);
 		}
 		// A known family that is NOT retryable stays classifiable as such.
@@ -64,6 +66,21 @@ describe("persistableProcessingError — allowlist, never the raw message", () =
 describe("every processingError persist site routes through the allowlist (the CLASS, not one table)", () => {
 	const read = (rel: string) =>
 		readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+	it("the upload-abort and stale-upload writers are not SILENT: they name the stage and route the cause through the allowlist (round-19 #2)", () => {
+		for (const rel of [
+			"../../actions/video/mark-upload-failed.ts",
+			"../../app/api/cron/reconcile-storage/route.ts",
+		]) {
+			const src = read(rel);
+			// Every phase:"error" write in these files must carry BOTH fields —
+			// a bare { phase: "error" } is exactly the silent failure that left
+			// the owner's dead upload invisible.
+			expect(src, rel).not.toMatch(/\.set\(\{ phase: "error" \}\)/);
+			expect(src, rel).toMatch(/processingMessage/);
+			expect(src, rel).toMatch(/processingError: persistableProcessingError\(/);
+		}
+	});
 
 	it("all five writers use persistableProcessingError; none persists a raw message", () => {
 		const writers = [

@@ -31,6 +31,10 @@ const KNOWN_PROCESSING_FAILURE_TOKENS: readonly RegExp[] = [
 	/Segment manifest is not marked as complete/i,
 	/timed out/i,
 	/timeout/i,
+	// Known causes on the upload-abort paths (round-19 #2) — static literals
+	// passed by our own writers, never derived from upstream text.
+	/Upload interrupted/,
+	/Upload stalled/,
 ];
 
 export function persistableProcessingError(error: unknown): string {
@@ -39,5 +43,9 @@ export function persistableProcessingError(error: unknown): string {
 		const match = raw.match(pattern);
 		if (match) return match[0];
 	}
-	return "failed";
+	// EMPTY, not "failed" (round-19 #1): the share page reads
+	// `errorMessage || t("progressProcessingFailedOwner")`, so a truthy bare
+	// word suppressed the localized sentence that tells the viewer what to
+	// do. Falsy keeps the identical security property and restores the copy.
+	return "";
 }

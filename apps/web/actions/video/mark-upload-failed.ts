@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import { persistableProcessingError } from "@/lib/processing-error";
 
 /**
  * Marks a videoUploads row as phase="error" for a video the current user owns.
@@ -24,8 +25,18 @@ export async function markUploadFailed(videoId: Video.VideoId): Promise<void> {
 
 	if (!owned) return;
 
+	// A failure must be VISIBLE (round-19 #2): a bare { phase: "error" } left
+	// both text columns NULL, so the owner never learned his upload died.
+	// The stage is named statically; the cause is known here (the client
+	// reported a mid-upload failure) and goes through the same allowlist as
+	// every other writer.
 	await db()
 		.update(videoUploads)
-		.set({ phase: "error" })
+		.set({
+			phase: "error",
+			processingMessage: "Uploading",
+			processingError: persistableProcessingError("Upload interrupted"),
+			updatedAt: new Date(),
+		})
 		.where(eq(videoUploads.videoId, videoId));
 }

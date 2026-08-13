@@ -8,6 +8,7 @@ import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import { runPromise } from "@/lib/server";
 import { sendOpsAlert } from "@/lib/ops-alert";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export const dynamic = "force-dynamic";
@@ -139,9 +140,17 @@ export async function GET(request: Request) {
 
 	const staleUploads = staleUploadCandidates.length;
 	if (staleUploads > 0) {
+		// A failure must be VISIBLE (round-19 #2): name the stage and the known
+		// cause (no progress past the staleness threshold) instead of leaving
+		// both text columns NULL.
 		await db()
 			.update(videoUploads)
-			.set({ phase: "error" })
+			.set({
+				phase: "error",
+				processingMessage: "Uploading",
+				processingError: persistableProcessingError("Upload stalled"),
+				updatedAt: new Date(),
+			})
 			.where(
 				inArray(
 					videoUploads.videoId,
