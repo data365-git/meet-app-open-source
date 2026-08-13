@@ -81,6 +81,9 @@ describe("shouldDeferPlaybackSource", () => {
 
 	it("uses upload-specific failure messaging", () => {
 		const t = (key: string) => key;
+		// Round-20: stored error text is an ops TOKEN, never viewer copy — a
+		// legacy raw sentence (pre-allowlist rows) renders as the LOCALIZED
+		// fallback, not verbatim untranslated English.
 		expect(
 			getUploadFailureMessage(
 				{
@@ -92,7 +95,20 @@ describe("shouldDeferPlaybackSource", () => {
 				true,
 				t,
 			),
-		).toBe("Video uploaded, but processing could not start.");
+		).toBe("progressProcessingFailed");
+		// Known allowlist tokens get their own localized sentence.
+		expect(
+			getUploadFailureMessage(
+				{
+					status: "error",
+					lastUpdated: new Date(),
+					errorMessage: "Upload interrupted",
+					hasRawFallback: false,
+				},
+				false,
+				t,
+			),
+		).toBe("progressUploadInterrupted");
 		expect(
 			getUploadFailureMessage(
 				{

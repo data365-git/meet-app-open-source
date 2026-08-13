@@ -4,6 +4,7 @@ import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { useTranslations } from "next-intl";
+import { processingFailureMessageKey } from "./processing-failure-message";
 import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";
 
 type UploadProgress =
@@ -69,13 +70,14 @@ export function getUploadFailureMessage(
 	t: (key: string) => string,
 ): string {
 	if (uploadProgress?.status === "error") {
-		if (canRetryFailedProcessing(uploadProgress, canRetryProcessing)) {
-			return uploadProgress.errorMessage || t("progressProcessingFailed");
-		}
-
-		return (
-			uploadProgress.errorMessage ||
-			t("progressProcessingFailedOwner")
+		// The stored value is an ops TOKEN, never viewer copy (round-20 #1):
+		// known tokens map to their own localized sentence, everything else
+		// falls back to the localized default — nothing renders raw.
+		return t(
+			processingFailureMessageKey(
+				uploadProgress.errorMessage,
+				canRetryFailedProcessing(uploadProgress, canRetryProcessing),
+			),
 		);
 	}
 

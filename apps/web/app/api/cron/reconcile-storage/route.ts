@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videoUploads, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { Storage } from "@cap/web-backend";
-import { and, desc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import { runPromise } from "@/lib/server";
@@ -129,7 +129,7 @@ export async function GET(request: Request) {
 
 	const staleUploadBefore = new Date(Date.now() - STALE_UPLOAD_THRESHOLD_MS);
 	const staleUploadCandidates = await db()
-		.select({ videoId: videoUploads.videoId })
+		.select({ videoId: videoUploads.videoId, phase: videoUploads.phase })
 		.from(videoUploads)
 		.where(
 			and(
@@ -140,23 +140,44 @@ export async function GET(request: Request) {
 
 	const staleUploads = staleUploadCandidates.length;
 	if (staleUploads > 0) {
-		// A failure must be VISIBLE (round-19 #2): name the stage and the known
-		// cause (no progress past the staleness threshold) instead of leaving
-		// both text columns NULL.
-		await db()
-			.update(videoUploads)
-			.set({
-				phase: "error",
-				processingMessage: "Uploading",
-				processingError: persistableProcessingError("Upload stalled"),
-				updatedAt: new Date(),
-			})
-			.where(
-				inArray(
-					videoUploads.videoId,
-					staleUploadCandidates.map((row) => row.videoId),
-				),
-			);
+		// A failure must be VISIBLE (round-19 #2) — but only what was VERIFIED
+		// (round-20 #2): the candidate set spans uploading AND
+		// processing/generating_thumbnail, so the token comes from the row's
+		// actual phase, and COALESCE FILLS a missing stage text without ever
+		// overwriting the accurate one already written by the processing
+		// pipeline.
+		const groups: Array<{
+			ids: (typeof staleUploadCandidates)[number]["videoId"][];
+			stage: string;
+			cause: string;
+		}> = [
+			{
+				ids: staleUploadCandidates
+					.filter((row) => row.phase === "uploading")
+					.map((row) => row.videoId),
+				stage: "Uploading",
+				cause: "Upload stalled",
+			},
+			{
+				ids: staleUploadCandidates
+					.filter((row) => row.phase !== "uploading")
+					.map((row) => row.videoId),
+				stage: "Processing",
+				cause: "Processing stalled",
+			},
+		];
+		for (const group of groups) {
+			if (group.ids.length === 0) continue;
+			await db()
+				.update(videoUploads)
+				.set({
+					phase: "error",
+					processingMessage: sql`COALESCE(${videoUploads.processingMessage}, ${group.stage})`,
+					processingError: persistableProcessingError(group.cause),
+					updatedAt: new Date(),
+				})
+				.where(inArray(videoUploads.videoId, group.ids));
+		}
 	}
 
 	if (missing > 0) {

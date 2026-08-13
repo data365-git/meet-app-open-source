@@ -35,6 +35,7 @@ const KNOWN_PROCESSING_FAILURE_TOKENS: readonly RegExp[] = [
 	// passed by our own writers, never derived from upstream text.
 	/Upload interrupted/,
 	/Upload stalled/,
+	/Processing stalled/,
 ];
 
 export function persistableProcessingError(error: unknown): string {
