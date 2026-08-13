@@ -2,7 +2,6 @@ import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
 } from "@cap/web-domain";
-import type { AiSpeedMode } from "@/lib/ai-speed-mode";
 
 // Plain (non-"use server") home for the org-settings shape + pure helpers.
 // These CANNOT live in actions/organization/settings.ts: that file has a
@@ -21,7 +20,6 @@ export type OrganizationSettingsInput = {
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
 	defaultPlaybackSpeed?: number;
-	aiSpeedMode?: AiSpeedMode;
 };
 
 const proOrganizationSettingKeys = [

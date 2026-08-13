@@ -183,7 +183,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const out = await transcribeAudioChunks(
 			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
+			CTX,
 		);
 
 		expect(out).toContain("PAID");
@@ -203,7 +203,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const out = await transcribeAudioChunks(
 			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
+			CTX,
 		);
 
 		expect(out).toContain("PAID");
@@ -221,7 +221,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const err = await transcribeAudioChunks(
 			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
+			CTX,
 		).catch((e) => e);
 
 		expect((err as Error).message).toContain("could not decode");
@@ -242,7 +242,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const err = await transcribeAudioChunks(
 			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
-			{ ...CTX, aiSpeedMode: "cheap" },
+			CTX,
 		).catch((e) => e);
 
 		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
@@ -258,7 +258,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const err = await transcribeAudioChunks(
 			TWO_CHUNKS,
 			null,
-			{ ...CTX, aiSpeedMode: "fast" },
+			CTX,
 			fn,
 		).catch((e) => e);
 
@@ -274,7 +274,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const err = await transcribeAudioChunks(
 			TWO_CHUNKS,
 			null,
-			{ ...CTX, aiSpeedMode: "fast" },
+			CTX,
 			fn,
 		).catch((e) => e);
 
@@ -294,7 +294,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const out = await transcribeAudioChunks(
 			TWO_CHUNKS,
 			null,
-			{ ...CTX, aiSpeedMode: "fast" },
+			CTX,
 			fn,
 		);
 
@@ -309,7 +309,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		const err = await transcribeAudioChunks(
 			{ chunks: [chunk(0)], totalDurationSec: 600 },
 			null,
-			{ ...CTX, aiSpeedMode: "fast" },
+			CTX,
 		).catch((e) => e);
 
 		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
@@ -325,7 +325,7 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		await transcribeAudioChunks(
 			TWO_CHUNKS,
 			null,
-			{ ...CTX, aiSpeedMode: "fast" },
+			CTX,
 			fn,
 		).catch(() => {});
 

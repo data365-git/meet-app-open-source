@@ -413,42 +413,18 @@ describe("transcribeVideo", () => {
 			});
 		});
 
-		it("claim WITHOUT an explicit override defers server-side to the row's already-claimed aiMode", async () => {
-			// 2026-08-10 incident pin: two starts raced (two taps seconds apart);
-			// the later one carried no per-click override, resolved the mode from a
-			// STALE pre-claim read and overwrote the owner's claimed "cheap" with
-			// the org default "fast" — the paid path. The claim must therefore
-			// resolve aiMode INSIDE the UPDATE (COALESCE on the row's current
-			// value), not from the in-process snapshot.
+		it("the claim writes NO aiMode (the speed-mode split is deleted) and stamps the heartbeat", async () => {
 			await transcribeVideo("video-123" as Video.VideoId, "user-456", true);
 
 			const claim = updateSetCalls.find(
 				(setArg) => setArg.transcriptionStatus === "PROCESSING",
 			) as { metadata?: { sql: string } } | undefined;
 			expect(claim).toBeDefined();
-			expect(claim?.metadata?.sql).toContain("'$.aiMode', COALESCE(");
+			expect(claim?.metadata?.sql).not.toContain("$.aiMode");
 			// The claim is also the first progress HEARTBEAT — the recovery cron
 			// judges staleness by time since last progress, so every claim must
 			// stamp it (round-3 review: the heartbeat mechanism).
 			expect(claim?.metadata?.sql).toContain("'$.aiProgressAt'");
-		});
-
-		it("claim WITH an explicit per-click override writes that mode unconditionally", async () => {
-			await transcribeVideo(
-				"video-123" as Video.VideoId,
-				"user-456",
-				true,
-				false,
-				"cheap",
-			);
-
-			const claim = updateSetCalls.find(
-				(setArg) => setArg.transcriptionStatus === "PROCESSING",
-			) as { metadata?: { sql: string; values: unknown[] } } | undefined;
-			expect(claim).toBeDefined();
-			// The owner's click wins outright — no deferring to the stored mode.
-			expect(claim?.metadata?.sql).not.toContain("'$.aiMode', COALESCE(");
-			expect(claim?.metadata?.values).toContain("cheap");
 		});
 
 		it("a retry REFUSES a PROCESSING row whose claim marker is fresh (live workflow)", async () => {
@@ -478,7 +454,6 @@ describe("transcribeVideo", () => {
 				"user-456",
 				true,
 				true,
-				"cheap",
 			);
 
 			expect(result.success).toBe(true);
@@ -503,7 +478,6 @@ describe("transcribeVideo", () => {
 				"user-456",
 				true,
 				true,
-				"cheap",
 			);
 			const retryClaim = updateSetCalls.find(
 				(setArg) => setArg.transcriptionStatus === "PROCESSING",
@@ -541,7 +515,6 @@ describe("transcribeVideo", () => {
 				"user-456",
 				true,
 				true,
-				"cheap",
 			);
 
 			expect(result.success).toBe(true);
@@ -571,7 +544,6 @@ describe("transcribeVideo", () => {
 				"user-456",
 				true,
 				true,
-				"cheap",
 			);
 
 			expect(result.success).toBe(true);

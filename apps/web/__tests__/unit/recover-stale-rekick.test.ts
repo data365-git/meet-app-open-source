@@ -165,7 +165,7 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 		expect(nulledStatus).toEqual([]);
 	});
 
-	it("(c) the re-kick passes the job's own CHEAP mode (as a retry) so the owner's choice survives", async () => {
+	it("(c) the re-kick is a plain retry — no speed-mode argument exists anymore", async () => {
 		armWithStaleCheapCandidate();
 
 		await GET(cronRequest());
@@ -175,7 +175,6 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			"owner-1",
 			true,
 			true,
-			"cheap",
 		);
 	});
 
@@ -225,7 +224,6 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			"owner-1",
 			true,
 			true,
-			"cheap",
 		);
 		// No ladder slot is booked anymore.
 		const laddered = state.setCalls.find((setArg) =>
@@ -263,7 +261,6 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 			"owner-1",
 			true,
 			true,
-			"cheap",
 		);
 	});
 

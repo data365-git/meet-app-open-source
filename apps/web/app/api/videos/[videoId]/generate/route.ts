@@ -5,7 +5,6 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { type AiSpeedMode, isAiSpeedMode } from "@/lib/ai-speed-mode";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
 import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
@@ -28,16 +27,9 @@ export async function POST(
     // Owner/admin "Qayta analiz" (retry) re-runs AI on the EXISTING transcript
     // even when content already exists. No re-upload / re-transcription.
     let reprocess = false;
-    // Optional per-click speed-mode override from the share page's price
-    // chooser (only meaningful on the first-run transcribeVideo path below —
-    // never trust an unvalidated client string, so discard anything invalid).
-    let speedMode: AiSpeedMode | undefined;
     try {
       const body = await request.json();
       reprocess = body?.reprocess === true;
-      if (isAiSpeedMode(body?.speedMode)) {
-        speedMode = body.speedMode;
-      }
     } catch {
       // no body → normal (non-forced) request
     }
@@ -116,13 +108,10 @@ export async function POST(
     // uses that status to mean a real AI workflow has already been launched.
     //
     // Server-side JSON_SET, same discipline as transcribeVideo's claim. A
-    // plain spread of the row read above would (a) let a stale panel / second
-    // tab with speedMode overwrite a RUNNING cheap job's mode, and (b) revert
-    // everything the workflow wrote between that read and this write —
-    // aiBatchJobs (losing the handle means the collector never collects),
-    // aiQuotaWaiting, chunk progress. A start request never changes the mode
-    // of a job that is already running; it only records the explicit AI
-    // request and backfills the job clock if missing.
+    // plain spread of the row read above would revert everything the workflow
+    // wrote between that read and this write (chunk progress, legacy Batch
+    // handles). This only records the explicit AI request and backfills the
+    // job clock if missing.
     if (video.transcriptionStatus === "PROCESSING") {
       const now = new Date().toISOString();
       await db()
@@ -172,7 +161,6 @@ export async function POST(
       // start/retry AI generation on the existing transcript.
       const result = await startAiGeneration(videoId, video.ownerId, {
         force: reprocess,
-        speedModeOverride: speedMode,
       });
       if (!result.success) {
         return Response.json({ error: result.message }, { status: 500 });
@@ -181,13 +169,7 @@ export async function POST(
     }
 
     // Transcription not yet started — kick off the full pipeline
-    const result = await transcribeVideo(
-      videoId,
-      video.ownerId,
-      true,
-      false,
-      speedMode,
-    );
+    const result = await transcribeVideo(videoId, video.ownerId, true, false);
 
     if (!result.success) {
       return Response.json({ error: result.message }, { status: 500 });

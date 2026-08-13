@@ -5,12 +5,10 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
-	CHEAP_STALE_JOB_THRESHOLD_MS,
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
@@ -75,9 +73,7 @@ export async function GET(request: Request) {
 
 	const now = Date.now();
 	const fastStaleBefore = new Date(now - FAST_STALE_JOB_THRESHOLD_MS);
-	const cheapStaleBefore = new Date(now - CHEAP_STALE_JOB_THRESHOLD_MS);
 	const fastStaleBeforeIso = fastStaleBefore.toISOString();
-	const cheapStaleBeforeIso = cheapStaleBefore.toISOString();
 	const refineStaleBefore = new Date(now - REFINE_STALE_JOB_THRESHOLD_MS);
 	const refineStaleBeforeIso = refineStaleBefore.toISOString();
 
@@ -103,21 +99,11 @@ export async function GET(request: Request) {
 				// cleared both markers (and whose re-claim then failed: budget, no
 				// key, crash) was INVISIBLE forever: no retry, no ERROR, no flip —
 				// a permanent spinner the generate route refuses as already-running.
-				sql`(
-					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
-						AND COALESCE(
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')),
-							''
-						) <= ${cheapStaleBeforeIso})
-					OR
-					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
-						AND COALESCE(
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
-							JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')),
-							''
-						) <= ${fastStaleBeforeIso})
-				)`,
+				sql`COALESCE(
+					JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProgressAt')),
+					JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingStartedAt')),
+					''
+				) <= ${fastStaleBeforeIso}`,
 			),
 		);
 
@@ -156,13 +142,7 @@ export async function GET(request: Request) {
 			and(
 				isNull(videos.deletedAt),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) IN ('PROCESSING', 'QUEUED')`,
-				sql`(
-					(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')) = 'cheap'
-						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${cheapStaleBeforeIso})
-					OR
-					(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiMode')), 'fast') <> 'cheap'
-						AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${fastStaleBeforeIso})
-				)`,
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiProcessingStartedAt')) <= ${fastStaleBeforeIso}`,
 			),
 		);
 
@@ -192,15 +172,6 @@ export async function GET(request: Request) {
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
 		try {
-			// NOTE: no automatic 4h paid flip for TRANSCRIPTION anymore (owner
-			// decision 2026-08-11): cheap now continues on the discounted Batch
-			// the moment free fails, so "stuck on free for 4h" is not a state a
-			// healthy cheap job can be in. Termination is guaranteed by: the
-			// Batch collector (with-Batch rows), the bounded free ladder ending
-			// in terminal ERROR below (no-Batch rows), and the bounded stale
-			// re-kicks ending in the death branch (crashed rows). The owner's
-			// manual "continue on paid" button remains the only cheap→full-price
-			// path.
 			if (hasPendingBatchJobs(metadata)) {
 				// The poll-batch-jobs collector owns this cheap job's pending Batch;
 				// re-kicking here would create a duplicate non-idempotent Batch.
@@ -217,25 +188,15 @@ export async function GET(request: Request) {
 				// must never pass through NULL on a re-kick — a page load in that
 				// window reads NULL and renders "start AI analysis?" for a job that
 				// is alive. transcribeVideo(isRetry=true) re-claims a PROCESSING row
-				// in place. The re-kick also carries the job's own resolved speed
-				// mode so the owner's cheap choice survives the restart.
+				// in place.
 				await db()
 					.update(videos)
 					.set({ metadata: nextMetadata })
 					.where(eq(videos.id, candidate.id));
-				await transcribeVideo(
-					candidate.id,
-					candidate.ownerId,
-					true,
-					true,
-					resolveAiSpeedMode(nextMetadata.aiMode),
-				);
+				await transcribeVideo(candidate.id, candidate.ownerId, true, true);
 				retried++;
 			} else {
-				// Retries exhausted (cheap or fast alike): terminal ERROR + ops
-				// alert. No automatic paid rescue for cheap — the owner's rule
-				// allows paid only via the discounted Batch (already attempted on
-				// every re-kick) or his own explicit "continue on paid" click.
+				// Retries exhausted: terminal ERROR + ops alert.
 				await db()
 					.update(videos)
 					.set({
@@ -279,19 +240,12 @@ export async function GET(request: Request) {
 			};
 			// Keep the row's ERROR status until the re-claim writes PROCESSING —
 			// never NULL in between (same no-NULL law as the stale re-kick above;
-			// ERROR passes transcribeVideo's start guard on its own). The re-kick
-			// carries the job's resolved mode so a cheap choice stays cheap.
+			// ERROR passes transcribeVideo's start guard on its own).
 			await db()
 				.update(videos)
 				.set({ metadata: nextMetadata })
 				.where(eq(videos.id, candidate.id));
-			await transcribeVideo(
-				candidate.id,
-				candidate.ownerId,
-				true,
-				true,
-				resolveAiSpeedMode(nextMetadata.aiMode),
-			);
+			await transcribeVideo(candidate.id, candidate.ownerId, true, true);
 			quotaRetried++;
 		} catch (error) {
 			console.error(
@@ -384,7 +338,6 @@ export async function GET(request: Request) {
 	return NextResponse.json({
 		success: true,
 		staleBefore: fastStaleBefore.toISOString(),
-		cheapStaleBefore: cheapStaleBefore.toISOString(),
 		refineStaleBefore: refineStaleBefore.toISOString(),
 		retried,
 		gaveUp,

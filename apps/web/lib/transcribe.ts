@@ -16,7 +16,6 @@ import {
 } from "@/lib/ai-cost-guard";
 import { isTranscriptionJobStale } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
-import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
@@ -70,7 +69,6 @@ export async function transcribeVideo(
 	// that window renders "not started" for a job that is alive), so instead a
 	// retry is allowed to pass the PROCESSING guard and re-claim in place.
 	isRetry = false,
-	speedModeOverride?: AiSpeedMode,
 ): Promise<TranscribeResult> {
 	if (!userId || !videoId) {
 		return {
@@ -247,28 +245,6 @@ export async function transcribeVideo(
 		// whatever a concurrent writer (retry-ai, the batch-poll cron) had set in
 		// the meantime. JSON_SET merges server-side and touches only these keys.
 		//
-		// `aiMode` is written here for a specific reason, not for completeness:
-		// recover-stale-ai-jobs picks its staleness threshold from it and treats a
-		// MISSING aiMode as "fast", which is the SHORTER window. Claiming the row
-		// with a start time but no mode would let the cron judge a legitimately
-		// patient "cheap" job stale far too early, until the workflow's own later
-		// write filled the mode in.
-		const claimSpeedMode =
-			speedModeOverride ??
-			resolveAiSpeedMode(
-				((video.metadata as VideoMetadata) || {}).aiMode ??
-					result.orgSettings?.aiSpeedMode,
-			);
-		// The owner's per-click choice is authoritative for the WHOLE job.
-		// Two starts can race (double-tap / reload+retap a few seconds apart):
-		// the second call's metadata was read at the top of this function, BEFORE
-		// the first call's claim landed, so its in-process resolution falls back
-		// to the org default ("fast") and would silently overwrite the owner's
-		// already-claimed "cheap" — the paid path spends money he chose not to.
-		// So: an EXPLICIT override always wins (the owner just clicked it); a
-		// start WITHOUT an override must defer, server-side, to whatever mode is
-		// already claimed in the row and only fall back to the resolved default
-		// when the row has none.
 		// A FRESH (owner-initiated) start gets a fresh recovery budget: without
 		// this, a video that ever burned its auto-recover or quota-retry budget
 		// could never be successfully retried after a terminal state — only
@@ -286,22 +262,11 @@ export async function transcribeVideo(
 			.update(videos)
 			.set({
 				transcriptionStatus: "PROCESSING",
-				metadata: speedModeOverride
-					? sql`JSON_SET(
-						${claimBase},
-						'$.processingStartedAt', ${new Date().toISOString()},
-						'$.aiProgressAt', ${new Date().toISOString()},
-						'$.aiMode', ${speedModeOverride}
-					)`
-					: sql`JSON_SET(
-						${claimBase},
-						'$.processingStartedAt', ${new Date().toISOString()},
-						'$.aiProgressAt', ${new Date().toISOString()},
-						'$.aiMode', COALESCE(
-							JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiMode')),
-							${claimSpeedMode}
-						)
-					)`,
+				metadata: sql`JSON_SET(
+					${claimBase},
+					'$.processingStartedAt', ${new Date().toISOString()},
+					'$.aiProgressAt', ${new Date().toISOString()}
+				)`,
 			})
 			.where(eq(videos.id, videoId));
 
@@ -309,9 +274,6 @@ export async function transcribeVideo(
 			videoId,
 			userId,
 			aiGenerationEnabled,
-			// Only include the override when explicitly set, so the default-path
-			// payload stays exactly {videoId, userId, aiGenerationEnabled}.
-			...(speedModeOverride ? { speedModeOverride } : {}),
 		}).catch((err) => {
 			if (isAiQuotaWaitError(err)) {
 				console.warn(

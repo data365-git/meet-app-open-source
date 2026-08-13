@@ -206,8 +206,6 @@ const useVideoStatus = (
 						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
 						null,
 					aiProcessingStep: null,
-					aiMode: null,
-					aiQuotaWaiting: false,
 					name: initialData.name ?? null,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,

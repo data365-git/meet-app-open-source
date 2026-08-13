@@ -23,14 +23,13 @@ import {
 	hasPaidGeminiKey,
 } from "@/lib/gemini-paid-key";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
-import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import {
 	isQuotaLikeAiError,
 	isTranscriptionQuotaFailureError,
 	TranscriptionQuotaFailureError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
-import { withDeadline } from "@/lib/deadline";
+import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -66,9 +65,6 @@ interface TranscribeWorkflowPayload {
 	videoId: string;
 	userId: string;
 	aiGenerationEnabled: boolean;
-	/** Optional per-click override of the org-level aiSpeedMode default (see
-	 * GenerateAiPanel's price chooser). Falls back to the org setting when absent. */
-	speedModeOverride?: AiSpeedMode;
 }
 
 interface VideoData {
@@ -77,7 +73,6 @@ interface VideoData {
 	isOwnerPro: boolean;
 	ownerEncryptedGeminiKey: string | null;
 	orgId: string;
-	aiSpeedMode: AiSpeedMode;
 }
 
 export interface ExtractedAudioChunk {
@@ -111,11 +106,10 @@ const FREE_TRANSCRIBE_MODELS = [
 	"gemini-3-flash-preview",
 ] as const;
 
-// Tez (fast) free-probe deadline for one transcription chunk (Files API
-// upload + activation + generation). Fast mode makes exactly ONE free attempt
-// (no retry backoff) under this deadline; on the deadline or any failure it
-// falls straight to the paid path. Cheap mode ignores this — it stays patient.
-// Initial value per spec §1; measured-p75 tuning is a blocked Phase-A follow-up.
+// Free-probe deadline for one transcription chunk (Files API upload +
+// activation + generation). Every job makes exactly ONE free attempt (no
+// retry backoff) under this deadline; on a quota answer or the deadline it
+// continues on the paid path immediately — free first, but never waiting.
 const FREE_TRANSCRIBE_PROBE_MS = 30_000;
 
 // Chunk length is the ceiling on transcript↔audio drift: Gemini estimates (does
@@ -168,9 +162,9 @@ export async function transcribeVideoWorkflow(
 ) {
 	"use workflow";
 
-	const { videoId, userId, aiGenerationEnabled, speedModeOverride } = payload;
+	const { videoId, userId, aiGenerationEnabled } = payload;
 
-	const videoData = await validateVideo(videoId, speedModeOverride);
+	const videoData = await validateVideo(videoId);
 
 	if (videoData.transcriptionDisabled) {
 		await markSkipped(videoId);
@@ -207,7 +201,7 @@ export async function transcribeVideoWorkflow(
 		const transcription = await transcribeAudioChunks(
 			audio,
 			videoData.ownerEncryptedGeminiKey,
-			{ userId, orgId: videoData.orgId, videoId, aiSpeedMode: videoData.aiSpeedMode },
+			{ userId, orgId: videoData.orgId, videoId },
 			undefined,
 			async (p) => {
 				await savePartialTranscription(
@@ -223,7 +217,7 @@ export async function transcribeVideoWorkflow(
 			userId,
 			video: videoData.video,
 			ownerEncryptedGeminiKey: videoData.ownerEncryptedGeminiKey,
-			context: { userId, orgId: videoData.orgId, videoId, aiSpeedMode: videoData.aiSpeedMode },
+			context: { userId, orgId: videoData.orgId, videoId },
 			mergedVtt: transcription,
 			totalDurationSec: audio.totalDurationSec,
 		});
@@ -267,7 +261,7 @@ export async function transcribeVideoWorkflow(
 	await cleanupTempAudioKeys(tempAudioKeys, videoData.video);
 
 	if (await shouldQueueAiGeneration(videoId, aiGenerationEnabled)) {
-		await queueAiGeneration(videoId, userId, videoData.aiSpeedMode);
+		await queueAiGeneration(videoId, userId);
 	}
 
 	return { success: true, message: "Transcription completed successfully" };
@@ -498,10 +492,7 @@ function currentBillingMonth(): string {
 	return `${year}-${month}`;
 }
 
-async function validateVideo(
-	videoId: string,
-	speedModeOverride?: AiSpeedMode,
-): Promise<VideoData> {
+async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
 	const query = await db()
@@ -532,18 +523,8 @@ async function validateVideo(
 
 	const isOwnerPro = userIsPro(result.owner);
 
-	const metadata = (result.video.metadata as VideoMetadata) || {};
-
-	// Read the requested transcription speed/cost mode ONCE, here at workflow
-	// start. Per-click override wins, then per-job metadata, then org setting.
-	// "cheap" now means patient free-tier; it must flow through unchanged.
-	const requestedSpeedMode =
-		speedModeOverride ??
-		resolveAiSpeedMode(metadata.aiMode ?? result.orgSettings?.aiSpeedMode);
-	const aiSpeedMode: AiSpeedMode = requestedSpeedMode;
-
 	console.log(
-		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}, aiSpeedMode=${aiSpeedMode}`,
+		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}`,
 	);
 
 	// Server-side merge, NOT a spread of the metadata read at step start: a
@@ -565,7 +546,6 @@ async function validateVideo(
 					'$.transcriptionError',
 					'$.aiProcessingSubStep'
 				),
-				'$.aiMode', ${aiSpeedMode},
 				'$.aiJobStartedAt', COALESCE(
 					JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiJobStartedAt')),
 					${nowIso}
@@ -584,7 +564,6 @@ async function validateVideo(
 		isOwnerPro,
 		ownerEncryptedGeminiKey: result.owner.geminiApiKey ?? null,
 		orgId: result.video.orgId,
-		aiSpeedMode,
 	};
 }
 
@@ -849,9 +828,6 @@ export async function transcribeAudio(
 		userId: string;
 		orgId: string;
 		videoId: string;
-		aiSpeedMode?: AiSpeedMode;
-		/** Free chain only — no paid fallback (cheap gap-fill). */
-		freeOnly?: boolean;
 	},
 	knownSpeakers: string[] = [],
 ): Promise<string> {
@@ -875,14 +851,11 @@ export async function transcribeAudio(
 		);
 	}
 
-	// One synchronous path for BOTH modes (round-8 deletion round). Fast: a
-	// bounded free probe, then paid. Cheap (the owner's ACTUAL rule, "imkon
-	// qadar bepuldan foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"):
-	// a PATIENT free attempt, and when free fails, the SAME paid call
-	// immediately — no parking, no Batch, no collector. The next chunk tries
-	// free again, so the job returns to free the moment quota comes back. The
-	// old submit→park→collector→re-kick machinery manufactured unowned states
-	// and 29 defects across 7 rounds for a ~2x discount worth cents.
+	// ONE synchronous path (owner, 2026-08-13 — the fast/cheap chooser is
+	// deleted): a bounded free probe first, then the paid call immediately on
+	// genuine quota exhaustion or the probe deadline. The next chunk tries
+	// free again, so the job returns to free the moment quota comes back. No
+	// parking, no Batch, no collector, no waiting.
 	const runPaidSync = async (syncKey: string): Promise<string> => {
 		const result = await withCostGuard({
 			orgId: context.orgId,
@@ -914,16 +887,6 @@ export async function transcribeAudio(
 
 	const runSync = async (): Promise<string> => {
 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
-		// FACT, not a declaration (round-9 #1): true only when the free chain
-		// genuinely has no capacity — a real quota/rate-limit signal, or no
-		// free key configured at all. A revoked key, a permission error, a
-		// safety block or a malformed response is an ERROR, and treating it as
-		// exhaustion would silently bill every cheap chunk on the paid path
-		// while free quota sits untouched — the owner's original defect.
-		let freeQuotaExhausted = false;
-		if (!freeKey) {
-			freeQuotaExhausted = true;
-		}
 		if (freeKey) {
 			try {
 				const freeResult = await withCostGuard({
@@ -934,21 +897,18 @@ export async function transcribeAudio(
 					model: FREE_TRANSCRIBE_MODEL,
 					free: true,
 					fn: async () => {
-						// Tez: exactly one free attempt, no backoff, under a real
-						// deadline that aborts the in-flight fetches. Arzon: patient —
-						// default retries, no deadline (cron handles the quota wait).
-						const isFast = context.aiSpeedMode !== "cheap";
+						// Exactly one free attempt, no backoff, under a real deadline
+						// that aborts the in-flight fetches — free first, never waiting.
 						const runFree = (signal?: AbortSignal) =>
 							transcribeWithGemini(audioUrl, {
 								apiKey: freeKey,
 								audioDurationSec: audioDurationSec ?? undefined,
 								knownSpeakers,
 								models: FREE_TRANSCRIBE_MODELS,
-								...(isFast ? { maxAttempts: 1, signal } : {}),
+								maxAttempts: 1,
+								signal,
 							});
-						const res = isFast
-							? await withDeadline(FREE_TRANSCRIBE_PROBE_MS, runFree)
-							: await runFree();
+						const res = await withDeadline(FREE_TRANSCRIBE_PROBE_MS, runFree);
 						return {
 							transcriptVtt: res.transcriptVtt,
 							inputTokens: res.inputTokens,
@@ -960,48 +920,30 @@ export async function transcribeAudio(
 				});
 				return freeResult.transcriptVtt;
 			} catch (error) {
-				// Gap-fill runs FREE-ONLY in cheap mode (round-8, correction 1):
-				// polishing an already-complete transcript must not spend paid
-				// money — a failed span simply stays a gap in the caller.
-				if (context.freeOnly) {
+				if (!isQuotaLikeAiError(error) && !isDeadlineError(error)) {
+					// A NON-quota, non-deadline free failure (revoked key, safety
+					// block, malformed response) is a real ERROR: rethrow so the
+					// chunk retry machinery handles it — free quota is intact and
+					// must not be silently billed on the paid path.
 					throw error;
 				}
-				if (context.aiSpeedMode === "cheap") {
-					if (!isQuotaLikeAiError(error)) {
-						// Cheap + a NON-quota free failure: rethrow so the chunk
-						// retry machinery handles it as the real error it is
-						// (retry, then the existing fault tolerance — a gap). Only
-						// FAST users bought "any failure falls through to paid".
-						throw error;
-					}
-					freeQuotaExhausted = true;
-				}
+				// Quota answer or probe deadline: continue on paid, no waiting.
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
-		} else if (context.freeOnly) {
-			throw new Error(
-				`No free-tier key configured; free-only call skipped for video=${context.videoId}`,
-			);
 		}
 
-		// Synchronous paid call. CHEAP REACHES THIS TOO (round-8, the owner's
-		// actual rule): paying once free is GENUINELY out is the requested
-		// behaviour, and the next chunk tries free again. The authorization is
-		// checked BEFORE resolving any key — the owner's personal key passes
-		// the exact same gate (round-9 #1 closed the `ownerApiKey ?? gate`
-		// short-circuit that skipped the check entirely).
+		// Synchronous paid call, reached only when the free chain was given its
+		// chance: quota-exhausted, probe deadline, or no free key at all. The
+		// authorization is checked BEFORE resolving any key — the owner's
+		// personal key passes the exact same gate.
 		const paidUse = {
 			operation: "transcription" as const,
-			mode:
-				context.aiSpeedMode === "cheap"
-					? ("cheap" as const)
-					: ("fast" as const),
 			route: "sync" as const,
-			...(context.aiSpeedMode === "cheap"
-				? { freeExhausted: freeQuotaExhausted }
-				: {}),
+			// FACT: no free key, a genuine quota signal, or the probe deadline —
+			// every other free failure rethrew above and never reaches here.
+			freeAttempted: true,
 		};
 		authorizePaidGeminiUse(paidUse);
 		const resolvedApiKey = ownerApiKey ?? getPaidGeminiKey(paidUse);
@@ -1020,7 +962,7 @@ export async function transcribeAudio(
 export async function transcribeAudioChunks(
 	audio: ExtractedAudio,
 	ownerEncryptedGeminiKey: string | null,
-	context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode },
+	context: { userId: string; orgId: string; videoId: string },
 	transcribeChunk: typeof transcribeAudioChunkWithRetry = transcribeAudioChunkWithRetry,
 	onProgress?: (p: { transcribedChunks: Array<{ vtt: string; offsetSec: number }>; completed: number; total: number }) => Promise<void>,
 	existingPartialVtt?: string,
@@ -1221,7 +1163,7 @@ export async function transcribeAudioChunks(
 	// returns mid-job is used immediately instead of several parallel chunks
 	// all falling to paid at once. Fast mode keeps the normal concurrency.
 	const chunkConcurrency =
-		context.aiSpeedMode === "cheap" ? 1 : AI_CHUNK_CONCURRENCY;
+		AI_CHUNK_CONCURRENCY;
 	await mapWithConcurrency(
 		audio.chunks.slice(1),
 		chunkConcurrency,
@@ -1605,7 +1547,7 @@ export async function fillTranscriptGaps(
 		userId: string;
 		video: typeof videos.$inferSelect;
 		ownerEncryptedGeminiKey: string | null;
-		context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode };
+		context: { userId: string; orgId: string; videoId: string };
 		mergedVtt: string;
 		totalDurationSec: number | null;
 	},
@@ -1665,14 +1607,10 @@ export async function fillTranscriptGaps(
 				span.url,
 				span.durationSec,
 				ownerEncryptedGeminiKey,
-				// Gap-fill is an OPTIONAL cosmetic pass over a complete transcript
-				// — in cheap mode it may only use the FREE chain (round-8,
-				// correction 1: up to 12 spans x 300s of paid audio to polish a
-				// finished transcript is disproportionate spend). A free failure
-				// lands in the catch below and the span stays a gap.
-				context.aiSpeedMode === "cheap"
-					? { ...context, freeOnly: true }
-					: context,
+				// Gap-fill takes the same single path as every chunk: free probe
+				// first, paid continuation on exhaustion or the deadline. A real
+				// failure lands in the catch below and the span stays a gap.
+				context,
 			);
 			// Boundary protection: an internal gap's startSec IS the previous good
 			// cue's start (gaps are measured cue-START to cue-START), so a
@@ -1728,7 +1666,7 @@ export async function transcribeAudioChunkWithRetry(
 	}: {
 		chunk: ExtractedAudioChunk;
 		ownerEncryptedGeminiKey: string | null;
-		context: { userId: string; orgId: string; videoId: string; aiSpeedMode?: AiSpeedMode };
+		context: { userId: string; orgId: string; videoId: string };
 		knownSpeakers?: string[];
 	},
 	transcribeFn: typeof transcribeAudio = transcribeAudio,
@@ -1949,13 +1887,10 @@ async function cleanupTempAudioKeys(
 async function queueAiGeneration(
 	videoId: string,
 	userId: string,
-	aiSpeedMode: AiSpeedMode,
 ): Promise<void> {
 	"use step";
 
-	await startAiGeneration(videoId as Video.VideoId, userId, {
-		speedModeOverride: aiSpeedMode,
-	});
+	await startAiGeneration(videoId as Video.VideoId, userId);
 }
 
 async function shouldQueueAiGeneration(

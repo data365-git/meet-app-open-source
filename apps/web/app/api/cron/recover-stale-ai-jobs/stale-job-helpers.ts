@@ -1,24 +1,21 @@
 import type { VideoMetadata } from "@cap/database/types";
 
 export const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
-// (round-10: the 4h auto-flip helper and its constant are deleted — neither
-// phase parks anymore, so no automatic paid escalation exists; cheap pays
-// inline per call the moment its free chain is genuinely exhausted, and the
-// owner's manual "continue on paid" button is the only other paid path.)
-// These thresholds are TIME SINCE LAST PROGRESS (the aiProgressAt heartbeat,
+// This threshold is TIME SINCE LAST PROGRESS (the aiProgressAt heartbeat,
 // falling back to processingStartedAt for rows claimed before the heartbeat
 // existed), NOT time since the job started. That distinction is the whole
-// mechanism: a job's total runtime is unbounded — a 3-hour cheap recording at
+// mechanism: a job's total runtime is unbounded — a 3-hour recording at
 // chunk 12/20 is perfectly healthy at minute 61 — but a healthy job always
 // advances within minutes (the heartbeat rides the existing per-chunk
 // metadata writes, so it costs zero extra write volume). A row that has shown
-// NO progress of any kind for a whole hour is crashed, whatever its mode or
-// length. History of tuning this as time-since-start, recorded so nobody
-// re-tries it: 20min killed healthy long extractions (2026-08-10 treadmill);
-// 4h made the free re-kick unreachable behind the paid flip; 60min-since-
-// start killed healthy 2-3h cheap recordings mid-chunk. The number stopped
-// being load-bearing when the clock became time-since-progress.
-export const CHEAP_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
+// NO progress of any kind for a whole hour is crashed, whatever its length.
+// History of tuning this as time-since-start, recorded so nobody re-tries
+// it: 20min killed healthy long extractions (2026-08-10 treadmill); 4h made
+// the free re-kick unreachable behind the paid flip; 60min-since-start
+// killed healthy 2-3h recordings mid-chunk. The number stopped being
+// load-bearing when the clock became time-since-progress.
+// (2026-08-13: the fast/cheap mode split is deleted — ONE threshold for every
+// row; legacy rows still carrying aiMode in metadata get the same window.)
 
 /** The job's last evidence of life: the progress heartbeat, or the claim
  * time for rows that never got a heartbeat (pre-heartbeat claims). */
@@ -34,7 +31,7 @@ export function lastTranscriptionProgressAt(
 export function isTranscriptionJobStale(
 	metadata: VideoMetadata,
 	nowMs = Date.now(),
-	thresholdMs = staleThresholdMsForMetadata(metadata),
+	thresholdMs = FAST_STALE_JOB_THRESHOLD_MS,
 ): boolean {
 	const last = lastTranscriptionProgressAt(metadata);
 	if (!last) return true;
@@ -42,12 +39,6 @@ export function isTranscriptionJobStale(
 	return !Number.isFinite(lastMs) || nowMs - lastMs > thresholdMs;
 }
 const MAX_AUTO_RETRY_ATTEMPTS = 2;
-
-export function staleThresholdMsForMetadata(metadata: VideoMetadata): number {
-	return metadata.aiMode === "cheap"
-		? CHEAP_STALE_JOB_THRESHOLD_MS
-		: FAST_STALE_JOB_THRESHOLD_MS;
-}
 
 /**
  * Quota re-kick budget. A flat cap is the wrong shape: at the 30-min cron

@@ -31,10 +31,10 @@ const HELPERS = read(
 );
 const TRANSCRIBE_WORKFLOW = read("../../workflows/transcribe.ts");
 
-describe("round-10 #1 — generation freeExhausted is a classified fact", () => {
+describe("round-10 #1 — generation freeAttempted is a classified fact", () => {
 	it("callAiApi passes the computed fact, never the literal", () => {
-		expect(GEN_WORKFLOW).toContain("freeExhausted: freeQuotaExhausted");
-		expect(GEN_WORKFLOW).not.toContain("freeExhausted: true");
+		expect(GEN_WORKFLOW).toContain("freeAttempted,");
+		expect(GEN_WORKFLOW).not.toContain("freeAttempted: true");
 	});
 
 	it("a NON-quota free failure surfaces instead of falling through to paid", () => {

@@ -10,7 +10,6 @@ export type AiGenerationStatus =
 
 export type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
 export type AiProcessingSubStep = "extract_audio";
-export type AiSpeedMode = "fast" | "cheap";
 
 type AiStatusResult = {
 	processing: boolean;
@@ -18,10 +17,6 @@ type AiStatusResult = {
 	aiProcessingStep: AiProcessingStep | null;
 	/** Fine sub-phase inside "transcribe" ("videodan audio ajratilyapti"). */
 	aiProcessingSubStep: AiProcessingSubStep | null;
-	aiMode: AiSpeedMode | null;
-	aiQuotaWaiting: boolean;
-	/** Cheap mode: a durable Batch is pending on the discounted paid queue. */
-	aiBatchPending: boolean;
 	hasContent: boolean;
 	/** Fine-grained transcription chunk progress ("Gemini'ga N/M audio yuborildi"). */
 	transcriptionChunksCompleted: number | null;
@@ -52,9 +47,6 @@ export const useAiStatus = (
 				aiGenerationStatus: body.aiGenerationStatus ?? null,
 				aiProcessingStep: body.aiProcessingStep ?? null,
 				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
-				aiMode: body.aiMode ?? null,
-				aiQuotaWaiting: body.aiQuotaWaiting === true,
-				aiBatchPending: body.aiBatchPending === true,
 				hasContent: !!(body.summary || body.chapters),
 				transcriptionChunksCompleted:
 					body.transcriptionChunksCompleted ?? null,

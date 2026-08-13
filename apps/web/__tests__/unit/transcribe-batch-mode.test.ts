@@ -106,21 +106,18 @@ function costGuardCall(n: number): { batch?: boolean } {
 	return call[0] as { batch?: boolean };
 }
 
-describe("transcribeAudio speed-mode routing", () => {
+describe("transcribeAudio routing (single behaviour)", () => {
 	beforeEach(() => {
 		withCostGuard.mockReset();
 		transcribeChunkWithBatch.mockReset();
 		transcribeWithGemini.mockReset();
 	});
 
-	it("mode=fast (default): uses the SYNC path and does NOT pass batch:true", async () => {
+	it("uses the SYNC path and does NOT pass batch:true", async () => {
 		costGuardRunsFn();
 		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
 
-		const out = await transcribeAudio("https://a/x.mp3?sig=1", 300, null, {
-			...CTX_BASE,
-			aiSpeedMode: "fast",
-		});
+		const out = await transcribeAudio("https://a/x.mp3?sig=1", 300, null, CTX_BASE);
 
 		expect(out).toBe("WEBVTT\n\nSYNC");
 		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);
@@ -130,7 +127,7 @@ describe("transcribeAudio speed-mode routing", () => {
 		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 
-	it("mode absent (undefined): behaves exactly like fast (regression guard)", async () => {
+	it("plain context: the sync path (regression guard)", async () => {
 		costGuardRunsFn();
 		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
 
@@ -141,17 +138,11 @@ describe("transcribeAudio speed-mode routing", () => {
 		expect(costGuardCall(0).batch).toBeFalsy();
 	});
 
-	it("mode=cheap with NO free key: free is exhausted by definition — runs the SAME sync paid path, no Batch, no parking (round-8 owner rule)", async () => {
-		// The owner's actual rule: pay when free is out. With no free key
-		// configured, free is out for every call, so cheap behaves like fast —
-		// terminating through machinery that already works.
+	it("NO free key: free is unavailable by definition — runs the sync paid path, no Batch, no parking", async () => {
 		costGuardRunsFn();
 		transcribeWithGemini.mockResolvedValue(SYNC_RESULT);
 
-		const out = await transcribeAudio("https://a/x.mp3", 300, null, {
-			...CTX_BASE,
-			aiSpeedMode: "cheap",
-		});
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CTX_BASE);
 
 		expect(out).toBe("WEBVTT\n\nSYNC");
 		expect(transcribeWithGemini).toHaveBeenCalledTimes(1);

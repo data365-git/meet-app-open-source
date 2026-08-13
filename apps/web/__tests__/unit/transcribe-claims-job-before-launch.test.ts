@@ -66,12 +66,9 @@ describe("transcribeVideo claims the job before launching the workflow", () => {
 		expect(claim).toMatch(/JSON_SET\(/);
 	});
 
-	it("claims aiMode too, so the stale-job cron uses the right threshold", () => {
-		// recover-stale-ai-jobs picks cheap vs fast from aiMode and treats a MISSING
-		// aiMode as "fast" — the SHORTER window. A claim with a start time but no
-		// mode would let it judge a patient cheap job stale far too early.
+	it("claims NO aiMode — the speed-mode split is deleted, one stale threshold serves every row", () => {
 		const claim = body.slice(body.search(/transcriptionStatus:\s*"PROCESSING"/));
-		expect(claim).toMatch(/\$\.aiMode/);
+		expect(claim).not.toMatch(/\$\.aiMode/);
 	});
 
 	it("still clears the claim if the workflow could not be started", () => {

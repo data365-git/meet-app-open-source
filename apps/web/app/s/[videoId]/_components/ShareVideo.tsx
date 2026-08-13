@@ -272,15 +272,6 @@ export const ShareVideo = forwardRef<
 			aiStatusQuery.data?.aiProcessingSubStep ??
 			data.metadata?.aiProcessingSubStep ??
 			null;
-		const effectiveAiMode =
-			aiStatusQuery.data?.aiMode ?? data.metadata?.aiMode ?? null;
-		const effectiveAiQuotaWaiting =
-			aiStatusQuery.data?.aiQuotaWaiting ??
-			data.metadata?.aiQuotaWaiting === true;
-		const effectiveAiBatchPending =
-			aiStatusQuery.data?.aiBatchPending ??
-			(Array.isArray(data.metadata?.aiBatchJobs) &&
-				(data.metadata?.aiBatchJobs?.length ?? 0) > 0);
 		// Read from the server prop. ERROR is terminal, so this is correct on any
 		// load; a failure that lands while the page is already open shows the
 		// generic message until the next navigation (the /api/video/ai poll has
@@ -919,9 +910,6 @@ export const ShareVideo = forwardRef<
 											aiGenerationStatus={effectiveAiStatus}
 											aiProcessingStep={effectiveAiProcessingStep}
 											aiProcessingSubStep={effectiveAiProcessingSubStep}
-											aiMode={effectiveAiMode}
-											aiQuotaWaiting={effectiveAiQuotaWaiting}
-											aiBatchPending={effectiveAiBatchPending}
 											transcriptionErrorCode={effectiveTranscriptionErrorCode}
 											aiIncomplete={aiIncomplete}
 											duration={data.duration}

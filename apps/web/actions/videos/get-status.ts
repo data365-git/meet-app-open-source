@@ -31,8 +31,6 @@ export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;
 	aiGenerationStatus: AiGenerationStatus | null;
 	aiProcessingStep: VideoMetadata["aiProcessingStep"] | null;
-	aiMode: VideoMetadata["aiMode"] | null;
-	aiQuotaWaiting: boolean;
 	name: string | null;
 	aiTitle: string | null;
 	summary: string | null;
@@ -60,8 +58,6 @@ const getAiStatusData = (metadata: VideoMetadata) => {
 		chapters: legacyChapters,
 		aiSummary,
 		aiProcessingStep: metadata.aiProcessingStep || null,
-		aiMode: metadata.aiMode || null,
-		aiQuotaWaiting: metadata.aiQuotaWaiting === true,
 	};
 };
 

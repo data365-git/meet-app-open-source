@@ -48,10 +48,6 @@ vi.mock("@/lib/ops-alert", () => ({
 	sendOpsAlert: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("@/lib/ai-job-control", () => ({
-	continueAiJobOnPaid: vi.fn(() => Promise.resolve({ success: true })),
-}));
-
 vi.mock("@/lib/generate-ai", () => ({
 	startAiGeneration: vi.fn(() => Promise.resolve({ success: true })),
 }));
@@ -64,7 +60,6 @@ const {
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
 	shouldAutoRetry,
-	staleThresholdMsForMetadata,
 	withIncrementedAutoRecoverAttempts,
 } = await import("@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers");
 
@@ -165,32 +160,6 @@ describe("withIncrementedAutoRecoverAttempts", () => {
 		expect(result.autoRecoverAttempts).toBe(3);
 		expect(result.processingStartedAt).toBeUndefined();
 	});
-});
-
-describe("staleThresholdMsForMetadata", () => {
-	it("a HEALTHY cheap job is NOT stale at 25 minutes (cheap is the patient hours-long path)", () => {
-		// Regression pin for the 2026-08-10 restart treadmill: with a 20-min cheap
-		// threshold the cron killed and re-kicked a healthy free-tier/Batch job on
-		// every tick, burning Gemini calls. Cheap staleness must comfortably
-		// exceed an ordinary quota wait.
-		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBeGreaterThan(
-			25 * 60 * 1000,
-		);
-	});
-
-	it("uses 60 minutes for cheap (crash detection) and 60 minutes for fast/default", () => {
-		expect(staleThresholdMsForMetadata({ aiMode: "cheap" })).toBe(
-			60 * 60 * 1000,
-		);
-		expect(staleThresholdMsForMetadata({ aiMode: "fast" })).toBe(
-			60 * 60 * 1000,
-		);
-		expect(staleThresholdMsForMetadata({})).toBe(60 * 60 * 1000);
-	});
-
-	// (the shouldAutoFlipCheapJobToPaid describe and the flip-invariant test
-	// were deleted in round 10 along with the flip itself - no automatic
-	// paid escalation exists in either phase anymore.)
 });
 
 describe("isTranscriptionJobStale — liveness by TIME SINCE LAST PROGRESS", () => {

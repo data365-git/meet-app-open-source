@@ -21,76 +21,64 @@ vi.mock("@cap/env", () => ({
 
 import {
 	authorizePaidGeminiUse,
-	CheapPaidWhileFreeAvailableError,
 	getPaidGeminiKey,
 	hasPaidGeminiKey,
+	PaidWhileFreeAvailableError,
 } from "@/lib/gemini-paid-key";
 
-describe("INVARIANT (owner's actual rule, round-8): a cheap job never pays WHILE FREE IS AVAILABLE", () => {
-	it("a cheap sync call WITHOUT the freeExhausted declaration is refused", () => {
+describe("INVARIANT (owner's rule, single behaviour): a job never pays while free quota is still available", () => {
+	it("a job-bound sync call with freeAttempted:false is refused", () => {
 		expect(() =>
 			getPaidGeminiKey({
 				operation: "transcription",
-				mode: "cheap",
 				route: "sync",
+				freeAttempted: false,
 			}),
-		).toThrow(CheapPaidWhileFreeAvailableError);
+		).toThrow(PaidWhileFreeAvailableError);
+		expect(() =>
+			getPaidGeminiKey({
+				operation: "generation",
+				route: "sync",
+				freeAttempted: false,
+			}),
+		).toThrow(PaidWhileFreeAvailableError);
 	});
 
-	it("a cheap sync call AFTER the free chain is exhausted receives the key — paying then is the REQUESTED behaviour", () => {
+	it("a job-bound sync call AFTER the free chain had its chance receives the key — paying then is the REQUESTED behaviour", () => {
 		expect(
 			getPaidGeminiKey({
 				operation: "transcription",
-				mode: "cheap",
 				route: "sync",
-				freeExhausted: true,
+				freeAttempted: true,
 			}),
 		).toBe("server-paid-key");
 		expect(
 			getPaidGeminiKey({
 				operation: "generation",
-				mode: "cheap",
 				route: "sync",
-				freeExhausted: true,
+				freeAttempted: true,
 			}),
 		).toBe("server-paid-key");
 	});
 
-	it("freeExhausted must be the FACT, not a truthy-looking value — false is refused (round-9 #1)", () => {
+	it("the standalone authorization exists so OWNER-KEY call sites pass the identical check", () => {
 		expect(() =>
 			authorizePaidGeminiUse({
 				operation: "transcription",
-				mode: "cheap",
 				route: "sync",
-				freeExhausted: false,
+				freeAttempted: false,
 			}),
-		).toThrow(CheapPaidWhileFreeAvailableError);
-		// The standalone authorization exists so OWNER-KEY call sites (which
-		// resolve their key elsewhere) pass the identical check.
+		).toThrow(PaidWhileFreeAvailableError);
 		expect(() =>
 			authorizePaidGeminiUse({
 				operation: "transcription",
-				mode: "cheap",
 				route: "sync",
-				freeExhausted: true,
+				freeAttempted: true,
 			}),
 		).not.toThrow();
 	});
 
-	it("job-bound uses carry a derived mode; job-less uses have NO mode field to falsify (round-9 #3)", () => {
-		expect(
-			getPaidGeminiKey({ operation: "transcription", mode: "fast", route: "sync" }),
-		).toBe("server-paid-key");
-		expect(
-			getPaidGeminiKey({
-				operation: "transcription",
-				mode: "cheap",
-				route: "batch",
-			}),
-		).toBe("server-paid-key");
-		// Job-less operations: no cheap notion exists, so the round-8 shape
-		// that let them self-declare mode:"fast" (the value that disables the
-		// check) is gone from the type itself.
+	it("job-less uses have NO freeAttempted field to falsify", () => {
 		expect(getPaidGeminiKey({ operation: "ops-script", route: "sync" })).toBe(
 			"server-paid-key",
 		);
@@ -98,14 +86,14 @@ describe("INVARIANT (owner's actual rule, round-8): a cheap job never pays WHILE
 			"server-paid-key",
 		);
 		expect(
-			getPaidGeminiKey({ operation: "owner-continue-paid", route: "sync" }),
+			getPaidGeminiKey({ operation: "legacy-batch-admin", route: "batch" }),
 		).toBe("server-paid-key");
 		const src = readFileSync(
 			fileURLToPath(new URL("../../lib/gemini-paid-key.ts", import.meta.url)),
 			"utf8",
 		);
-		// The job-less arm of the union must not accept a mode at all.
-		expect(src).toMatch(/"translation"[\s\S]{0,400}route: "sync" \| "batch";\s*\}/);
+		// The job-less arm of the union must not accept the declaration at all.
+		expect(src).toMatch(/"translation"[\s\S]{0,600}route: "sync" \| "batch";\s*\}/);
 		expect(hasPaidGeminiKey()).toBe(true);
 	});
 });

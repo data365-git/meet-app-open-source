@@ -300,7 +300,6 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 			"owner1",
 			true,
 			true,
-			"cheap",
 		);
 		expect(body.succeeded).toBe(1);
 		expect(body.retried).toBe(1);
@@ -384,7 +383,6 @@ describe("poll-batch-jobs GET — orchestration branches", () => {
 			"owner1",
 			true,
 			true,
-			"cheap",
 		);
 		expect(body.failed).toBe(1);
 		expect(body.retried).toBe(1);

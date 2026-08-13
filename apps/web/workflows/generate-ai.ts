@@ -22,9 +22,8 @@ import {
 	isAiQuotaWaitError,
 	isQuotaLikeAiError,
 } from "@/lib/ai-quota-wait";
-import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
-import { withDeadline } from "@/lib/deadline";
+import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
@@ -49,14 +48,12 @@ interface GenerateAiWorkflowPayload {
 	 * — no re-upload / re-transcription.
 	 */
 	force?: boolean;
-	speedModeOverride?: AiSpeedMode;
 }
 
 interface VideoData {
 	video: typeof videos.$inferSelect;
 	metadata: VideoMetadata;
 	aiGenerationLanguage: AiGenerationLanguage;
-	aiSpeedMode: AiSpeedMode;
 }
 
 interface VttSegment {
@@ -88,7 +85,6 @@ interface AiCallContext {
 	orgId: string;
 	userId: string;
 	videoId: string;
-	aiSpeedMode?: AiSpeedMode;
 }
 
 interface AiResult {
@@ -228,13 +224,9 @@ export function shouldReplaceVideoTitle({
 export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 	"use workflow";
 
-	const { videoId, userId, force, speedModeOverride } = payload;
+	const { videoId, userId, force } = payload;
 
-	const videoData = await validateAndSetProcessing(
-		videoId,
-		force ?? false,
-		speedModeOverride,
-	);
+	const videoData = await validateAndSetProcessing(videoId, force ?? false);
 
 	const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
@@ -252,7 +244,6 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 			orgId: videoData.video.orgId,
 			userId,
 			videoId,
-			aiSpeedMode: videoData.aiSpeedMode,
 		});
 	} catch (error) {
 		if (error instanceof BudgetExceededError) {
@@ -273,7 +264,6 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 async function validateAndSetProcessing(
 	videoId: string,
 	force = false,
-	speedModeOverride?: AiSpeedMode,
 ): Promise<VideoData> {
 	"use step";
 
@@ -293,9 +283,6 @@ async function validateAndSetProcessing(
 
 	const { video } = query[0];
 	const metadata = (video.metadata as VideoMetadata) || {};
-	const aiSpeedMode =
-		speedModeOverride ??
-		resolveAiSpeedMode(metadata.aiMode ?? query[0]?.orgSettings?.aiSpeedMode);
 	const now = new Date().toISOString();
 
 	if (video.transcriptionStatus !== "COMPLETE") {
@@ -311,7 +298,6 @@ async function validateAndSetProcessing(
 		.set({
 			metadata: {
 				...metadata,
-				aiMode: aiSpeedMode,
 				aiJobStartedAt: metadata.aiJobStartedAt ?? now,
 				aiQuotaWaiting: false,
 				aiGenerationStatus: "PROCESSING",
@@ -327,7 +313,6 @@ async function validateAndSetProcessing(
 		aiGenerationLanguage: parseAiGenerationLanguage(
 			query[0]?.orgSettings?.aiGenerationLanguage,
 		),
-		aiSpeedMode,
 	};
 }
 
@@ -977,22 +962,21 @@ export async function callAiApi(
 	const { json = true, maxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS } = options;
 	const env = serverEnv();
 	const freeKey = env.GEMINI_API_KEY_FREE;
-	// FACT, not a declaration (round-10 #1, mirroring transcription): true only
-	// when the free chain genuinely has no capacity — every model quota-failed,
-	// or no free key exists at all.
-	let freeQuotaExhausted = !freeKey;
+	// FACT, not a declaration: the paid call below is allowed only when the
+	// free chain was given its chance for THIS call — no free key at all,
+	// every model quota-failed, or the bounded probe deadline was hit.
+	let freeAttempted = !freeKey;
 	let freeInputTokens = 0;
 	let freeOutputTokens = 0;
 
 	if (freeKey) {
-		// Tez: the whole free CHAIN shares one bounded probe deadline (a quota 429
+		// The whole free CHAIN shares one bounded probe deadline (a quota 429
 		// answers instantly, so trying the second model still fits); the abort
-		// signal stops the chain, never letting a hung call spill past the budget.
-		// Arzon: patient — default retries per model, no deadline. Since round
-		// 10 nothing parks: EVERY model quota-failing = genuine exhaustion and
-		// the call pays inline; any NON-quota failure is a real error and
-		// surfaces instead of silently billing paid with free quota intact.
-		const isFast = context.aiSpeedMode !== "cheap";
+		// signal stops the chain, never letting a hung call spill past the
+		// budget. Nothing parks: EVERY model quota-failing = genuine exhaustion
+		// and the call pays inline immediately; any NON-quota failure is a real
+		// error and surfaces instead of silently billing paid with free quota
+		// intact.
 		const freeErrors: unknown[] = [];
 		const tryFreeChain = async (
 			signal?: AbortSignal,
@@ -1011,7 +995,8 @@ export async function callAiApi(
 						{
 							free: true,
 							maxOutputTokens,
-							...(isFast ? { maxAttempts: 1 as const, signal } : {}),
+							maxAttempts: 1 as const,
+							signal,
 						},
 					);
 					freeInputTokens += freeResult.inputTokens;
@@ -1035,48 +1020,40 @@ export async function callAiApi(
 			return null;
 		};
 		try {
-			const freeResult = isFast
-				? await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain)
-				: await tryFreeChain();
+			const freeResult = await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain);
 			if (freeResult) return freeResult;
-			if (context.aiSpeedMode === "cheap") {
-				if (
-					freeErrors.length > 0 &&
-					freeErrors.every((e) => isQuotaLikeAiError(e))
-				) {
-					// Genuine exhaustion: EVERY free model answered with a quota
-					// signal. Under the owner's rule the job now pays INLINE and
-					// carries on — no parking, no aiQuotaWaiting, no 4h flip
-					// (round-10 #1/#2: generation gets the same shape as
-					// transcription; the park+flip pair is deleted).
-					freeQuotaExhausted = true;
-				} else {
-					// At least one free failure was NOT a quota signal (revoked
-					// key, permission denied, empty/unparseable response). That is
-					// a real ERROR, not exhaustion — billing the paid API here
-					// with free daily quota intact is the owner's original defect
-					// in the generation phase (round-10 #1, the twin).
-					throw (
-						freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
-						new Error(
-							`Free-tier summary chain failed for video=${context.videoId}`,
-						)
-					);
-				}
+			if (
+				freeErrors.length > 0 &&
+				freeErrors.every((e) => isQuotaLikeAiError(e))
+			) {
+				// Genuine exhaustion: EVERY free model answered with a quota
+				// signal. The job pays INLINE and carries on — no parking, no
+				// waiting.
+				freeAttempted = true;
+			} else {
+				// At least one free failure was NOT a quota signal (revoked key,
+				// permission denied, empty/unparseable response). That is a real
+				// ERROR, not exhaustion — billing the paid API here with free
+				// daily quota intact is the owner's original defect.
+				throw (
+					freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
+					new Error(
+						`Free-tier summary chain failed for video=${context.videoId}`,
+					)
+				);
 			}
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
 		} catch (error) {
-			if (context.aiSpeedMode === "cheap" && !isQuotaLikeAiError(error)) {
-				// Cheap free-chain real errors surface (they end in the bounded
-				// re-kick -> ERROR machinery); only the fast probe deadline may
-				// fall through to paid here.
+			if (!isQuotaLikeAiError(error) && !isDeadlineError(error)) {
+				// A real free-chain error surfaces (it ends in the bounded
+				// re-kick -> ERROR machinery); only a quota answer or the probe
+				// deadline may fall through to paid here.
 				throw error;
 			}
-			if (context.aiSpeedMode === "cheap") {
-				freeQuotaExhausted = true;
-			}
+			// Quota or the probe deadline: continue on paid, no waiting.
+			freeAttempted = true;
 			console.warn(
 				`[generate-ai] free-tier probe ended (${error instanceof Error ? error.message : String(error)}) for video=${context.videoId}, falling back to paid`,
 			);
@@ -1084,15 +1061,11 @@ export async function callAiApi(
 	}
 
 	// Paid key resolved only HERE, after the free chain above has run — so the
-	// cheap declaration is the classified FACT computed above, never a literal
-	// (generation has no discounted route; sync IS its cheapest paid path).
+	// declaration is the classified FACT computed above, never a literal.
 	const apiKey = getPaidGeminiKey({
 		operation: "generation",
-		mode: context.aiSpeedMode === "cheap" ? "cheap" : "fast",
 		route: "sync",
-		...(context.aiSpeedMode === "cheap"
-			? { freeExhausted: freeQuotaExhausted }
-			: {}),
+		freeAttempted,
 	});
 	if (!apiKey) {
 		console.warn("[generate-ai] GEMINI_API_KEY not set, skipping AI call");

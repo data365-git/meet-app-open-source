@@ -49,7 +49,6 @@ vi.mock("server-only", () => ({}));
 import { callAiApi } from "@/workflows/generate-ai";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
-const CHEAP_CTX = { ...CTX, aiSpeedMode: "cheap" as const };
 
 type GuardOpt = { model?: string; free?: boolean; fn: () => Promise<unknown> };
 
@@ -168,30 +167,7 @@ describe("callAiApi free-tier-first", () => {
 		expect((H.withCostGuard.mock.calls[1]?.[0] as GuardOpt).free).toBe(true);
 	});
 
-	it("both free models fail: falls back to paid, accumulates free tokens", async () => {
-		H.serverEnv.mockReturnValue({
-			GEMINI_API_KEY: "paid-key",
-			GEMINI_API_KEY_FREE: "free-key",
-		});
-		H.fetch
-			.mockResolvedValueOnce(geminiOk('{"bad":', 11, 7))
-			.mockResolvedValueOnce(geminiOk('{"also bad":', 9, 3))
-			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
-
-		const out = await callAiApi("prompt", {}, CTX);
-
-		expect(out.content).toBe('{"paid":true}');
-		expect(out.model).toBe("gemini-3-flash-preview");
-		expect(out.inputTokens).toBe(11 + 9 + 20);
-		expect(out.outputTokens).toBe(7 + 3 + 8);
-		expect(H.fetch).toHaveBeenCalledTimes(3);
-		expect(fetchUrl(0)).toContain("key=free-key");
-		expect(fetchUrl(1)).toContain("key=free-key");
-		expect(fetchUrl(2)).toContain("key=paid-key");
-		expect((H.withCostGuard.mock.calls[2]?.[0] as GuardOpt).free).toBeFalsy();
-	});
-
-	it("fast mode + first free model 429: second FREE model rescues before any paid call", async () => {
+	it("first free model 429: second FREE model rescues before any paid call", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -211,7 +187,7 @@ describe("callAiApi free-tier-first", () => {
 		expect(fetchUrl(1)).toContain("key=free-key");
 	});
 
-	it("cheap mode + BOTH free models 429: genuine exhaustion — pays INLINE and carries on, no park (round-10 owner rule)", async () => {
+	it("BOTH free models 429: genuine exhaustion — pays INLINE and carries on, no waiting", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -221,7 +197,7 @@ describe("callAiApi free-tier-first", () => {
 			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 
-		const out = await callAiApi("prompt", {}, CHEAP_CTX);
+		const out = await callAiApi("prompt", {}, CTX);
 
 		expect(out.content).toBe('{"paid":true}');
 		expect(H.fetch).toHaveBeenCalledTimes(3);
@@ -230,7 +206,7 @@ describe("callAiApi free-tier-first", () => {
 		expect(fetchUrl(2)).toContain("key=paid-key");
 	});
 
-	it("cheap mode + one quota error and one REAL error: the real error surfaces — paid is NOT billed with free quota intact (round-10 #1)", async () => {
+	it("one quota error and one REAL error: the real error surfaces — paid is NOT billed with free quota intact", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -240,14 +216,14 @@ describe("callAiApi free-tier-first", () => {
 			.mockResolvedValueOnce(geminiOk('{"bad":', 9, 3))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 
-		await expect(callAiApi("prompt", {}, CHEAP_CTX)).rejects.toBeInstanceOf(
+		await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(
 			Error,
 		);
 		// Both free attempts ran; the paid call never did.
 		expect(H.fetch).toHaveBeenCalledTimes(2);
 	});
 
-	it("cheap mode + non-quota errors on BOTH free models (e.g. revoked key): real error, ZERO paid calls (round-10 #1, the twin)", async () => {
+	it("non-quota errors on BOTH free models (e.g. revoked key): real error, ZERO paid calls", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -257,7 +233,7 @@ describe("callAiApi free-tier-first", () => {
 			.mockResolvedValueOnce(geminiOk('{"still bad":', 4, 2))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 
-		await expect(callAiApi("prompt", {}, CHEAP_CTX)).rejects.toBeInstanceOf(
+		await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(
 			Error,
 		);
 		expect(H.fetch).toHaveBeenCalledTimes(2);
@@ -266,7 +242,7 @@ describe("callAiApi free-tier-first", () => {
 		}
 	});
 
-	it("fast free probe threads an abort signal into the free call; cheap does not", async () => {
+	it("the free probe always threads an abort signal into the free call (bounded, never patient)", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
@@ -274,16 +250,11 @@ describe("callAiApi free-tier-first", () => {
 		H.fetch.mockResolvedValue(geminiOk('{"ok":true}', 11, 7));
 
 		await callAiApi("prompt", {}, CTX);
-		const fastOpt = H.fetch.mock.calls[0]?.[1] as { signal?: AbortSignal };
-		expect(fastOpt.signal).toBeInstanceOf(AbortSignal);
-
-		H.fetch.mockClear();
-		await callAiApi("prompt", {}, CHEAP_CTX);
-		const cheapOpt = H.fetch.mock.calls[0]?.[1] as { signal?: AbortSignal };
-		expect(cheapOpt.signal).toBeUndefined();
+		const probeOpt = H.fetch.mock.calls[0]?.[1] as { signal?: AbortSignal };
+		expect(probeOpt.signal).toBeInstanceOf(AbortSignal);
 	});
 
-	it("fast free deadline: aborts the free probe and falls back to paid once", async () => {
+	it("probe deadline: aborts the free probe and falls back to paid once", async () => {
 		vi.useFakeTimers();
 		try {
 			H.serverEnv.mockReturnValue({
@@ -295,7 +266,7 @@ describe("callAiApi free-tier-first", () => {
 				(_url: string, opts: { signal?: AbortSignal }) =>
 					new Promise((_resolve, reject) => {
 						opts.signal?.addEventListener("abort", () =>
-							reject(new Error("aborted")),
+							reject(opts.signal?.reason ?? new Error("aborted")),
 						);
 					}),
 			);

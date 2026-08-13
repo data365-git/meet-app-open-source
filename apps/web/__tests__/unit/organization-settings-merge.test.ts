@@ -12,14 +12,13 @@ describe("mergeOrganizationSettings", () => {
 			disableCaptions: true,
 			disableReactions: false,
 			defaultPlaybackSpeed: 1.5,
-			aiSpeedMode: "fast",
 		} as unknown as Record<string, unknown>;
 
-		const merged = mergeOrganizationSettings(existing, { aiSpeedMode: "cheap" });
+		const merged = mergeOrganizationSettings(existing, { defaultPlaybackSpeed: 2 });
 
 		expect(merged).toEqual({
 			...existing,
-			aiSpeedMode: "cheap",
+			defaultPlaybackSpeed: 2,
 		});
 	});
 
@@ -43,11 +42,11 @@ describe("mergeOrganizationSettings", () => {
 	});
 
 	it("merging onto null/undefined existing settings just returns the update", () => {
-		expect(mergeOrganizationSettings(null, { aiSpeedMode: "cheap" })).toEqual({
-			aiSpeedMode: "cheap",
+		expect(mergeOrganizationSettings(null, { defaultPlaybackSpeed: 2 })).toEqual({
+			defaultPlaybackSpeed: 2,
 		});
-		expect(mergeOrganizationSettings(undefined, { aiSpeedMode: "cheap" })).toEqual({
-			aiSpeedMode: "cheap",
+		expect(mergeOrganizationSettings(undefined, { defaultPlaybackSpeed: 2 })).toEqual({
+			defaultPlaybackSpeed: 2,
 		});
 	});
 
@@ -68,14 +67,14 @@ describe("mergeOrganizationSettings", () => {
 			hideShareableLinkCapLogo: true,
 			shareableLinkUseOrganizationIcon: false,
 			aiGenerationLanguage: "en",
-			aiSpeedMode: "fast",
+			defaultPlaybackSpeed: 1,
 			disableComments: false,
 		} as const;
 
 		// Non-pro caller attempts to flip a pro-gated key plus a non-gated key.
 		const submitted = {
 			disableSummary: false,
-			aiSpeedMode: "cheap",
+			defaultPlaybackSpeed: 2,
 		} as const;
 
 		const gated = preserveProSettings(submitted, existingSettings);
@@ -86,7 +85,7 @@ describe("mergeOrganizationSettings", () => {
 		expect(merged.disableChapters).toBe(true);
 		expect(merged.aiGenerationLanguage).toBe("en");
 		// Non-gated key from the submission still applied.
-		expect(merged.aiSpeedMode).toBe("cheap");
+		expect(merged.defaultPlaybackSpeed).toBe(2);
 		// Untouched key survived the merge.
 		expect(merged.disableComments).toBe(false);
 	});

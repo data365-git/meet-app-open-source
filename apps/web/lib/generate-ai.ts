@@ -7,7 +7,6 @@ import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
-import { type AiSpeedMode, resolveAiSpeedMode } from "@/lib/ai-speed-mode";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -21,7 +20,6 @@ export async function startAiGeneration(
 	userId: string,
 	opts?: {
 		force?: boolean;
-		speedModeOverride?: AiSpeedMode;
 		/** A cron/recovery re-kick — must NOT refund the recovery budget. */
 		isRetry?: boolean;
 	},
@@ -79,8 +77,6 @@ export async function startAiGeneration(
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};
-	const aiSpeedMode =
-		opts?.speedModeOverride ?? resolveAiSpeedMode(metadata.aiMode);
 
 	if (
 		metadata.aiGenerationStatus === "PROCESSING" ||
@@ -116,7 +112,6 @@ export async function startAiGeneration(
 			.set({
 				metadata: {
 					...metadata,
-					aiMode: aiSpeedMode,
 					aiJobStartedAt:
 						metadata.aiJobStartedAt ?? new Date().toISOString(),
 					aiQuotaWaiting: false,
@@ -136,7 +131,6 @@ export async function startAiGeneration(
 			videoId,
 			userId,
 			force,
-			speedModeOverride: aiSpeedMode,
 		}).catch(async (err) => {
 			console.error(
 				`[startAiGeneration] Inline workflow failed for video ${videoId}:`,

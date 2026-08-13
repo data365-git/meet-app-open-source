@@ -44,7 +44,6 @@ type AiGenerationStatus =
 
 type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
 type AiProcessingSubStep = "extract_audio";
-type AiSpeedMode = "fast" | "cheap";
 
 interface GenerateAiPanelProps {
 	videoId: Video.VideoId;
@@ -55,11 +54,6 @@ interface GenerateAiPanelProps {
 	/** Fine sub-phase inside "transcribe", written by the workflow when the
 	 * phase really starts — never inferred client-side. */
 	aiProcessingSubStep?: AiProcessingSubStep | null;
-	aiMode?: AiSpeedMode | null;
-	aiQuotaWaiting?: boolean;
-	/** Cheap mode: a durable Batch is pending on the discounted paid queue —
-	 * the honest wording differs from "waiting for free quota". */
-	aiBatchPending?: boolean;
 	/** Why transcription failed. QUOTA = the AI account ran out of credits —
 	 * the recording is safe and the recovery cron will re-run it. */
 	transcriptionErrorCode?: "QUOTA" | "FAILED" | null;
@@ -123,9 +117,6 @@ export function GenerateAiPanel({
 	aiGenerationStatus,
 	aiProcessingStep,
 	aiProcessingSubStep,
-	aiMode,
-	aiQuotaWaiting = false,
-	aiBatchPending = false,
 	transcriptionErrorCode = null,
 	duration,
 	aiIncomplete = false,
@@ -139,11 +130,7 @@ export function GenerateAiPanel({
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
-	const [continuingPaid, setContinuingPaid] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Mode chooser step: starting analysis can spend real Gemini API money, so an
-	// accidental tap must not fire it. null = no pending request.
-	const [confirm, setConfirm] = useState<{ reprocess: boolean } | null>(null);
 	const inFlightRef = useRef(false);
 	// Keeps the min ETA seen for the CURRENT stage so the caption never flaps
 	// upward between polls; reset whenever the active stage changes.
@@ -168,16 +155,14 @@ export function GenerateAiPanel({
 		transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
 	const aiNotice = getAiAnalysisNotice(duration);
 
-	// Fires the generation POST. Reached ONLY via the mode chooser block below —
-	// every start/re-analyze trigger first sets `confirm`, so an accidental tap
-	// never starts the job.
-	const requestStart = (reprocess = false, speedMode: AiSpeedMode) => {
+	// Fires the generation POST directly: one behaviour, no mode chooser —
+	// pressing the AI-analysis action starts the job (owner, 2026-08-13).
+	const requestStart = (reprocess = false) => {
 		// Synchronous in-flight guard: a very fast double-click can fire before the
 		// `loading` state re-renders the disabled buttons, sending two POSTs.
 		// The ref blocks the second call instantly.
 		if (inFlightRef.current) return;
 		inFlightRef.current = true;
-		setConfirm(null);
 		setLoading(true);
 		setError(null);
 		void (async () => {
@@ -185,7 +170,7 @@ export function GenerateAiPanel({
 				const res = await fetch(`/api/videos/${videoId}/generate`, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ reprocess, speedMode }),
+					body: JSON.stringify({ reprocess }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -201,74 +186,6 @@ export function GenerateAiPanel({
 			}
 		})();
 	};
-
-	const requestContinuePaid = () => {
-		if (inFlightRef.current) return;
-		inFlightRef.current = true;
-		setContinuingPaid(true);
-		setError(null);
-		void (async () => {
-			try {
-				const res = await fetch(`/api/videos/${videoId}/continue-paid`, {
-					method: "POST",
-				});
-				if (!res.ok) {
-					const body = await res.json().catch(() => ({}));
-					setError((body as { error?: string }).error ?? "An error occurred");
-				} else {
-					onStarted?.();
-				}
-			} catch {
-				setError("An error occurred");
-			} finally {
-				setContinuingPaid(false);
-				inFlightRef.current = false;
-			}
-		})();
-	};
-
-	// Shared mode chooser block: rendered in place of a trigger button
-	// whenever `confirm` is set, across all three start/re-analyze entry points.
-	const modeConfirm = confirm ? (
-		<div className="flex flex-col gap-2">
-			<p className="text-xs font-medium text-gray-10">
-				{tShare("aiChooseMode")}
-			</p>
-			<div className="grid gap-2 sm:grid-cols-2">
-				<button
-					type="button"
-					disabled={loading}
-					onClick={() => requestStart(confirm.reprocess, "fast")}
-					className="flex flex-col items-start rounded-lg bg-[var(--brand)] px-4 py-2 text-left text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
-				>
-					<span>{tShare("aiModeFast")}</span>
-					<span className="text-xs font-medium opacity-85">
-						{tShare("aiModeFastHint")}
-					</span>
-				</button>
-				<button
-					type="button"
-					disabled={loading}
-					onClick={() => requestStart(confirm.reprocess, "cheap")}
-					className="flex flex-col items-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-left text-sm font-semibold text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
-				>
-					<span>{tShare("aiModeCheap")}</span>
-					<span className="text-xs font-medium text-gray-10">
-						{tShare("aiModeCheapHint")}
-					</span>
-				</button>
-			</div>
-			<div>
-				<button
-					type="button"
-					onClick={() => setConfirm(null)}
-					className="rounded-lg px-3 py-1.5 text-xs font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
-				>
-					{tShare("aiConfirmCancel")}
-				</button>
-			</div>
-		</div>
-	) : null;
 
 	// ── Running state: persisted pipeline stage ──────────────────────────────
 	if (isRunning) {
@@ -334,16 +251,6 @@ export function GenerateAiPanel({
 		const etaMin = etaMinRef.current.value;
 		const etaLabel =
 			etaMin < 1 ? tShare("aiEtaSoon") : tShare("aiEta", { minutes: etaMin });
-
-		const currentMode: AiSpeedMode = aiMode === "cheap" ? "cheap" : "fast";
-		const modeLabel =
-			currentMode === "cheap"
-				? tShare("aiModeCheapShort")
-				: tShare("aiModeFastShort");
-		const displayedEtaLabel =
-			currentMode === "cheap" && aiQuotaWaiting
-				? tShare("aiEtaQueue")
-				: etaLabel;
 
 		// The 3 REAL tracked stages (tasks/chapters are not separately tracked,
 		// so they never get their own row).
@@ -430,21 +337,15 @@ export function GenerateAiPanel({
 
 		// ONE honest live line under the overall bar — only ever claims a step
 		// that is PROVEN by real backend data, in priority order:
-		//   1. cheap mode waiting for free quota (aiQuotaWaiting flag),
-		//   2. real chunk progress ("Gemini'ga 3/12 audio yuborildi"),
-		//   3. the workflow-written audio-extraction marker.
+		//   1. real chunk progress ("Gemini'ga 3/12 audio yuborildi"),
+		//   2. the workflow-written audio-extraction marker.
 		// If none of those markers exist, no line is shown — never an invented
 		// label or a fake percentage.
 		const liveDetailLine =
-			currentMode === "cheap" && aiQuotaWaiting
-				? tShare(
-						aiBatchPending ? "aiLiveDiscountedQueue" : "aiLiveWaitingFreeQuota",
-					)
-				: (activeDetail ??
-					(currentStep === "transcribe" &&
-					aiProcessingSubStep === "extract_audio"
-						? tShare("aiLiveExtractingAudio")
-						: null));
+			activeDetail ??
+			(currentStep === "transcribe" && aiProcessingSubStep === "extract_audio"
+				? tShare("aiLiveExtractingAudio")
+				: null);
 
 		return (
 			<div className="flex flex-col gap-4 rounded-2xl border border-gray-5 bg-gray-1 p-4 shadow-[0_18px_50px_-36px_rgba(0,92,177,0.7)] sm:p-5">
@@ -466,9 +367,6 @@ export function GenerateAiPanel({
 							)}
 						</div>
 					</div>
-					<span className="shrink-0 rounded-full border border-gray-5 bg-gray-2 px-2.5 py-1 text-[11px] font-medium text-gray-10">
-						{modeLabel}
-					</span>
 				</div>
 
 				{/* Overall glance readout: what's happening now + stage N/3 + ETA,
@@ -492,7 +390,7 @@ export function GenerateAiPanel({
 							</p>
 							<p className="mt-0.5 inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums text-gray-12">
 								<Clock3 aria-hidden className="size-3.5 text-[var(--brand)]" />
-								{displayedEtaLabel}
+								{etaLabel}
 							</p>
 						</div>
 					</div>
@@ -502,7 +400,7 @@ export function GenerateAiPanel({
 						aria-valuemin={0}
 						aria-valuemax={100}
 						aria-valuenow={overallPct}
-						aria-valuetext={`${stageNumber}/${runningStages.length}, ${displayedEtaLabel}`}
+						aria-valuetext={`${stageNumber}/${runningStages.length}, ${etaLabel}`}
 						className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-5"
 					>
 						<div
@@ -612,30 +510,7 @@ export function GenerateAiPanel({
 					})}
 				</ol>
 
-				{currentMode === "cheap" && aiQuotaWaiting && (
-					<p className="text-[12px] text-amber-11">
-						{tShare(
-							aiBatchPending
-								? "aiModeCheapBatchRunning"
-								: "aiModeCheapQuotaWaiting",
-						)}
-					</p>
-				)}
-
 				{error && <p className="text-xs text-red-10">{error}</p>}
-
-				{canGenerate && currentMode === "cheap" && (
-					<button
-						type="button"
-						disabled={continuingPaid}
-						onClick={requestContinuePaid}
-						className="self-start rounded-lg border border-gray-5 px-3 py-1.5 text-xs font-semibold text-gray-12 hover:bg-gray-3 disabled:opacity-60"
-					>
-						{continuingPaid
-							? tShare("aiContinuingPaid")
-							: tShare("aiContinuePaid")}
-					</button>
-				)}
 			</div>
 		);
 	}
@@ -668,19 +543,16 @@ export function GenerateAiPanel({
 				{canGenerate && error && (
 					<p className="text-xs text-red-10">{error}</p>
 				)}
-				{canGenerate &&
-					(confirm ? (
-						modeConfirm
-					) : (
-						<button
-							type="button"
-							disabled={loading}
-							onClick={() => setConfirm({ reprocess: false })}
-							className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-						>
-							{loading ? tShare("aiStarting") : tShare("aiRetry")}
-						</button>
-					))}
+				{canGenerate && (
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => requestStart(false)}
+						className="self-start rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+					>
+						{loading ? tShare("aiStarting") : tShare("aiRetry")}
+					</button>
+				)}
 			</div>
 		);
 	}
@@ -698,31 +570,20 @@ export function GenerateAiPanel({
 				<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-3">
 					<p className="text-xs text-gray-10">{tShare("aiIncompleteHint")}</p>
 					{error && <p className="text-xs text-red-10">{error}</p>}
-					{confirm ? (
-						modeConfirm
-					) : (
-						<button
-							type="button"
-							disabled={loading}
-							onClick={() => setConfirm({ reprocess: true })}
-							className="self-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
-						>
-							{loading ? tShare("aiStarting") : tShare("aiReanalyze")}
-						</button>
-					)}
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => requestStart(true)}
+						className="self-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
+					>
+						{loading ? tShare("aiStarting") : tShare("aiReanalyze")}
+					</button>
 				</div>
 			);
 		}
 
 		// Good analysis: don't alarm the owner with a panel — tuck re-analyze
 		// into a discreet overflow menu instead.
-		if (confirm) {
-			return (
-				<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-3">
-					{modeConfirm}
-				</div>
-			);
-		}
 		return (
 			<div className="flex justify-end">
 				<DropdownMenu>
@@ -738,7 +599,7 @@ export function GenerateAiPanel({
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem
 							disabled={loading}
-							onClick={() => setConfirm({ reprocess: true })}
+							onClick={() => requestStart(true)}
 						>
 							{tShare("aiReanalyze")}
 						</DropdownMenuItem>
@@ -762,19 +623,16 @@ export function GenerateAiPanel({
 						{tShare(aiNotice === "long" ? "aiNoticeLong" : "aiNoticeMedium")}
 					</p>
 				)}
+				<p className="text-xs text-gray-10">{tShare("aiFreeFirstHint")}</p>
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				{confirm ? (
-					modeConfirm
-				) : (
-					<button
-						type="button"
-						disabled={loading}
-						onClick={() => setConfirm({ reprocess: false })}
-						className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
-					>
-						{tShare("aiStartAnalysis")}
-					</button>
-				)}
+				<button
+					type="button"
+					disabled={loading}
+					onClick={() => requestStart(false)}
+					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+				>
+					{tShare("aiStartAnalysis")}
+				</button>
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
 				)}

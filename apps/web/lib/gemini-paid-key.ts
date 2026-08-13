@@ -1,50 +1,41 @@
 import { serverEnv } from "@cap/env";
-import type { AiSpeedMode } from "@/lib/ai-speed-mode";
 
 /**
  * THE single owner of the PAID Gemini credential on the AI path.
  *
  * The boundary is the structural fix (judge, 2026-08-11): with the key
  * ambiently in scope, every error path's default was a paid call. Every use
- * must name WHAT it is — operation, mode AND route, no unchecked escape
- * hatch — and a source-scan test fails the build if any AI-path file reads
- * the env var directly.
+ * must name WHAT it is — operation and route, no unchecked escape hatch —
+ * and a source-scan test fails the build if any AI-path file reads the env
+ * var directly.
  *
- * THE INVARIANT, corrected in round 8 to the owner's ACTUAL rule ("imkon
- * qadar bepuldan foydalanadi, u tugasa qaytguncha pullikdan foydalanadi"):
- * a cheap job never calls a paid API WHILE FREE QUOTA IS AVAILABLE. Paying —
- * on whatever the cheapest available route is — once free is exhausted is
- * the REQUESTED behaviour, not a defect. So a cheap synchronous paid call
- * must declare `freeExhausted: true`, meaning the free chain was actually
- * tried (or does not exist) for THIS call. The earlier absolute form
- * ("cheap never bills full price") was the coordinator's extrapolation, not
- * the owner's rule, and drove seven rounds of park/collector complexity.
+ * THE INVARIANT (owner, 2026-08-13 — the speed-mode chooser is deleted, one
+ * behaviour remains): a job never calls a paid API while free quota is still
+ * available. Every job-bound synchronous paid call must declare
+ * `freeAttempted: true`, and it must be a FACT about THIS call: the free
+ * chain was genuinely given its chance first — it answered with a real
+ * quota/rate-limit signal, it blew the bounded probe deadline (the owner
+ * chose time over waiting), or no free key is configured at all. A broken
+ * key, a safety block or a malformed response is a real ERROR, not
+ * exhaustion — billing paid on those is the owner's original defect.
  */
 export type PaidGeminiUse =
-	/** Job-bound operations: the mode MUST be derived from the job's own
-	 * resolved aiSpeedMode, never invented at the call site. */
+	/** Job-bound operations: `freeAttempted` MUST be the classified fact
+	 * computed after the free chain ran, never a literal at the call site. */
 	| {
 			operation: "transcription" | "generation";
-			mode: AiSpeedMode;
-			route: "sync" | "batch";
-			/** REQUIRED TRUE for cheap synchronous calls, and it must be a FACT:
-			 * only a genuine quota/rate-limit signal from the free chain (or the
-			 * absence of any free key) counts as exhaustion. A broken key, a
-			 * safety block or a malformed response is a real ERROR, not
-			 * exhaustion — billing paid on those is the owner's original defect
-			 * in a new shape (round-9 #1). */
-			freeExhausted?: boolean;
+			route: "sync";
+			freeAttempted: boolean;
 	  }
-	/** Job-less operations: there is no cheap notion here, so there is no
-	 * mode field to falsify — the round-8 shape let these self-declare
-	 * mode:"fast", the exact value that disables the check (round-9 #3). */
+	/** Job-less operations: no free tier applies, so there is no fact to
+	 * declare. */
 	| {
 			operation:
 				| "translation"
 				| "chat"
-				/** The owner's explicit "continue on paid" click — his money, his
-				 * call; the click itself is the authorization. */
-				| "owner-continue-paid"
+				/** poll-batch-jobs cron draining LEGACY durable Batch jobs
+				 * (nothing submits new ones — collection/cancellation only). */
+				| "legacy-batch-admin"
 				/** Operator-run verification/maintenance scripts (never a request
 				 * path). */
 				| "ops-script";
@@ -53,25 +44,19 @@ export type PaidGeminiUse =
 
 /** The authorization check, separated from the key handout so call sites
  * that resolve their key elsewhere (the video owner's personal key) still
- * MUST pass the same gate — round 9 #1 closed the `ownerApiKey ?? gate`
- * short-circuit that skipped the check entirely. */
+ * MUST pass the same gate. */
 export function authorizePaidGeminiUse(use: PaidGeminiUse): void {
-	if (
-		"mode" in use &&
-		use.mode === "cheap" &&
-		use.route === "sync" &&
-		use.freeExhausted !== true
-	) {
-		throw new CheapPaidWhileFreeAvailableError();
+	if ("freeAttempted" in use && use.freeAttempted !== true) {
+		throw new PaidWhileFreeAvailableError();
 	}
 }
 
-export class CheapPaidWhileFreeAvailableError extends Error {
+export class PaidWhileFreeAvailableError extends Error {
 	constructor() {
 		super(
-			"INVARIANT VIOLATION: a cheap job must not call a paid Gemini API while free quota is available — the caller did not declare freeExhausted (owner rule 2026-08-11: free first, paid only when free is out)",
+			"INVARIANT VIOLATION: a job must not call a paid Gemini API while free quota is still available — the caller did not declare freeAttempted (owner rule: free first, paid only when free is out or too slow)",
 		);
-		this.name = "CheapPaidWhileFreeAvailableError";
+		this.name = "PaidWhileFreeAvailableError";
 	}
 }
 

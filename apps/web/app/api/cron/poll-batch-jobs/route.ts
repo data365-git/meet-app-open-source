@@ -59,10 +59,9 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	// Polling/collecting cheap Batch jobs is Batch-route administration.
+	// Polling/collecting LEGACY Batch jobs is Batch-route administration.
 	const paidKey = getPaidGeminiKey({
-		operation: "transcription",
-		mode: "cheap",
+		operation: "legacy-batch-admin",
 		route: "batch",
 	});
 	if (!paidKey) {
@@ -258,7 +257,7 @@ export async function GET(request: Request) {
 						} as VideoMetadata,
 					})
 					.where(eq(videos.id, video.id));
-				await transcribeVideo(video.id, video.ownerId, true, true, "cheap");
+				await transcribeVideo(video.id, video.ownerId, true, true);
 				retried++;
 			}
 		} catch (error) {
