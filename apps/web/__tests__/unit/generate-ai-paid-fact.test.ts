@@ -110,6 +110,17 @@ describe("round-12 #3 — generation liveness is a heartbeat, not the start time
 	});
 });
 
+describe("round-16 #2 — the DB error field is sanitized; the body stays in the log", () => {
+	it("markError persists sanitizeAiErrorMessageForUi(...), never the raw message", () => {
+		expect(TRANSCRIBE_WORKFLOW).toMatch(
+			/message: sanitizeAiErrorMessageForUi\(/,
+		);
+		expect(TRANSCRIBE_WORKFLOW).not.toMatch(
+			/message: reason\.message\.slice/,
+		);
+	});
+});
+
 describe("round-10 #4 — a partial completion is visible", () => {
 	it("completing with failed chunks fires an ops alert", () => {
 		expect(TRANSCRIBE_WORKFLOW).toMatch(

@@ -47,7 +47,8 @@ vi.mock("workflow", () => ({
 vi.mock("server-only", () => ({}));
 
 import { callAiApi } from "@/workflows/generate-ai";
-import { resetFreeTierHealth } from "@/lib/free-tier-health";
+import { markUnusableAiOutput, resetFreeTierHealth } from "@/lib/free-tier-health";
+import { isQuotaLikeAiError } from "@/lib/ai-quota-wait";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
 
@@ -400,6 +401,50 @@ describe("callAiApi free-tier-first", () => {
 		for (const call of H.fetch.mock.calls) {
 			expect(String(call[0])).toContain("key=free-key");
 		}
+	});
+
+	it("a real 429 on model A + unusable CONTENT quoting 'Rate limit' on model B is NOT exhaustion — zero paid calls (round-16 #1)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		// V8 quotes the content into the parse message ("Unexpected token 'R',
+		// \"Rate limit\"... is not valid JSON") — without the structural tag on
+		// the QUOTA classifier too, every(isQuotaLikeAiError) reads this as
+		// genuine exhaustion and bills the whole summary on paid while model
+		// B's free quota is untouched (round-14's offset defect, quota arm).
+		H.fetch
+			.mockResolvedValueOnce(geminiError(429, "RESOURCE_EXHAUSTED"))
+			.mockResolvedValueOnce(geminiOk("Rate limit reached, try later", 5, 2));
+		await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+	});
+
+	it("isQuotaLikeAiError honours the unusable-output tag structurally (round-16 #1)", () => {
+		expect(
+			isQuotaLikeAiError(
+				markUnusableAiOutput(
+					new Error(
+						'Free Gemini summary content is not valid JSON: Unexpected token \'R\', "Rate limit"... is not valid JSON',
+					),
+				),
+			),
+		).toBe(false);
+		expect(
+			isQuotaLikeAiError(
+				markUnusableAiOutput(
+					new Error(
+						"Free Gemini summary content is not valid JSON: Unterminated string in JSON at position 428 (line 1 column 429)",
+					),
+				),
+			),
+		).toBe(false);
+		// The tag never suppresses a REAL quota answer.
+		expect(
+			isQuotaLikeAiError(new Error("429 RESOURCE_EXHAUSTED: quota exceeded")),
+		).toBe(true);
 	});
 
 	it("no free key: paid path only, exactly one call", async () => {

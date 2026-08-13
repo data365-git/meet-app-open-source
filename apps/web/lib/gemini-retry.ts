@@ -34,8 +34,14 @@ export async function withGeminiRetry<T>(
 			lastError = err;
 			const message = err instanceof Error ? err.message : String(err);
 			const permanent = (err as { permanent?: boolean })?.permanent === true;
+			// Word boundaries on the digits (round-16 #3): messages now carry the
+			// upstream response body, and a project number like 763029500123
+			// contains "500" — a permanent 403 must not look transient and burn
+			// backoff on the paid leg.
 			const isTransient =
-				/429|500|501|503|overloaded|high demand|unavailable/i.test(message);
+				/\b(429|500|501|503)\b|overloaded|high demand|unavailable/i.test(
+					message,
+				);
 			if (
 				permanent ||
 				!isTransient ||

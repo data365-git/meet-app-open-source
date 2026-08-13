@@ -29,6 +29,7 @@ import {
 	TranscriptionQuotaFailureError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
+import { sanitizeAiErrorMessageForUi } from "@/lib/ai-error-message";
 import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import {
@@ -578,6 +579,13 @@ async function markError(
 ): Promise<void> {
 	"use step";
 
+	// FULL detail to the server log — that is where diagnosis happens. The
+	// persisted field below reaches every share-page viewer (public links
+	// included), so it gets the sanitized short reason only (round-16 #2).
+	console.error(
+		`[transcribe] terminal ${reason.code} for video=${videoId}: ${reason.message}`,
+	);
+
 	// patchVideoMetadata locks the row (SELECT ... FOR UPDATE): poll-batch-jobs
 	// patches the same metadata concurrently in cheap mode, and an unlocked
 	// read-modify-write here would clobber it.
@@ -587,7 +595,7 @@ async function markError(
 		aiProcessingSubStep: undefined,
 		transcriptionError: {
 			code: reason.code,
-			message: reason.message.slice(0, 500),
+			message: sanitizeAiErrorMessageForUi(reason.message),
 			at: new Date().toISOString(),
 		},
 	}));
