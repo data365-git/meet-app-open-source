@@ -4,6 +4,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { FatalError } from "workflow";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 
 interface FinalizeDesktopRecordingWorkflowPayload {
@@ -91,7 +92,9 @@ async function markMuxError(
 			phase: "error",
 			processingProgress: 0,
 			processingMessage: "Segment muxing failed",
-			processingError: errorMessage,
+			// Allowlist token only — the raw message can carry a presigned
+			// URL and this field reaches every share-page viewer (round-18).
+			processingError: persistableProcessingError(errorMessage),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));

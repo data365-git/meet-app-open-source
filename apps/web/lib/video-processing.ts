@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
@@ -21,13 +22,20 @@ export async function setVideoProcessingError(
 	processingMessage: string,
 	error: unknown,
 ): Promise<void> {
+	// FULL detail to the server log; the persisted field reaches every viewer
+	// of the share link, so it gets the allowlist token only (round-18 — an
+	// S3 error message can carry a working presigned URL).
+	console.error(
+		`[video-processing] ${processingMessage} failed for video=${videoId}:`,
+		error,
+	);
 	await db()
 		.update(videoUploads)
 		.set({
 			phase: "error",
 			processingProgress: 0,
 			processingMessage,
-			processingError: error instanceof Error ? error.message : String(error),
+			processingError: persistableProcessingError(error),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId));

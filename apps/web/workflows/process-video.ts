@@ -4,6 +4,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { runPromise } from "@/lib/server";
 import { optimizeRemoteVideoToMp4, probeRemoteVideo } from "@/lib/video-convert";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
@@ -156,7 +157,9 @@ async function setProcessingError(
 			phase: "error",
 			processingProgress: 0,
 			processingMessage: "Video processing failed",
-			processingError: errorMessage,
+			// Allowlist token only — the raw message can carry a presigned
+			// URL and this field reaches every share-page viewer (round-18).
+			processingError: persistableProcessingError(errorMessage),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
