@@ -6,6 +6,15 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## 🚨 PRODUCTION INCIDENT — FIXED 2026-08-14 ~00:15 (read before anything else)
+
+**The team reported "AI tahlil ishlamayapti". It was a real, total outage of the AI feature, and it had been down since the 2026-08-12 cutover.** Diagnosed live, not guessed.
+
+- **Cause:** the whole AI feature is gated on `hasPaidGeminiKey()` — `lib/generate-ai.ts:57` refuses with *"No Gemini API key configured"*, and `app/s/[videoId]/page.tsx:553-555` sets both `transcriptionGenerationAvailable` and `aiProviderAvailable` from it. The new server had **only `GEMINI_API_KEY_FREE`**; the paid slot was empty, so the gate was shut and the free key could never be reached. Confirming evidence from the database: `ai_usage_events` has **282 calls on 08-11 and ZERO on 08-12/13** — the feature stopped the day of the migration.
+- **Fix applied:** `GEMINI_API_KEY` added to `/opt/data365/app.env` (backup written alongside as `app.env.bak-<date>`), container recreated. **Proof: `/api/cron/poll-batch-jobs` returned HTTP 200 `{"success":true,…}` where it had been returning 500 `{"error":"No paid GEMINI_API_KEY configured"}`**; `recover-stale-ai-jobs` 200; `/api/health` `db:ok storage:ok`; a public share page 200.
+- **⚠️ SELF-INFLICTED WOBBLE, recorded so it is not repeated:** the first restart used a bare `docker run`, which put the container on the default bridge instead of `data365_default`. `DATABASE_URL` addresses the DB by container name (`data365-db:3306`), so health went to `503 db:error` for about a minute. **Always restart via `docker compose -f /opt/data365/docker-compose.app.yml up -d`, never a hand-rolled `docker run`.**
+- **⚠️ THIS IS A STOPGAP, AND ITS LIMIT MUST BE STATED:** the value placed in the paid slot is the SAME free-tier key. So the gate opens and analysis runs, but the daily ceiling is still ~20 requests per model — **roughly one 1-hour recording per day**, after which analysis fails again. It also means `ai_usage_events` will now record ESTIMATED costs for calls that actually bill $0, so the spend panel overstates until the real paid path lands. The genuine fix is the OpenRouter work below.
+
 ## ▶ NEXT STEP — READ THIS FIRST (2026-08-12)
 
 **GOAL:** data365 is LIVE on the team's own Contabo server (`169.58.86.149`, `https://data365.duckdns.org`) and must stay boringly reliable — the analysis just works, spends the free allowance first, and restarts itself when something stalls.
