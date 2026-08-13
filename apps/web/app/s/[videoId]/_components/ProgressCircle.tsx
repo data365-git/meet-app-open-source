@@ -97,37 +97,39 @@ const STALE_PROCESSING_START_MS = 5 * MINUTE;
 const STALE_PROCESSING_PROGRESS_MS = 10 * MINUTE;
 const STALE_THUMBNAIL_MS = 5 * MINUTE;
 
-export function getStalledProcessingMessage(
-	input: {
-		phase:
-			| "uploading"
-			| "processing"
-			| "generating_thumbnail"
-			| "complete"
-			| "error";
-		updatedAt: Date;
-		processingProgress: number;
-	},
-	t: (key: string) => string,
-): string | null {
+// Returns a share-namespace KEY, not a translated sentence (round-21): the
+// value lands in `errorMessage`, which since round-20 carries ONLY
+// tokens/keys for processingFailureMessageKey to translate — one field, one
+// kind of value. Translating here re-created the bare-label defect: the
+// mapper did not recognise the already-localized sentence and discarded it.
+export function getStalledProcessingMessage(input: {
+	phase:
+		| "uploading"
+		| "processing"
+		| "generating_thumbnail"
+		| "complete"
+		| "error";
+	updatedAt: Date;
+	processingProgress: number;
+}): string | null {
 	const ageMs = Date.now() - input.updatedAt.getTime();
 
 	if (input.phase === "processing") {
 		if (input.processingProgress === 0 && ageMs > STALE_PROCESSING_START_MS) {
-			return t("progressDidNotStart");
+			return "progressDidNotStart";
 		}
 
 		if (ageMs > STALE_PROCESSING_PROGRESS_MS) {
-			return t("progressStalled");
+			return "progressStalled";
 		}
 	}
 
 	if (input.phase === "generating_thumbnail" && ageMs > STALE_THUMBNAIL_MS) {
-		return t("progressFinishingStalled");
+		return "progressFinishingStalled";
 	}
 
 	if (input.phase === "complete" && ageMs > STALE_THUMBNAIL_MS) {
-		return t("progressFinishingStalled");
+		return "progressFinishingStalled";
 	}
 
 	return null;
@@ -168,7 +170,7 @@ export function useUploadProgress(
 		phase,
 		updatedAt: lastUpdated,
 		processingProgress: query.data.processingProgress,
-	}, t);
+	});
 
 	if (phase === "complete") {
 		return {

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	canRetryFailedProcessing,
@@ -181,45 +183,70 @@ describe("shouldDeferPlaybackSource", () => {
 		expect(shouldReloadPlaybackAfterUploadCompletes(null, null)).toBe(false);
 	});
 
-	it("detects processing that never actually started", () => {
-		const t = (key: string) => key;
+	it("detects processing that never actually started — and returns a KEY, not a translated sentence (round-21)", () => {
 		// Threshold was deliberately raised 90s -> 5min (commit 3621e0f: 90s
 		// flashed a false "processing failed" on merely-queued videos), so the
 		// fixture must exceed 5 minutes.
 		expect(
-			getStalledProcessingMessage(
-				{
-					phase: "processing",
-					updatedAt: new Date(Date.now() - 301_000),
-					processingProgress: 0,
-				},
-				t,
-			),
+			getStalledProcessingMessage({
+				phase: "processing",
+				updatedAt: new Date(Date.now() - 301_000),
+				processingProgress: 0,
+			}),
 		).toBe("progressDidNotStart");
 
 		expect(
-			getStalledProcessingMessage(
-				{
-					phase: "processing",
-					updatedAt: new Date(Date.now() - 30_000),
-					processingProgress: 0,
-				},
-				t,
-			),
+			getStalledProcessingMessage({
+				phase: "processing",
+				updatedAt: new Date(Date.now() - 30_000),
+				processingProgress: 0,
+			}),
 		).toBeNull();
 	});
 
 	it("detects processing that stalled after starting", () => {
-		const t = (key: string) => key;
 		expect(
-			getStalledProcessingMessage(
-				{
-					phase: "processing",
-					updatedAt: new Date(Date.now() - 11 * 60 * 1000),
-					processingProgress: 25,
-				},
-				t,
-			),
+			getStalledProcessingMessage({
+				phase: "processing",
+				updatedAt: new Date(Date.now() - 11 * 60 * 1000),
+				processingProgress: 25,
+			}),
 		).toBe("progressStalled");
+	});
+
+	it("RENDER-PATH pin (round-21): the stalled instruction survives to what the page shows, for the owner AND the anonymous viewer", () => {
+		// This pin sits at the boundary the previous three misses sat below:
+		// the stalled branch's value flowing THROUGH getUploadFailureMessage
+		// with the REAL uz locale — not the helper asserted in isolation.
+		const uzShare = (
+			JSON.parse(
+				readFileSync(
+					fileURLToPath(new URL("../../messages/uz.json", import.meta.url)),
+					"utf8",
+				),
+			) as { share: Record<string, string> }
+		).share;
+		const tUz = (key: string) => uzShare[key] ?? key;
+
+		const stalledKey = getStalledProcessingMessage({
+			phase: "processing",
+			updatedAt: new Date(Date.now() - 301_000),
+			processingProgress: 0,
+		});
+		expect(stalledKey).toBe("progressDidNotStart");
+
+		const uploadProgress = {
+			status: "error" as const,
+			lastUpdated: new Date(),
+			errorMessage: stalledKey,
+			hasRawFallback: false,
+		};
+		// Owner (retry available) and anonymous viewer both get the localized
+		// sentence WITH its instruction — never a bare "Processing failed."
+		for (const canRetry of [true, false]) {
+			const rendered = getUploadFailureMessage(uploadProgress, canRetry, tUz);
+			expect(rendered).toBe(uzShare.progressDidNotStart);
+			expect(rendered).toContain("Qayta ishlovni");
+		}
 	});
 });

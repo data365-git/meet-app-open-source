@@ -15,6 +15,12 @@ const TOKEN_MESSAGE_KEYS: Record<string, string> = {
 	"Upload interrupted": "progressUploadInterrupted",
 	"Upload stalled": "progressUploadStalledError",
 	"Processing stalled": "progressProcessingStalled",
+	// Stall-detection KEYS from getStalledProcessingMessage (round-21): the
+	// same field carries them, and they are already share-namespace keys —
+	// they pass through to t() unchanged. One field, one kind of value.
+	progressDidNotStart: "progressDidNotStart",
+	progressStalled: "progressStalled",
+	progressFinishingStalled: "progressFinishingStalled",
 };
 
 export function processingFailureMessageKey(
