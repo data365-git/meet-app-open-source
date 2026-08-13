@@ -31,6 +31,11 @@ import {
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import {
+	isFreeTierUnusable,
+	recordFreeTierSuccess,
+	recordGenuineFreeFailure,
+} from "@/lib/free-tier-health";
+import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
 	enhanceAudioFromUrl,
@@ -887,7 +892,14 @@ export async function transcribeAudio(
 
 	const runSync = async (): Promise<string> => {
 		const freeKey = serverEnv().GEMINI_API_KEY_FREE;
-		if (freeKey) {
+		// FACT for the paid-key gate, computed — never a literal (round-11 #3):
+		// true only when no free key exists, or this job's free chain has
+		// already proven persistently broken (bounded consecutive genuine
+		// failures — see lib/free-tier-health.ts). The catch below adds the
+		// other true cases: a genuine quota signal, the probe deadline, or the
+		// failure that crosses the broken-key bound.
+		let freeAttempted = !freeKey || isFreeTierUnusable(context.videoId);
+		if (freeKey && !freeAttempted) {
 			try {
 				const freeResult = await withCostGuard({
 					orgId: context.orgId,
@@ -918,16 +930,28 @@ export async function transcribeAudio(
 						};
 					},
 				});
+				recordFreeTierSuccess(context.videoId);
 				return freeResult.transcriptVtt;
 			} catch (error) {
-				if (!isQuotaLikeAiError(error) && !isDeadlineError(error)) {
-					// A NON-quota, non-deadline free failure (revoked key, safety
-					// block, malformed response) is a real ERROR: rethrow so the
-					// chunk retry machinery handles it — free quota is intact and
-					// must not be silently billed on the paid path.
+				if (isQuotaLikeAiError(error) || isDeadlineError(error)) {
+					// Quota answer or probe deadline: continue on paid, no
+					// waiting. Neither is evidence of a broken key, so the
+					// genuine-failure streak is untouched.
+					freeAttempted = true;
+				} else if (!recordGenuineFreeFailure(context.videoId)) {
+					// A genuine (non-quota, non-deadline) free failure below the
+					// bound — revoked key, safety block, malformed response — is
+					// a real ERROR: rethrow so the chunk retry machinery handles
+					// it. Free quota is intact and one hiccup must not open the
+					// paid path (the owner's original money defect, three times).
 					throw error;
+				} else {
+					// The bound crossed: the free key is persistently broken FOR
+					// THIS JOB. Continuing on paid is the classified fact the
+					// gate accepts — the alternative is a product-unrecoverable
+					// permanent ERROR (round-11 ship-blocker).
+					freeAttempted = true;
 				}
-				// Quota answer or probe deadline: continue on paid, no waiting.
 				console.warn(
 					`[transcribe] free-tier (${FREE_TRANSCRIBE_MODEL}) attempt failed for video=${context.videoId}, falling back to paid: ${error instanceof Error ? error.message : String(error)}`,
 				);
@@ -935,15 +959,13 @@ export async function transcribeAudio(
 		}
 
 		// Synchronous paid call, reached only when the free chain was given its
-		// chance: quota-exhausted, probe deadline, or no free key at all. The
-		// authorization is checked BEFORE resolving any key — the owner's
-		// personal key passes the exact same gate.
+		// chance: quota-exhausted, probe deadline, persistently-broken key, or
+		// no free key at all. The authorization is checked BEFORE resolving any
+		// key — the owner's personal key passes the exact same gate.
 		const paidUse = {
 			operation: "transcription" as const,
 			route: "sync" as const,
-			// FACT: no free key, a genuine quota signal, or the probe deadline —
-			// every other free failure rethrew above and never reaches here.
-			freeAttempted: true,
+			freeAttempted,
 		};
 		authorizePaidGeminiUse(paidUse);
 		const resolvedApiKey = ownerApiKey ?? getPaidGeminiKey(paidUse);

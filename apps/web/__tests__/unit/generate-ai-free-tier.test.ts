@@ -47,6 +47,7 @@ vi.mock("workflow", () => ({
 vi.mock("server-only", () => ({}));
 
 import { callAiApi } from "@/workflows/generate-ai";
+import { resetFreeTierHealth } from "@/lib/free-tier-health";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
 
@@ -85,6 +86,7 @@ function fetchUrl(callIndex: number): string {
 
 describe("callAiApi free-tier-first", () => {
 	beforeEach(() => {
+		resetFreeTierHealth();
 		H.serverEnv.mockReset();
 		H.withCostGuard.mockReset();
 		H.withGeminiRetry.mockReset();
@@ -283,6 +285,42 @@ describe("callAiApi free-tier-first", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("a persistently broken free key does NOT deadlock generation: after 3 consecutive genuine failures the call completes on paid (round-11 blocker)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+
+		// Calls 1-2: both free models return unusable output — a real error
+		// surfaces and the paid key is never used.
+		for (let i = 0; i < 2; i++) {
+			H.fetch
+				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
+				.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1));
+			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		}
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+
+		// Call 3: the streak crosses the bound — the SAME call continues on
+		// paid instead of dying.
+		H.fetch
+			.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
+			.mockResolvedValueOnce(geminiOk('{"bad":', 1, 1))
+			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+		const out = await callAiApi("prompt", {}, CTX);
+		expect(out.content).toBe('{"paid":true}');
+
+		// Call 4: free is now unusable FOR THIS JOB — skipped entirely.
+		H.fetch.mockClear();
+		H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
+		const out2 = await callAiApi("prompt", {}, CTX);
+		expect(out2.content).toBe('{"paid":true}');
+		expect(H.fetch).toHaveBeenCalledTimes(1);
+		expect(String(H.fetch.mock.calls[0]?.[0])).toContain("key=paid-key");
 	});
 
 	it("no free key: paid path only, exactly one call", async () => {

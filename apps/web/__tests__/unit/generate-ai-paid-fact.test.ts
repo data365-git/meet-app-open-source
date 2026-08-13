@@ -37,6 +37,11 @@ describe("round-10 #1 — generation freeAttempted is a classified fact", () => 
 		expect(GEN_WORKFLOW).not.toContain("freeAttempted: true");
 	});
 
+	it("transcription passes the computed fact too — no literal at its paid call site (round-11 #3)", () => {
+		expect(TRANSCRIBE_WORKFLOW).toContain("freeAttempted,");
+		expect(TRANSCRIBE_WORKFLOW).not.toContain("freeAttempted: true");
+	});
+
 	it("a NON-quota free failure surfaces instead of falling through to paid", () => {
 		// The rethrow of the first non-quota free error, keyed on the classifier.
 		expect(GEN_WORKFLOW).toMatch(

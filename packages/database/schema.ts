@@ -235,7 +235,6 @@ export const organizations = mysqlTable(
 				alertAtPct: number;
 				enabled: boolean;
 			};
-			aiSpeedMode?: "fast" | "cheap";
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,

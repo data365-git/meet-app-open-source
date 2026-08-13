@@ -53,6 +53,7 @@ vi.mock("@/lib/gemini-transcribe", () => ({
 }));
 
 import { transcribeAudio } from "@/workflows/transcribe";
+import { resetFreeTierHealth } from "@/lib/free-tier-health";
 
 const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
 const FREE_RESULT = { transcriptVtt: "WEBVTT\n\nFREE", inputTokens: 10, outputTokens: 5, audioInTokens: 3 };
@@ -67,6 +68,7 @@ type FreeProbeOpt = GeminiOpt & {
 
 describe("transcribeAudio free-tier-first", () => {
 	beforeEach(() => {
+		resetFreeTierHealth();
 		H.serverEnv.mockReset();
 		H.withCostGuard.mockReset();
 		H.transcribeWithGemini.mockReset();
@@ -237,6 +239,65 @@ describe("transcribeAudio free-tier-first", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("a persistently broken free key does NOT deadlock the job: after 3 consecutive genuine failures it continues on paid (round-11 blocker)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini.mockRejectedValue(new Error("400 API_KEY_INVALID"));
+
+		// Attempts 1-2: the genuine error surfaces; paid is NEVER billed.
+		for (let i = 0; i < 2; i++) {
+			const err = await transcribeAudio(
+				"https://a/x.mp3",
+				300,
+				null,
+				CTX,
+			).catch((e) => e);
+			expect((err as Error).message).toContain("API_KEY_INVALID");
+		}
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+		for (const call of H.transcribeWithGemini.mock.calls) {
+			expect((call[1] as GeminiOpt).apiKey).toBe("free-key");
+		}
+
+		// Attempt 3: the streak crosses the bound — free fails again, the SAME
+		// call completes on paid instead of dying.
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("400 API_KEY_INVALID"))
+			.mockResolvedValueOnce(PAID_RESULT);
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CTX);
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect((H.transcribeWithGemini.mock.calls[3]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+
+		// Attempt 4: the key is now unusable FOR THIS JOB — free is skipped
+		// entirely, straight to paid, no wasted probe.
+		H.transcribeWithGemini.mockResolvedValueOnce(PAID_RESULT);
+		const out2 = await transcribeAudio("https://a/x.mp3", 300, null, CTX);
+		expect(out2).toBe("WEBVTT\n\nPAID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(5);
+		expect((H.transcribeWithGemini.mock.calls[4]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+	});
+
+	it("a free SUCCESS resets the genuine-failure streak — one later transient error still does not bill paid", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(new Error("400 API_KEY_INVALID"))
+			.mockRejectedValueOnce(new Error("400 API_KEY_INVALID"))
+			.mockResolvedValueOnce(FREE_RESULT)
+			.mockRejectedValueOnce(new Error("400 API_KEY_INVALID"));
+
+		await transcribeAudio("https://a/x.mp3", 300, null, CTX).catch(() => {});
+		await transcribeAudio("https://a/x.mp3", 300, null, CTX).catch(() => {});
+		expect(await transcribeAudio("https://a/x.mp3", 300, null, CTX)).toBe(
+			"WEBVTT\n\nFREE",
+		);
+		// Streak was cleared by the success: this third failure is failure #1
+		// again — it must rethrow, not open the paid path.
+		const err = await transcribeAudio("https://a/x.mp3", 300, null, CTX).catch(
+			(e) => e,
+		);
+		expect((err as Error).message).toContain("API_KEY_INVALID");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(4);
 	});
 
 	it("no free key: paid path only, never a free attempt (regression)", async () => {

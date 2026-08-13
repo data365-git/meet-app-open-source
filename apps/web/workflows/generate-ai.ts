@@ -24,6 +24,11 @@ import {
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
+import {
+	isFreeTierUnusable,
+	recordFreeTierSuccess,
+	recordGenuineFreeFailure,
+} from "@/lib/free-tier-health";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
@@ -964,12 +969,14 @@ export async function callAiApi(
 	const freeKey = env.GEMINI_API_KEY_FREE;
 	// FACT, not a declaration: the paid call below is allowed only when the
 	// free chain was given its chance for THIS call — no free key at all,
-	// every model quota-failed, or the bounded probe deadline was hit.
-	let freeAttempted = !freeKey;
+	// every model quota-failed, the bounded probe deadline was hit, or this
+	// job's free chain has already proven persistently broken (bounded
+	// consecutive genuine failures — see lib/free-tier-health.ts).
+	let freeAttempted = !freeKey || isFreeTierUnusable(context.videoId);
 	let freeInputTokens = 0;
 	let freeOutputTokens = 0;
 
-	if (freeKey) {
+	if (freeKey && !freeAttempted) {
 		// The whole free CHAIN shares one bounded probe deadline (a quota 429
 		// answers instantly, so trying the second model still fits); the abort
 		// signal stops the chain, never letting a hung call spill past the
@@ -1019,43 +1026,70 @@ export async function callAiApi(
 			}
 			return null;
 		};
+		// The probe try covers ONLY the chain call; classification happens
+		// OUTSIDE it, otherwise the classification's own rethrow would be
+		// re-caught below and the genuine-failure streak double-counted.
+		let chainResult: AiApiResult | null = null;
+		let probeThrew = false;
+		let probeError: unknown;
 		try {
-			const freeResult = await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain);
-			if (freeResult) return freeResult;
+			chainResult = await withDeadline(FREE_SUMMARY_PROBE_MS, tryFreeChain);
+		} catch (error) {
+			probeThrew = true;
+			probeError = error;
+		}
+		if (chainResult) {
+			recordFreeTierSuccess(context.videoId);
+			return chainResult;
+		}
+		if (probeThrew) {
 			if (
-				freeErrors.length > 0 &&
-				freeErrors.every((e) => isQuotaLikeAiError(e))
+				!isQuotaLikeAiError(probeError) &&
+				!isDeadlineError(probeError) &&
+				!recordGenuineFreeFailure(context.videoId)
 			) {
-				// Genuine exhaustion: EVERY free model answered with a quota
-				// signal. The job pays INLINE and carries on — no parking, no
-				// waiting.
-				freeAttempted = true;
-			} else {
-				// At least one free failure was NOT a quota signal (revoked key,
-				// permission denied, empty/unparseable response). That is a real
-				// ERROR, not exhaustion — billing the paid API here with free
-				// daily quota intact is the owner's original defect.
-				throw (
-					freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
-					new Error(
-						`Free-tier summary chain failed for video=${context.videoId}`,
-					)
-				);
+				// A real free-chain error below the broken-key bound surfaces
+				// (it ends in the bounded re-kick -> ERROR machinery); only a
+				// quota answer, the probe deadline, or a persistently broken
+				// key may fall through to paid here.
+				throw probeError;
 			}
+			// Quota, the probe deadline, or the broken-key bound: continue on
+			// paid, no waiting.
+			freeAttempted = true;
+			console.warn(
+				`[generate-ai] free-tier probe ended (${probeError instanceof Error ? probeError.message : String(probeError)}) for video=${context.videoId}, falling back to paid`,
+			);
+		} else if (
+			freeErrors.length > 0 &&
+			freeErrors.every((e) => isQuotaLikeAiError(e))
+		) {
+			// Genuine exhaustion: EVERY free model answered with a quota
+			// signal. The job pays INLINE and carries on — no parking, no
+			// waiting. Not evidence of a broken key: streak untouched.
+			freeAttempted = true;
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
-		} catch (error) {
-			if (!isQuotaLikeAiError(error) && !isDeadlineError(error)) {
-				// A real free-chain error surfaces (it ends in the bounded
-				// re-kick -> ERROR machinery); only a quota answer or the probe
-				// deadline may fall through to paid here.
-				throw error;
-			}
-			// Quota or the probe deadline: continue on paid, no waiting.
+		} else if (!recordGenuineFreeFailure(context.videoId)) {
+			// At least one free failure was NOT a quota signal (revoked key,
+			// permission denied, empty/unparseable response) and the streak is
+			// below the bound. That is a real ERROR, not exhaustion — billing
+			// the paid API here with free daily quota intact is the owner's
+			// original defect.
+			throw (
+				freeErrors.find((e) => !isQuotaLikeAiError(e)) ??
+				new Error(
+					`Free-tier summary chain failed for video=${context.videoId}`,
+				)
+			);
+		} else {
+			// Bound crossed: the free key is persistently broken FOR THIS JOB —
+			// continue on paid instead of dying unrecoverably (round-11
+			// ship-blocker).
 			freeAttempted = true;
 			console.warn(
-				`[generate-ai] free-tier probe ended (${error instanceof Error ? error.message : String(error)}) for video=${context.videoId}, falling back to paid`,
+				`[generate-ai] free tier persistently failing for video=${context.videoId}, continuing on paid`,
 			);
 		}
 	}
