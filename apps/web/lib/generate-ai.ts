@@ -7,6 +7,7 @@ import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
+import { sanitizeAiErrorMessageForUi } from "@/lib/ai-error-message";
 import { clearFreeTierVerdict } from "@/lib/free-tier-health";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
@@ -170,10 +171,13 @@ export async function startAiGeneration(
 						metadata: {
 							...currentMeta,
 							aiGenerationStatus: "ERROR",
-							aiGenerationError:
-								err instanceof Error
-									? err.message
-									: String(err),
+							// Client-visible metadata (round-17 #2): the raw message
+							// can carry Google's response body — the full detail is
+							// already in the console.error above; the DB gets the
+							// sanitized reason.
+							aiGenerationError: sanitizeAiErrorMessageForUi(
+								err instanceof Error ? err.message : String(err),
+							),
 						} as VideoMetadata,
 					})
 					.where(eq(videos.id, videoId));

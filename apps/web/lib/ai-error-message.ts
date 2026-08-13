@@ -11,12 +11,20 @@
  * the database gets this short, stable reason.
  */
 export function sanitizeAiErrorMessageForUi(message: string): string {
-	// The stable prefix every Gemini HTTP failure carries ("... failed
-	// (HTTP 400)") identifies the failure class without the body.
-	const prefix = message.match(/^[^:{\n]*\(HTTP \d+\)/);
-	if (prefix) return prefix[0];
-	// No HTTP prefix (e.g. "empty transcript from Gemini"): first line,
-	// bounded.
+	// The stable "... failed (HTTP nnn)" marker identifies the failure class
+	// without the body. Lazy from the START so WRAPPED messages keep their
+	// wrapper context ("Transcription quota/credits exhausted for v1: ...")
+	// and still stop before the body — the old anchored arm could not cross
+	// the wrapper's colon and fell through to a fallback that leaked ~95
+	// chars of Google's JSON into a public share page (round-17 #1).
+	const prefix = message.match(/^[\s\S]*?\(HTTP \d+\)/);
+	if (prefix) return prefix[0].slice(0, 200);
+	// No HTTP marker (e.g. "empty transcript from Gemini"): first line, cut
+	// before any body brace, bounded.
 	const firstLine = message.split("\n", 1)[0] ?? "";
-	return firstLine.slice(0, 200);
+	const brace = firstLine.indexOf("{");
+	return (brace === -1 ? firstLine : firstLine.slice(0, brace))
+		.trimEnd()
+		.replace(/:$/, "")
+		.slice(0, 200);
 }

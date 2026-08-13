@@ -25,6 +25,28 @@ describe("sanitizeAiErrorMessageForUi", () => {
 		);
 	});
 
+	it("a WRAPPED message (the real TranscriptionQuotaFailureError shape) still loses the body (round-17 #1)", () => {
+		// The exact composition at workflows/transcribe.ts: the wrapper adds a
+		// colon, which the old anchored regex could not cross — ~95 chars of
+		// Google's JSON body then reached a PUBLIC share page's RSC payload.
+		const raw =
+			'Transcription quota/credits exhausted for vid-123: Gemini generateContent failed (HTTP 429): {"error":{"code":429,"message":"Quota exceeded for quota metric generate_content_free_tier_requests","status":"RESOURCE_EXHAUSTED","details":[{"reason":"RATE_LIMIT_EXCEEDED","metadata":{"consumer":"projects/763029500123"}}]}}';
+		const out = sanitizeAiErrorMessageForUi(raw);
+		expect(out).toBe(
+			"Transcription quota/credits exhausted for vid-123: Gemini generateContent failed (HTTP 429)",
+		);
+		expect(out).not.toContain("{");
+		expect(out).not.toContain("763029500123");
+	});
+
+	it("the no-HTTP fallback also stops at a body brace", () => {
+		const out = sanitizeAiErrorMessageForUi(
+			'Gemini upload response missing file info: {"file":null,"internal":"detail"}',
+		);
+		expect(out).not.toContain("{");
+		expect(out).toContain("missing file info");
+	});
+
 	it("falls back to a bounded first line for messages without an HTTP prefix", () => {
 		expect(sanitizeAiErrorMessageForUi("empty transcript from Gemini")).toBe(
 			"empty transcript from Gemini",

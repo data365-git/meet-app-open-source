@@ -119,6 +119,13 @@ describe("round-16 #2 — the DB error field is sanitized; the body stays in the
 			/message: reason\.message\.slice/,
 		);
 	});
+
+	it("the SIBLING persist site — aiGenerationError — is sanitized too (round-17 #2)", () => {
+		expect(GEN_LIB).toMatch(
+			/aiGenerationError: sanitizeAiErrorMessageForUi\(/,
+		);
+		expect(GEN_LIB).not.toMatch(/aiGenerationError:\s+err instanceof Error/);
+	});
 });
 
 describe("round-10 #4 — a partial completion is visible", () => {
