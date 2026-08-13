@@ -108,3 +108,76 @@ describe("withCostGuard — mispriced fallback model (A2)", () => {
 		);
 	});
 });
+
+// The provider-reported cost path (OpenRouter). The owner reads the recorded
+// number, so it must be the vendor's own charge and not our estimate of it.
+describe("withCostGuard — a provider-reported cost outranks the pricing table", () => {
+	beforeEach(() => {
+		H.insertValues.mockClear();
+		H.priceForMicros.mockClear();
+	});
+
+	it("records the reported microdollars and never consults the token pricing table", async () => {
+		await withCostGuard({
+			orgId: "org-1",
+			userId: "user-1",
+			operation: "transcription",
+			model: "openrouter/google/gemini-3-flash-preview",
+			fn: async () => ({
+				transcriptVtt: "WEBVTT\n\n",
+				inputTokens: 4321,
+				outputTokens: 765,
+				audioInTokens: 0,
+				costUsdMicros: 12_900,
+			}),
+		});
+
+		expect(H.priceForMicros).not.toHaveBeenCalled();
+		expect(H.insertValues).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: "openrouter/google/gemini-3-flash-preview",
+				costUsdMicros: 12_900,
+			}),
+		);
+	});
+
+	it("a malformed reported cost falls back to the pricing table rather than recording $0", async () => {
+		await withCostGuard({
+			orgId: "org-1",
+			userId: "user-1",
+			operation: "summary",
+			model: "openrouter/google/gemini-3-flash-preview",
+			fn: async () => ({
+				content: "{}",
+				inputTokens: 100,
+				outputTokens: 50,
+				costUsdMicros: Number.NaN,
+			}),
+		});
+
+		expect(H.priceForMicros).toHaveBeenCalled();
+		expect(H.insertValues).toHaveBeenCalledWith(
+			expect.objectContaining({ costUsdMicros: 12_345 }),
+		);
+	});
+
+	it("a FREE call still records $0 even if a cost was reported", async () => {
+		await withCostGuard({
+			orgId: "org-1",
+			userId: "user-1",
+			operation: "summary",
+			model: "gemini-3.5-flash",
+			free: true,
+			fn: async () => ({
+				content: "{}",
+				inputTokens: 100,
+				outputTokens: 50,
+				costUsdMicros: 99_999,
+			}),
+		});
+
+		expect(H.insertValues).toHaveBeenCalledWith(
+			expect.objectContaining({ costUsdMicros: 0 }),
+		);
+	});
+});

@@ -103,6 +103,12 @@ function createServerEnv() {
 				.describe(
 					"Optional Gemini key on a free-tier (billing-off) project. When set, transcription tries it first (gemini-3.5-flash, $0) and falls back to GEMINI_API_KEY on any failure/quota.",
 				),
+			OPENROUTER_API_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"OpenRouter key (sk-or-v1-…). When set, the PAID leg of the AI path (transcription, summary/generation, translation, chat) runs through OpenRouter instead of paid Gemini. The FREE Google chain is unchanged and still runs FIRST — OpenRouter is paid-only and sits behind the same free-first gate.",
+				),
 			ELEVENLABS_API_KEY: z
 				.string()
 				.optional()

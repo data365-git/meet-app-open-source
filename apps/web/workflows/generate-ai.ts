@@ -32,6 +32,11 @@ import {
 	markUnusableAiOutput,
 } from "@/lib/free-tier-health";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
+import {
+	OPENROUTER_USAGE_MODEL,
+	openRouterCompletion,
+} from "@/lib/openrouter";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import { stripRunawayRepetition } from "@/lib/gemini-transcribe";
 import {
@@ -282,7 +287,7 @@ async function validateAndSetProcessing(
 ): Promise<VideoData> {
 	"use step";
 
-	if (!hasPaidGeminiKey()) {
+	if (!hasPaidGeminiKey() && !hasOpenRouterKey()) {
 		throw new FatalError("Missing GEMINI_API_KEY");
 	}
 
@@ -1136,6 +1141,31 @@ export async function callAiApi(
 		}
 	}
 
+	// PAID PROVIDER SWITCH — resolved only HERE, after the free chain above has
+	// run, from the identical classified FACT and through the identical gate.
+	// OpenRouter is the same paid leg with a different vendor, never a second
+	// way to spend: if the free chain answered, this line is never reached.
+	const openRouterKey = getOpenRouterKey({
+		operation: "generation",
+		route: "sync",
+		freeAttempted,
+	});
+	if (openRouterKey) {
+		const orResult = await callOpenRouterSummary(
+			prompt,
+			json,
+			openRouterKey,
+			context,
+			maxOutputTokens,
+		);
+		return {
+			content: orResult.content,
+			model: OPENROUTER_USAGE_MODEL,
+			inputTokens: freeInputTokens + orResult.inputTokens,
+			outputTokens: freeOutputTokens + orResult.outputTokens,
+		};
+	}
+
 	// Paid key resolved only HERE, after the free chain above has run — so the
 	// declaration is the classified FACT computed above, never a literal.
 	const apiKey = getPaidGeminiKey({
@@ -1189,6 +1219,59 @@ export async function callAiApi(
 	throw lastError instanceof Error
 		? lastError
 		: new Error("All summary models failed");
+}
+
+/** The OpenRouter twin of callAiApiWithModel's paid arm: same prompt bytes,
+ * same runaway guard, same cost guard — the recorded COST is OpenRouter's own
+ * figure rather than the token-pricing estimate. */
+async function callOpenRouterSummary(
+	prompt: string,
+	json: boolean,
+	apiKey: string,
+	context: AiCallContext,
+	maxOutputTokens: number,
+): Promise<AiApiModelResult> {
+	const result = await withCostGuard({
+		orgId: context.orgId,
+		userId: context.userId,
+		videoId: context.videoId,
+		operation: "summary",
+		model: OPENROUTER_USAGE_MODEL,
+		fn: async () => {
+			const res = await openRouterCompletion({
+				apiKey,
+				messages: [{ role: "user", content: prompt }],
+				maxTokens: maxOutputTokens,
+				temperature: 0.2,
+			});
+			if (res.finishReason === "length") {
+				console.error(
+					"[generate-ai] OpenRouter response TRUNCATED (length) - raise maxOutputTokens",
+					{ json, outputTokens: res.outputTokens },
+				);
+			}
+			const guarded = guardRunawaySummaryContent(res.text || "{}", json);
+			if (guarded.runaway) {
+				console.warn(
+					`[generate-ai] runaway repetition detected in OpenRouter ${json ? "JSON" : "text"} response (video=${context.videoId}, outputTokens=${res.outputTokens})`,
+				);
+			}
+			return {
+				content: guarded.content,
+				emptyResponse: !res.text?.trim(),
+				inputTokens: res.inputTokens,
+				outputTokens: res.outputTokens,
+				costUsdMicros: res.costUsdMicros,
+			};
+		},
+	});
+
+	return {
+		content: result.content,
+		emptyResponse: result.emptyResponse,
+		inputTokens: result.inputTokens,
+		outputTokens: result.outputTokens,
+	};
 }
 
 async function callAiApiWithModel(

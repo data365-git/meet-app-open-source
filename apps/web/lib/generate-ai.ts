@@ -4,6 +4,7 @@ import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
@@ -54,7 +55,11 @@ export async function startAiGeneration(
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
-	let hasUsableGeminiKey = hasPaidGeminiKey();
+	// An OpenRouter key is a usable PAID provider for this path too, so it must
+	// satisfy the same availability check — otherwise an instance whose paid
+	// credential lives entirely at OpenRouter is refused at the gate before the
+	// call it would happily serve.
+	let hasUsableGeminiKey = hasPaidGeminiKey() || hasOpenRouterKey();
 	if (!hasUsableGeminiKey && owner?.geminiApiKey) {
 		try {
 			hasUsableGeminiKey = Boolean(await decrypt(owner.geminiApiKey));

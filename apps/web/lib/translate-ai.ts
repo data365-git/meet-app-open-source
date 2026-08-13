@@ -7,6 +7,11 @@ import type {
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { getOpenRouterKey } from "@/lib/openrouter-key";
+import {
+	OPENROUTER_USAGE_MODEL,
+	openRouterCompletion,
+} from "@/lib/openrouter";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
@@ -112,10 +117,54 @@ function cleanJsonResponse(content: string): string {
 	return content;
 }
 
+/** The OpenRouter twin of callGeminiJson: same prompt bytes, same JSON-cleaning
+ * downstream, same cost guard — only the transport and the recorded model
+ * differ, and the recorded COST is OpenRouter's own figure. */
+async function callOpenRouterJson(
+	prompt: string,
+	context: AiCallContext,
+	apiKey: string,
+): Promise<string> {
+	const result = await withCostGuard({
+		orgId: context.orgId,
+		userId: context.userId,
+		videoId: context.videoId,
+		operation: "translate",
+		model: OPENROUTER_USAGE_MODEL,
+		fn: async () => {
+			const res = await openRouterCompletion({
+				apiKey,
+				messages: [{ role: "user", content: prompt }],
+				maxTokens: 65536,
+				temperature: 0.2,
+			});
+			return {
+				content: res.text || "{}",
+				inputTokens: res.inputTokens,
+				outputTokens: res.outputTokens,
+				costUsdMicros: res.costUsdMicros,
+			};
+		},
+	});
+
+	return result.content;
+}
+
 async function callGeminiJson(
 	prompt: string,
 	context: AiCallContext,
 ): Promise<string> {
+	// Translation is job-LESS: no free tier applies to it, so there is no fact
+	// to declare — the same union arm on both gates. When OpenRouter is
+	// configured it IS the paid provider here; otherwise nothing changes.
+	const openRouterKey = getOpenRouterKey({
+		operation: "translation",
+		route: "sync",
+	});
+	if (openRouterKey) {
+		return callOpenRouterJson(prompt, context, openRouterKey);
+	}
+
 	const apiKey = getPaidGeminiKey({ operation: "translation", route: "sync" });
 	if (!apiKey) {
 		throw new Error("Missing GEMINI_API_KEY");

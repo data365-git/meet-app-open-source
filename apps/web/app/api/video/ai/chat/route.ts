@@ -5,6 +5,13 @@ import { nanoId } from "@cap/database/helpers";
 import { aiChatUsage, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { getOpenRouterKey } from "@/lib/openrouter-key";
+import {
+	buildOpenRouterBody,
+	costUsdToMicros,
+	OPENROUTER_USAGE_MODEL,
+	redactOpenRouterKey,
+} from "@/lib/openrouter";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -455,9 +462,18 @@ export async function POST(request: NextRequest) {
 				// Free models first, paid as the fallback. The rules that make this
 				// safe (connect-time only, free chain walked at most once, final
 				// response left unread) live in the module and are pinned by tests.
+				// PAID PROVIDER SWITCH. Chat is job-LESS on the gate (no free tier
+				// declaration to falsify) — but the free Gemini chain above is
+				// still walked first, and OpenRouter only ever takes the position
+				// paid Gemini holds today. A video owner using their own key keeps
+				// Gemini: that key is theirs.
+				const chatOpenRouterKey = owner?.geminiApiKey
+					? undefined
+					: getOpenRouterKey({ operation: "chat", route: "sync" });
 				const chatFetcher = createGeminiChatFetcher({
 					paidKey: resolvedApiKey,
 					freeKey: freeApiKey,
+					openRouterKey: chatOpenRouterKey,
 				});
 
 				await withCostGuard({
@@ -465,23 +481,23 @@ export async function POST(request: NextRequest) {
 					userId: video.ownerId,
 					videoId,
 					operation: "chat",
-					model: "gemini-2.5-flash",
+					model: chatOpenRouterKey
+						? OPENROUTER_USAGE_MODEL
+						: "gemini-2.5-flash",
 					recordUsageBestEffort: true,
 					fn: async () => {
 				// Retry the initial connect on transient Gemini errors
 				// (429/500/503/overloaded), matching summary/transcription.
 				const geminiRes = await withGeminiRetry(async () => {
+					const chatSystemInstruction = "You answer questions about a meeting recording. Use ONLY the provided context. Use the overview for broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. \"main lessons\", \"key takeaways\"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more.\n\nBREVITY OVERRIDE — this outranks the detail rule above. When the user explicitly asks for a SHORT answer (\"qisqacha\", \"qisqa\", \"brief\", \"short\", \"in a few sentences\", \"кратко\"), give three or four sentences, no headings and no bullets. Do not expand a request for brevity into a full report; the user asked for the opposite.\n\nAUTHORITATIVE LISTS — when the context above supplies tasks, next steps or topics marked \"already extracted (authoritative)\", answer from that list instead of rebuilding it from the transcript, and preserve each item's assignee and deadline. Only add from the transcript what the list is missing.\n\nThe content may be in Uzbek, Russian, or English — respond in the same language.\n\nFORMAT (keep it scannable and calm):\n- Begin with ONE short summary sentence — the TL;DR.\n- For a simple question, stop there: one or two sentences, no headings.\n- For a richer answer, add short sections with markdown \"## Heading\" lines and \"- \" bullets. One idea per bullet. Keep timestamps as [mm:ss].";
+
 					const res = await chatFetcher.fetch(
 						{
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: JSON.stringify({
 								system_instruction: {
-									parts: [
-										{
-											text: "You answer questions about a meeting recording. Use ONLY the provided context. Use the overview for broad questions, and cite timestamps exactly as they appear in the context, e.g. [mm:ss] or [h:mm:ss] for recordings over an hour, from transcript lines. Give a thorough, well-structured answer. For broad questions (e.g. \"main lessons\", \"key takeaways\"), synthesize across the ENTIRE recording using the overview, the chapter titles, and the transcript context together — cover the major points in order and cite SEVERAL timestamps spanning the whole video, not just the opening. Be specific and detailed; never reply with a single vague sentence when the context supports more.\n\nBREVITY OVERRIDE — this outranks the detail rule above. When the user explicitly asks for a SHORT answer (\"qisqacha\", \"qisqa\", \"brief\", \"short\", \"in a few sentences\", \"кратко\"), give three or four sentences, no headings and no bullets. Do not expand a request for brevity into a full report; the user asked for the opposite.\n\nAUTHORITATIVE LISTS — when the context above supplies tasks, next steps or topics marked \"already extracted (authoritative)\", answer from that list instead of rebuilding it from the transcript, and preserve each item's assignee and deadline. Only add from the transcript what the list is missing.\n\nThe content may be in Uzbek, Russian, or English — respond in the same language.\n\nFORMAT (keep it scannable and calm):\n- Begin with ONE short summary sentence — the TL;DR.\n- For a simple question, stop there: one or two sentences, no headings.\n- For a richer answer, add short sections with markdown \"## Heading\" lines and \"- \" bullets. One idea per bullet. Keep timestamps as [mm:ss].",
-										},
-									],
+									parts: [{ text: chatSystemInstruction }],
 								},
 								contents: geminiMessages,
 								generationConfig: {
@@ -491,12 +507,36 @@ export async function POST(request: NextRequest) {
 								},
 							}),
 						},
+						// The SAME question in OpenRouter's shape, built here beside
+						// its twin so the two can never drift apart. Gemini's
+						// "model" role is OpenAI's "assistant"; everything else is
+						// a one-to-one rename.
+						{
+							method: "POST",
+							body: JSON.stringify(
+								buildOpenRouterBody({
+									messages: [
+										{ role: "system", content: chatSystemInstruction },
+										...geminiMessages.map((m) => ({
+											role: (m.role === "model"
+												? "assistant"
+												: "user") as "assistant" | "user",
+											content: m.parts.map((p) => p.text).join(""),
+										})),
+									],
+									maxTokens: 2048,
+									temperature: 0.2,
+									stream: true,
+								}),
+							),
+						},
 					);
 
 					if (!res.ok) {
-						const errText = await res
-							.text()
-							.catch(() => String(res.status));
+						const errText = redactOpenRouterKey(
+							await res.text().catch(() => String(res.status)),
+							chatOpenRouterKey,
+						);
 						// Include the HTTP status so withGeminiRetry's transient
 						// detection (429/500/503) matches even when the body text
 						// doesn't name the code.
@@ -520,6 +560,8 @@ export async function POST(request: NextRequest) {
 				let buffer = "";
 				let chatInputTokens = 0;
 				let chatOutputTokens = 0;
+				let chatCostUsdMicros: number | undefined;
+				const isOpenRouterStream = chatFetcher.provider() === "openrouter";
 
 				while (true) {
 					const { done, value } = await reader.read();
@@ -542,13 +584,33 @@ export async function POST(request: NextRequest) {
 									promptTokenCount?: number;
 									candidatesTokenCount?: number;
 								};
+								// OpenRouter (OpenAI wire format)
+								choices?: Array<{ delta?: { content?: string } }>;
+								usage?: {
+									prompt_tokens?: number;
+									completion_tokens?: number;
+									cost?: number;
+								};
 							};
-							const token =
-								parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+							// Two different wire formats behind one reader. Which one
+							// applies is decided by the leg that actually answered,
+							// not by sniffing the payload.
+							const token = isOpenRouterStream
+								? (parsed.choices?.[0]?.delta?.content ?? "")
+								: (parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
 							if (token) {
 								send(JSON.stringify({ token }));
 							}
-							if (parsed.usageMetadata) {
+							if (isOpenRouterStream) {
+								if (parsed.usage) {
+									chatInputTokens =
+										parsed.usage.prompt_tokens ?? chatInputTokens;
+									chatOutputTokens =
+										parsed.usage.completion_tokens ?? chatOutputTokens;
+									chatCostUsdMicros =
+										costUsdToMicros(parsed.usage.cost) ?? chatCostUsdMicros;
+								}
+							} else if (parsed.usageMetadata) {
 								chatInputTokens =
 									parsed.usageMetadata.promptTokenCount ?? chatInputTokens;
 								chatOutputTokens =
@@ -568,6 +630,11 @@ export async function POST(request: NextRequest) {
 					: {
 							inputTokens: chatInputTokens,
 							outputTokens: chatOutputTokens,
+							// OpenRouter's own charge when the stream reported one;
+							// undefined falls back to the token pricing table.
+							...(chatCostUsdMicros != null
+								? { costUsdMicros: chatCostUsdMicros }
+								: {}),
 						};
 					},
 				});

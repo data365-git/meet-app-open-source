@@ -22,6 +22,11 @@ import {
 	getPaidGeminiKey,
 	hasPaidGeminiKey,
 } from "@/lib/gemini-paid-key";
+import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
+import {
+	OPENROUTER_USAGE_MODEL,
+	transcribeWithOpenRouter,
+} from "@/lib/openrouter";
 import { shouldStartAiAfterTranscription } from "@/lib/ai-generation-request";
 import {
 	isQuotaLikeAiError,
@@ -836,7 +841,7 @@ export async function transcribeAudio(
 		}
 	}
 
-	if (!ownerApiKey && !hasPaidGeminiKey()) {
+	if (!ownerApiKey && !hasPaidGeminiKey() && !hasOpenRouterKey()) {
 		throw new FatalError(
 			"No Gemini API key configured. Set one in Settings → Account → Transcription API Keys, or ask your admin to set GEMINI_API_KEY.",
 		);
@@ -847,6 +852,37 @@ export async function transcribeAudio(
 	// genuine quota exhaustion or the probe deadline. The next chunk tries
 	// free again, so the job returns to free the moment quota comes back. No
 	// parking, no Batch, no collector, no waiting.
+	// The PAID transcription leg through OpenRouter. Same position in the
+	// ladder, same gate, same cost guard — only the vendor differs. Reached
+	// exactly where runPaidSync is reached and never before it.
+	const runPaidOpenRouter = async (syncKey: string): Promise<string> => {
+		const result = await withCostGuard({
+			orgId: context.orgId,
+			userId: context.userId,
+			videoId: context.videoId,
+			operation: "transcription",
+			model: OPENROUTER_USAGE_MODEL,
+			fn: async () => {
+				const res = await transcribeWithOpenRouter(audioUrl, {
+					apiKey: syncKey,
+					audioDurationSec: audioDurationSec ?? undefined,
+					knownSpeakers,
+				});
+				return {
+					transcriptVtt: res.transcriptVtt,
+					inputTokens: res.inputTokens,
+					outputTokens: res.outputTokens,
+					audioInTokens: res.audioInTokens,
+					modelUsed: res.modelUsed,
+					// OpenRouter's own dollar figure for THIS call — recorded
+					// instead of the token-pricing estimate.
+					costUsdMicros: res.costUsdMicros,
+				};
+			},
+		});
+		return result.transcriptVtt;
+	};
+
 	const runPaidSync = async (syncKey: string): Promise<string> => {
 		const result = await withCostGuard({
 			orgId: context.orgId,
@@ -968,6 +1004,17 @@ export async function transcribeAudio(
 			route: "sync" as const,
 			freeAttempted,
 		};
+		// PAID PROVIDER SWITCH. OpenRouter is not an extra way to spend — it is
+		// this same paid leg, billed by a different vendor — so it is resolved
+		// HERE, behind the identical authorization, from the identical fact. A
+		// video owner who supplied their OWN Google key keeps using it: that key
+		// is theirs and is not an OpenRouter credential.
+		if (!ownerApiKey && hasOpenRouterKey()) {
+			const openRouterKey = getOpenRouterKey(paidUse);
+			if (openRouterKey) {
+				return runPaidOpenRouter(openRouterKey);
+			}
+		}
 		authorizePaidGeminiUse(paidUse);
 		const resolvedApiKey = ownerApiKey ?? getPaidGeminiKey(paidUse);
 		if (!resolvedApiKey) {
@@ -1649,9 +1696,37 @@ export async function fillTranscriptGaps(
 			// audio into paid re-transcription (round-12 #2) — so it runs
 			// free-only too. Below the bar the span still gets its free attempt;
 			// a failure stays a recorded gap.
+			//
+			// TRAILING-GAP GUARD FOR THE OPENROUTER PROVIDER (measured
+			// 2026-08-13). On a 10-minute input OpenRouter returned the SAME
+			// word count as Google (1224 vs 1230 — the TEXT is complete) but
+			// compressed its cue TIMESTAMPS into a span ending at 6m42s instead
+			// of 9m57s. Gap detection reads cue timestamps, so that compression
+			// manufactures a gap at the END of the transcript whose audio is
+			// already transcribed — and paying to "fill" it buys text we
+			// already have, once per run, forever.
+			//
+			// The artifact has a shape: compression pulls every cue toward the
+			// start, so it can only ever invent the LAST gap (the branch in
+			// findVttGaps that measures the final cue against the video's
+			// duration). Interior gaps mean a chunk genuinely failed, so those
+			// keep today's paid behaviour untouched. So: with OpenRouter as the
+			// paid provider, a gap that runs to the end of the video is treated
+			// as "timestamps, not missing audio" and gets the FREE attempt only.
+			// It is still filled when free quota answers; it simply never bills.
+			//
+			// Not a blanket disable, and not a new timestamp heuristic: the
+			// multi-chunk path already corrects this exact drift shape with the
+			// linear per-chunk rescale (rescaleChunkVtt), whose measured factor
+			// for the case above is 600/402 ≈ 1.49, inside its 1.05–2.5 range.
+			// This guard covers what that rescale cannot reach — an
+			// already-merged transcript.
+			const trailingGap =
+				totalDurationSec != null && span.gapEndSec >= totalDurationSec;
 			const paidWorthy =
 				span.speechSec != null &&
-				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC;
+				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC &&
+				!(trailingGap && hasOpenRouterKey());
 			const vtt = await transcribeFn(
 				span.url,
 				span.durationSec,

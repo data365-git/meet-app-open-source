@@ -221,6 +221,13 @@ interface CostGuardOptions<T> {
 			 * this — not options.model — is what gets priced and recorded, so
 			 * spend is never attributed to a model that wasn't actually billed. */
 			modelUsed?: string;
+			/** The provider's OWN charge for the call, in microdollars. Present
+			 * only for providers that return a real price (OpenRouter's
+			 * `usage.cost`); when present it REPLACES the token-pricing table,
+			 * because a vendor's invoice beats our estimate of it. Absent (the
+			 * Gemini paths) keeps today's behaviour exactly. A `free: true` call
+			 * still records $0 — free outranks any reported cost. */
+			costUsdMicros?: number;
 		}
 	>;
 }
@@ -311,14 +318,25 @@ export async function withCostGuard<T>(
 		result.inputTokens > 0
 			? result.inputTokens
 			: rawAudioInTokens;
+	// A provider-reported charge (OpenRouter's `usage.cost`) is the truth for
+	// this event and outranks the pricing table — the table exists to ESTIMATE
+	// a bill we cannot see. Anything that is not a usable non-negative number
+	// falls through to the table rather than silently recording $0.
+	const reportedCostMicros =
+		typeof result.costUsdMicros === "number" &&
+		Number.isFinite(result.costUsdMicros) &&
+		result.costUsdMicros >= 0
+			? Math.round(result.costUsdMicros)
+			: undefined;
 	const costUsdMicros = options.free
 		? 0
-		: priceForMicros(billedModel, {
+		: (reportedCostMicros ??
+			priceForMicros(billedModel, {
 				textInTokens: Math.max(0, result.inputTokens - audioInTokens),
 				audioInTokens,
 				outputTokens: result.outputTokens,
 				batch: options.batch,
-			});
+			}));
 
 	try {
 		await db()

@@ -25,11 +25,28 @@
  *     reported itself as a bare status code.
  */
 
+import {
+	OPENROUTER_COMPLETIONS_URL,
+	openRouterHeaders,
+} from "@/lib/openrouter";
+
+export type ChatProvider = "gemini-free" | "gemini-paid" | "openrouter";
+
 export type GeminiChatFetcher = {
-	/** Connects, free models first. Resolves with the response to stream from. */
-	fetch: (init: RequestInit) => Promise<Response>;
+	/** Connects, free models first. Resolves with the response to stream from.
+	 * `openRouterInit` is the SAME question expressed in OpenRouter's request
+	 * shape; it is used only if the paid leg is an OpenRouter leg, and the two
+	 * bodies are built together at the call site so they can never drift apart.
+	 */
+	fetch: (
+		init: RequestInit,
+		openRouterInit?: RequestInit,
+	) => Promise<Response>;
 	/** True when the response came from the free key — such a call costs nothing. */
 	usedFreeKey: () => boolean;
+	/** Which leg actually answered — the caller needs it to parse the stream,
+	 * since Gemini SSE and OpenRouter SSE are different wire formats. */
+	provider: () => ChatProvider;
 };
 
 const FREE_CHAT_MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview"] as const;
@@ -43,6 +60,10 @@ export function createGeminiChatFetcher(opts: {
 	paidKey: string;
 	/** Omit when the video owner supplied their own key — see the route. */
 	freeKey?: string;
+	/** When present the PAID leg goes to OpenRouter instead of paid Gemini. The
+	 * free chain above it is untouched: OpenRouter is the same paid step with a
+	 * different vendor, never an extra one. */
+	openRouterKey?: string;
 	/** Injected for tests. */
 	fetchImpl?: typeof fetch;
 }): GeminiChatFetcher {
@@ -56,10 +77,12 @@ export function createGeminiChatFetcher(opts: {
 
 	let usedFree = false;
 	let freeChainSpent = false;
+	let usedProvider: ChatProvider = "gemini-paid";
 
 	return {
 		usedFreeKey: () => usedFree,
-		fetch: async (init: RequestInit) => {
+		provider: () => usedProvider,
+		fetch: async (init: RequestInit, openRouterInit?: RequestInit) => {
 			if (!freeChainSpent) {
 				for (const attempt of freeAttempts) {
 					let res: Response;
@@ -72,6 +95,7 @@ export function createGeminiChatFetcher(opts: {
 					}
 					if (res.ok) {
 						usedFree = true;
+						usedProvider = "gemini-free";
 						return res;
 					}
 					// Safe to drain: we are definitely moving on from this one, and
@@ -84,6 +108,17 @@ export function createGeminiChatFetcher(opts: {
 			usedFree = false;
 			// Deliberately NOT read here — the caller needs the body to report the
 			// real error.
+			if (opts.openRouterKey && openRouterInit) {
+				usedProvider = "openrouter";
+				return doFetch(OPENROUTER_COMPLETIONS_URL, {
+					...openRouterInit,
+					headers: {
+						...(openRouterInit.headers as Record<string, string> | undefined),
+						...openRouterHeaders(opts.openRouterKey),
+					},
+				});
+			}
+			usedProvider = "gemini-paid";
 			return doFetch(endpoint(PAID_CHAT_MODEL, opts.paidKey), init);
 		},
 	};

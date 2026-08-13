@@ -16,6 +16,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, serverEnv } from "@cap/env";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -549,9 +550,13 @@ async function AuthorizedContent({
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
 	const env = serverEnv();
+	// Either paid provider counts as "an AI provider is configured": OpenRouter
+	// serves the same paid leg, so hiding the UI when only it is set would
+	// silently disable a working instance.
+	const paidAiProviderConfigured = hasPaidGeminiKey() || hasOpenRouterKey();
 	const transcriptionGenerationAvailable =
-		hasPaidGeminiKey() && !rules.settings.disableTranscript;
-	const aiProviderAvailable = hasPaidGeminiKey();
+		paidAiProviderConfigured && !rules.settings.disableTranscript;
+	const aiProviderAvailable = paidAiProviderConfigured;
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
