@@ -34,8 +34,7 @@ import { isDeadlineError, withDeadline } from "@/lib/deadline";
 import {
 	isBrokenFreeKeyError,
 	isFreeTierUnusable,
-	recordBrokenFreeKeySignal,
-	recordFreeTierSuccess,
+	markFreeKeyBrokenForJob,
 } from "@/lib/free-tier-health";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -916,7 +915,6 @@ export async function transcribeAudio(
 						};
 					},
 				});
-				recordFreeTierSuccess(context.videoId);
 				return freeResult.transcriptVtt;
 			} catch (error) {
 				if (context.freeOnly) {
@@ -929,23 +927,22 @@ export async function transcribeAudio(
 					// waiting. Neither is evidence of a broken key, so the
 					// broken-key streak is untouched.
 					freeAttempted = true;
-				} else if (
-					isBrokenFreeKeyError(error) &&
-					recordBrokenFreeKeySignal(context.videoId)
-				) {
-					// The 400/401/403 auth family, AND the bound crossed: the
-					// free key is persistently broken FOR THIS JOB. Continuing
-					// on paid is the classified fact the gate accepts — the
-					// alternative is a product-unrecoverable permanent ERROR
-					// (round-11 ship-blocker).
+				} else if (isBrokenFreeKeyError(error)) {
+					// The 400/401/403 auth family is by definition not
+					// transient — ONE full-chain occurrence is conclusive
+					// (round-13 #2): mark the free key broken for this job and
+					// continue on paid, the classified fact the gate accepts.
+					// The alternative is a product-unrecoverable permanent
+					// ERROR (round-11 ship-blocker).
+					markFreeKeyBrokenForJob(context.videoId);
 					freeAttempted = true;
 				} else {
 					// Everything else — a 503 overload, a socket reset, an
-					// empty/unusable result, or an auth error still below the
-					// bound — is a real ERROR: rethrow so the chunk retry
-					// machinery handles it. Free quota is intact and a transient
-					// hiccup must never open the paid path (round-12 #1: the
-					// owner's original money defect, in burst form).
+					// empty/unusable result — is a real ERROR: rethrow so the
+					// chunk retry machinery handles it. Free quota is intact
+					// and a transient hiccup must never open the paid path
+					// (round-12 #1: the owner's original money defect, in
+					// burst form).
 					throw error;
 				}
 				console.warn(

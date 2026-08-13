@@ -25,12 +25,15 @@ describe("startAiJobHeartbeat", () => {
 		vi.useRealTimers();
 	});
 
-	it("stamps aiProgressAt every 5 minutes, preserves other metadata, and stops cleanly", async () => {
+	it("stamps aiProgressAt IMMEDIATELY (no 5-minute blind hole), then every 5 minutes, and stops cleanly", async () => {
 		const stop = startAiJobHeartbeat("v1");
-		expect(H.patch).not.toHaveBeenCalled();
+		// Leading stamp (round-13 #1): without it a job is judged by a stale
+		// cross-phase aiProgressAt for its first 5 minutes.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(H.patch).toHaveBeenCalledTimes(1);
 
 		await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-		expect(H.patch).toHaveBeenCalledTimes(1);
+		expect(H.patch).toHaveBeenCalledTimes(2);
 		expect(H.patch.mock.calls[0]?.[0]).toBe("v1");
 		const updater = H.patch.mock.calls[0]?.[1] as (
 			m: Record<string, unknown>,
@@ -40,10 +43,10 @@ describe("startAiJobHeartbeat", () => {
 		expect(out.keep).toBe(1);
 
 		await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
-		expect(H.patch).toHaveBeenCalledTimes(3);
+		expect(H.patch).toHaveBeenCalledTimes(4);
 
 		stop();
 		await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
-		expect(H.patch).toHaveBeenCalledTimes(3);
+		expect(H.patch).toHaveBeenCalledTimes(4);
 	});
 });

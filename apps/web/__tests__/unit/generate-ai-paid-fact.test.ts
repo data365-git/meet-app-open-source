@@ -80,16 +80,27 @@ describe("round-10 #3 — the generation recovery budget is refundable", () => {
 	});
 });
 
-describe("round-12 #1b — the free-tier streak is cleared at every job start", () => {
-	it("both phase launchers clear the streak so a Retry after a fixed key starts on free", () => {
-		expect(TRANSCRIBE_LIB).toContain("clearFreeTierStreak(");
-		expect(GEN_LIB).toContain("clearFreeTierStreak(");
+describe("round-13 #2 — the broken-key verdict is per-job, reset at every job start", () => {
+	it("both phase launchers clear the verdict so a Retry after a fixed key starts on free", () => {
+		expect(TRANSCRIBE_LIB).toContain("clearFreeTierVerdict(");
+		expect(GEN_LIB).toContain("clearFreeTierVerdict(");
+	});
+
+	it("the streak counter is DELETED, not tuned — one conclusive auth failure marks the job", () => {
+		const HEALTH = read("../../lib/free-tier-health.ts");
+		expect(HEALTH).not.toMatch(/MAX_CONSECUTIVE|Map</);
+		expect(HEALTH).toContain("markFreeKeyBrokenForJob");
 	});
 });
 
 describe("round-12 #3 — generation liveness is a heartbeat, not the start time", () => {
 	it("the generation workflow runs the shared job heartbeat", () => {
 		expect(GEN_WORKFLOW).toContain("startAiJobHeartbeat(");
+	});
+
+	it("BOTH generation claims stamp aiProgressAt, so a stale transcription stamp cannot mark a fresh generation stale (round-13 #1)", () => {
+		expect(GEN_LIB).toContain("aiProgressAt");
+		expect(GEN_WORKFLOW).toMatch(/aiProcessingStartedAt: now,[\s\S]{0,600}aiProgressAt: now,|aiProgressAt: now,[\s\S]{0,600}aiProcessingStartedAt: now,/);
 	});
 
 	it("the cron judges generation staleness by time since last PROGRESS", () => {

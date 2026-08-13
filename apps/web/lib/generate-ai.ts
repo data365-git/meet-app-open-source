@@ -7,7 +7,7 @@ import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
-import { clearFreeTierStreak } from "@/lib/free-tier-health";
+import { clearFreeTierVerdict } from "@/lib/free-tier-health";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -108,9 +108,9 @@ export async function startAiGeneration(
 			videoId,
 		});
 
-		// Job start = a fresh verdict on the free tier (round-12 #1b), same as
-		// transcription's claim.
-		clearFreeTierStreak(videoId);
+		// Job start = a fresh verdict on the free tier, same as transcription's
+		// claim.
+		clearFreeTierVerdict(videoId);
 		await db()
 			.update(videos)
 			.set({
@@ -121,6 +121,11 @@ export async function startAiGeneration(
 					aiQuotaWaiting: false,
 					aiGenerationStatus: "QUEUED",
 					aiProcessingStartedAt: new Date().toISOString(),
+					// Fresh liveness baseline (round-13 #1): without this, a
+					// transcription-era aiProgressAt from hours ago makes the
+					// cron's since-last-progress clock judge this brand-new
+					// generation stale immediately and start a SECOND paid run.
+					aiProgressAt: new Date().toISOString(),
 					// A FRESH (owner-initiated) start gets a fresh recovery budget
 					// (round-10 #3, mirroring transcription): without this, two
 					// stalls pinned the video at attempts=2 forever and every later

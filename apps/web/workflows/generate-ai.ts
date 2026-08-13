@@ -28,8 +28,7 @@ import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import {
 	isBrokenFreeKeyError,
 	isFreeTierUnusable,
-	recordBrokenFreeKeySignal,
-	recordFreeTierSuccess,
+	markFreeKeyBrokenForJob,
 } from "@/lib/free-tier-health";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { withGeminiRetry } from "@/lib/gemini-retry";
@@ -317,6 +316,12 @@ async function validateAndSetProcessing(
 				aiQuotaWaiting: false,
 				aiGenerationStatus: "PROCESSING",
 				aiProcessingStartedAt: now,
+				// Fresh liveness baseline (round-13 #1): aiProgressAt is a
+				// CROSS-PHASE field that transcription stamped hours ago and
+				// never clears on success — without re-stamping it here the
+				// cron's since-last-progress clock reads yesterday's value and
+				// re-kicks a seconds-old generation into a concurrent paid run.
+				aiProgressAt: now,
 				aiProcessingStep: "summary",
 			} as VideoMetadata,
 		})
@@ -1049,22 +1054,22 @@ export async function callAiApi(
 			probeError = error;
 		}
 		if (chainResult) {
-			recordFreeTierSuccess(context.videoId);
 			return chainResult;
 		}
 		if (probeThrew) {
 			if (
+				isBrokenFreeKeyError(probeError) &&
+				!isQuotaLikeAiError(probeError)
+			) {
+				markFreeKeyBrokenForJob(context.videoId);
+			} else if (
 				!isQuotaLikeAiError(probeError) &&
-				!isDeadlineError(probeError) &&
-				!(
-					isBrokenFreeKeyError(probeError) &&
-					recordBrokenFreeKeySignal(context.videoId)
-				)
+				!isDeadlineError(probeError)
 			) {
 				// A real free-chain error surfaces (it ends in the bounded
 				// re-kick -> ERROR machinery); only a quota answer, the probe
-				// deadline, or a persistently broken key (auth family at the
-				// bound) may fall through to paid here.
+				// deadline, or a conclusive auth failure may fall through to
+				// paid here.
 				throw probeError;
 			}
 			// Quota, the probe deadline, or the broken-key bound: continue on
@@ -1084,16 +1089,16 @@ export async function callAiApi(
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
-		} else if (
-			freeErrors.some((e) => isBrokenFreeKeyError(e)) &&
-			recordBrokenFreeKeySignal(context.videoId)
-		) {
-			// A 400/401/403 auth-family answer AND the bound crossed: the free
-			// key is persistently broken FOR THIS JOB — continue on paid instead
-			// of dying unrecoverably (round-11 ship-blocker).
+		} else if (freeErrors.some((e) => isBrokenFreeKeyError(e))) {
+			// A 400/401/403 auth-family answer from the free chain is
+			// conclusive (round-13 #2): mark the key broken for this job and
+			// continue on paid instead of dying unrecoverably (round-11
+			// ship-blocker). Critical for SHORT videos — their single summary
+			// call could never reach a multi-strike bound.
+			markFreeKeyBrokenForJob(context.videoId);
 			freeAttempted = true;
 			console.warn(
-				`[generate-ai] free key persistently broken for video=${context.videoId}, continuing on paid`,
+				`[generate-ai] free key broken for video=${context.videoId} (auth failure), continuing on paid`,
 			);
 		} else {
 			// Everything else — a 5xx overload, an empty/unparseable response,

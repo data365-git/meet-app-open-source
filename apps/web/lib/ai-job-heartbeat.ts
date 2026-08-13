@@ -26,6 +26,10 @@ export function startAiJobHeartbeat(videoId: string): () => void {
 			aiProgressAt: new Date().toISOString(),
 		})).catch(() => {});
 	};
+	// Leading stamp (round-13 #1): setInterval has no leading tick, and
+	// aiProgressAt is a cross-phase field — a 5-minute hole at start lets a
+	// stale previous-phase stamp mark a brand-new job stale.
+	stamp();
 	const timer = setInterval(stamp, HEARTBEAT_INTERVAL_MS);
 	// Never keep the process alive just for the heartbeat.
 	(timer as unknown as { unref?: () => void }).unref?.();

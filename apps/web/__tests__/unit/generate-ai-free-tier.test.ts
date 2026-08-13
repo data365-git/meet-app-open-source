@@ -287,34 +287,26 @@ describe("callAiApi free-tier-first", () => {
 		}
 	});
 
-	it("a persistently broken free key does NOT deadlock generation: after 3 consecutive genuine failures the call completes on paid (round-11 blocker)", async () => {
+	it("a broken free key does NOT deadlock generation: ONE full-chain auth failure is conclusive — the SAME call completes on paid (round-13 #2)", async () => {
 		H.serverEnv.mockReturnValue({
 			GEMINI_API_KEY: "paid-key",
 			GEMINI_API_KEY_FREE: "free-key",
 		});
 
-		// Calls 1-2: both free models answer with the 400 invalid-key family —
-		// the real error surfaces and the paid key is never used.
-		for (let i = 0; i < 2; i++) {
-			H.fetch
-				.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
-				.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."));
-			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
-		}
-		for (const call of H.fetch.mock.calls) {
-			expect(String(call[0])).toContain("key=free-key");
-		}
-
-		// Call 3: the streak crosses the bound — the SAME call continues on
-		// paid instead of dying.
+		// Call 1: both free models answer with the invalid-key family; the call
+		// continues on paid immediately — critical for SHORT videos, whose
+		// single summary call was permanently unrecoverable under a 3-strike
+		// counter that reset at every job start (round-13 #2).
 		H.fetch
 			.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
 			.mockResolvedValueOnce(geminiError(400, "API key not valid. Please pass a valid API key."))
 			.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 		const out = await callAiApi("prompt", {}, CTX);
 		expect(out.content).toBe('{"paid":true}');
+		expect(H.fetch).toHaveBeenCalledTimes(3);
+		expect(String(H.fetch.mock.calls[2]?.[0])).toContain("key=paid-key");
 
-		// Call 4: free is now unusable FOR THIS JOB — skipped entirely.
+		// Call 2, same job: free is skipped entirely — the verdict stands.
 		H.fetch.mockClear();
 		H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));
 		const out2 = await callAiApi("prompt", {}, CTX);
