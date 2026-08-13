@@ -50,7 +50,32 @@ const brokenKeyJobs = new Set<string>();
  * Everything else — 5xx overloads, socket errors, deadline aborts, empty or
  * unusable output — is NOT evidence and must never open the paid path.
  */
+/** Tag for failures that are about the MODEL'S OUTPUT, not the API call —
+ * an unusable/unparseable free result. V8's JSON.parse quotes the offending
+ * content into its message, so such messages can contain arbitrary
+ * key-looking substrings ("HTTP 403 ...") — they must be excluded from
+ * classification structurally, never by another regex (round-15 #2). */
+const UNUSABLE_OUTPUT_TAG = Symbol.for("cap.unusableAiOutput");
+
+export function markUnusableAiOutput<E>(error: E): E {
+	if (error !== null && typeof error === "object") {
+		(error as Record<PropertyKey, unknown>)[UNUSABLE_OUTPUT_TAG] = true;
+	}
+	return error;
+}
+
+export function isUnusableAiOutputError(error: unknown): boolean {
+	return (
+		error !== null &&
+		typeof error === "object" &&
+		(error as Record<PropertyKey, unknown>)[UNUSABLE_OUTPUT_TAG] === true
+	);
+}
+
 export function isBrokenFreeKeyError(error: unknown): boolean {
+	// Output-shaped failures never reach the message regex at all: their text
+	// quotes model CONTENT, which can contain anything.
+	if (isUnusableAiOutputError(error)) return false;
 	const message = error instanceof Error ? error.message : String(error);
 	if (/HTTP (401|403)\b/i.test(message)) return true;
 	return (

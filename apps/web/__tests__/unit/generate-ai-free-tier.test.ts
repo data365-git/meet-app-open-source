@@ -384,6 +384,24 @@ describe("callAiApi free-tier-first", () => {
 		}
 	});
 
+	it("free CONTENT that merely quotes 'HTTP 403' is unusable output, not a revoked key — zero paid calls (round-15 #2)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		// JSON.parse of this content produces a V8 message that QUOTES the
+		// content's first characters ("Unexpected token 'H', \"HTTP 403 F\"...")
+		// — a content-parse failure must be tagged at the throw site and never
+		// reach the classifier at all.
+		H.fetch
+			.mockResolvedValueOnce(geminiOk("HTTP 403 Forbidden by upstream proxy", 5, 2))
+			.mockResolvedValueOnce(geminiOk("HTTP 403 Forbidden by upstream proxy", 5, 2));
+		await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+	});
+
 	it("no free key: paid path only, exactly one call", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
 		H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));

@@ -994,7 +994,14 @@ export async function transcribeWithGemini(
 		);
 
 		if (!initRes.ok) {
-			throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
+			// Include the response BODY (round-15 #1): with a revoked key the
+			// FIRST answer of every job is THIS error, and Google puts the
+			// API_KEY_INVALID evidence in the body — a status-only message hides
+			// a broken key from the free-tier classifier forever.
+			const body = await initRes.text().catch(() => "");
+			throw new Error(
+				`Gemini upload init failed (HTTP ${initRes.status}): ${body.slice(0, 300)}`,
+			);
 		}
 
 		const url = initRes.headers.get("x-goog-upload-url");
@@ -1077,7 +1084,11 @@ export async function transcribeWithGemini(
 		});
 
 		if (!uploadRes.ok) {
-			throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
+			// Body included for the same reason as the init leg (round-15 #1).
+			const body = await uploadRes.text().catch(() => "");
+			throw new Error(
+				`Gemini audio upload failed (HTTP ${uploadRes.status}): ${body.slice(0, 300)}`,
+			);
 		}
 
 		const data = (await uploadRes.json()) as GeminiFileResponse;

@@ -29,6 +29,7 @@ import {
 	isBrokenFreeKeyError,
 	isFreeTierUnusable,
 	markFreeKeyBrokenForJob,
+	markUnusableAiOutput,
 } from "@/lib/free-tier-health";
 import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { withGeminiRetry } from "@/lib/gemini-retry";
@@ -966,11 +967,25 @@ function assertFreeAiResultUsable(
 	result: AiApiModelResult,
 	json: boolean,
 ): void {
+	// Both throws are tagged as OUTPUT failures (round-15 #2): a JSON.parse
+	// message quotes the model's own content, so without the tag a reply that
+	// happens to start "HTTP 403 ..." would read as a revoked key and bill the
+	// whole job on paid.
 	if (result.emptyResponse) {
-		throw new Error("Free Gemini summary returned an empty response");
+		throw markUnusableAiOutput(
+			new Error("Free Gemini summary returned an empty response"),
+		);
 	}
 	if (json) {
-		JSON.parse(cleanJsonResponse(result.content).trim());
+		try {
+			JSON.parse(cleanJsonResponse(result.content).trim());
+		} catch (error) {
+			throw markUnusableAiOutput(
+				new Error(
+					`Free Gemini summary content is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+				),
+			);
+		}
 	}
 }
 

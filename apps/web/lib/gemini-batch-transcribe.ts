@@ -299,7 +299,12 @@ async function uploadAudioForBatch(
 			},
 		);
 		if (!initRes.ok) {
-			throw new Error(`Gemini upload init failed (HTTP ${initRes.status})`);
+			// Body included so a revoked key is visible to the classifier
+			// (round-15 #1, same as the sync path).
+			const body = await initRes.text().catch(() => "");
+			throw new Error(
+				`Gemini upload init failed (HTTP ${initRes.status}): ${body.slice(0, 300)}`,
+			);
 		}
 		const url = initRes.headers.get("x-goog-upload-url");
 		if (!url) throw new Error("No upload URL from Gemini Files API");
@@ -317,7 +322,10 @@ async function uploadAudioForBatch(
 			body: audioBytes,
 		});
 		if (!uploadRes.ok) {
-			throw new Error(`Gemini audio upload failed (HTTP ${uploadRes.status})`);
+			const body = await uploadRes.text().catch(() => "");
+			throw new Error(
+				`Gemini audio upload failed (HTTP ${uploadRes.status}): ${body.slice(0, 300)}`,
+			);
 		}
 		return (await uploadRes.json()) as {
 			file: { name: string; uri: string; state: string };
