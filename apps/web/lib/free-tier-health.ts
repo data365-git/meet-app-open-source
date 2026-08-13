@@ -36,14 +36,28 @@ const brokenKeyJobs = new Set<string>();
 /**
  * Evidence of a BROKEN/REVOKED free key: the permanent auth family only.
  * Transcription tags these errors `permanent` upstream, but both phases'
- * messages carry the status, so the message is the shared signal. Everything
- * else — 5xx overloads, socket errors, deadline aborts, empty or unusable
- * output — is NOT evidence and must never open the paid path.
+ * messages carry the status, so the message is the shared signal.
+ *
+ * Narrowed in round-14 — this classifier is the ONLY thing protecting the
+ * money, so every arm must be auth-specific:
+ *  - HTTP 401/403 are auth by definition: broad match.
+ *  - HTTP 400 is ALSO Gemini's INVALID_ARGUMENT / FAILED_PRECONDITION
+ *    (oversized request, unsupported param/region), so 400 counts ONLY
+ *    together with an explicit auth token.
+ *  - A bare number is NEVER evidence: the old digit arm let a JSON parse
+ *    offset ("Unterminated string in JSON at position 400") masquerade as a
+ *    revoked key.
+ * Everything else — 5xx overloads, socket errors, deadline aborts, empty or
+ * unusable output — is NOT evidence and must never open the paid path.
  */
 export function isBrokenFreeKeyError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
-	return /HTTP (400|401|403)\b|\b40[013] |API[_ ]?KEY[_ ]?INVALID|API key not valid|PERMISSION_DENIED/i.test(
-		message,
+	if (/HTTP (401|403)\b/i.test(message)) return true;
+	return (
+		/\b400\b/.test(message) &&
+		/API[_ ]?KEY[_ ]?INVALID|API key not valid|PERMISSION_DENIED|UNAUTHENTICATED/i.test(
+			message,
+		)
 	);
 }
 

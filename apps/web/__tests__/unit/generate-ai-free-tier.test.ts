@@ -347,6 +347,43 @@ describe("callAiApi free-tier-first", () => {
 		}
 	});
 
+	it("a free-model-specific 400 (INVALID_ARGUMENT) plus a 503 never routes the job to paid (round-14 #1)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		// The exact scenario: the free chain leads with a model the paid list
+		// does not use; a 400 specific to it + a 503 on the fallback.
+		for (let i = 0; i < 2; i++) {
+			H.fetch
+				.mockResolvedValueOnce(geminiError(400, "Request contains an invalid argument."))
+				.mockResolvedValueOnce(geminiError(503, "The model is overloaded"));
+			await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		}
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+	});
+
+	it("a mixed set where the QUOTA error carries a 403 token stays quota-classified — zero paid calls (round-14 #2)", async () => {
+		H.serverEnv.mockReturnValue({
+			GEMINI_API_KEY: "paid-key",
+			GEMINI_API_KEY_FREE: "free-key",
+		});
+		// Quota-shaped 429 whose body happens to mention HTTP 403, plus a 503:
+		// quota must be classified FIRST, exactly like the other two call
+		// sites, so the auth branch never sees it.
+		H.fetch
+			.mockResolvedValueOnce(
+				geminiError(429, "RESOURCE_EXHAUSTED: quota exceeded (upstream HTTP 403)"),
+			)
+			.mockResolvedValueOnce(geminiError(503, "The model is overloaded"));
+		await expect(callAiApi("prompt", {}, CTX)).rejects.toBeInstanceOf(Error);
+		for (const call of H.fetch.mock.calls) {
+			expect(String(call[0])).toContain("key=free-key");
+		}
+	});
+
 	it("no free key: paid path only, exactly one call", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key" });
 		H.fetch.mockResolvedValueOnce(geminiOk('{"paid":true}', 20, 8));

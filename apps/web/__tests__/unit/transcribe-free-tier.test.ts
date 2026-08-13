@@ -286,6 +286,56 @@ describe("transcribeAudio free-tier-first", () => {
 		expect((lastCall?.[1] as GeminiOpt).apiKey).toBe("free-key");
 	});
 
+	it("a NON-auth HTTP 400 (INVALID_ARGUMENT family) never opens the paid path — 400 is not proof of a broken key (round-14 #1)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		// The REAL message this code builds for Gemini's INVALID_ARGUMENT.
+		H.transcribeWithGemini.mockRejectedValue(
+			new Error("Gemini generateContent failed (HTTP 400): Request contains an invalid argument."),
+		);
+
+		for (let i = 0; i < 2; i++) {
+			const err = await transcribeAudio(
+				"https://a/x.mp3",
+				300,
+				null,
+				CTX,
+			).catch((e) => e);
+			expect((err as Error).message).toContain("invalid argument");
+		}
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(2);
+		for (const call of H.transcribeWithGemini.mock.calls) {
+			expect((call[1] as GeminiOpt).apiKey).toBe("free-key");
+		}
+	});
+
+	it("a JSON parse failure whose byte OFFSET is 400 never opens the paid path (round-14 #3)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		// The REAL Node message for a truncated response body.
+		H.transcribeWithGemini.mockRejectedValue(
+			new SyntaxError("Unterminated string in JSON at position 400 (line 1 column 401)"),
+		);
+
+		const err = await transcribeAudio("https://a/x.mp3", 300, null, CTX).catch(
+			(e) => e,
+		);
+		expect((err as Error).message).toContain("Unterminated string");
+		expect(H.transcribeWithGemini).toHaveBeenCalledTimes(1);
+		expect((H.transcribeWithGemini.mock.calls[0]?.[1] as GeminiOpt).apiKey).toBe("free-key");
+	});
+
+	it("a genuine HTTP 401 still marks the job and continues on paid (round-14 positive pin)", async () => {
+		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
+		H.transcribeWithGemini
+			.mockRejectedValueOnce(
+				new Error("Gemini generateContent failed (HTTP 401): Request had invalid authentication credentials."),
+			)
+			.mockResolvedValueOnce(PAID_RESULT);
+
+		const out = await transcribeAudio("https://a/x.mp3", 300, null, CTX);
+		expect(out).toBe("WEBVTT\n\nPAID");
+		expect((H.transcribeWithGemini.mock.calls[1]?.[1] as GeminiOpt).apiKey).toBe("paid-key");
+	});
+
 	it("freeOnly (silence gap-fill span): a free failure rethrows — the paid path is NEVER entered", async () => {
 		H.serverEnv.mockReturnValue({ GEMINI_API_KEY: "paid-key", GEMINI_API_KEY_FREE: "free-key" });
 		H.transcribeWithGemini.mockRejectedValue(new Error("429 RESOURCE_EXHAUSTED"));

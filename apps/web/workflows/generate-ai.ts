@@ -1089,7 +1089,14 @@ export async function callAiApi(
 			console.warn(
 				`[generate-ai] all free-tier models failed for video=${context.videoId}, falling back to paid`,
 			);
-		} else if (freeErrors.some((e) => isBrokenFreeKeyError(e))) {
+		} else if (
+			freeErrors.some(
+				(e) => !isQuotaLikeAiError(e) && isBrokenFreeKeyError(e),
+			)
+		) {
+			// Quota is classified FIRST, same order as the other two call sites
+			// (round-14 #2): a quota-shaped error whose body happens to carry a
+			// 403 token must never reach the auth branch.
 			// A 400/401/403 auth-family answer from the free chain is
 			// conclusive (round-13 #2): mark the key broken for this job and
 			// continue on paid instead of dying unrecoverably (round-11
