@@ -84,6 +84,13 @@ export const ShareVideo = forwardRef<
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		canGenerate?: boolean;
+		/** Whether the AI chat surface (FAB + popup) may be shown at all. Chat
+		 * needs a GEMINI key specifically — its transcript index is built with
+		 * Google-only embeddings — so on an OpenRouter-only instance the route
+		 * answers HTTP 500 to every message. Rendering the entry point there
+		 * advertises a feature that cannot work; default true keeps every
+		 * existing caller unchanged. */
+		aiChatAvailable?: boolean;
 		/** Owner/member-only cost card rendered above the share panel. */
 		costPanel?: React.ReactNode;
 		/** Comments/activity content for the panel's "Izohlar" tab. */
@@ -108,6 +115,7 @@ export const ShareVideo = forwardRef<
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			canGenerate = false,
+			aiChatAvailable = true,
 			costPanel,
 			commentsPanel,
 		},
@@ -1033,18 +1041,22 @@ export const ShareVideo = forwardRef<
 			    now. The old `.ai-aura` glow is gone with it — the owner's redesign
 			    drops it deliberately for a calmer surface, and ai-chat.css no
 			    longer styles it. */}
-				<AIChatPopup
-					videoId={data.id}
-					onVideoJump={handleSeekAndPlay}
-					onClose={() => setAiChatOpen(false)}
-					isOpen={aiChatOpen}
-					processing={aiProcessing}
-					transcriptReady={transcriptReady}
-				/>
-				<AIFab
-					onClick={() => setAiChatOpen((v) => !v)}
-					isOpen={aiChatOpen}
-				/>
+				{aiChatAvailable && (
+					<>
+						<AIChatPopup
+							videoId={data.id}
+							onVideoJump={handleSeekAndPlay}
+							onClose={() => setAiChatOpen(false)}
+							isOpen={aiChatOpen}
+							processing={aiProcessing}
+							transcriptReady={transcriptReady}
+						/>
+						<AIFab
+							onClick={() => setAiChatOpen((v) => !v)}
+							isOpen={aiChatOpen}
+						/>
+					</>
+				)}
 			</>
 		);
 	},

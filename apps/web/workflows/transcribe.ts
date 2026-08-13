@@ -24,6 +24,10 @@ import {
 } from "@/lib/gemini-paid-key";
 import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
 import {
+	markOpenRouterTranscript,
+	transcriptCameFromOpenRouter,
+} from "@/lib/transcript-provenance";
+import {
 	OPENROUTER_USAGE_MODEL,
 	transcribeWithOpenRouter,
 } from "@/lib/openrouter";
@@ -880,6 +884,11 @@ export async function transcribeAudio(
 				};
 			},
 		});
+		// Record WHO produced this job's transcript text, for the trailing-gap
+		// guard below. The guard's question is "did OpenRouter's cue-timestamp
+		// compression manufacture this gap?", which only a run fact can answer —
+		// the presence of a key in the environment cannot (round-18 #1).
+		markOpenRouterTranscript(context.videoId);
 		return result.transcriptVtt;
 	};
 
@@ -1721,12 +1730,24 @@ export async function fillTranscriptGaps(
 			// for the case above is 600/402 ≈ 1.49, inside its 1.05–2.5 range.
 			// This guard covers what that rescale cannot reach — an
 			// already-merged transcript.
+			//
+			// THE CONDITION IS THE PRODUCING PROVIDER, NOT THE ENVIRONMENT
+			// (round-18 #1). This used to read `hasOpenRouterKey()`, which names
+			// the artefact but tests for a key in the env. On the ordinary case —
+			// a transcript produced entirely by the FREE Google chain on a box
+			// that also holds an OpenRouter key for its paid leg — a genuinely
+			// failed last chunk was refused its paid fill, the free-only retry
+			// threw `free-only call skipped`, and the END OF THE MEETING was
+			// permanently lost. Only a gap on an OpenRouter-PRODUCED transcript
+			// may be treated as a timestamp artefact; real audio loss is still
+			// paid-filled, and an unknown provenance reads as "not OpenRouter",
+			// so the failure direction is data-preserving.
 			const trailingGap =
 				totalDurationSec != null && span.gapEndSec >= totalDurationSec;
 			const paidWorthy =
 				span.speechSec != null &&
 				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC &&
-				!(trailingGap && hasOpenRouterKey());
+				!(trailingGap && transcriptCameFromOpenRouter(context.videoId));
 			const vtt = await transcribeFn(
 				span.url,
 				span.durationSec,

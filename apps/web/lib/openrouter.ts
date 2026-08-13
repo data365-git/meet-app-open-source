@@ -83,12 +83,22 @@ export function buildOpenRouterBody(opts: {
 	maxTokens: number;
 	temperature: number;
 	stream?: boolean;
+	/** Structured-output request, the twin of the Gemini legs'
+	 * `generationConfig.responseMimeType: "application/json"`. Without it the
+	 * model may wrap its JSON in prose, which costs a SECOND paid call on the
+	 * summary leg and throws on the translate leg — after both are billed.
+	 * Verified accepted (HTTP 200, valid JSON) against
+	 * google/gemini-3-flash-preview on 2026-08-13. */
+	responseFormat?: "json_object";
 }): Record<string, unknown> {
 	return {
 		model: opts.model ?? OPENROUTER_MODEL,
 		messages: opts.messages,
 		max_tokens: opts.maxTokens,
 		temperature: opts.temperature,
+		...(opts.responseFormat
+			? { response_format: { type: opts.responseFormat } }
+			: {}),
 		// Reasoning OFF. Parity requirement, not a cost tweak: the Google path
 		// runs with thinkingBudget 0 and the measured transcript match was taken
 		// with reasoning disabled.
@@ -107,11 +117,19 @@ export function openRouterHeaders(apiKey: string): Record<string, string> {
 }
 
 /** USD → microdollars, the unit `ai_usage_events.costUsdMicros` stores. Returns
- * undefined for anything that is not a usable non-negative number, so a missing
- * or malformed `usage.cost` falls back to the pricing table instead of
- * recording a free call that was not free. */
+ * undefined for anything that is not a usable POSITIVE number, so a missing,
+ * malformed OR ZERO `usage.cost` falls back to the pricing table instead of
+ * recording a free call that was not free.
+ *
+ * Why zero is excluded (round-18 #5): a paid OpenRouter call is never actually
+ * free — every measured response, down to an 11-character completion, reports a
+ * non-zero cost. An exact `0` is therefore a REPORTING failure, not a price, and
+ * accepting it recorded a $0 event: monthly/per-video spend stayed flat and the
+ * $100/month + $20/video backstops could never trip, so a retry loop could bill
+ * without limit. The genuinely-free Google path never reaches this function — it
+ * records $0 through `withCostGuard({ free: true })`. */
 export function costUsdToMicros(cost: unknown): number | undefined {
-	if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) {
+	if (typeof cost !== "number" || !Number.isFinite(cost) || cost <= 0) {
 		return undefined;
 	}
 	return Math.round(cost * 1_000_000);
@@ -137,6 +155,8 @@ export async function openRouterCompletion(opts: {
 	signal?: AbortSignal;
 	maxAttempts?: number;
 	fetchImpl?: typeof fetch;
+	/** Ask for structured JSON, the twin of the Gemini legs' responseMimeType. */
+	responseFormat?: "json_object";
 }): Promise<OpenRouterUsage & { text: string; finishReason?: string }> {
 	const doFetch = opts.fetchImpl ?? fetch;
 	const body = JSON.stringify(
@@ -145,6 +165,7 @@ export async function openRouterCompletion(opts: {
 			messages: opts.messages,
 			maxTokens: opts.maxTokens,
 			temperature: opts.temperature,
+			responseFormat: opts.responseFormat,
 		}),
 	);
 

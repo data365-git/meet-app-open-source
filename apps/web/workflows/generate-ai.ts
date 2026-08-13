@@ -1243,6 +1243,12 @@ async function callOpenRouterSummary(
 				messages: [{ role: "user", content: prompt }],
 				maxTokens: maxOutputTokens,
 				temperature: 0.2,
+				// Structured output, the twin of the Gemini leg's
+				// `responseMimeType: "application/json"` (round-18 #6). Without it
+				// a prose preamble makes parseJsonWithRetry fire a SECOND full PAID
+				// call and then return null — an empty summary the user pays twice
+				// for. Only the JSON legs ask for it; free-text summaries must not.
+				...(json ? { responseFormat: "json_object" as const } : {}),
 			});
 			if (res.finishReason === "length") {
 				console.error(

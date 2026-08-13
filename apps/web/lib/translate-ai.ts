@@ -117,6 +117,37 @@ function cleanJsonResponse(content: string): string {
 	return content;
 }
 
+/**
+ * The ONE place this module turns a model reply into JSON (round-18 #6).
+ *
+ * Both call sites used to `JSON.parse(...)` bare, so a prose preamble threw a
+ * raw V8 SyntaxError — after the call was already billed — instead of the
+ * module's own descriptive failures. Every other throw here names the module
+ * and what was wrong; this one leaked "Unexpected token < in JSON at position
+ * 0" straight up the stack, where the caller could neither recognise it nor
+ * tell the user anything true.
+ *
+ * The message deliberately does NOT quote the model's content: that text can
+ * contain anything, including strings that look like auth or quota evidence to
+ * the classifiers that decide whether to spend money.
+ */
+export function parseTranslationJson(content: string, label: string): unknown {
+	const cleaned = cleanJsonResponse(content).trim();
+	try {
+		return JSON.parse(cleaned);
+	} catch (error) {
+		// The raw parser message is LOGGED, never thrown: V8 quotes the offending
+		// content into it, and that content reaches the classifiers.
+		console.error(
+			`[translate-ai] ${label} JSON parse FAILED`,
+			error instanceof Error ? error.message.slice(0, 200) : error,
+		);
+		throw new Error(
+			`[translate-ai] ${label} response was not valid JSON (${cleaned.length} chars)`,
+		);
+	}
+}
+
 /** The OpenRouter twin of callGeminiJson: same prompt bytes, same JSON-cleaning
  * downstream, same cost guard — only the transport and the recorded model
  * differ, and the recorded COST is OpenRouter's own figure. */
@@ -137,6 +168,11 @@ async function callOpenRouterJson(
 				messages: [{ role: "user", content: prompt }],
 				maxTokens: 65536,
 				temperature: 0.2,
+				// Structured output, the twin of the Gemini leg's
+				// `responseMimeType: "application/json"` below (round-18 #6). Every
+				// caller of this function immediately JSON.parses the result, so a
+				// prose preamble is a billed call that cannot be used.
+				responseFormat: "json_object",
 			});
 			return {
 				content: res.text || "{}",
@@ -306,7 +342,7 @@ Lines:
 ${wrapUntrustedTranscript(numbered)}`;
 
 		const content = await callGeminiJson(prompt, context);
-		const parsed = JSON.parse(cleanJsonResponse(content).trim()) as {
+		const parsed = parseTranslationJson(content, "batch translation") as {
 			lines?: unknown;
 		};
 
@@ -370,7 +406,10 @@ Input JSON:
 ${JSON.stringify(compactInput)}`;
 
 	const compactContent = await callGeminiJson(compactPrompt, context);
-	const compactParsed = JSON.parse(cleanJsonResponse(compactContent).trim());
+	const compactParsed = parseTranslationJson(
+		compactContent,
+		"AiSummary (compact)",
+	);
 	const compactResult = CompactAiSummarySchema.safeParse(compactParsed);
 	if (!compactResult.success) {
 		throw new Error(

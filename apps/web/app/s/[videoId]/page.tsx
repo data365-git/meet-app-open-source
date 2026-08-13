@@ -557,6 +557,16 @@ async function AuthorizedContent({
 	const transcriptionGenerationAvailable =
 		paidAiProviderConfigured && !rules.settings.disableTranscript;
 	const aiProviderAvailable = paidAiProviderConfigured;
+	// CHAT IS A DIFFERENT CAPABILITY (round-18 #3). Transcription and summary
+	// run on either paid provider, but chat first builds a transcript EMBEDDING
+	// index, and embeddings are Google-only (lib/gemini-embed.ts) — the chat
+	// route hard-returns HTTP 500 "No Gemini API key configured" when only
+	// OpenRouter is set. Advertising the chat surface there gives the viewer a
+	// panel where every single message errors, so the flag must require what
+	// chat actually needs rather than inheriting the summary/transcription one.
+	// The video owner's OWN saved Gemini key serves chat too (the route prefers
+	// it over the env key), so it counts — filled in from the owner row below.
+	let aiChatAvailable = hasPaidGeminiKey();
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -564,6 +574,7 @@ async function AuthorizedContent({
 			email: users.email,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			geminiApiKey: users.geminiApiKey,
 		})
 		.from(users)
 		.where(eq(users.id, video.owner.id))
@@ -572,6 +583,9 @@ async function AuthorizedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+		if (!aiChatAvailable && videoOwner.geminiApiKey) {
+			aiChatAvailable = true;
+		}
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
@@ -901,6 +915,7 @@ async function AuthorizedContent({
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
+				aiChatAvailable={aiChatAvailable}
 				transcriptionGenerationAvailable={transcriptionGenerationAvailable}
 				canGenerate={canGenerate}
 			/>

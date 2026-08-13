@@ -320,12 +320,19 @@ export async function withCostGuard<T>(
 			: rawAudioInTokens;
 	// A provider-reported charge (OpenRouter's `usage.cost`) is the truth for
 	// this event and outranks the pricing table — the table exists to ESTIMATE
-	// a bill we cannot see. Anything that is not a usable non-negative number
-	// falls through to the table rather than silently recording $0.
+	// a bill we cannot see. Anything that is not a usable POSITIVE number falls
+	// through to the table rather than silently recording $0.
+	//
+	// ZERO is excluded deliberately (round-18 #5), the same rule as
+	// costUsdToMicros: a PAID call reporting exactly $0 is a reporting failure,
+	// not a price, and accepting it froze monthly/per-video spend at 0 so the
+	// $100/month and $20/video backstops could never trip. The genuinely-free
+	// Google path is unaffected — it records $0 via `options.free` below, which
+	// is checked first and never consults this value.
 	const reportedCostMicros =
 		typeof result.costUsdMicros === "number" &&
 		Number.isFinite(result.costUsdMicros) &&
-		result.costUsdMicros >= 0
+		result.costUsdMicros > 0
 			? Math.round(result.costUsdMicros)
 			: undefined;
 	const costUsdMicros = options.free

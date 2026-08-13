@@ -169,6 +169,9 @@ interface ShareProps {
 	} | null;
 	aiGenerationAvailable: boolean;
 	transcriptionGenerationAvailable: boolean;
+	/** Chat needs a GEMINI key specifically (embeddings are Google-only), which
+	 * is a strictly narrower requirement than the paid-provider flags above. */
+	aiChatAvailable: boolean;
 	canGenerate?: boolean;
 }
 
@@ -287,6 +290,7 @@ export const Share = ({
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
+	aiChatAvailable,
 	canGenerate = false,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
@@ -511,6 +515,7 @@ export const Share = ({
 					recordingStopped={recordingStopped}
 					defaultPlaybackSpeed={defaultPlaybackSpeed}
 					canGenerate={canGenerate}
+					aiChatAvailable={aiChatAvailable}
 					ref={playerRef}
 					costPanel={
 						viewerId === data.owner.id ? (

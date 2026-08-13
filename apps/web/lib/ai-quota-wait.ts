@@ -42,6 +42,31 @@ export function isTranscriptionQuotaFailureError(
 
 import { isUnusableAiOutputError } from "@/lib/free-tier-health";
 
+/**
+ * CREDIT exhaustion, the paid-vendor twin of a free-tier quota wall
+ * (round-18 #4). Google answers exhaustion with 429/RESOURCE_EXHAUSTED;
+ * OpenRouter answers "you are out of money" with HTTP 402 and an
+ * "insufficient credits" body. Left unclassified, that surfaced as a generic
+ * failure — the user was told the AI broke when in fact the account needs a
+ * top-up, and the job was not tagged for the credits-returned re-run.
+ *
+ * Deliberately NARROW, because this verdict can open the paid path from a free
+ * failure (transcribe.ts) exactly like the 429 arm: a bare "402" is never
+ * evidence — the number must arrive as an HTTP status, or the text must name
+ * credits outright. Output-shaped failures are excluded structurally by the
+ * caller below, the same as every other classifier here.
+ */
+export function isCreditExhaustedAiError(error: unknown): boolean {
+	if (isUnusableAiOutputError(error)) return false;
+	const message = error instanceof Error ? error.message : String(error);
+	return (
+		/HTTP 402\b/i.test(message) ||
+		/insufficient[_ -]?credits?|not enough credits|credit balance|out of credits|requires more credits/i.test(
+			message,
+		)
+	);
+}
+
 export function isQuotaLikeAiError(error: unknown): boolean {
 	// Structural exclusion BEFORE any regex (round-16 #1, the same shape as
 	// the broken-key classifier): an unusable-output failure's message quotes
@@ -51,6 +76,11 @@ export function isQuotaLikeAiError(error: unknown): boolean {
 	// classifier whose verdict can open the paid path must honour this tag.
 	if (isUnusableAiOutputError(error)) return false;
 	const message = error instanceof Error ? error.message : String(error);
+	// Credit exhaustion IS quota-like for every consumer of this verdict: the
+	// paid provider refuses to serve until money returns, which is precisely
+	// what TranscriptionQuotaFailureError ("re-run it once credits return")
+	// and the "quota/credits exhausted" user message already describe.
+	if (isCreditExhaustedAiError(error)) return true;
 	return /\b429\b|RESOURCE_EXHAUSTED|quota|rate[- ]?limit|too many requests/i.test(
 		message,
 	);

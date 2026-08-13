@@ -16,8 +16,10 @@ import {
 } from "@/lib/ai-cost-guard";
 import { isTranscriptionJobStale } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { clearFreeTierVerdict } from "@/lib/free-tier-health";
+import { clearTranscriptProvenance } from "@/lib/transcript-provenance";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
@@ -112,7 +114,13 @@ export async function transcribeVideo(
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
-	let hasUsableGeminiKey = hasPaidGeminiKey();
+	// An OpenRouter key is a usable PAID provider for transcription too (the
+	// paid leg in workflows/transcribe.ts resolves it in exactly the position
+	// paid Gemini holds), so it must satisfy the same availability check — the
+	// identical twin of the gate in lib/generate-ai.ts. Without this, an
+	// instance whose paid credential lives entirely at OpenRouter — the
+	// intended end state — is refused HERE, before any AI call is attempted.
+	let hasUsableGeminiKey = hasPaidGeminiKey() || hasOpenRouterKey();
 	if (!hasUsableGeminiKey && owner?.geminiApiKey) {
 		try {
 			hasUsableGeminiKey = Boolean(await decrypt(owner.geminiApiKey));
@@ -263,6 +271,10 @@ export async function transcribeVideo(
 		// key was fixed must not inherit a previous run's broken-key verdict
 		// and silently start on paid.
 		clearFreeTierVerdict(videoId);
+		// Same reason, same moment: a fresh run must not inherit which provider
+		// produced the PREVIOUS run's transcript — that fact drives the
+		// trailing-gap paid/free decision (lib/transcript-provenance.ts).
+		clearTranscriptProvenance(videoId);
 		await db()
 			.update(videos)
 			.set({

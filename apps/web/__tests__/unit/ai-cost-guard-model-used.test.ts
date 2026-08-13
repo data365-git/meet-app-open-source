@@ -161,6 +161,30 @@ describe("withCostGuard — a provider-reported cost outranks the pricing table"
 		);
 	});
 
+	// round-18 #5 — the hole `??` could not catch. Missing/NaN/negative already
+	// fell back to the table; EXACT ZERO was accepted, so a paid call recorded
+	// costUsdMicros = 0, monthly/per-video spend stayed flat, and the
+	// $100/month + $20/video backstops could never trip on a retry loop.
+	it("an exact ZERO reported cost on a PAID call falls back to the pricing table (a paid call is never free)", async () => {
+		await withCostGuard({
+			orgId: "org-1",
+			userId: "user-1",
+			operation: "summary",
+			model: "openrouter/google/gemini-3-flash-preview",
+			fn: async () => ({
+				content: "{}",
+				inputTokens: 100,
+				outputTokens: 50,
+				costUsdMicros: 0,
+			}),
+		});
+
+		expect(H.priceForMicros).toHaveBeenCalled();
+		expect(H.insertValues).toHaveBeenCalledWith(
+			expect.objectContaining({ costUsdMicros: 12_345 }),
+		);
+	});
+
 	it("a FREE call still records $0 even if a cost was reported", async () => {
 		await withCostGuard({
 			orgId: "org-1",

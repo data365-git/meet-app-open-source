@@ -625,11 +625,24 @@ export async function POST(request: NextRequest) {
 				// A free-key answer costs nothing, so it must not be billed to the
 				// org's AI budget — reporting its tokens would put money in the spend
 				// panel that was never spent.
+				// ATTRIBUTE FROM THE LEG THAT ACTUALLY ANSWERED (round-18 #7).
+				// `options.model` above is chosen from KEY PRESENCE, before a
+				// single byte is sent, so on an instance with both keys every
+				// answer the FREE Gemini chain served was recorded as an
+				// OpenRouter row in the owner's cost panel. The fetcher already
+				// knows the truth — the streaming branch four lines up reads the
+				// same value — and withCostGuard prefers `modelUsed` over the
+				// requested model for both pricing and the recorded row.
+				const chatModelUsed =
+					chatFetcher.provider() === "openrouter"
+						? OPENROUTER_USAGE_MODEL
+						: "gemini-2.5-flash";
 				return chatFetcher.usedFreeKey()
-					? { inputTokens: 0, outputTokens: 0 }
+					? { inputTokens: 0, outputTokens: 0, modelUsed: chatModelUsed }
 					: {
 							inputTokens: chatInputTokens,
 							outputTokens: chatOutputTokens,
+							modelUsed: chatModelUsed,
 							// OpenRouter's own charge when the stream reported one;
 							// undefined falls back to the token pricing table.
 							...(chatCostUsdMicros != null
