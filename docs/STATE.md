@@ -6,6 +6,39 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## ▶ THE STOPPING POINT — 2026-08-14 ~02:50 (read this first, then the incident block below)
+
+**GOAL of this stream, in his words:** *"ai tahlil bu ishini to'liq hal qilib qo'y yana shikoyat eshitish hohlamayman"* — AI analysis must simply work, with no daily ceiling, so the team stops complaining. Report to him on Telegram when it lands (his chat id is the single entry in `~/.claude/channels/telegram/access.json`).
+
+**WHERE IT IS RIGHT NOW:**
+- **Production is UP and AI analysis WORKS** on `1d85710` — but on a stopgap: the paid key slot holds the FREE key, so the ~20-requests/day ceiling still applies (≈ one recording a day). See the incident block below.
+- **The real fix is committed and NOT deployed: `7630159` → `197cb2a` on `qa-fixes`.** Gates re-run by the main session at `197cb2a`: **tsc 0 · 1416 passed / 26 skipped · real `next build` 0.** (IDE diagnostics during the agents' edits looked alarming twice and were stale both times — a clean `tsc -b --force` is the truth.)
+- **Round 18 happened exactly like the previous 13:** the first blind review of `7630159` returned **DO-NOT-SHIP** with 8 findings, the worst of which silently dropped **the end of a meeting** from the transcript in the ordinary free-tier configuration. `197cb2a` fixes findings 1-7 (finding 8 — `poll-batch-jobs` needing a paid Gemini key — was left out of scope deliberately: legacy Batch admin, no spend impact, and production has a Gemini key).
+- **A SECOND blind review of `197cb2a` was in flight when this was written.** Do not deploy until it returns. Its result is the only thing standing between here and the deploy.
+
+**THE NEXT ACTION, in order:**
+1. Read the second review. If **SHIP** → bump the image tag in `/opt/data365/docker-compose.app.yml` to `197cb2a` and `docker compose -f /opt/data365/docker-compose.app.yml up -d`. **Never a bare `docker run`** — that skips the `data365_default` network and produced a live `db:error` tonight.
+2. The image for `7630159` is already built on the host, so a build for `197cb2a` will be fast off the layer cache. Source ships as `git archive <sha>` → `/opt/data365/app-<sha>` → `docker build -f apps/web/Dockerfile -t data365-web:<sha> .`
+3. `OPENROUTER_API_KEY` is ALREADY written into `/opt/data365/app.env` (backup `app.env.bak-or-*`). Nothing else is needed for the paid path.
+4. Verify live: `/api/health` 200 `db:ok storage:ok`, a share page 200, and `/api/cron/poll-batch-jobs` 200. Then **run one real AI analysis** and confirm it completes past the free ceiling — that is the only proof that matters for his complaint.
+5. Tell him on Telegram.
+- **Rollback is one tag change:** `1d85710`, `7d3ecd4`, `5c9a52d` are all still on the host.
+
+**MEASURED AND WAITING (not started, do not lose):** the free tier counts REQUESTS, not tokens, so `LONG_AUDIO_CHUNK_DURATION_SEC = 3 * 60` spends ~20 free requests on one 1-hour recording. A live A/B on the same 10 minutes showed **a 10-minute chunk returns the same transcript content** (1 224-1 233 words across all three arms) for a **quarter of the requests**. Full numbers, method and the latency ceiling are in the `docs/chunk-size-measurement.md`; the owner approved testing it. Do this AFTER the OpenRouter deploy, never bundled with it.
+
+## 🌙 AUTONOMOUS RUN — 2026-08-14 ~00:30, owner asleep
+
+**His order, verbatim:** *"ai tahlil bu ishini to'liq hal qilib qo'y yana shikoyat eshitish hohlamayman / men esa uhlayman bajargach aytib qo'y telegram bot orqali."* So: finish the AI-analysis fix end to end and report to him on Telegram (his chat id is the single entry in `~/.claude/channels/telegram/access.json`).
+
+**Why the stopgap is not enough:** the paid slot currently holds the FREE key, so the daily ~20-request ceiling still applies — about one recording a day, and then the complaints return. The real fix is `7630159`, which routes the PAID leg through OpenRouter (unlimited by quota, bounded only by credit).
+
+**State at the time of writing:**
+- `7630159` gates re-run by the main session: **tsc 0 · 1398 passed / 26 skipped · real `next build` 0.** (The IDE diagnostics that looked alarming were stale mid-edit snapshots; a clean `tsc -b --force` is 0.)
+- **Blind non-author review IN FLIGHT** with a falsifiable bar — the only thing that has ever caught defects in this area; green gates have caught 0 of ~20.
+- Server prepared but NOT switched: `OPENROUTER_API_KEY` written into `/opt/data365/app.env` (backup `app.env.bak-or-*`), source of `7630159` unpacked to `/opt/data365/app-7630159`, image building to `data365-web:7630159` (log `/opt/data365/build-7630159.log`). **Production still runs `1d85710`.**
+- **Deploy ONLY if the review returns SHIP.** Restart with `docker compose -f /opt/data365/docker-compose.app.yml up -d` after bumping the image tag in that file — never a bare `docker run` (that is what caused the brief `db:error` below).
+- Rollback stays one tag change: `1d85710`, `7d3ecd4`, `5c9a52d` are all still on the host.
+
 ## 🚨 PRODUCTION INCIDENT — FIXED 2026-08-14 ~00:15 (read before anything else)
 
 **The team reported "AI tahlil ishlamayapti". It was a real, total outage of the AI feature, and it had been down since the 2026-08-12 cutover.** Diagnosed live, not guessed.
