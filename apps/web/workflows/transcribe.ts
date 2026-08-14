@@ -24,10 +24,6 @@ import {
 } from "@/lib/gemini-paid-key";
 import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
 import {
-	markOpenRouterTranscript,
-	transcriptCameFromOpenRouter,
-} from "@/lib/transcript-provenance";
-import {
 	OPENROUTER_USAGE_MODEL,
 	transcribeWithOpenRouter,
 } from "@/lib/openrouter";
@@ -884,11 +880,6 @@ export async function transcribeAudio(
 				};
 			},
 		});
-		// Record WHO produced this job's transcript text, for the trailing-gap
-		// guard below. The guard's question is "did OpenRouter's cue-timestamp
-		// compression manufacture this gap?", which only a run fact can answer —
-		// the presence of a key in the environment cannot (round-18 #1).
-		markOpenRouterTranscript(context.videoId);
 		return result.transcriptVtt;
 	};
 
@@ -1706,48 +1697,26 @@ export async function fillTranscriptGaps(
 			// free-only too. Below the bar the span still gets its free attempt;
 			// a failure stays a recorded gap.
 			//
-			// TRAILING-GAP GUARD FOR THE OPENROUTER PROVIDER (measured
-			// 2026-08-13). On a 10-minute input OpenRouter returned the SAME
-			// word count as Google (1224 vs 1230 — the TEXT is complete) but
-			// compressed its cue TIMESTAMPS into a span ending at 6m42s instead
-			// of 9m57s. Gap detection reads cue timestamps, so that compression
-			// manufactures a gap at the END of the transcript whose audio is
-			// already transcribed — and paying to "fill" it buys text we
-			// already have, once per run, forever.
+			// NO TRAILING-GAP PROVIDER GUARD — deliberately, after two attempts
+			// at one both caused data loss (round-18 #1, round-19 #1). The guard
+			// existed for ONE measured artefact: on a 10-MINUTE single request
+			// OpenRouter returned the same word count as Google but compressed
+			// its cue timestamps, manufacturing a gap at the end whose audio was
+			// already transcribed.
 			//
-			// The artifact has a shape: compression pulls every cue toward the
-			// start, so it can only ever invent the LAST gap (the branch in
-			// findVttGaps that measures the final cue against the video's
-			// duration). Interior gaps mean a chunk genuinely failed, so those
-			// keep today's paid behaviour untouched. So: with OpenRouter as the
-			// paid provider, a gap that runs to the end of the video is treated
-			// as "timestamps, not missing audio" and gets the FREE attempt only.
-			// It is still filled when free quota answers; it simply never bills.
+			// That artefact does not arise at the chunk size this code actually
+			// uses. Measured 2026-08-13 at LONG_AUDIO_CHUNK_DURATION_SEC = 3*60,
+			// last cue per 3-minute chunk: OpenRouter 2m35s / 2m26s / 2m18s,
+			// Google 2m21s / 2m04s / 2m56s — the same shape, no provider-specific
+			// compression — and rescaleChunkVtt already corrects per-chunk drift.
+			// So the question the guard answered does not arise here, while every
+			// way of asking it risked refusing a REAL trailing gap its paid fill
+			// and silently losing the end of a meeting.
 			//
-			// Not a blanket disable, and not a new timestamp heuristic: the
-			// multi-chunk path already corrects this exact drift shape with the
-			// linear per-chunk rescale (rescaleChunkVtt), whose measured factor
-			// for the case above is 600/402 ≈ 1.49, inside its 1.05–2.5 range.
-			// This guard covers what that rescale cannot reach — an
-			// already-merged transcript.
-			//
-			// THE CONDITION IS THE PRODUCING PROVIDER, NOT THE ENVIRONMENT
-			// (round-18 #1). This used to read `hasOpenRouterKey()`, which names
-			// the artefact but tests for a key in the env. On the ordinary case —
-			// a transcript produced entirely by the FREE Google chain on a box
-			// that also holds an OpenRouter key for its paid leg — a genuinely
-			// failed last chunk was refused its paid fill, the free-only retry
-			// threw `free-only call skipped`, and the END OF THE MEETING was
-			// permanently lost. Only a gap on an OpenRouter-PRODUCED transcript
-			// may be treated as a timestamp artefact; real audio loss is still
-			// paid-filled, and an unknown provenance reads as "not OpenRouter",
-			// so the failure direction is data-preserving.
-			const trailingGap =
-				totalDurationSec != null && span.gapEndSec >= totalDurationSec;
+			// If the chunk duration is ever raised (see docs/chunk-size-measurement.md),
+			// re-measure the artefact FIRST — do not restore this guard from memory.
 			const paidWorthy =
-				span.speechSec != null &&
-				span.speechSec >= MIN_PAID_GAP_SPEECH_SEC &&
-				!(trailingGap && transcriptCameFromOpenRouter(context.videoId));
+				span.speechSec != null && span.speechSec >= MIN_PAID_GAP_SPEECH_SEC;
 			const vtt = await transcribeFn(
 				span.url,
 				span.durationSec,

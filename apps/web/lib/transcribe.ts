@@ -19,7 +19,6 @@ import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
 import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import { isAiQuotaWaitError } from "@/lib/ai-quota-wait";
 import { clearFreeTierVerdict } from "@/lib/free-tier-health";
-import { clearTranscriptProvenance } from "@/lib/transcript-provenance";
 import { isTranscriptionDisabled } from "@/lib/transcription-settings";
 import { after } from "next/server";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
@@ -273,8 +272,6 @@ export async function transcribeVideo(
 		clearFreeTierVerdict(videoId);
 		// Same reason, same moment: a fresh run must not inherit which provider
 		// produced the PREVIOUS run's transcript — that fact drives the
-		// trailing-gap paid/free decision (lib/transcript-provenance.ts).
-		clearTranscriptProvenance(videoId);
 		await db()
 			.update(videos)
 			.set({

@@ -633,10 +633,15 @@ export async function POST(request: NextRequest) {
 				// knows the truth — the streaming branch four lines up reads the
 				// same value — and withCostGuard prefers `modelUsed` over the
 				// requested model for both pricing and the recorded row.
+				// Round-19 #2: this used to fall back to the literal PAID chat model
+				// for every non-OpenRouter answer, so a FREE answer (served by
+				// gemini-3.5-flash / gemini-3-flash-preview) was recorded under the
+				// paid model's name. The fetcher now reports the model that really
+				// answered.
 				const chatModelUsed =
 					chatFetcher.provider() === "openrouter"
 						? OPENROUTER_USAGE_MODEL
-						: "gemini-2.5-flash";
+						: chatFetcher.modelUsed();
 				return chatFetcher.usedFreeKey()
 					? { inputTokens: 0, outputTokens: 0, modelUsed: chatModelUsed }
 					: {

@@ -48,10 +48,6 @@ import {
 	filterVttCuesByAbsoluteStart,
 	findVttGaps,
 } from "../../workflows/transcribe";
-import {
-	markOpenRouterTranscript,
-	resetTranscriptProvenance,
-} from "@/lib/transcript-provenance";
 
 const fakeVideo = {} as never; // deps are injected; the video row is never touched
 
@@ -452,77 +448,21 @@ describe("fillTranscriptGaps — paid spend only for meaningful speech (owner 20
 });
 
 // ─── round-18 #1 ─────────────────────────────────────────────────────────────
-// The trailing-gap guard NAMED "OpenRouter compressed this transcript's cue
-// timestamps" but TESTED "an OpenRouter key exists in the environment". Both
-// tests below run with `hasOpenRouterKey()` mocked TRUE (the production shape:
-// OpenRouter IS the paid leg); only the PRODUCING provider differs. Under the
-// old env-based condition the first test fails — the end of the meeting is
-// refused its paid fill and, when the free-only retry throws, is lost for good.
-describe("fillTranscriptGaps — a TRAILING gap is judged by the producing provider, not by key presence", () => {
-	beforeEach(() => {
-		resetTranscriptProvenance();
-	});
-
-	/** Cues stop at 60s on a 900s video → findVttGaps reports the trailing
-	 * {60, 900}. Plenty of measured speech, so the ONLY thing that can send it
-	 * free-only is the trailing-gap guard. */
-	async function runTrailing(
-		transcribeFn: (
-			u: string,
-			d: number | null,
-			k: string | null,
-			c: unknown,
-		) => Promise<string>,
-	) {
+// A TRAILING gap is real audio loss until proven otherwise, so it keeps the
+// paid path like any other gap. Two rounds tried to make it provider-conditional
+// — first on key presence (round-18 #1), then on a per-job provenance mark
+// (round-19 #1) — and BOTH silently dropped the end of a meeting. The artefact
+// that motivated the guard was measured on a 10-MINUTE single request; at the
+// 3-minute chunk size this code uses, both providers leave the same shape and
+// rescaleChunkVtt already corrects per-chunk drift. This pin exists so nobody
+// reintroduces the guard from memory.
+describe("fillTranscriptGaps — a TRAILING gap is still PAID-filled", () => {
+	it("REAL AUDIO LOSS: a gap running to the end of the video keeps the paid path", async () => {
+		const seen: Array<{ freeOnly?: boolean }> = [];
+		// Cues stop at 60s on a 900s video → findVttGaps reports the trailing
+		// {60, 900}. Plenty of measured speech, so nothing but a trailing-gap
+		// guard could send it free-only.
 		const holey = vtt([[0, 10, "a"], [60, 70, "b"]]);
-		return fillTranscriptGaps(
-			{
-				videoId: "v1", userId: "u1", video: fakeVideo,
-				ownerEncryptedGeminiKey: null,
-				context: ctx(),
-				mergedVtt: holey, totalDurationSec: 900,
-			},
-			{
-				extractSpans: async (_v, _u, _vid, spans) =>
-					spans.map((s, i) => ({
-						key: `k${i}`, url: `u${i}`,
-						startSec: s.startSec, durationSec: s.durationSec,
-						gapStartSec: s.gapStartSec, gapEndSec: s.gapEndSec,
-						speechSec: 200,
-					})),
-				transcribeFn: transcribeFn as never,
-				cleanupFn: async () => {},
-			},
-		);
-	}
-
-	it("REAL AUDIO LOSS: a trailing gap on a FREE-GOOGLE-produced transcript is still PAID-filled, even though the instance holds an OpenRouter key", async () => {
-		const seen: Array<{ freeOnly?: boolean }> = [];
-		// No markOpenRouterTranscript(...) — nothing in this job was produced by
-		// OpenRouter, which is the ordinary case.
-		await runTrailing(async (_u, _d, _k, c) => {
-			seen.push(c as { freeOnly?: boolean });
-			return "WEBVTT\n\n";
-		});
-		expect(seen.length).toBeGreaterThan(0);
-		for (const c of seen) expect(c.freeOnly).toBeFalsy();
-	});
-
-	it("TIMESTAMP ARTEFACT: a trailing gap on an OPENROUTER-produced transcript stays free-only — we never pay to re-buy text we already have", async () => {
-		const seen: Array<{ freeOnly?: boolean }> = [];
-		markOpenRouterTranscript("v1");
-		await runTrailing(async (_u, _d, _k, c) => {
-			seen.push(c as { freeOnly?: boolean });
-			return "WEBVTT\n\n";
-		});
-		expect(seen.length).toBeGreaterThan(0);
-		for (const c of seen) expect(c.freeOnly).toBe(true);
-	});
-
-	it("an INTERIOR gap keeps the paid path on an OpenRouter transcript — compression can only ever invent the LAST gap", async () => {
-		const seen: Array<{ freeOnly?: boolean }> = [];
-		markOpenRouterTranscript("v1");
-		const holey = vtt([[0, 10, "a"], [30, 40, "b"], [800, 810, "c"], [880, 890, "d"]]);
 		await fillTranscriptGaps(
 			{
 				videoId: "v1", userId: "u1", video: fakeVideo,

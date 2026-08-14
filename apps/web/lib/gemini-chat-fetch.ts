@@ -47,6 +47,9 @@ export type GeminiChatFetcher = {
 	/** Which leg actually answered — the caller needs it to parse the stream,
 	 * since Gemini SSE and OpenRouter SSE are different wire formats. */
 	provider: () => ChatProvider;
+	/** The model that actually answered. The free chain walks several models, so
+	 * the provider name alone cannot identify it. */
+	modelUsed: () => string;
 };
 
 const FREE_CHAT_MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview"] as const;
@@ -78,10 +81,15 @@ export function createGeminiChatFetcher(opts: {
 	let usedFree = false;
 	let freeChainSpent = false;
 	let usedProvider: ChatProvider = "gemini-paid";
+	// The model that actually answered. `provider()` alone cannot name it: the
+	// free chain walks several models, so attributing a free answer to the PAID
+	// model name put wrong rows in the owner's cost panel (round-19 #2).
+	let usedModel: string = PAID_CHAT_MODEL;
 
 	return {
 		usedFreeKey: () => usedFree,
 		provider: () => usedProvider,
+		modelUsed: () => usedModel,
 		fetch: async (init: RequestInit, openRouterInit?: RequestInit) => {
 			if (!freeChainSpent) {
 				for (const attempt of freeAttempts) {
@@ -96,6 +104,7 @@ export function createGeminiChatFetcher(opts: {
 					if (res.ok) {
 						usedFree = true;
 						usedProvider = "gemini-free";
+						usedModel = attempt.model;
 						return res;
 					}
 					// Safe to drain: we are definitely moving on from this one, and
@@ -119,6 +128,7 @@ export function createGeminiChatFetcher(opts: {
 				});
 			}
 			usedProvider = "gemini-paid";
+			usedModel = PAID_CHAT_MODEL;
 			return doFetch(endpoint(PAID_CHAT_MODEL, opts.paidKey), init);
 		},
 	};
