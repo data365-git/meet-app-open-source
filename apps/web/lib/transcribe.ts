@@ -270,8 +270,6 @@ export async function transcribeVideo(
 		// key was fixed must not inherit a previous run's broken-key verdict
 		// and silently start on paid.
 		clearFreeTierVerdict(videoId);
-		// Same reason, same moment: a fresh run must not inherit which provider
-		// produced the PREVIOUS run's transcript — that fact drives the
 		await db()
 			.update(videos)
 			.set({
