@@ -6,6 +6,18 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## 🚨 ROOT CAUSE OF ALL UPLOAD FAILURES — FOUND AND FIXED 2026-08-14 ~06:30
+
+**Every video upload since the cutover was dying at ZERO bytes, and the cause was one missing setting: the new R2 bucket had no CORS policy.** Cloudflare said it in its own words when a browser-style preflight was simulated against a presigned PUT: `403 … <Message>CORS not configured for this bucket</Message>`.
+
+- **Why it was missed:** the bucket `meetapp` was created BY HAND in the dashboard during the migration. A bucket's CORS policy does not travel with its objects, so copying 142 objects moved the data and left the browser-write permission behind. Server-side reads and writes (the app's own transcription, the nightly backup, the object copy) all worked throughout, which is exactly why every earlier check looked green — **only the BROWSER is subject to CORS.**
+- **The victims, both previously misdiagnosed:** `r5m2y8jxhatkmef` ("IMG_1400", 08-12 21:54) and `4a951226qwjhbz9` (08-14 06:05). Both `singlepart`, both `uploaded 0 / total 0`, both `phase error`. The 08-12 one had been recorded here as an isolated failed upload; it was not isolated, it was the first symptom.
+- **Fixed by the owner** (the app's R2 token is `Object Read & Write`, so `put_bucket_cors` returns AccessDenied — this genuinely required the dashboard). Policy applied: origin `https://data365.duckdns.org`, methods GET/PUT/POST/HEAD/DELETE, all headers, `ETag`/`Content-Length`/`Content-Type` exposed, max-age 3600.
+- **VERIFIED, not assumed:** preflight now returns **HTTP 204** with `access-control-allow-origin: https://data365.duckdns.org`, and a real cross-origin presigned PUT stored **4096 bytes** (HTTP 200) which was then deleted. The upload path works at the storage layer.
+- **⚠️ CARRY THIS INTO ANY FUTURE STORAGE MOVE:** copying objects is not migrating a bucket. Bucket-level configuration — CORS above all, plus lifecycle rules and public-access settings — must be checked explicitly, and the only honest check is a simulated BROWSER preflight, because every server-side probe passes without it.
+- **Second, smaller finding from the same log sweep:** `Failed to find Server Action … might be from an older or newer deployment`. A page left open across a deploy fires actions that no longer exist. Harmless once reloaded, but it means a deploy should be followed by telling the owner to hard-refresh.
+- **STILL OPEN (owner-visible):** the share page for a failed upload shows the player's generic *"This recording could not be found — please contact your admin"*, which is advice the owner cannot act on. He asked for it to say the upload was interrupted and to re-upload. The correct copy ALREADY EXISTS (`progressUploadInterrupted` in `messages/uz.json`) but is not what the player renders for this state — `StorageMissingOverlay` is chosen from `metadata.storageMissing` alone and cannot tell "never arrived" from "vanished later". Fix shape agreed with him: flag the incomplete-upload case when the reconcile cron sets `storageMissing`, and give the overlay the re-upload copy for it.
+
 ## ▶ THE STOPPING POINT — 2026-08-14 ~02:50 (read this first, then the incident block below)
 
 **GOAL of this stream, in his words:** *"ai tahlil bu ishini to'liq hal qilib qo'y yana shikoyat eshitish hohlamayman"* — AI analysis must simply work, with no daily ceiling, so the team stops complaining. Report to him on Telegram when it lands (his chat id is the single entry in `~/.claude/channels/telegram/access.json`).
