@@ -34,6 +34,23 @@ export function hasPendingAiGenerationRequest(
 	);
 }
 
+/**
+ * Is there an OUTSTANDING one-shot order to start the pipeline for a request
+ * the user made while the upload was still processing? Unlike
+ * `aiGenerationRequestedAt` — a durable "the user wants AI" flag that nothing
+ * ever clears — this marker is written only by the generate route's
+ * UPLOAD_IN_PROGRESS branch and is JSON_REMOVE'd the moment either redeemer
+ * (processVideoWorkflow, the recover-stale-ai-jobs cron) takes it. Without
+ * that split, the cron's pending-request query meant "every video that ever
+ * had a request and is currently unclaimed" and re-started paid work forever.
+ */
+export function hasPendingUploadStartOrder(metadata: VideoMetadata): boolean {
+	return (
+		typeof metadata.aiStartPendingUpload === "string" &&
+		metadata.aiStartPendingUpload.length > 0
+	);
+}
+
 export function shouldStartAiAfterTranscription({
 	metadata,
 	aiGenerationEnabled,

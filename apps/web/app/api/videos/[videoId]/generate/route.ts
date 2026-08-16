@@ -188,6 +188,12 @@ export async function POST(
     // read at the top of this handler would revert whatever the upload /
     // processing workflow wrote in between (phase progress, duration, error
     // markers).
+    //
+    // `aiStartPendingUpload` is the ONE-SHOT start order both redeemers
+    // consume (and JSON_REMOVE). `aiGenerationRequestedAt` is still written
+    // beside it, unchanged, because shouldStartAiAfterTranscription reads that
+    // field to run AI once the transcript lands — the two markers mean
+    // different things and only this one is a queue entry.
     if (result.code === "UPLOAD_IN_PROGRESS") {
       const now = new Date().toISOString();
       await db()
@@ -196,7 +202,8 @@ export async function POST(
           metadata: sql`JSON_SET(
             COALESCE(${videos.metadata}, JSON_OBJECT()),
             '$.aiGenerationRequestedAt', ${now},
-            '$.aiGenerationRequestedBy', ${user.id}
+            '$.aiGenerationRequestedBy', ${user.id},
+            '$.aiStartPendingUpload', ${now}
           )`,
         })
         .where(eq(videos.id, videoId));

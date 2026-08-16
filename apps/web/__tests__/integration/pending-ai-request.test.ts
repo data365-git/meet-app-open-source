@@ -24,6 +24,13 @@ const state = vi.hoisted(() => ({
 	videoRow: null as Record<string, unknown> | null,
 	uploadRow: null as Record<string, unknown> | null,
 	uploadDeleted: false,
+	/**
+	 * Simulates LOSING the claim race: transcribeVideo's claim is a conditional
+	 * UPDATE, so a row another starter already claimed matches nothing and mysql
+	 * reports affectedRows = 0. The row is left untouched, exactly as the real
+	 * conditional write would leave it.
+	 */
+	claimLost: false,
 }));
 
 const schemaMocks = vi.hoisted(() => ({
@@ -41,18 +48,50 @@ const schemaMocks = vi.hoisted(() => ({
 
 const transcribeVideoWorkflowMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
+/** The `'$.key'` paths of every JSON_REMOVE(...) call in a SQL fragment. */
+function jsonRemovePaths(sqlText: string): string[] {
+	const keys: string[] = [];
+	const marker = "JSON_REMOVE(";
+	let from = sqlText.indexOf(marker);
+	while (from !== -1) {
+		let depth = 1;
+		let i = from + marker.length;
+		for (; i < sqlText.length && depth > 0; i++) {
+			if (sqlText[i] === "(") depth++;
+			else if (sqlText[i] === ")") depth--;
+		}
+		const args = sqlText.slice(from + marker.length, i - 1);
+		for (const match of args.matchAll(/'\$\.([A-Za-z0-9_]+)'/g)) {
+			keys.push(match[1] as string);
+		}
+		from = sqlText.indexOf(marker, i);
+	}
+	return keys;
+}
+
 /**
- * Applies a drizzle `sql` JSON_SET expression to a plain metadata object the
- * way MySQL would: every `'$.key', ?` pair in the template sets that key, and
- * every other placeholder (the COALESCE/JSON_REMOVE base) is left alone. This
- * is what makes the server-side merge observable in the fake DB instead of the
- * test hand-writing the resulting row.
+ * Applies a drizzle `sql` metadata expression to a plain object the way MySQL
+ * would, so the server-side merge is observable in the fake DB instead of the
+ * test hand-writing the resulting row:
+ *   - a NESTED expression (transcribeVideo's claim base is interpolated as a
+ *     value, so its own SQL text never reaches this template) is applied first,
+ *     which is what makes the non-retry claim's JSON_REMOVE of the recovery
+ *     counters visible here at all;
+ *   - then every JSON_REMOVE path in THIS fragment is deleted;
+ *   - then every `'$.key', ?` pair sets that key.
  */
 function applyJsonSet(
 	expression: { sql: string; values: unknown[] },
 	current: Record<string, unknown>,
 ): Record<string, unknown> {
-	const next = { ...current };
+	let next = { ...current };
+	for (const value of expression.values) {
+		if (isSqlExpression(value)) next = applyJsonSet(value, next);
+	}
+	// Only the paths INSIDE the JSON_REMOVE(...) argument list count: a claim
+	// expression is JSON_SET(JSON_REMOVE(base, counters...), setPaths...), and
+	// treating the outer JSON_SET paths as removals would make this fake lie.
+	for (const key of jsonRemovePaths(expression.sql)) delete next[key];
 	const segments = expression.sql.split("?");
 	for (let i = 0; i < segments.length - 1; i++) {
 		const match = /'\$\.([A-Za-z0-9_]+)'\s*,\s*$/.exec(segments[i] ?? "");
@@ -108,14 +147,17 @@ vi.mock("@cap/database", () => ({
 						}
 						const predicate = JSON.stringify(condition ?? {});
 						const rows = () => {
-							if (predicate.includes("aiGenerationRequestedAt")) {
-								// The recovery cron's pending-request query.
+							if (predicate.includes("aiStartPendingUpload")) {
+								// The recovery cron's pending-request query: an OUTSTANDING
+								// one-shot start order on an unclaimed row. Keying on
+								// aiGenerationRequestedAt (which nothing ever clears) is the
+								// bug this mirrors — the marker must be gone once redeemed.
 								const row = state.videoRow;
 								if (
 									!row ||
 									row.transcriptionStatus !== null ||
 									!(row.metadata as Record<string, unknown> | null)
-										?.aiGenerationRequestedAt
+										?.aiStartPendingUpload
 								)
 									return [];
 								return [row];
@@ -147,6 +189,12 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (values: Record<string, unknown>) => ({
 				where: () => {
+					// The transcription claim is a conditional UPDATE. When the race is
+					// lost it matches no row: nothing is written and mysql reports
+					// affectedRows = 0.
+					if (state.claimLost && values.transcriptionStatus === "PROCESSING") {
+						return Promise.resolve([{ affectedRows: 0 }]);
+					}
 					if (state.videoRow) {
 						for (const [key, value] of Object.entries(values)) {
 							if (key === "metadata" && isSqlExpression(value)) {
@@ -159,7 +207,8 @@ vi.mock("@cap/database", () => ({
 							}
 						}
 					}
-					return Promise.resolve([]);
+					// mysql2's shape: [ResultSetHeader, FieldPacket[]].
+					return Promise.resolve([{ affectedRows: 1 }]);
 				},
 			}),
 		}),
@@ -196,6 +245,7 @@ vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	or: vi.fn((...args: unknown[]) => args),
 	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 		sql: strings.join("?"),
 		values,
@@ -283,6 +333,16 @@ async function postGenerate() {
 	);
 }
 
+async function runRecoveryCron(): Promise<Record<string, unknown>> {
+	const { GET } = await import("@/app/api/cron/recover-stale-ai-jobs/route");
+	const response = await GET(
+		new Request("http://localhost/api/cron/recover-stale-ai-jobs", {
+			headers: { authorization: "Bearer test-cron-secret" },
+		}),
+	);
+	return (await response.json()) as Record<string, unknown>;
+}
+
 describe("AI request made while the upload is still processing", () => {
 	beforeAll(async () => {
 		optimizedFile.path = join(tmpdir(), `pending-ai-request-${Date.now()}.mp4`);
@@ -298,6 +358,7 @@ describe("AI request made while the upload is still processing", () => {
 		state.videoRow = freshVideoRow();
 		state.uploadRow = inProgressUploadRow();
 		state.uploadDeleted = false;
+		state.claimLost = false;
 		process.env.CRON_SECRET = "test-cron-secret";
 	});
 
@@ -317,6 +378,8 @@ describe("AI request made while the upload is still processing", () => {
 		const metadata = state.videoRow?.metadata as Record<string, unknown>;
 		expect(typeof metadata.aiGenerationRequestedAt).toBe("string");
 		expect(metadata.aiGenerationRequestedBy).toBe("user-1");
+		// The one-shot start order the two redeemers consume.
+		expect(typeof metadata.aiStartPendingUpload).toBe("string");
 	});
 
 	it("starts transcription when the processing workflow finishes", async () => {
@@ -355,6 +418,104 @@ describe("AI request made while the upload is still processing", () => {
 
 		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
 		expect(state.videoRow?.transcriptionStatus).toBeNull();
+	});
+
+	it("does not start a second run after the request was already redeemed", async () => {
+		await postGenerate();
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		await processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: `user-1/${VIDEO_ID}/raw.mp4`,
+			bucketId: null,
+		});
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
+		// Redeemed means CONSUMED: the marker is gone from the row.
+		expect(
+			(state.videoRow?.metadata as Record<string, unknown>)
+				.aiStartPendingUpload,
+		).toBeUndefined();
+
+		// An operator resets the status to NULL by hand — the documented habit
+		// behind the 2026-08-16 rescue. Nothing may re-launch paid work.
+		state.videoRow!.transcriptionStatus = null;
+		const body = await runRecoveryCron();
+
+		expect(body.pendingRequestStarted).toBe(0);
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the request when the start is refused for a still-running upload", async () => {
+		await postGenerate();
+		// The cron ticks while the bytes are genuinely still landing.
+		const body = await runRecoveryCron();
+
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+		expect(body.pendingRequestStarted).toBe(0);
+		// Nothing was redeemed, so the ask must survive for the real redeemer.
+		expect(
+			typeof (state.videoRow?.metadata as Record<string, unknown>)
+				.aiStartPendingUpload,
+		).toBe("string");
+
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		await processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: `user-1/${VIDEO_ID}/raw.mp4`,
+			bucketId: null,
+		});
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("ignores a video that merely has aiGenerationRequestedAt", async () => {
+		// The already-PROCESSING branch of the generate route writes this marker
+		// too, and shouldStartAiAfterTranscription needs it to survive — so it is
+		// NOT a queue entry. A row carrying only it was never queued by the
+		// upload-in-progress branch and must be invisible to the cron.
+		state.uploadRow = null;
+		state.videoRow!.metadata = {
+			aiGenerationRequestedAt: "2026-08-16T09:00:00.000Z",
+			aiGenerationRequestedBy: "user-1",
+		};
+
+		const body = await runRecoveryCron();
+
+		expect(body.pendingRequestStarted).toBe(0);
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+		expect(state.videoRow?.transcriptionStatus).toBeNull();
+	});
+
+	it("launches nothing when the claim race is lost", async () => {
+		await postGenerate();
+		state.uploadRow = null;
+		// Another starter claimed the row between the status guard and the claim:
+		// the conditional UPDATE matches zero rows.
+		state.claimLost = true;
+
+		const body = await runRecoveryCron();
+
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+		expect(body.pendingRequestStarted).toBe(1);
+		// The row is untouched — the winner owns it, we did not stomp its claim.
+		expect(state.videoRow?.transcriptionStatus).toBeNull();
+	});
+
+	it("does not refund the recovery budget when the cron starts the request", async () => {
+		await postGenerate();
+		state.uploadRow = null;
+		// The video already burned auto-recover attempts. A cron start must not
+		// wipe them: that is what let a failing video retry forever and kept the
+		// bounded-retry ops alert from ever firing.
+		(state.videoRow!.metadata as Record<string, unknown>).autoRecoverAttempts = 2;
+		(state.videoRow!.metadata as Record<string, unknown>).quotaRetryAttempts = 1;
+
+		await runRecoveryCron();
+
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
+		expect(metadata.autoRecoverAttempts).toBe(2);
+		expect(metadata.quotaRetryAttempts).toBe(1);
 	});
 
 	it("the recovery cron rescues the request if the app restarted meanwhile", async () => {

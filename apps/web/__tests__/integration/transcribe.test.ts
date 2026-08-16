@@ -75,7 +75,10 @@ vi.mock("@cap/database", () => ({
 			set: (arg: Record<string, unknown>) => {
 				updateSetCalls.push(arg);
 				return {
-					where: vi.fn().mockResolvedValue([]),
+					// mysql2's [ResultSetHeader, FieldPacket[]] shape — transcribeVideo
+					// reads affectedRows off the conditional claim and refuses to launch
+					// when it is 0, so an empty array here would mean "race lost".
+					where: vi.fn().mockResolvedValue([{ affectedRows: 1 }]),
 				};
 			},
 		}),
@@ -104,6 +107,12 @@ vi.mock("drizzle-orm", () => ({
 		sql: strings.join("?"),
 		values,
 	})),
+	// The claim is a compare-and-swap, so it also needs and/or/isNull. Same
+	// failure mode as the missing `sql` above: an absent helper throws inside
+	// the try and is reported as "failed to start".
+	and: vi.fn((...args: unknown[]) => args),
+	or: vi.fn((...args: unknown[]) => args),
+	isNull: vi.fn((field: unknown) => ({ isNull: field })),
 }));
 
 import type { Video } from "@cap/web-domain";

@@ -2,20 +2,11 @@ import { db } from "@cap/database";
 import { videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
+import { getAffectedRows } from "@/lib/affected-rows";
 import { persistableProcessingError } from "@/lib/processing-error";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export async function setVideoProcessingError(
 	videoId: Video.VideoId,

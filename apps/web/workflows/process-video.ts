@@ -3,9 +3,9 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { FatalError } from "workflow";
-import { hasPendingAiGenerationRequest } from "@/lib/ai-generation-request";
+import { hasPendingUploadStartOrder } from "@/lib/ai-generation-request";
 import { persistableProcessingError } from "@/lib/processing-error";
 import { runPromise } from "@/lib/server";
 import { optimizeRemoteVideoToMp4, probeRemoteVideo } from "@/lib/video-convert";
@@ -157,9 +157,16 @@ async function optimizeAndFinalizeVideo(
  * A user can press "AI tahlil" while this workflow is still optimizing the
  * file. The generate route cannot start the pipeline in that window
  * (transcribeVideo refuses an upload that is still in progress), so it records
- * `metadata.aiGenerationRequestedAt` instead and this step is what redeems it —
+ * `metadata.aiStartPendingUpload` instead and this step is what redeems it —
  * without it the request is lost silently and the video sits at
  * transcriptionStatus NULL forever (owner incident, 2026-08-16).
+ *
+ * The marker is a ONE-SHOT order and is removed the moment it is redeemed —
+ * but only once the start was not refused for bytes still landing, otherwise
+ * this step would consume the request and drop it, which is the very incident
+ * above. Removing it after the start cannot cause a duplicate: the claim
+ * inside transcribeVideo is a compare-and-swap, so the other redeemer (the
+ * recover-stale-ai-jobs cron) loses the claim and launches nothing.
  *
  * Only ever starts for a video whose transcription has NOT started yet: a
  * non-NULL status means some other path (the generate route's own successful
@@ -185,13 +192,30 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 			.limit(1);
 
 		if (!video || video.transcriptionStatus !== null) return;
-		if (!hasPendingAiGenerationRequest((video.metadata as VideoMetadata) ?? {}))
+		if (!hasPendingUploadStartOrder((video.metadata as VideoMetadata) ?? {}))
 			return;
 
 		console.log(
 			`[process-video] Starting AI requested during upload for ${videoId}`,
 		);
-		await transcribeVideo(videoId as Video.VideoId, video.ownerId, true, false);
+		const result = await transcribeVideo(
+			videoId as Video.VideoId,
+			video.ownerId,
+			true,
+			false,
+		);
+
+		if (result.code === "UPLOAD_IN_PROGRESS") return;
+
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_REMOVE(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.aiStartPendingUpload'
+				)`,
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
 	} catch (error) {
 		console.error(
 			`[process-video] Failed to start the pending AI request for ${videoId}:`,

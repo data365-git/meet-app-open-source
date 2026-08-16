@@ -157,10 +157,19 @@ export async function GET(request: Request) {
 		);
 
 	// Restart-proof safety net for a request the user made while the upload was
-	// still processing: the generate route recorded aiGenerationRequestedAt but
+	// still processing: the generate route recorded aiStartPendingUpload but
 	// could not start anything, and processVideoWorkflow — which normally
 	// redeems that marker the moment processing finishes — may never have run it
-	// (container restart, crashed workflow). transcriptionStatus IS NULL is
+	// (container restart, crashed workflow).
+	//
+	// The marker is aiStartPendingUpload, NOT aiGenerationRequestedAt. The
+	// latter is written by the already-PROCESSING branch too and nothing ever
+	// clears it (shouldStartAiAfterTranscription still needs it), so keying on
+	// it made this query mean "every video that ever asked for AI and is
+	// currently unclaimed" — a standing order that re-launched full paid
+	// transcription every 30 minutes on any row an operator reset to NULL.
+	// aiStartPendingUpload is one-shot: removed below the moment it is redeemed.
+	// transcriptionStatus IS NULL is
 	// exactly "nobody ever claimed this job", so there is no live run to
 	// duplicate; transcribeVideo re-checks the upload row itself and simply
 	// refuses again (a no-op) while bytes are genuinely still landing.
@@ -179,7 +188,7 @@ export async function GET(request: Request) {
 			and(
 				isNull(videos.deletedAt),
 				isNull(videos.transcriptionStatus),
-				sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationRequestedAt')), '') <> ''`,
+				sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiStartPendingUpload')), '') <> ''`,
 			),
 		)
 		.limit(3);
@@ -338,8 +347,41 @@ export async function GET(request: Request) {
 
 	for (const candidate of pendingRequestCandidates) {
 		try {
-			await transcribeVideo(candidate.id, candidate.ownerId, true, false);
-			pendingRequestStarted++;
+			// isRetry = TRUE. A non-retry claim JSON_REMOVEs autoRecoverAttempts /
+			// quotaRetryAttempts / quotaRetryNextAt — "a cron RETRY must NOT refund
+			// itself" (lib/transcribe.ts). Refunding here let a repeatedly-failing
+			// video reset its budget every 30 minutes, so the bounded-retry ops
+			// alert and the quota backoff could never terminate. The retry arm of
+			// the claim's compare-and-swap also accepts a PROCESSING row, but this
+			// candidate is transcriptionStatus IS NULL by construction, so the
+			// isNull arm is what matches — and the status guard above it still
+			// refuses a live PROCESSING row on evidence of life.
+			const result = await transcribeVideo(
+				candidate.id,
+				candidate.ownerId,
+				true,
+				true,
+			);
+			// Redeem the one-shot order — but ONLY once the start was not refused
+			// for bytes still landing. Consuming it there would drop the user's
+			// request exactly as the 2026-08-16 incident did: nothing runs, and
+			// processVideoWorkflow finds no marker when processing finishes.
+			// Removing AFTER the start is safe against a duplicate because the
+			// claim inside transcribeVideo is a compare-and-swap: a second
+			// redeemer that also sees the marker loses the claim and launches
+			// nothing.
+			if (result.code !== "UPLOAD_IN_PROGRESS") {
+				await db()
+					.update(videos)
+					.set({
+						metadata: sql`JSON_REMOVE(
+							COALESCE(${videos.metadata}, JSON_OBJECT()),
+							'$.aiStartPendingUpload'
+						)`,
+					})
+					.where(eq(videos.id, candidate.id));
+				pendingRequestStarted++;
+			}
 		} catch (error) {
 			console.error(
 				`[recover-stale-ai-jobs] Failed to start the pending AI request for video ${candidate.id}:`,

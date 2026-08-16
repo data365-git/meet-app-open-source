@@ -92,6 +92,21 @@ export interface VideoMetadata {
 	aiProcessingSubStep?: "extract_audio";
 	aiGenerationRequestedAt?: string;
 	aiGenerationRequestedBy?: string;
+	/**
+	 * A ONE-SHOT start order, written only when the user pressed "AI tahlil"
+	 * while the upload was still processing and nothing could be started yet.
+	 * Redeemed — and JSON_REMOVE'd — by processVideoWorkflow's
+	 * startPendingAiRequest or by the recover-stale-ai-jobs cron, whichever
+	 * gets there first.
+	 *
+	 * Deliberately NOT aiGenerationRequestedAt: that field is a durable "the
+	 * user wants AI on this video" flag that shouldStartAiAfterTranscription
+	 * reads after every transcription, and it is also written by the
+	 * already-PROCESSING branch. Using it as the queue marker made the cron a
+	 * standing order that re-started paid transcription on any row an operator
+	 * reset to transcriptionStatus NULL.
+	 */
+	aiStartPendingUpload?: string;
 	aiGenerationError?: string;
 	/**
 	 * Why the last transcription attempt died. `QUOTA` = the AI account is out of

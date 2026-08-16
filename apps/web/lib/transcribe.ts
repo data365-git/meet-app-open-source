@@ -9,7 +9,8 @@ import {
 import { serverEnv } from "@cap/env";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { getAffectedRows } from "@/lib/affected-rows";
 import {
 	assertAiBudgetAvailable,
 	BudgetExceededError,
@@ -279,7 +280,16 @@ export async function transcribeVideo(
 		// key was fixed must not inherit a previous run's broken-key verdict
 		// and silently start on paid.
 		clearFreeTierVerdict(videoId);
-		await db()
+		// COMPARE-AND-SWAP, not a bare write. The status guard above read the row
+		// four awaits ago (owner lookup, decrypt, upload check, budget guard), and
+		// a NULL row now has three possible starters — the user's press,
+		// processVideoWorkflow's pending-request step and the recovery cron. Two
+		// could both read NULL and both write PROCESSING, which means two
+		// workflows billing Gemini for one video and racing transcript writes.
+		// So the claim only wins if the row is STILL in the state we judged:
+		// unclaimed, or (for a retry, whose whole purpose is re-claiming a dead
+		// run in place) still PROCESSING.
+		const claimResult = await db()
 			.update(videos)
 			.set({
 				transcriptionStatus: "PROCESSING",
@@ -289,7 +299,45 @@ export async function transcribeVideo(
 					'$.aiProgressAt', ${new Date().toISOString()}
 				)`,
 			})
-			.where(eq(videos.id, videoId));
+			.where(
+				and(
+					eq(videos.id, videoId),
+					// Exactly the states the guard above accepted, so a claim never
+					// fails on a row this call was allowed to start:
+					//   - NULL  = nobody ever claimed it,
+					//   - ERROR = a dead run; both an owner press (generate /
+					//     retry-transcription, isRetry=false) and the quota-blocked
+					//     cron re-kick (isRetry=true) legitimately restart these,
+					//   - PROCESSING = re-claimed in place, RETRIES ONLY (the guard
+					//     already refused a PROCESSING row that still has a heartbeat).
+					// COMPLETE / SKIPPED / NO_AUDIO are absent on purpose: the guard
+					// refuses them, so the claim must not be able to overwrite them.
+					isRetry
+						? or(
+								isNull(videos.transcriptionStatus),
+								eq(videos.transcriptionStatus, "ERROR"),
+								eq(videos.transcriptionStatus, "PROCESSING"),
+							)
+						: or(
+								isNull(videos.transcriptionStatus),
+								eq(videos.transcriptionStatus, "ERROR"),
+							),
+				),
+			);
+
+		// Lost the race: another starter claimed the row between the guard read
+		// and this write. Launching now is exactly the double-billing this CAS
+		// exists to prevent, so return WITHOUT launching. success: true because
+		// nothing is wrong — the job the caller wanted is running.
+		if (getAffectedRows(claimResult) === 0) {
+			console.log(
+				`[transcribeVideo] Claim lost for video ${videoId} — another starter owns it`,
+			);
+			return {
+				success: true,
+				message: "Transcription already claimed by another starter",
+			};
+		}
 
 		const runTranscribe = () => transcribeVideoWorkflow({
 			videoId,
