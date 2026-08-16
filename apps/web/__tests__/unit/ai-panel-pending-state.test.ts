@@ -26,6 +26,7 @@ vi.mock("@cap/ui", () => {
 import { GenerateAiPanel } from "@/app/s/[videoId]/_components/GenerateAiPanel";
 import { buildAiStatusFacts } from "@/lib/ai-request-pending";
 import {
+	AiStatusRequestError,
 	isAiStatusTerminal,
 	nextAiStatusPollInterval,
 } from "../../hooks/use-ai-status";
@@ -71,7 +72,13 @@ function renderForPollBody(body: {
 }
 
 describe("share panel state for a pending AI request", () => {
-	it("does NOT show the start button for a banked press (upload still processing)", () => {
+	// NOTE on what these assert: the queued block deliberately CARRIES a start
+	// button, so that a marker no redeemer ever takes cannot strand the owner on
+	// a screen with no action. The thing that must never happen is the panel
+	// looking untouched — i.e. the plain "not run yet" screen — after a press
+	// that WAS recorded. So the discriminator is aiQueuedTitle vs aiNotRunYet,
+	// not the presence of the button.
+	it("shows the QUEUED state for a banked press, not the untouched start screen", () => {
 		const { text, facts } = renderForPollBody({
 			transcriptionStatus: null,
 			metadata: {
@@ -80,8 +87,8 @@ describe("share panel state for a pending AI request", () => {
 			},
 		});
 		expect(facts.aiRequestPending).toBe(true);
-		expect(text).not.toContain("aiStartAnalysis");
 		expect(text).toContain("aiQueuedTitle");
+		expect(text).not.toContain("aiNotRunYet");
 	});
 
 	it("treats the one-shot banked marker alone as pending", () => {
@@ -92,7 +99,8 @@ describe("share panel state for a pending AI request", () => {
 			metadata: { aiStartPendingUpload: "2026-08-16T09:00:00.000Z" },
 		});
 		expect(facts.aiRequestPending).toBe(true);
-		expect(text).not.toContain("aiStartAnalysis");
+		expect(text).toContain("aiQueuedTitle");
+		expect(text).not.toContain("aiNotRunYet");
 	});
 
 	it("keeps the pending state across repeated polls while the banked marker stands", () => {
@@ -102,8 +110,8 @@ describe("share panel state for a pending AI request", () => {
 				transcriptionStatus: null,
 				metadata: { aiStartPendingUpload: "2026-08-16T09:00:00.000Z" },
 			});
-			expect(text).not.toContain("aiStartAnalysis");
 			expect(text).toContain("aiQueuedTitle");
+			expect(text).not.toContain("aiNotRunYet");
 		}
 	});
 
@@ -176,14 +184,42 @@ describe("poll stop condition", () => {
 		).toBe(false);
 	});
 
-	it("STOPS polling once the request can never succeed", () => {
-		// 401/403 for a share-link viewer, 404 for a deleted video, 500 for a
-		// route failure: the query function throws, so `data` never lands. An
-		// interval keyed only on `data` kept firing every 4s for as long as the
-		// tab stayed open — 3 attempts each time, on an unauthenticated request.
-		expect(nextAiStatusPollInterval({ status: "error" }, 4000)).toBe(false);
+	it("STOPS polling only when the request can NEVER succeed", () => {
+		// 401/403 for a share-link viewer, 404 for a deleted video: this caller
+		// will never get an answer, and an interval keyed only on `data` kept
+		// firing every 4s for as long as the tab stayed open.
+		for (const status of [401, 403, 404]) {
+			expect(
+				nextAiStatusPollInterval(
+					{ status: "error", error: new AiStatusRequestError(status) },
+					4000,
+				),
+			).toBe(false);
+		}
 		// Still-loading is not an error: the first tick must still be scheduled.
 		expect(nextAiStatusPollInterval({ status: "pending" }, 4000)).toBe(4000);
+	});
+
+	it("SURVIVES a transient failure instead of freezing the panel", () => {
+		// The mirror defect: `retry: 2` retires a query in ~2 seconds and nothing
+		// re-arms it without a button press, so treating every error as fatal
+		// froze the panel on "AI analysis running" after one 502 mid-transcription
+		// — recoverable only by the page reload this feature exists to remove.
+		for (const status of [500, 502, 503, 504]) {
+			expect(
+				nextAiStatusPollInterval(
+					{ status: "error", error: new AiStatusRequestError(status) },
+					4000,
+				),
+			).toBe(4000);
+		}
+		// A dropped connection throws a plain Error, not ours — also transient.
+		expect(
+			nextAiStatusPollInterval(
+				{ status: "error", error: new TypeError("Failed to fetch") },
+				4000,
+			),
+		).toBe(4000);
 	});
 
 	it("keeps polling a live run and stops on a terminal body", () => {

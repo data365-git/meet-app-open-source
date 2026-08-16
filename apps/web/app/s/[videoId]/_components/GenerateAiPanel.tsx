@@ -643,6 +643,22 @@ export function GenerateAiPanel({
 						{tShare("aiQueuedHint")}
 					</p>
 					{error && <p className="mt-1 text-xs text-red-10">{error}</p>}
+					{/* A screen with no action is a trap. The banked marker is only
+					    cleared by a redeemer that takes the job, and the recovery
+					    cron deliberately KEEPS it when it refuses for a reason that
+					    is not "upload in progress" — no usable key, budget spent.
+					    Without this button that state renders "queued" forever with
+					    nothing to press. Pressing again simply re-banks the same
+					    markers, and the route still refuses to start a duplicate
+					    once a job is genuinely QUEUED or PROCESSING. */}
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => requestStart(false)}
+						className="mt-2 self-start rounded-lg border border-gray-5 px-3 py-1.5 text-xs font-medium text-gray-12 transition-opacity hover:opacity-90 disabled:opacity-60"
+					>
+						{tShare("aiStartAnalysis")}
+					</button>
 				</div>
 			</div>
 		);

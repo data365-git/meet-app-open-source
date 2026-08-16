@@ -206,11 +206,19 @@ export const ShareVideo = forwardRef<
 		// an endless retry loop for as long as the tab is open. This gate is a
 		// SEPARATE expression from the panel's own `canGenerate` check; fixing
 		// one does not fix the other.
+		// A genuinely running job is polled for ANYONE the route will answer —
+		// gating this arm on `canGenerate` was too strict, because that flag also
+		// requires `isAdmin`, while `/api/video/ai` answers the video's own owner
+		// and any org owner/admin. A non-admin owner therefore lost live updates
+		// and had to reload to see their own summary appear. What stops a viewer
+		// who may NOT read it is the poll's own stop condition: 401/403 is a
+		// permanent failure, so it fires once and retires.
+		// The banked-marker arm stays gated — that marker is the owner's own
+		// pending press and means nothing to a visitor.
 		const [aiPollEnabled, setAiPollEnabled] = useState(
-			canGenerate &&
-				(aiGenerationStatus === "QUEUED" ||
-					aiGenerationStatus === "PROCESSING" ||
-					serverAiPending),
+			aiGenerationStatus === "QUEUED" ||
+				aiGenerationStatus === "PROCESSING" ||
+				(canGenerate && serverAiPending),
 		);
 		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
 		const queryClient = useQueryClient();
