@@ -562,6 +562,8 @@
 		"aiStarting": "Boshlanmoqda…",
 		"aiRetry": "Qayta urinish",
 		"aiNotRunYet": "Bu video uchun AI tahlili hali bajarilmagan.",
+		"aiQueuedTitle": "AI tahlil navbatda",
+		"aiQueuedHint": "So‘rovingiz saqlandi. Yozuv qayta ishlanishi tugashi bilan tahlil o‘zi boshlanadi — bu sahifani yopsangiz ham bo‘ladi.",
 		"aiStartAnalysis": "AI tahlilini boshlash",
 		"aiFreeFirstHint": "Avval bepul AI limitidan foydalanadi; u tugasa, kutmasdan darhol pullik yo'lda davom etadi.",
 		"aiCostEstimate": "Taxminiy narx: ~{amount}",

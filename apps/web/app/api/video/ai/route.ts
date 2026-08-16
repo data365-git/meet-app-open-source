@@ -9,6 +9,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
+import { buildAiStatusFacts } from "@/lib/ai-request-pending";
 import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,16 @@ export async function GET(request: NextRequest) {
 		// below so the poll never has to fall back to a full page refresh just to
 		// see these move — that's what let ShareVideo.tsx retire its 6s
 		// `router.refresh()` workaround.
+		// The share panel must be able to tell "banked / not yet claimed" from
+		// "did nothing" WITHOUT a page reload, and must not fall back to the
+		// start button because one poll raced the workflow's claim. Both need
+		// server facts the poll never used to carry: the live transcription
+		// status and whether the user's press is still outstanding.
+		const statusFacts = buildAiStatusFacts({
+			transcriptionStatus: video.transcriptionStatus,
+			metadata,
+		});
+
 		const chunkProgress = {
 			// Fine sub-phase inside "transcribe" (e.g. audio extraction), written
 			// by the workflow at the moment the phase starts — same honesty rule
@@ -114,8 +125,8 @@ export async function GET(request: NextRequest) {
 					title: metadata.aiTitle ?? null,
 					summary: metadata.summary ?? null,
 					chapters: metadata.chapters ?? null,
-					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					...statusFacts,
 					...chunkProgress,
 				},
 				{ status: 200 },
@@ -133,8 +144,8 @@ export async function GET(request: NextRequest) {
 				{
 					processing: true,
 					message: "AI metadata generation in progress",
-					aiGenerationStatus: metadata.aiGenerationStatus,
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					...statusFacts,
 					...chunkProgress,
 				},
 				{ status: 200 },
@@ -150,8 +161,8 @@ export async function GET(request: NextRequest) {
 		return Response.json(
 			{
 				processing: false,
-				aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 				aiProcessingStep: metadata.aiProcessingStep ?? null,
+				...statusFacts,
 				...chunkProgress,
 			},
 			{ status: 200 },

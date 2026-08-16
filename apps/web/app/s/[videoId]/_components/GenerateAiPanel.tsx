@@ -70,6 +70,11 @@ interface GenerateAiPanelProps {
 	/** ISO timestamps used to compute a rate-based ETA for the active stage. */
 	processingStartedAt?: string | null;
 	aiProcessingStartedAt?: string | null;
+	/** The user's press is banked server-side (`metadata.aiStartPendingUpload`)
+	 * or not yet claimed by the workflow — see lib/ai-request-pending.ts. It
+	 * comes from the same status poll as the other fields, so it survives polls
+	 * and remounts until the server says the job started, failed or completed. */
+	aiRequestPending?: boolean;
 	/** Called after a successful POST so the parent can refetch status */
 	onStarted?: () => void;
 }
@@ -126,6 +131,7 @@ export function GenerateAiPanel({
 	aiStageChunksTotal,
 	processingStartedAt,
 	aiProcessingStartedAt,
+	aiRequestPending = false,
 	onStarted,
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
@@ -605,6 +611,34 @@ export function GenerateAiPanel({
 						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
+			</div>
+		);
+	}
+
+	// ── Banked request: pressed, recorded server-side, not yet claimed ────────
+	// Before this branch the panel fell straight through to the start button
+	// while the request was genuinely pending, so a press that WAS honoured
+	// looked like a press that did nothing — and only a full page reload
+	// showed the truth. `aiRequestPending` is false the moment the pipeline
+	// claims the row (transcription goes PROCESSING) or anything fails, so the
+	// error branch above still owns failures and the retry button stays
+	// reachable.
+	if (aiRequestPending) {
+		return (
+			<div className="flex items-start gap-3 rounded-xl border border-gray-4 bg-gray-2 px-4 py-4">
+				<div className="relative flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-wash)] text-[var(--brand)]">
+					<Sparkles aria-hidden className="size-5" />
+					<span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-gray-1 bg-[var(--brand)] motion-safe:animate-pulse" />
+				</div>
+				<div className="min-w-0" aria-live="polite">
+					<p className="text-sm font-semibold text-gray-12">
+						{tShare("aiQueuedTitle")}
+					</p>
+					<p className="mt-0.5 text-xs text-gray-10">
+						{tShare("aiQueuedHint")}
+					</p>
+					{error && <p className="mt-1 text-xs text-red-10">{error}</p>}
+				</div>
 			</div>
 		);
 	}

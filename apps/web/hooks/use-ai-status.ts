@@ -11,9 +11,23 @@ export type AiGenerationStatus =
 export type AiProcessingStep = "transcribe" | "summary" | "refined" | "done";
 export type AiProcessingSubStep = "extract_audio";
 
+export type TranscriptionStatus =
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED"
+	| "NO_AUDIO";
+
 type AiStatusResult = {
 	processing: boolean;
 	aiGenerationStatus: AiGenerationStatus | null;
+	/** Live transcription status — the share page used to read this only from
+	 * the server-rendered prop, so a job that had really started still looked
+	 * "not started" until a manual page reload. */
+	transcriptionStatus: TranscriptionStatus | null;
+	/** The user's press is banked (or not yet claimed by the workflow).
+	 * Computed server-side from metadata so it survives polls and remounts. */
+	aiRequestPending: boolean;
 	aiProcessingStep: AiProcessingStep | null;
 	/** Fine sub-phase inside "transcribe" ("videodan audio ajratilyapti"). */
 	aiProcessingSubStep: AiProcessingSubStep | null;
@@ -24,6 +38,33 @@ type AiStatusResult = {
 	/** Fine-grained summary/refine chunk progress, reset at each stage transition. */
 	aiStageChunksCompleted: number | null;
 	aiStageChunksTotal: number | null;
+};
+
+/**
+ * Is this poll result a state the client can stop polling on?
+ *
+ * `hasContent` alone is NOT terminal: a re-analysis runs against a video that
+ * already has a summary, so the endpoint answers with the OLD content while
+ * the new run is QUEUED/PROCESSING — treating that as terminal stopped the
+ * poll mid-run and dropped the page back to a "not running" view.
+ * Exported so ShareVideo's stop-polling effect uses the same rule instead of
+ * a second, drifting copy.
+ */
+export const isAiStatusTerminal = (d: {
+	hasContent: boolean;
+	aiGenerationStatus: AiGenerationStatus | null;
+}): boolean => {
+	if (
+		d.aiGenerationStatus === "QUEUED" ||
+		d.aiGenerationStatus === "PROCESSING"
+	)
+		return false;
+	return (
+		d.hasContent ||
+		d.aiGenerationStatus === "COMPLETE" ||
+		d.aiGenerationStatus === "ERROR" ||
+		d.aiGenerationStatus === "SKIPPED"
+	);
 };
 
 export const useAiStatus = (
@@ -45,6 +86,8 @@ export const useAiStatus = (
 			return {
 				processing: !!body.processing,
 				aiGenerationStatus: body.aiGenerationStatus ?? null,
+				transcriptionStatus: body.transcriptionStatus ?? null,
+				aiRequestPending: !!body.aiRequestPending,
 				aiProcessingStep: body.aiProcessingStep ?? null,
 				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
 				hasContent: !!(body.summary || body.chapters),
@@ -60,12 +103,7 @@ export const useAiStatus = (
 		refetchInterval: (query) => {
 			const d = query.state.data;
 			if (!d) return intervalMs;
-			const terminal =
-				d.hasContent ||
-				d.aiGenerationStatus === "COMPLETE" ||
-				d.aiGenerationStatus === "ERROR" ||
-				d.aiGenerationStatus === "SKIPPED";
-			return terminal ? false : intervalMs;
+			return isAiStatusTerminal(d) ? false : intervalMs;
 		},
 		retry: 2,
 		retryDelay: 1000,

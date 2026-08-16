@@ -3,7 +3,7 @@ import type { ShareLanguage } from "@cap/database/types";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { useAiStatus } from "hooks/use-ai-status";
+import { isAiStatusTerminal, useAiStatus } from "hooks/use-ai-status";
 import { useAiTranslation } from "hooks/use-ai-translation";
 import { useTranscript } from "hooks/use-transcript";
 import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
@@ -24,6 +24,7 @@ import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-deskt
 import { getTranscript } from "@/actions/videos/get-transcript";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { isAiRequestPending } from "@/lib/ai-request-pending";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { AIChatPopup } from "./AIChatPopup";
@@ -181,8 +182,27 @@ export const ShareVideo = forwardRef<
 
 		const [optimisticAiStatus, setOptimisticAiStatus] =
 			useState<AiGenerationStatus | null>(null);
+		// A banked request (the press was recorded while the upload was still
+		// processing) has no status yet, so the old QUEUED/PROCESSING-only
+		// condition never started the poll — the page sat on the start button
+		// until a manual reload. Derive the same "pending" fact the poll
+		// returns from the server-rendered metadata for this first paint.
+		const serverAiPending = isAiRequestPending({
+			transcriptionStatus: data.transcriptionStatus as
+				| "PROCESSING"
+				| "COMPLETE"
+				| "ERROR"
+				| "SKIPPED"
+				| "NO_AUDIO"
+				| null,
+			aiGenerationStatus,
+			aiStartPendingUpload: data.metadata?.aiStartPendingUpload ?? null,
+			aiGenerationRequestedAt: data.metadata?.aiGenerationRequestedAt ?? null,
+		});
 		const [aiPollEnabled, setAiPollEnabled] = useState(
-			aiGenerationStatus === "QUEUED" || aiGenerationStatus === "PROCESSING",
+			aiGenerationStatus === "QUEUED" ||
+				aiGenerationStatus === "PROCESSING" ||
+				serverAiPending,
 		);
 		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
 		const aiRefreshedRef = useRef(false);
@@ -224,11 +244,10 @@ export const ShareVideo = forwardRef<
 		useEffect(() => {
 			const d = aiStatusQuery.data;
 			if (!d || !aiPollEnabled) return;
-			const terminal =
-				d.hasContent ||
-				d.aiGenerationStatus === "COMPLETE" ||
-				d.aiGenerationStatus === "ERROR" ||
-				d.aiGenerationStatus === "SKIPPED";
+			// Same rule the poll interval uses (one source, no drifting twin):
+			// old content present while a NEW run is QUEUED/PROCESSING is not
+			// terminal — treating it as terminal stopped the poll mid-run.
+			const terminal = isAiStatusTerminal(d);
 			if (terminal && !aiRefreshedRef.current) {
 				aiRefreshedRef.current = true;
 				setAiPollEnabled(false);
@@ -272,6 +291,26 @@ export const ShareVideo = forwardRef<
 			optimisticAiStatus ??
 			aiGenerationStatus;
 
+		// Live transcription status: the poll now carries it, so a job that has
+		// really started stops looking "not started" between page loads. The
+		// server-rendered prop is only the fallback until the first poll lands.
+		const effectiveTranscriptionStatus =
+			aiStatusQuery.data?.transcriptionStatus ??
+			(data.transcriptionStatus as
+				| "PROCESSING"
+				| "COMPLETE"
+				| "ERROR"
+				| "SKIPPED"
+				| "NO_AUDIO"
+				| null
+				| undefined);
+
+		// Server-backed "the press is banked / not yet claimed". Unlike the
+		// optimistic QUEUED above it survives remounts, and it is cleared by the
+		// server the moment the row is claimed, fails, or completes.
+		const effectiveAiRequestPending =
+			aiStatusQuery.data?.aiRequestPending ?? serverAiPending;
+
 		const effectiveAiProcessingStep =
 			aiStatusQuery.data?.aiProcessingStep ??
 			data.metadata?.aiProcessingStep ??
@@ -291,7 +330,7 @@ export const ShareVideo = forwardRef<
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
 		const aiProcessing =
-			data.transcriptionStatus === "PROCESSING" ||
+			effectiveTranscriptionStatus === "PROCESSING" ||
 			effectiveAiStatus === "QUEUED" ||
 			effectiveAiStatus === "PROCESSING";
 
@@ -905,17 +944,9 @@ export const ShareVideo = forwardRef<
 										<GenerateAiPanel
 											videoId={data.id}
 											canGenerate={canGenerate}
-											transcriptionStatus={
-												data.transcriptionStatus as
-													| "PROCESSING"
-													| "COMPLETE"
-													| "ERROR"
-													| "SKIPPED"
-													| "NO_AUDIO"
-													| null
-													| undefined
-											}
+											transcriptionStatus={effectiveTranscriptionStatus}
 											aiGenerationStatus={effectiveAiStatus}
+											aiRequestPending={effectiveAiRequestPending}
 											aiProcessingStep={effectiveAiProcessingStep}
 											aiProcessingSubStep={effectiveAiProcessingSubStep}
 											transcriptionErrorCode={effectiveTranscriptionErrorCode}

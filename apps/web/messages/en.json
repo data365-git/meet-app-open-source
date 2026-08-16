@@ -562,6 +562,8 @@
 		"aiStarting": "Starting…",
 		"aiRetry": "Retry",
 		"aiNotRunYet": "AI analysis has not been run for this video yet.",
+		"aiQueuedTitle": "AI analysis is queued",
+		"aiQueuedHint": "Your request is saved. The analysis starts on its own as soon as the recording finishes processing — you can leave this page.",
 		"aiStartAnalysis": "Start AI analysis",
 		"aiFreeFirstHint": "Uses the free AI allowance first; once it runs out, the analysis continues on the paid path immediately, without waiting.",
 		"aiCostEstimate": "Estimated cost: ~{amount}",
