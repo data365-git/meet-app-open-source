@@ -24,6 +24,7 @@ import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-deskt
 import { getTranscript } from "@/actions/videos/get-transcript";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { useQueryClient } from "@tanstack/react-query";
 import { isAiRequestPending } from "@/lib/ai-request-pending";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
@@ -197,14 +198,21 @@ export const ShareVideo = forwardRef<
 				| null,
 			aiGenerationStatus,
 			aiStartPendingUpload: data.metadata?.aiStartPendingUpload ?? null,
-			aiGenerationRequestedAt: data.metadata?.aiGenerationRequestedAt ?? null,
 		});
+		// A banked request may only start the poll for someone who can actually
+		// read it. `/api/video/ai` answers 401 to a public share-link viewer and
+		// the hook throws on a non-OK response, so `data` would stay undefined
+		// forever and the refetch interval would never reach a stop condition —
+		// an endless retry loop for as long as the tab is open. This gate is a
+		// SEPARATE expression from the panel's own `canGenerate` check; fixing
+		// one does not fix the other.
 		const [aiPollEnabled, setAiPollEnabled] = useState(
 			aiGenerationStatus === "QUEUED" ||
 				aiGenerationStatus === "PROCESSING" ||
-				serverAiPending,
+				(canGenerate && serverAiPending),
 		);
 		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
+		const queryClient = useQueryClient();
 		const aiRefreshedRef = useRef(false);
 		const aiTranslationQuery = useAiTranslation(
 			data.id,
@@ -214,9 +222,17 @@ export const ShareVideo = forwardRef<
 
 		const handleAiStarted = useCallback(() => {
 			aiRefreshedRef.current = false;
+			// Drop the PREVIOUS run's cached body before re-enabling the poll.
+			// Without this, react-query serves the finished run's
+			// `{hasContent: true, aiGenerationStatus: "COMPLETE"}` on the very next
+			// render, `isAiStatusTerminal` reads it as terminal, and the effect
+			// below switches the poll straight back off — so a re-analysis press
+			// shows nothing at all until a manual reload, which is the exact bug
+			// this commit exists to remove.
+			queryClient.removeQueries({ queryKey: ["ai-status", data.id] });
 			setOptimisticAiStatus("QUEUED");
 			setAiPollEnabled(true);
-		}, []);
+		}, [queryClient, data.id]);
 
 		const handleGenerateTranslation = useCallback(
 			async (lang: ShareLanguage) => {

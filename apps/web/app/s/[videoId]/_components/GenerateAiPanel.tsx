@@ -623,7 +623,12 @@ export function GenerateAiPanel({
 	// claims the row (transcription goes PROCESSING) or anything fails, so the
 	// error branch above still owns failures and the retry button stays
 	// reachable.
-	if (aiRequestPending) {
+	// `canGenerate` gates it because this panel also renders for public
+	// share-link viewers: without the gate a visitor reads "your request is
+	// saved…" about a request they never made, and it leaks that the owner
+	// started a job. A viewer falls through to the `aiNotAvailable` branch
+	// below, exactly as before this feature existed.
+	if (canGenerate && aiRequestPending) {
 		return (
 			<div className="flex items-start gap-3 rounded-xl border border-gray-4 bg-gray-2 px-4 py-4">
 				<div className="relative flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-wash)] text-[var(--brand)]">

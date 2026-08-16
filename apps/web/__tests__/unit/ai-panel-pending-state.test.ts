@@ -40,6 +40,7 @@ const VIDEO_ID = "vid_1" as Video.VideoId;
 function renderForPollBody(body: {
 	transcriptionStatus?: string | null;
 	metadata?: Record<string, unknown>;
+	canGenerate?: boolean;
 }) {
 	const facts = buildAiStatusFacts({
 		transcriptionStatus: body.transcriptionStatus ?? null,
@@ -52,7 +53,7 @@ function renderForPollBody(body: {
 		root.render(
 			createElement(GenerateAiPanel, {
 				videoId: VIDEO_ID,
-				canGenerate: true,
+				canGenerate: body.canGenerate ?? true,
 				transcriptionStatus: facts.transcriptionStatus,
 				aiGenerationStatus: facts.aiGenerationStatus,
 				aiRequestPending: facts.aiRequestPending,
@@ -91,16 +92,43 @@ describe("share panel state for a pending AI request", () => {
 		expect(text).not.toContain("aiStartAnalysis");
 	});
 
-	it("keeps the pending state across repeated polls that still report nothing started", () => {
+	it("keeps the pending state across repeated polls while the banked marker stands", () => {
 		// The poll that used to destroy the optimistic state: row still NULL.
 		for (let poll = 0; poll < 3; poll++) {
 			const { text } = renderForPollBody({
 				transcriptionStatus: null,
-				metadata: { aiGenerationRequestedAt: "2026-08-16T09:00:00.000Z" },
+				metadata: { aiStartPendingUpload: "2026-08-16T09:00:00.000Z" },
 			});
 			expect(text).not.toContain("aiStartAnalysis");
 			expect(text).toContain("aiQueuedTitle");
 		}
+	});
+
+	it("NEVER claims 'queued' from aiGenerationRequestedAt alone — no redeemer reads it", () => {
+		// This is the trap the first version shipped: nothing ever clears that
+		// field and neither redeemer (the recover-stale-ai-jobs cron nor
+		// ai-generation-request.ts) keys on it, so an unclaimed row — e.g. one an
+		// operator reset to NULL — would render "queued" forever with no button.
+		const { text, facts } = renderForPollBody({
+			transcriptionStatus: null,
+			metadata: { aiGenerationRequestedAt: "2026-08-16T09:00:00.000Z" },
+		});
+		expect(facts.aiRequestPending).toBe(false);
+		expect(text).not.toContain("aiQueuedTitle");
+		expect(text).toContain("aiStartAnalysis");
+	});
+
+	it("never shows a public share-link viewer a request they did not make", () => {
+		// The panel renders for every visitor; only someone who can start the job
+		// may be told one is queued (it also leaks that the owner started it).
+		const { text, facts } = renderForPollBody({
+			transcriptionStatus: null,
+			metadata: { aiStartPendingUpload: "2026-08-16T09:00:00.000Z" },
+			canGenerate: false,
+		});
+		expect(facts.aiRequestPending).toBe(true);
+		expect(text).not.toContain("aiQueuedTitle");
+		expect(text).toContain("aiNotAvailable");
 	});
 
 	it("shows the running panel once the workflow claims the row", () => {
