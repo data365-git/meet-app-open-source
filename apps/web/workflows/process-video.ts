@@ -1,12 +1,15 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
+import { hasPendingAiGenerationRequest } from "@/lib/ai-generation-request";
 import { persistableProcessingError } from "@/lib/processing-error";
 import { runPromise } from "@/lib/server";
 import { optimizeRemoteVideoToMp4, probeRemoteVideo } from "@/lib/video-convert";
+import { transcribeVideo } from "@/lib/transcribe";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
 
 interface ProcessVideoWorkflowPayload {
@@ -40,6 +43,11 @@ export async function processVideoWorkflow(
 		await db()
 			.delete(videoUploads)
 			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+		// The upload row is gone, so transcribeVideo's in-progress guard passes
+		// from here on. Honour an "AI tahlil" press that arrived while this
+		// workflow was still running.
+		await startPendingAiRequest(videoId);
 
 		return {
 			success: true,
@@ -142,6 +150,53 @@ async function optimizeAndFinalizeVideo(
 			.update(videos)
 			.set({ duration: durationSec })
 			.where(eq(videos.id, videoId as Video.VideoId));
+	}
+}
+
+/**
+ * A user can press "AI tahlil" while this workflow is still optimizing the
+ * file. The generate route cannot start the pipeline in that window
+ * (transcribeVideo refuses an upload that is still in progress), so it records
+ * `metadata.aiGenerationRequestedAt` instead and this step is what redeems it —
+ * without it the request is lost silently and the video sits at
+ * transcriptionStatus NULL forever (owner incident, 2026-08-16).
+ *
+ * Only ever starts for a video whose transcription has NOT started yet: a
+ * non-NULL status means some other path (the generate route's own successful
+ * kick, a cron re-kick, a completed run) already owns the job, and
+ * transcribeVideo's own guards would refuse it anyway.
+ *
+ * Never throws: a failure here must not turn a perfectly processed recording
+ * into a processing ERROR — the recover-stale-ai-jobs cron re-attempts the same
+ * pending request every 30 minutes.
+ */
+async function startPendingAiRequest(videoId: string): Promise<void> {
+	"use step";
+
+	try {
+		const [video] = await db()
+			.select({
+				ownerId: videos.ownerId,
+				transcriptionStatus: videos.transcriptionStatus,
+				metadata: videos.metadata,
+			})
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId))
+			.limit(1);
+
+		if (!video || video.transcriptionStatus !== null) return;
+		if (!hasPendingAiGenerationRequest((video.metadata as VideoMetadata) ?? {}))
+			return;
+
+		console.log(
+			`[process-video] Starting AI requested during upload for ${videoId}`,
+		);
+		await transcribeVideo(videoId as Video.VideoId, video.ownerId, true, false);
+	} catch (error) {
+		console.error(
+			`[process-video] Failed to start the pending AI request for ${videoId}:`,
+			error,
+		);
 	}
 }
 

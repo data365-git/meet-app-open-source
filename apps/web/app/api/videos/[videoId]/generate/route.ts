@@ -175,6 +175,39 @@ export async function POST(
       return Response.json({ error: result.message }, { status: 500 });
     }
 
+    // transcribeVideo refuses while the upload/processing is still running, and
+    // it refuses SILENTLY (success:true, nothing launched). Answering
+    // {started:true} here is what lost the owner's 2026-08-16 request: the
+    // button reported success, transcriptionStatus stayed NULL, and nothing
+    // ever picked the job up. Record the explicit request instead — the same
+    // marker the PROCESSING branch above writes — so processVideoWorkflow
+    // starts transcription the moment processing finishes (and the
+    // recover-stale-ai-jobs cron picks it up if the app restarted meanwhile).
+    //
+    // Server-side JSON_SET for the same reason as above: a spread of the row
+    // read at the top of this handler would revert whatever the upload /
+    // processing workflow wrote in between (phase progress, duration, error
+    // markers).
+    if (result.code === "UPLOAD_IN_PROGRESS") {
+      const now = new Date().toISOString();
+      await db()
+        .update(videos)
+        .set({
+          metadata: sql`JSON_SET(
+            COALESCE(${videos.metadata}, JSON_OBJECT()),
+            '$.aiGenerationRequestedAt', ${now},
+            '$.aiGenerationRequestedBy', ${user.id}
+          )`,
+        })
+        .where(eq(videos.id, videoId));
+
+      return Response.json({
+        queued: true,
+        queuedAfterProcessing: true,
+        message: result.message,
+      });
+    }
+
     return Response.json({ started: true });
   } catch (error) {
     console.error("[generate/route] Unexpected error:", error);

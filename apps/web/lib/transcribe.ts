@@ -26,6 +26,14 @@ import { transcribeVideoWorkflow } from "@/workflows/transcribe";
 type TranscribeResult = {
 	success: boolean;
 	message: string;
+	/**
+	 * Why a `success: true` call did NOT actually launch anything. Callers that
+	 * answer a user ("started!") must branch on this: UPLOAD_IN_PROGRESS means
+	 * the pipeline was refused because the bytes/processing are not ready, so
+	 * the request has to be recorded and honoured later instead of reported as
+	 * started. Optional so existing callers stay source-compatible.
+	 */
+	code?: "UPLOAD_IN_PROGRESS";
 };
 
 const UPLOAD_IN_PROGRESS_PHASES = new Set([
@@ -199,6 +207,7 @@ export async function transcribeVideo(
 	if (isUploadInProgress(uploadRow)) {
 		return {
 			success: true,
+			code: "UPLOAD_IN_PROGRESS",
 			message: "Video upload is still in progress",
 		};
 	}

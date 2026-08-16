@@ -156,6 +156,34 @@ export async function GET(request: Request) {
 			),
 		);
 
+	// Restart-proof safety net for a request the user made while the upload was
+	// still processing: the generate route recorded aiGenerationRequestedAt but
+	// could not start anything, and processVideoWorkflow — which normally
+	// redeems that marker the moment processing finishes — may never have run it
+	// (container restart, crashed workflow). transcriptionStatus IS NULL is
+	// exactly "nobody ever claimed this job", so there is no live run to
+	// duplicate; transcribeVideo re-checks the upload row itself and simply
+	// refuses again (a no-op) while bytes are genuinely still landing.
+	// LIMIT 3 for the same reason as the quota query: transcribeVideo detaches
+	// via after(), so an unbounded tick would launch every pending video's
+	// ffmpeg/S3 work concurrently in one box.
+	const pendingRequestCandidates: StaleTranscriptionCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
+		.from(videos)
+		.where(
+			and(
+				isNull(videos.deletedAt),
+				isNull(videos.transcriptionStatus),
+				sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationRequestedAt')), '') <> ''`,
+			),
+		)
+		.limit(3);
+
 	const refinementCandidates: StaleRefinementCandidate[] = await db()
 		.select({
 			id: videos.id,
@@ -178,6 +206,7 @@ export async function GET(request: Request) {
 	let skippedAlive = 0;
 	let quotaRetried = 0;
 	let refinementReset = 0;
+	let pendingRequestStarted = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -307,6 +336,18 @@ export async function GET(request: Request) {
 		}
 	}
 
+	for (const candidate of pendingRequestCandidates) {
+		try {
+			await transcribeVideo(candidate.id, candidate.ownerId, true, false);
+			pendingRequestStarted++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to start the pending AI request for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
+
 	for (const candidate of refinementCandidates) {
 		const metadata = candidate.metadata ?? {};
 		const current = metadata.timestampRefinement;
@@ -355,5 +396,6 @@ export async function GET(request: Request) {
 		skippedAlive,
 		quotaRetried,
 		refinementReset,
+		pendingRequestStarted,
 	});
 }
