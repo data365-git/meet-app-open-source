@@ -48,7 +48,7 @@ import type { Folder, Video } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import { moveVideosToFolder } from "@/actions/folders/moveVideosToFolder";
 import { replaceVideosWithAudio } from "@/actions/video/replace-videos-with-audio";
 import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
 import type { LibraryKind } from "@/lib/library-kind";
@@ -109,14 +109,33 @@ export const SelectedCapsBar = ({
 		if (isMoving || ids.length === 0) return;
 		setIsMoving(true);
 		try {
-			for (const videoId of ids) {
-				await moveVideoToFolder({
-					videoId,
-					folderId: folder.id as Folder.FolderId,
-					spaceId: folder.spaceId ?? null,
-				});
+			const result = await moveVideosToFolder({
+				videoIds: ids,
+				folderId: folder.id as Folder.FolderId,
+				spaceId: folder.spaceId ?? null,
+			});
+
+			// Report moved vs. failed separately — a partial batch must never be
+			// reported as a single blanket "done", since that would leave the
+			// user believing every selected cap moved when some did not.
+			if (result.movedCount > 0) {
+				toast.success(
+					result.failedCount > 0
+						? `Moved ${result.movedCount} of ${ids.length} cap${
+								ids.length === 1 ? "" : "s"
+							} to ${folder.name} (${result.failedCount} failed)`
+						: `Moved ${countLabel} to ${folder.name}`,
+				);
 			}
-			toast.success(`Moved ${countLabel} to ${folder.name}`);
+			if (result.failedCount > 0 && result.movedCount === 0) {
+				toast.error(result.error ?? "Failed to move to folder");
+			} else if (result.failedCount > 0) {
+				toast.error(
+					`${result.failedCount} cap${
+						result.failedCount === 1 ? "" : "s"
+					} could not be moved`,
+				);
+			}
 			setSelectedCaps([]);
 			router.refresh();
 		} catch (error) {
