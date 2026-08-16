@@ -31,8 +31,17 @@ export type AiGenerationStatusValue =
  * `aiStartPendingUpload` alone, for exactly this reason). Keying on it renders
  * a permanent "queued" screen with no button on any row whose
  * `transcriptionStatus` is NULL while no job exists — e.g. after an operator
- * resets a row. The owner's original bug stays fixed without it, because the
- * generate route writes BOTH markers together.
+ * resets a row.
+ *
+ * The owner's original bug stays fixed without it — but be precise about WHY,
+ * because "the generate route writes both markers" is NOT true of every branch.
+ * Only the UPLOAD_IN_PROGRESS branch writes `aiStartPendingUpload` beside
+ * `aiGenerationRequestedAt`, and that is exactly the reported case: the press
+ * arrived while the upload was still processing. The other banking branch
+ * (transcription already PROCESSING) writes `aiGenerationRequestedAt` alone and
+ * needs nothing here — its `transcriptionStatus` is truthy, so this function
+ * returns false at the guard below and the panel's running branch owns that
+ * screen.
  *
  * Anything terminal or already-running wins over this: a real failure
  * (transcription ERROR / SKIPPED / NO_AUDIO, or aiGenerationStatus ERROR)

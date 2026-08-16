@@ -207,9 +207,10 @@ export const ShareVideo = forwardRef<
 		// SEPARATE expression from the panel's own `canGenerate` check; fixing
 		// one does not fix the other.
 		const [aiPollEnabled, setAiPollEnabled] = useState(
-			aiGenerationStatus === "QUEUED" ||
-				aiGenerationStatus === "PROCESSING" ||
-				(canGenerate && serverAiPending),
+			canGenerate &&
+				(aiGenerationStatus === "QUEUED" ||
+					aiGenerationStatus === "PROCESSING" ||
+					serverAiPending),
 		);
 		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
 		const queryClient = useQueryClient();

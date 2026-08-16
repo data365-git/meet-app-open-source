@@ -67,6 +67,27 @@ export const isAiStatusTerminal = (d: {
 	);
 };
 
+/**
+ * When may this poll fire again? Exported so the rule is assertable — an
+ * unasserted rule is not a rule, and the two live defects here were both
+ * "the poll never stopped".
+ *
+ * A poll that CANNOT succeed must stop. The query function throws on any
+ * non-OK response — 401/403 for a public share-link viewer, 404 for a deleted
+ * video, 500 for a route failure — and on that path `data` never lands, so an
+ * interval keyed only on `data` keeps firing (3 attempts every 4s) for as long
+ * as the tab stays open. The error state is the single stop condition that
+ * covers every caller, whatever enabled the poll.
+ */
+export const nextAiStatusPollInterval = (
+	query: { status: "pending" | "error" | "success"; data?: AiStatusResult },
+	intervalMs: number,
+): number | false => {
+	if (query.status === "error") return false;
+	if (!query.data) return intervalMs;
+	return isAiStatusTerminal(query.data) ? false : intervalMs;
+};
+
 export const useAiStatus = (
 	videoId: Video.VideoId,
 	enabled: boolean,
@@ -100,11 +121,11 @@ export const useAiStatus = (
 		},
 		enabled,
 		refetchOnWindowFocus: false,
-		refetchInterval: (query) => {
-			const d = query.state.data;
-			if (!d) return intervalMs;
-			return isAiStatusTerminal(d) ? false : intervalMs;
-		},
+		refetchInterval: (query) =>
+			nextAiStatusPollInterval(
+				{ status: query.state.status, data: query.state.data },
+				intervalMs,
+			),
 		retry: 2,
 		retryDelay: 1000,
 	});

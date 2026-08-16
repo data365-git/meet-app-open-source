@@ -25,7 +25,10 @@ vi.mock("@cap/ui", () => {
 
 import { GenerateAiPanel } from "@/app/s/[videoId]/_components/GenerateAiPanel";
 import { buildAiStatusFacts } from "@/lib/ai-request-pending";
-import { isAiStatusTerminal } from "../../hooks/use-ai-status";
+import {
+	isAiStatusTerminal,
+	nextAiStatusPollInterval,
+} from "../../hooks/use-ai-status";
 
 const VIDEO_ID = "vid_1" as Video.VideoId;
 
@@ -170,6 +173,35 @@ describe("poll stop condition", () => {
 		).toBe(false);
 		expect(
 			isAiStatusTerminal({ hasContent: true, aiGenerationStatus: "QUEUED" }),
+		).toBe(false);
+	});
+
+	it("STOPS polling once the request can never succeed", () => {
+		// 401/403 for a share-link viewer, 404 for a deleted video, 500 for a
+		// route failure: the query function throws, so `data` never lands. An
+		// interval keyed only on `data` kept firing every 4s for as long as the
+		// tab stayed open — 3 attempts each time, on an unauthenticated request.
+		expect(nextAiStatusPollInterval({ status: "error" }, 4000)).toBe(false);
+		// Still-loading is not an error: the first tick must still be scheduled.
+		expect(nextAiStatusPollInterval({ status: "pending" }, 4000)).toBe(4000);
+	});
+
+	it("keeps polling a live run and stops on a terminal body", () => {
+		const running = {
+			processing: true,
+			aiGenerationStatus: "PROCESSING",
+			hasContent: false,
+		} as never;
+		const done = {
+			processing: false,
+			aiGenerationStatus: "COMPLETE",
+			hasContent: true,
+		} as never;
+		expect(
+			nextAiStatusPollInterval({ status: "success", data: running }, 4000),
+		).toBe(4000);
+		expect(
+			nextAiStatusPollInterval({ status: "success", data: done }, 4000),
 		).toBe(false);
 	});
 
