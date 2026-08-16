@@ -18,6 +18,22 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 - **Second, smaller finding from the same log sweep:** `Failed to find Server Action … might be from an older or newer deployment`. A page left open across a deploy fires actions that no longer exist. Harmless once reloaded, but it means a deploy should be followed by telling the owner to hard-refresh.
 - **STILL OPEN (owner-visible):** the share page for a failed upload shows the player's generic *"This recording could not be found — please contact your admin"*, which is advice the owner cannot act on. He asked for it to say the upload was interrupted and to re-upload. The correct copy ALREADY EXISTS (`progressUploadInterrupted` in `messages/uz.json`) but is not what the player renders for this state — `StorageMissingOverlay` is chosen from `metadata.storageMissing` alone and cannot tell "never arrived" from "vanished later". Fix shape agreed with him: flag the incomplete-upload case when the reconcile cron sets `storageMissing`, and give the overlay the re-upload copy for it.
 
+## 📋 NEXT WORK — approved by the owner 2026-08-16, NOT started
+
+Bunyod filed six cards himself on the "Meeting app" list (`901819987518`, all tagged `by:bunyod`, status `shkafda`). The owner reviewed them and **approved four, declined two**. His words: *"demak 5-6 kerak emas 1234 tasklar hammasini bajarishing kerak"*.
+
+**BUILD THESE FOUR (his order, folder/upload behaviour):**
+1. `z92046jw04` **HIGH** — an uploaded file lands in the ROOT folder instead of the folder the user is currently in.
+2. `z92046jvh3` **HIGH** — moving files into a sub-folder moves only ONE file even when several are selected.
+3. `z92046jvh4` — a folder cannot be moved inside another folder.
+4. `z92046jw05` — uploading takes 3-4 clicks; he wants 1.
+
+**DECLINED — do NOT build, already answered on the cards:**
+- `z92046jvh0` "the fast/slow choice screen no longer appears" — **not a defect.** The mode chooser was deliberately removed on the owner's own instruction (2026-08-12): one behaviour now, free allowance first then paid immediately. A comment explaining this was posted on the card.
+- `z92046jvk2` "show the free-tier amount as *saved* rather than *spent*" — **already shipped.** The cost panel already renders *"Bepul kvota bilan tejaldi: ~N so'm (taxminan)"* under the figures. Comment posted asking for a screenshot if he meant a different screen.
+
+**ORDER OF WORK: `d4add24`'s blind review and deploy come FIRST** (see the block below) — it is finished code sitting undeployed, and these four are fresh work. Do not interleave them.
+
 ## ▶ STOPPING POINT — 2026-08-16 ~21:30 — one commit awaiting review, then deploy
 
 **Production is HEALTHY on `data365-web:7e26ca9`** (shipped and live-verified earlier today — see the block below).
