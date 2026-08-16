@@ -28,6 +28,7 @@ import { buildAiStatusFacts } from "@/lib/ai-request-pending";
 import {
 	AiStatusRequestError,
 	isAiStatusTerminal,
+	MAX_TRANSIENT_AI_STATUS_FAILURES,
 	nextAiStatusPollInterval,
 } from "../../hooks/use-ai-status";
 
@@ -213,6 +214,25 @@ describe("poll stop condition", () => {
 				),
 			).toBe(4000);
 		}
+	});
+
+	it("BACKS OFF and finally gives up on a route that keeps failing", () => {
+		// Surviving a blip must not mean hammering a broken endpoint: 3 requests
+		// every 4s from every open tab amplifies load exactly during an outage.
+		const at = (failureCount: number) =>
+			nextAiStatusPollInterval(
+				{
+					status: "error",
+					error: new AiStatusRequestError(500),
+					failureCount,
+				},
+				4000,
+			);
+		expect(at(1)).toBe(8000);
+		expect(at(2)).toBe(16000);
+		expect(at(4)).toBe(60000); // capped, never longer than a minute
+		expect(at(MAX_TRANSIENT_AI_STATUS_FAILURES)).toBe(false);
+		expect(at(MAX_TRANSIENT_AI_STATUS_FAILURES + 5)).toBe(false);
 		// A dropped connection throws a plain Error, not ours — also transient.
 		expect(
 			nextAiStatusPollInterval(

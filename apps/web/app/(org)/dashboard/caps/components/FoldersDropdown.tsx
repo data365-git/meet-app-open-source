@@ -122,6 +122,9 @@ export const FoldersDropdown = ({
 						<DropdownMenuItem
 							className="gap-2 rounded-lg"
 							onClick={() => setMoveMenuOpen(false)}
+							// Same reason as `keepMenuOpen` below: without this, "Back"
+							// closed the whole menu instead of returning to it.
+							onSelect={(e) => e.preventDefault()}
 						>
 							<FontAwesomeIcon
 								className="text-gray-10 size-3"
@@ -174,6 +177,13 @@ export const FoldersDropdown = ({
 							label: string;
 							icon: typeof faPencil;
 							onClick: () => void | Promise<void>;
+							// Radix closes the menu on select unless the handler calls
+							// preventDefault. Without this the "Move to folder" item set
+							// its state and the root closed in the same tick, so the
+							// submenu never rendered and the whole feature was dead —
+							// invisible to tsc, to 1457 tests and to a real build,
+							// because nothing renders this component in a test.
+							keepMenuOpen?: boolean;
 						};
 						const items: FolderDropdownItem[] = [
 							{
@@ -191,6 +201,7 @@ export const FoldersDropdown = ({
 								label: "Move to folder",
 								icon: faArrowRightArrowLeft,
 								onClick: () => void openMoveMenu(),
+								keepMenuOpen: true,
 							},
 							{
 								label: isPublic ? "Make private" : "Make public",
@@ -216,6 +227,9 @@ export const FoldersDropdown = ({
 							<DropdownMenuItem
 								key={item.label}
 								onClick={item.onClick}
+								onSelect={(e) => {
+									if (item.keepMenuOpen) e.preventDefault();
+								}}
 								className="rounded-lg"
 							>
 								<FontAwesomeIcon

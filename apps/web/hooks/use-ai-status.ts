@@ -100,16 +100,28 @@ const isPermanentAiStatusFailure = (error: unknown): boolean =>
  * analysis running" after a single 502 mid-transcription, recoverable only by
  * the page reload this whole feature exists to remove.
  */
+/** Give up on a route that keeps failing: 6 consecutive failed fetches. */
+export const MAX_TRANSIENT_AI_STATUS_FAILURES = 6;
+
 export const nextAiStatusPollInterval = (
 	query: {
 		status: "pending" | "error" | "success";
 		data?: AiStatusResult;
 		error?: unknown;
+		failureCount?: number;
 	},
 	intervalMs: number,
 ): number | false => {
-	if (query.status === "error")
-		return isPermanentAiStatusFailure(query.error) ? false : intervalMs;
+	if (query.status === "error") {
+		if (isPermanentAiStatusFailure(query.error)) return false;
+		const failures = query.failureCount ?? 0;
+		// Bounded, and backing OFF while it lasts. Retrying a failing endpoint
+		// every 4s from every open tab amplifies load exactly during an outage,
+		// which is the mirror of the defect this branch was added to fix — so
+		// the retry must be both slower each time and finite.
+		if (failures >= MAX_TRANSIENT_AI_STATUS_FAILURES) return false;
+		return Math.min(intervalMs * 2 ** Math.min(failures, 4), 60_000);
+	}
 	if (!query.data) return intervalMs;
 	return isAiStatusTerminal(query.data) ? false : intervalMs;
 };
@@ -153,6 +165,7 @@ export const useAiStatus = (
 					status: query.state.status,
 					data: query.state.data,
 					error: query.state.error,
+					failureCount: query.state.fetchFailureCount,
 				},
 				intervalMs,
 			),

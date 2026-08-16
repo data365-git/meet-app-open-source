@@ -129,14 +129,12 @@ export const SelectedCapsBar = ({
 			}
 			if (result.failedCount > 0 && result.movedCount === 0) {
 				toast.error(result.error ?? "Failed to move to folder");
-			} else if (result.failedCount > 0) {
-				toast.error(
-					`${result.failedCount} cap${
-						result.failedCount === 1 ? "" : "s"
-					} could not be moved`,
-				);
 			}
-			setSelectedCaps([]);
+			// A partial batch gets ONE toast, not two: the success message above
+			// already carries "(N failed)", so an error toast beside it states the
+			// same fact twice. And the selection is KEPT when nothing moved — that
+			// selection is exactly what the user needs in order to retry.
+			if (result.movedCount > 0) setSelectedCaps([]);
 			router.refresh();
 		} catch (error) {
 			toast.error(
