@@ -6,6 +6,16 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
      "ustoz" to THIS project. A top-block rewrite on 2026-08-04 dropped it and
      the routing silently broke — restore it in every future rewrite. -->
 
+## ▶ RESUME HERE — 2026-08-16 ~22:50 (read this block first, then the detail below)
+
+**GOAL — what "done" looks like:** data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable** — AI analysis simply works, spends the free allowance first, restarts itself when something stalls, and the owner stops hearing complaints from the team.
+
+**LAST DONE:** the share page's "AI tahlil" state fix went through two blind non-author reviews. Both returned DO-NOT-SHIP and both were right — six real defects in total, all now fixed and committed. **Ship candidate `0790167`** (tsc 0 · 1444 passed / 26 skipped · real build 0). Working tree clean, nothing uncommitted.
+
+**NEXT STEP:** (1) a **THIRD blind non-author review** of `0790167` — this stack has produced a real defect on six of six reviews and nearly every one was created by the previous fix, so do not skip it; (2) if SHIP → `git archive 0790167` → `/opt/data365/app-0790167` → `docker build -f apps/web/Dockerfile -t data365-web:0790167 .` → bump the tag on line 3 of `/opt/data365/docker-compose.app.yml` → `docker compose -f /opt/data365/docker-compose.app.yml up -d` (**never a bare `docker run`**); (3) verify `/api/health` **and walk the share page in the browser pane** — this is a VISUAL fix and a 200 cannot prove it; (4) tell him. **Then** the four owner-approved ClickUp cards (folder/upload behaviour) below.
+
+**BLOCKERS:** none — nothing is waiting on the owner for this step. **Production is HEALTHY on `7e26ca9`** and was NOT changed tonight; rollback is one tag change.
+
 ## 🚨 ROOT CAUSE OF ALL UPLOAD FAILURES — FOUND AND FIXED 2026-08-14 ~06:30
 
 **Every video upload since the cutover was dying at ZERO bytes, and the cause was one missing setting: the new R2 bucket had no CORS policy.** Cloudflare said it in its own words when a browser-style preflight was simulated against a presigned PUT: `403 … <Message>CORS not configured for this bucket</Message>`.
