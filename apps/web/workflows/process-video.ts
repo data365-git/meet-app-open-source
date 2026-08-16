@@ -205,7 +205,19 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 			false,
 		);
 
-		if (result.code === "UPLOAD_IN_PROGRESS") return;
+		// Redeem the one-shot order ONLY when the start actually took. A refusal
+		// that launched nothing must LEAVE the marker so the other redeemer (or
+		// the 30-minute cron) can try again — `code === "UPLOAD_IN_PROGRESS"` is
+		// only ONE of several such refusals: no usable key, "AI budget exceeded"
+		// and a failed workflow launch all return with the row still at NULL and
+		// carry no code. Consuming the order on those turned a transient budget
+		// or key blip into permanent silent loss of the user's press, which is
+		// the 2026-08-16 incident all over again (round-21 #2).
+		// Removing AFTER a successful start is safe against a duplicate: the
+		// claim inside transcribeVideo is a compare-and-swap, so a second
+		// redeemer that also sees the marker loses the claim and launches
+		// nothing.
+		if (!result.success || result.code === "UPLOAD_IN_PROGRESS") return;
 
 		await db()
 			.update(videos)

@@ -79,7 +79,20 @@ export async function transcribeVideo(
 	// The re-kick path must NOT reset the status to NULL first (a page load in
 	// that window renders "not started" for a job that is alive), so instead a
 	// retry is allowed to pass the PROCESSING guard and re-claim in place.
+	//
+	// This flag ALSO means "do not refund the recovery budget" (see the
+	// JSON_REMOVE of autoRecoverAttempts below) — two different meanings on one
+	// boolean, which is the shape that has bitten this file before. Callers that
+	// need one without the other use `reclaimProcessing`.
 	isRetry = false,
+	// May this call take over a row that is ALREADY `PROCESSING`? Defaults to
+	// `isRetry`, which is what every historical caller meant. Split out because
+	// the pending-upload starter in recover-stale-ai-jobs needs `isRetry` purely
+	// for the no-refund half: it only ever acts on a NULL row, and letting it
+	// match PROCESSING re-opened the exact double-launch this CAS exists to
+	// stop — the process-video redeemer can claim the row inside the four
+	// awaits between this call's status read and its claim.
+	reclaimProcessing = isRetry,
 ): Promise<TranscribeResult> {
 	if (!userId || !videoId) {
 		return {
@@ -182,7 +195,7 @@ export async function transcribeVideo(
 	if (
 		video.transcriptionStatus === "COMPLETE" ||
 		(video.transcriptionStatus === "PROCESSING" &&
-			(!isRetry || processingLooksLive)) ||
+			(!reclaimProcessing || processingLooksLive)) ||
 		video.transcriptionStatus === "SKIPPED" ||
 		video.transcriptionStatus === "NO_AUDIO"
 	) {
@@ -312,7 +325,7 @@ export async function transcribeVideo(
 					//     already refused a PROCESSING row that still has a heartbeat).
 					// COMPLETE / SKIPPED / NO_AUDIO are absent on purpose: the guard
 					// refuses them, so the claim must not be able to overwrite them.
-					isRetry
+					reclaimProcessing
 						? or(
 								isNull(videos.transcriptionStatus),
 								eq(videos.transcriptionStatus, "ERROR"),

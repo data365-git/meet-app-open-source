@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NextRequest } from "next/server";
@@ -538,5 +538,53 @@ describe("AI request made while the upload is still processing", () => {
 		expect(body.pendingRequestStarted).toBe(1);
 		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
 		expect(state.videoRow?.transcriptionStatus).toBe("PROCESSING");
+	});
+	// ── round-21 review findings ─────────────────────────────────────────────
+	it("KEEPS the request when the start failed for a reason that carries no code (budget/key)", async () => {
+		// Round-21 #2: removal was gated on `code !== "UPLOAD_IN_PROGRESS"` alone,
+		// but several refusals launch nothing and carry NO code — no usable key,
+		// "AI budget exceeded", a failed workflow launch. Consuming the one-shot
+		// order on those turns a transient blip into permanent silent loss of the
+		// user's press, which is the incident this whole feature exists to stop.
+		await postGenerate();
+		state.uploadRow = null; // bytes have landed; the refusal is NOT upload-related
+		const { assertAiBudgetAvailable } = await import("@/lib/ai-cost-guard");
+		vi.mocked(assertAiBudgetAvailable).mockRejectedValueOnce(
+			new Error("AI budget exceeded"),
+		);
+
+		const body = await runRecoveryCron();
+
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+		expect(body.pendingRequestStarted).toBe(0);
+		// The ask must SURVIVE so the next tick (or the other redeemer) can honour it.
+		expect(
+			typeof (state.videoRow?.metadata as Record<string, unknown>)
+				.aiStartPendingUpload,
+		).toBe("string");
+	});
+
+	it("the cron's pending start may NOT take over a row that is already PROCESSING", () => {
+		// Round-21 #1: `isRetry` carried TWO meanings — "do not refund the recovery
+		// budget" AND "may re-claim a PROCESSING row". The pending starter needs
+		// only the first; with the second it could win the CAS against a row the
+		// process-video redeemer had just claimed, launching a SECOND paid
+		// transcription for one video. The 5th argument (reclaimProcessing) must
+		// stay `false` here. Asserted on the source because the fake DB in this
+		// file does not evaluate the claim's WHERE clause — see the review note.
+		const src = readFileSync(
+			join(process.cwd(), "app/api/cron/recover-stale-ai-jobs/route.ts"),
+			"utf8",
+		);
+		// The call is written across several lines with a trailing comma, so the
+		// pattern has to tolerate both forms.
+		const pendingCall = src.match(
+			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*true,\s*true,\s*(\w+)\s*,?\s*\)/,
+		);
+		expect(
+			pendingCall,
+			"the pending-request start must pass reclaimProcessing explicitly",
+		).not.toBeNull();
+		expect(pendingCall?.[1]).toBe("false");
 	});
 });

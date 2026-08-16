@@ -347,30 +347,39 @@ export async function GET(request: Request) {
 
 	for (const candidate of pendingRequestCandidates) {
 		try {
-			// isRetry = TRUE. A non-retry claim JSON_REMOVEs autoRecoverAttempts /
-			// quotaRetryAttempts / quotaRetryNextAt — "a cron RETRY must NOT refund
-			// itself" (lib/transcribe.ts). Refunding here let a repeatedly-failing
-			// video reset its budget every 30 minutes, so the bounded-retry ops
-			// alert and the quota backoff could never terminate. The retry arm of
-			// the claim's compare-and-swap also accepts a PROCESSING row, but this
-			// candidate is transcriptionStatus IS NULL by construction, so the
-			// isNull arm is what matches — and the status guard above it still
-			// refuses a live PROCESSING row on evidence of life.
+			// isRetry = TRUE, reclaimProcessing = FALSE — and the split matters.
+			// isRetry is needed only for its no-refund half: a non-retry claim
+			// JSON_REMOVEs autoRecoverAttempts / quotaRetryAttempts /
+			// quotaRetryNextAt ("a cron RETRY must NOT refund itself"), so
+			// refunding here let a repeatedly-failing video reset its budget every
+			// 30 minutes and the bounded-retry alert could never fire.
+			// But isRetry ALSO used to mean "may re-claim a PROCESSING row", and
+			// that half is wrong here (round-21 #1): the SELECT says the row is
+			// NULL, yet four awaits pass before the claim, and inside that window
+			// the process-video redeemer can claim it. With the PROCESSING arm the
+			// CAS would then MATCH and launch a SECOND paid transcription for one
+			// video. Passing false keeps this starter on the NULL/ERROR arm, so a
+			// lost race launches nothing.
 			const result = await transcribeVideo(
 				candidate.id,
 				candidate.ownerId,
 				true,
 				true,
+				false,
 			);
-			// Redeem the one-shot order — but ONLY once the start was not refused
-			// for bytes still landing. Consuming it there would drop the user's
-			// request exactly as the 2026-08-16 incident did: nothing runs, and
-			// processVideoWorkflow finds no marker when processing finishes.
-			// Removing AFTER the start is safe against a duplicate because the
-			// claim inside transcribeVideo is a compare-and-swap: a second
+			// Redeem the one-shot order ONLY when the start actually took. A refusal
+			// that launched nothing must LEAVE the marker so the other redeemer (or
+			// the 30-minute cron) can try again — `code === "UPLOAD_IN_PROGRESS"` is
+			// only ONE of several such refusals: no usable key, "AI budget exceeded"
+			// and a failed workflow launch all return with the row still at NULL and
+			// carry no code. Consuming the order on those turned a transient budget
+			// or key blip into permanent silent loss of the user's press, which is
+			// the 2026-08-16 incident all over again (round-21 #2).
+			// Removing AFTER a successful start is safe against a duplicate: the
+			// claim inside transcribeVideo is a compare-and-swap, so a second
 			// redeemer that also sees the marker loses the claim and launches
 			// nothing.
-			if (result.code !== "UPLOAD_IN_PROGRESS") {
+			if (result.success && result.code !== "UPLOAD_IN_PROGRESS") {
 				await db()
 					.update(videos)
 					.set({
