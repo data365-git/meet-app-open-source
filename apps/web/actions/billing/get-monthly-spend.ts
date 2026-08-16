@@ -112,14 +112,28 @@ export async function getMonthlySpend(scope: {
 	let totalMicros = 0;
 	const breakdown: Record<string, number> = {};
 
+	// Do NOT round to whole cents here. Owner-reported 2026-08-16: the panel
+	// showed 903 + 903 so'm against a total of 1 935 so'm — the parts summed to
+	// LESS than the whole, which reads as a broken price. Cause: one cent is
+	// ~129 so'm at the display rate, so rounding each operation to a whole cent
+	// is a ~60 so'm error PER CARD, and the total rounds independently. On that
+	// video: transcription 7.36c and summary 7.16c each rounded DOWN to 7 (903
+	// so'm), while the total 14.52c rounded UP to 15 (1 935 so'm) — the missing
+	// 129 so'm was exactly that one cent.
+	//
+	// Cents stay the unit of the returned contract (every consumer expects it),
+	// but they are now FRACTIONAL: `formatUzs` already rounds once, at display,
+	// so the cards add up to the total. Consumers checked before this change —
+	// both AiBudgetCards (`.toFixed(2)` / formatUzs) and AiSpend handle a
+	// fractional value correctly, and the cost GUARD does not read this function
+	// at all (it has its own getMonthlySpendMicros in lib/ai-cost-guard.ts).
 	for (const row of rows) {
 		const micros = Number(row.totalMicros);
-		const cents = Math.round(micros / 10_000);
-		breakdown[row.operation] = cents;
+		breakdown[row.operation] = micros / 10_000;
 		totalMicros += micros;
 	}
 
-	const totalUsdCents = Math.round(totalMicros / 10_000);
+	const totalUsdCents = totalMicros / 10_000;
 
 	const capUsdCents: number | null = null;
 
@@ -165,7 +179,9 @@ export async function getMonthlySpend(scope: {
 				outputTokens: row.outputTokens,
 			});
 		}
-		freeTierSavingsUsdCents = Math.round(savingsMicros / 10_000);
+		// Fractional for the same reason as the breakdown above: formatUzs is the
+		// single rounding point.
+		freeTierSavingsUsdCents = savingsMicros / 10_000;
 	}
 
 	return {
