@@ -12,6 +12,14 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **⭐ THE OWNER RE-ORDERED THE WORK, 2026-08-16 ~23:00 (his words):** *"yo'q avval 1234ni ham qilib ol 3soatdan keyin fable qaytadi shunda tekshirtirib deploy qilaverasan hammasini"* — do the four approved cards FIRST, let **Fable review EVERYTHING when its quota returns (~02:00 laptop time)**, then **ONE deploy of the whole lot.** The earlier "ship the share-page stack first" ordering is DEAD; do not restore it.
 
+## 📋 THE WHOLE "Meeting app" LIST AUDITED 2026-08-17 (list `901819987518`, 19 tasks)
+
+Queried from ClickUp, not remembered: **4 `tamom` · 13 `tekshirishda` · 2 `shkafda`.** **Nothing on that list is unbuilt work waiting to start.** The two in `shkafda` are both already answered on the card — `z92046jvk2` ("show the free allowance as *saved*") was **already shipped**, and `z92046jvh0` ("bring back the fast/slow chooser") the owner **deliberately cancelled** on 2026-08-12. Do not re-open either as new work.
+
+**But a card sitting in `tekshirishda` is NOT evidence it shipped** — that column only means nobody has confirmed it. Two independent checks were running when this was written: a blind review of the live diff, and a code-level BUILT/PARTIAL/NOT-BUILT sweep of the nine older `tekshirishda` cards (AI-chat timestamps · share-link preview image · transcript filename · auto title from filename · bulk keep-audio-only · MP3 download · drag-and-drop into folders · Move-to-folder button · the "tejaldi" wording). **Read their results before telling the client anything is done.**
+
+**One of the nine is already LIVE-PROVEN by me, not inferred:** the share link's preview image. `/s/<id>` serves `og:image` and `/api/video/og?videoId=…` returns a real **43 761-byte PNG, HTTP 200** — so a link pasted into Telegram/WhatsApp does show a picture. (Noted for whoever looks: the page emits TWO `og:image` tags, the first being `/api/video/preview?…&fallback=og` which 302-redirects. Scrapers that take only the first tag still resolve it, but a single canonical tag would be cleaner.)
+
 ## ✅ DEPLOYED 2026-08-16 23:18 — production runs `data365-web:7bab43b`
 
 **Live-verified after the switch, not assumed:** `/api/health` 200 `db:ok storage:ok` · `/login` 200 · a share page 200 and **walked in the browser pane** (summary + topics render, **zero console errors**) · a restricted video shows the correct restricted page · the team's own `data365dashboard.uz` still answering. The only log line matching "error" is the pre-existing duplicate-column migration notice. **Rollback is one tag change** — `7e26ca9`, `44b5236`, `f5d9cdc`, `7029a39`, `1d85710`, `7d3ecd4`, `5c9a52d` are all still on the host, and `/opt/data365/docker-compose.app.yml.bak-7bab43b` holds the previous file.
