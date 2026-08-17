@@ -12,7 +12,18 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 
 **⭐ THE OWNER RE-ORDERED THE WORK, 2026-08-16 ~23:00 (his words):** *"yo'q avval 1234ni ham qilib ol 3soatdan keyin fable qaytadi shunda tekshirtirib deploy qilaverasan hammasini"* — do the four approved cards FIRST, let **Fable review EVERYTHING when its quota returns (~02:00 laptop time)**, then **ONE deploy of the whole lot.** The earlier "ship the share-page stack first" ordering is DEAD; do not restore it.
 
+## 🔎 FABLE'S REVIEW OF THE LIVE CODE — 2026-08-17: **FIX FORWARD**, and it found the one a user would hit
+
+Explicitly **not** a rollback: reverting would resurrect six confirmed-worse defects this range fixed. Two real findings, both fixed in `07fe301`:
+1. **An upload made inside a folder never appeared.** The list is server-rendered and the only revalidation was `revalidatePath("/dashboard/folder")` — which matches **literally**, so it matched nothing: the page that lists a folder's videos is the dynamic `/dashboard/folder/[id]`. (`"/dashboard/caps"` only worked because that path *is* its route — the trap is that `659d864` copied the caps pattern into a route where its hidden dependency does not hold.) With `onUploadStarted` a no-op, the progress card vanished on success and an empty folder said "empty" again, so the natural next move is **re-uploading the same file**. Fixed at both ends: the route pattern is revalidated with its type, and the button refreshes.
+2. **A folder cycle could hang every page in a subtree, permanently.** `moveFolderToFolder` is check-then-write with no transaction, so two people moving A→B and B→A at the same instant both pass the ancestor check; `getFolderBreadcrumb` then walked `parentId` forever. It now carries a visited set — a cycle degrades to a truncated breadcrumb instead of a dead page. **The transaction is the deeper fix and is NOT done** — do it next, in its own commit.
+3. Minor, fixed: a partial batch move cleared the whole selection including the videos that failed.
+
+**Fable's own UNPROVEN, carry it:** finding 1's mechanism rests on Next's documented literal-path matching; nobody has watched the live folder page fail to refresh. **A two-minute check settles it — upload a small file inside a folder and see whether the card appears without reloading.** Also unverified: whether TanStack's `fetchFailureCount` survives interval refetches (worst case the poll backs off to ~60 s instead of giving up — no user-visible break).
+
 ## 📋 THE WHOLE "Meeting app" LIST AUDITED 2026-08-17 (list `901819987518`, 19 tasks)
+
+**All nine older `tekshirishda` cards were verified BUILT in the shipped code, each with a file:line** — AI-chat timestamps (`AIChatPopup.tsx:83-114`) · share-link preview (`s/[videoId]/page.tsx:201-263`) · transcript filename (`TranscriptPanel.tsx:515`) · title from filename (`useImportUpload.ts:88`) · bulk keep-audio-only (`SelectedCapsBar.tsx:155-185`) · MP3 download (`api/videos/[videoId]/audio/route.ts:36-155`) · drag-and-drop to folder (`CapCard.tsx:636-637` + `Folder.tsx:267`) · Move-to-folder button (`SelectedCapsBar.tsx:262-280`) · the "tejaldi" wording (`uz.json:518` rendered at `MeetingCostPanel.tsx:90-97`). **None was missing or half-built.**
 
 Queried from ClickUp, not remembered: **4 `tamom` · 13 `tekshirishda` · 2 `shkafda`.** **Nothing on that list is unbuilt work waiting to start.** The two in `shkafda` are both already answered on the card — `z92046jvk2` ("show the free allowance as *saved*") was **already shipped**, and `z92046jvh0` ("bring back the fast/slow chooser") the owner **deliberately cancelled** on 2026-08-12. Do not re-open either as new work.
 
@@ -20,7 +31,11 @@ Queried from ClickUp, not remembered: **4 `tamom` · 13 `tekshirishda` · 2 `shk
 
 **One of the nine is already LIVE-PROVEN by me, not inferred:** the share link's preview image. `/s/<id>` serves `og:image` and `/api/video/og?videoId=…` returns a real **43 761-byte PNG, HTTP 200** — so a link pasted into Telegram/WhatsApp does show a picture. (Noted for whoever looks: the page emits TWO `og:image` tags, the first being `/api/video/preview?…&fallback=og` which 302-redirects. Scrapers that take only the first tag still resolve it, but a single canonical tag would be cleaner.)
 
-## ✅ DEPLOYED 2026-08-16 23:18 — production runs `data365-web:7bab43b`
+## ✅ DEPLOYED — production now runs `data365-web:07fe301` (2026-08-17 ~04:45; the 23:18 deploy of `7bab43b` is superseded)
+
+**Re-verified live after this second switch:** `/api/health` 200 `db:ok storage:ok` · `/login` 200 · share page 200 · the OG preview image still returns a real PNG 200 · `data365dashboard.uz` untouched · the only log lines matching "error" are the one known benign duplicate-column migration notice, which prints its own "benign" line. Rollback is one tag change; `7bab43b` and everything before it are still on the host, and `/opt/data365/docker-compose.app.yml.bak-07fe301` holds the previous file.
+
+### (previous) DEPLOYED 2026-08-16 23:18 — `data365-web:7bab43b`
 
 **Live-verified after the switch, not assumed:** `/api/health` 200 `db:ok storage:ok` · `/login` 200 · a share page 200 and **walked in the browser pane** (summary + topics render, **zero console errors**) · a restricted video shows the correct restricted page · the team's own `data365dashboard.uz` still answering. The only log line matching "error" is the pre-existing duplicate-column migration notice. **Rollback is one tag change** — `7e26ca9`, `44b5236`, `f5d9cdc`, `7029a39`, `1d85710`, `7d3ecd4`, `5c9a52d` are all still on the host, and `/opt/data365/docker-compose.app.yml.bak-7bab43b` holds the previous file.
 
