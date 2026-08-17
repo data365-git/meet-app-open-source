@@ -47,8 +47,19 @@ export const getFolderBreadcrumb = Effect.fn(function* (
 		color: "normal" | "blue" | "red" | "yellow";
 	}> = [];
 	let currentFolderId = folderId;
+	// A folder tree can only become cyclic through a race — two people moving
+	// A into B and B into A at the same instant both pass the ancestor check,
+	// because that check and the write are not one transaction. It is rare and
+	// it is unrecoverable without hand-editing the database, because THIS walk
+	// is what every folder page runs: without a guard it queries forever and
+	// hangs the whole subtree. The guard costs one Set and degrades a cycle to
+	// a truncated breadcrumb instead of a dead page.
+	const visited = new Set<string>();
 
 	while (currentFolderId) {
+		if (visited.has(currentFolderId)) break;
+		visited.add(currentFolderId);
+
 		const folder = yield* getFolderById(currentFolderId);
 		if (!folder) break;
 

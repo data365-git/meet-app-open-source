@@ -134,7 +134,10 @@ export const SelectedCapsBar = ({
 			// already carries "(N failed)", so an error toast beside it states the
 			// same fact twice. And the selection is KEPT when nothing moved — that
 			// selection is exactly what the user needs in order to retry.
-			if (result.movedCount > 0) setSelectedCaps([]);
+			// Cleared only when EVERYTHING moved. On a partial batch the failed
+			// ones stay selected so the user can retry with one press instead of
+			// hunting them down again; re-moving the arrived ones is harmless.
+			if (result.failedCount === 0) setSelectedCaps([]);
 			router.refresh();
 		} catch (error) {
 			toast.error(

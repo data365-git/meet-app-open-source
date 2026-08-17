@@ -174,7 +174,12 @@ export async function createVideoForServerProcessing({
 	}
 
 	revalidatePath("/dashboard/caps");
-	revalidatePath("/dashboard/folder");
+	// `revalidatePath` matches LITERALLY unless the route pattern is given with
+	// its type. "/dashboard/folder" therefore matched nothing — the pages that
+	// actually list a folder's videos are the dynamic `/dashboard/folder/[id]`,
+	// so an upload made inside a folder never invalidated the view it landed
+	// in. "/dashboard/caps" works only because that path IS its route.
+	revalidatePath("/dashboard/folder/[id]", "page");
 	revalidatePath("/dashboard/spaces");
 
 	return {
