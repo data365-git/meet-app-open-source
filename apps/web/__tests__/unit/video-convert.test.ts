@@ -357,6 +357,40 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
 		expect(spawnArgs[2]?.args).toContain("libx264");
 	});
 
+	it("a copy failure on a LONG source must not buy an unbounded compress (test 7)", async () => {
+		const { optimizeRemoteVideoToMp4 } = await import("@/lib/video-convert");
+
+		// Two hours — past COMPRESS_MAX_DURATION_SEC (3600). Codec/bitrate still
+		// select the "copy" strategy, so this reaches the copy-failure fallback,
+		// which is the one path that had no duration gate and no outcome log.
+		const metadataStderr = `
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':
+  Duration: 02:00:00.00, start: 0.000000, bitrate: 1000 kb/s
+  Stream #0:0: Video: h264 (High), yuv420p, 640x360, 30 fps
+  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo
+`;
+
+		const resultPromise = optimizeRemoteVideoToMp4(
+			"https://example.com/video.mp4",
+		);
+
+		setTimeout(() => {
+			spawnedProcesses[0]?.stderr.emit("data", Buffer.from(metadataStderr));
+			spawnedProcesses[0]?.emit("close", 0);
+			setTimeout(() => {
+				// A real ffmpeg failure, not a timeout.
+				spawnedProcesses[1]?.stderr.emit("data", Buffer.from("copy failed"));
+				spawnedProcesses[1]?.emit("close", 1);
+			}, 5);
+		}, 5);
+
+		await expect(resultPromise).rejects.toThrow();
+
+		// probe + copy only. A compress spawn here is the 45-minute hole.
+		expect(spawnedProcesses).toHaveLength(2);
+		expect(spawnArgs.some((s) => s?.args?.includes("libx264"))).toBe(false);
+	});
+
 	it("copyTimeoutMs scales with duration and clamps at both ends (test 3)", async () => {
 		const { computeCopyTimeoutMs } = await import("@/lib/video-convert");
 

@@ -462,29 +462,54 @@ async function convertRemoteVideoToMp4FileInternal(
 			throw error;
 		}
 
-		await runFfmpeg(
-			[
-				"-y",
-				"-i",
-				videoUrl,
-				"-c:v",
-				"libx264",
-				"-preset",
-				"veryfast",
-				"-crf",
-				"26",
-				"-pix_fmt",
-				"yuv420p",
-				"-c:a",
-				"aac",
-				"-b:a",
-				"128k",
-				"-movflags",
-				"+faststart",
-				outputPath,
-			],
-			options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
-		);
+		// A genuine (non-timeout) copy failure is the only thing that may buy a
+		// re-encode. It still must not buy an UNBOUNDED one: without this gate a
+		// long source whose copy fails for a real reason walks straight into the
+		// 45-minute compress this whole change exists to remove.
+		logOptimizeOutcome("copy", durationSec, startedAt, "failed");
+
+		if (durationSec != null && durationSec > COMPRESS_MAX_DURATION_SEC) {
+			console.log(
+				`[video-convert] optimize skipped: strategy=compress durationSec=${durationSec} reason=copy failed and source exceeds the ${COMPRESS_MAX_DURATION_SEC}s compress limit, raw upload kept`,
+			);
+			throw error;
+		}
+
+		const compressStartedAt = Date.now();
+		try {
+			await runFfmpeg(
+				[
+					"-y",
+					"-i",
+					videoUrl,
+					"-c:v",
+					"libx264",
+					"-preset",
+					"veryfast",
+					"-crf",
+					"26",
+					"-pix_fmt",
+					"yuv420p",
+					"-c:a",
+					"aac",
+					"-b:a",
+					"128k",
+					"-movflags",
+					"+faststart",
+					outputPath,
+				],
+				options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+			);
+			logOptimizeOutcome("compress", durationSec, compressStartedAt, "ok");
+		} catch (compressError) {
+			logOptimizeOutcome(
+				"compress",
+				durationSec,
+				compressStartedAt,
+				compressError instanceof FfmpegTimeoutError ? "timeout" : "failed",
+			);
+			throw compressError;
+		}
 	}
 }
 

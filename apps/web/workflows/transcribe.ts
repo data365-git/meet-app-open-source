@@ -197,6 +197,12 @@ export async function transcribeVideoWorkflow(
 			existingPartialVtt,
 		);
 
+		// The chunk loop's abort checks cannot cover what comes after it: gap-fill
+		// can call Gemini for minutes more and then saveTranscription would mint
+		// COMPLETE for a video the user has already thrown away. One more check
+		// here closes that window.
+		await assertVideoNotDeleted(videoId);
+
 		// Merge-level gap-fill: close any hole the per-chunk retries left behind.
 		const gapFill = await fillTranscriptGaps({
 			videoId,
