@@ -21,6 +21,16 @@ const DEFAULT_COPY_TIMEOUT_MS = 10 * 60 * 1000;
 // "compress" re-encodes the whole file frame-by-frame on a shared 4-core VPS;
 // a 40+ min recording can take a large fraction of its own runtime to encode.
 const DEFAULT_COMPRESS_TIMEOUT_MS = 45 * 60 * 1000;
+// The copy remux's cost is dominated by pulling the source down, so its
+// budget scales with the source's own length instead of a flat default.
+const COPY_TIMEOUT_MS_PER_SEC = 400;
+const COPY_TIMEOUT_MAX_MS = 45 * 60 * 1000;
+// A source this long that ALSO needs a re-encode (VP9/Opus, >1080p/2.5Mbps)
+// is not worth the ~45 min compress budget — the raw upload is proven safe
+// to serve as-is (app/api/playlist/route.ts falls back to it when result.mp4
+// is absent), so compress is skipped entirely instead of run as a 45-minute
+// consolation prize.
+const COMPRESS_MAX_DURATION_SEC = 3600;
 const HIGH_BITRATE_BPS = 2_500_000;
 // 1080p is the quality floor we ship, so a 1920-edge source is NOT "too big" —
 // only something larger than 1080p is downscaled by the compress pass.
@@ -49,6 +59,32 @@ export interface VideoProbeMetadata {
 
 export type VideoOptimizationStrategy = "copy" | "compress";
 
+/**
+ * Distinguishes "ffmpeg hit its time budget" from a genuine encode failure.
+ * A timeout on the fast copy remux tells us nothing about whether the codec
+ * needs a re-encode — it means the budget was too small for THIS source, so
+ * it must be rethrown, never treated as a signal to fall through to the much
+ * more expensive compress pass (see convertRemoteVideoToMp4FileInternal).
+ */
+export class FfmpegTimeoutError extends Error {
+	constructor(message = "Video conversion timed out") {
+		super(message);
+		this.name = "FfmpegTimeoutError";
+	}
+}
+
+/**
+ * A copy remux is a fast passthrough, so its budget scales with the source's
+ * own duration instead of one flat default — a 2-hour recording needs far
+ * more than the 10-minute default to even pull the source down, while a
+ * short clip should not wait the full default either way (floor keeps it,
+ * ceiling caps a runaway duration read).
+ */
+export function computeCopyTimeoutMs(durationSec: number | null): number {
+	const scaled = (durationSec ?? 0) * COPY_TIMEOUT_MS_PER_SEC;
+	return Math.min(Math.max(scaled, DEFAULT_COPY_TIMEOUT_MS), COPY_TIMEOUT_MAX_MS);
+}
+
 function runFfmpeg(
 	args: string[],
 	timeoutMs: number = DEFAULT_COMPRESS_TIMEOUT_MS,
@@ -64,7 +100,7 @@ function runFfmpeg(
 			if (settled) return;
 			settled = true;
 			proc.kill("SIGKILL");
-			reject(new Error("Video conversion timed out"));
+			reject(new FfmpegTimeoutError());
 		}, timeoutMs);
 
 		const finish = (callback: () => void) => {
@@ -390,17 +426,42 @@ async function materializeStreamingInput(
 	return videoUrl;
 }
 
+function logOptimizeOutcome(
+	strategy: VideoOptimizationStrategy,
+	durationSec: number | null,
+	startedAt: number,
+	outcome: "ok" | "timeout" | "failed",
+): void {
+	console.log(
+		`[video-convert] optimize ${outcome}: strategy=${strategy} durationSec=${durationSec ?? "unknown"} elapsedMs=${Date.now() - startedAt}`,
+	);
+}
+
 async function convertRemoteVideoToMp4FileInternal(
 	videoUrl: string,
 	outputPath: string,
 	options: VideoConversionOptions = {},
+	durationSec: number | null = null,
 ): Promise<void> {
+	const startedAt = Date.now();
+	const copyTimeoutMs = options.timeoutMs ?? computeCopyTimeoutMs(durationSec);
+
 	try {
 		await runFfmpeg(
 			["-y", "-i", videoUrl, "-c", "copy", "-movflags", "+faststart", outputPath],
-			options.timeoutMs ?? DEFAULT_COPY_TIMEOUT_MS,
+			copyTimeoutMs,
 		);
-	} catch {
+		logOptimizeOutcome("copy", durationSec, startedAt, "ok");
+	} catch (error) {
+		if (error instanceof FfmpegTimeoutError) {
+			// A TIMEOUT tells us the budget was too small for this source, not
+			// that the codec needs re-encoding — falling through here is what
+			// turned a 10-minute copy timeout into a 45-minute compress timeout
+			// on top of it (measured: 0 successes, 3 failures in prod).
+			logOptimizeOutcome("copy", durationSec, startedAt, "timeout");
+			throw error;
+		}
+
 		await runFfmpeg(
 			[
 				"-y",
@@ -431,40 +492,67 @@ async function optimizeRemoteVideoToMp4FileInternal(
 	videoUrl: string,
 	outputPath: string,
 	strategy: VideoOptimizationStrategy,
+	durationSec: number | null,
 	options: VideoConversionOptions = {},
 ): Promise<void> {
 	if (strategy === "copy") {
-		await convertRemoteVideoToMp4FileInternal(videoUrl, outputPath, options);
+		await convertRemoteVideoToMp4FileInternal(
+			videoUrl,
+			outputPath,
+			options,
+			durationSec,
+		);
 		return;
 	}
 
-	await runFfmpeg(
-		[
-			"-y",
-			"-i",
-			videoUrl,
-			"-c:v",
-			"libx264",
-			"-preset",
-			"veryfast",
-			"-crf",
-			"21",
-			"-vf",
-			"scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'",
-			"-pix_fmt",
-			"yuv420p",
-			"-c:a",
-			"aac",
-			"-b:a",
-			"128k",
-			"-ar",
-			"48000",
-			"-movflags",
-			"+faststart",
-			outputPath,
-		],
-		options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
-	);
+	if (durationSec != null && durationSec > COMPRESS_MAX_DURATION_SEC) {
+		console.log(
+			`[video-convert] optimize skipped: strategy=compress durationSec=${durationSec} reason=exceeds ${COMPRESS_MAX_DURATION_SEC}s compress limit, raw upload kept`,
+		);
+		throw new Error(
+			`Compress skipped: durationSec=${durationSec} exceeds the ${COMPRESS_MAX_DURATION_SEC}s compress limit`,
+		);
+	}
+
+	const startedAt = Date.now();
+	try {
+		await runFfmpeg(
+			[
+				"-y",
+				"-i",
+				videoUrl,
+				"-c:v",
+				"libx264",
+				"-preset",
+				"veryfast",
+				"-crf",
+				"21",
+				"-vf",
+				"scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'",
+				"-pix_fmt",
+				"yuv420p",
+				"-c:a",
+				"aac",
+				"-b:a",
+				"128k",
+				"-ar",
+				"48000",
+				"-movflags",
+				"+faststart",
+				outputPath,
+			],
+			options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+		);
+		logOptimizeOutcome("compress", durationSec, startedAt, "ok");
+	} catch (error) {
+		logOptimizeOutcome(
+			"compress",
+			durationSec,
+			startedAt,
+			error instanceof FfmpegTimeoutError ? "timeout" : "failed",
+		);
+		throw error;
+	}
 }
 
 export async function convertRemoteVideoToMp4(
@@ -508,6 +596,7 @@ export async function optimizeRemoteVideoToMp4(
 			inputPath,
 			filePath,
 			strategy,
+			metadata.durationSec,
 			options,
 		);
 

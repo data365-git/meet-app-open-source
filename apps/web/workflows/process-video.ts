@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { FatalError } from "workflow";
 import { hasPendingUploadStartOrder } from "@/lib/ai-generation-request";
 import { persistableProcessingError } from "@/lib/processing-error";
@@ -11,6 +11,7 @@ import { runPromise } from "@/lib/server";
 import { optimizeRemoteVideoToMp4, probeRemoteVideo } from "@/lib/video-convert";
 import { transcribeVideo } from "@/lib/transcribe";
 import { getStorageAccessForVideo } from "@/lib/video-storage";
+import { assertVideoNotDeleted } from "@/lib/video-alive";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -38,16 +39,37 @@ export async function processVideoWorkflow(
 	const { videoId, rawFileKey } = payload;
 
 	try {
-		await optimizeAndFinalizeVideo(videoId, rawFileKey);
-
+		// Delete the upload row and honour a pending "AI tahlil" press BEFORE
+		// optimization runs, not after — transcription never needs result.mp4
+		// (workflows/transcribe.ts's resolveVideoSourceUrl falls back to the raw
+		// upload key once this row is gone) and the bytes are already verified
+		// complete before this workflow starts. Queuing transcription behind the
+		// ~45-minute optimize pass is what turned a ~10-minute transcription into
+		// the measured 2-hour wait (wave1 SPEC, CHANGE 2) — of the two ways to
+		// remove that queueing (reorder here, or teach transcribeVideo's
+		// upload-in-progress guard that phase "processing" means bytes landed),
+		// this reorder is the smaller change: the guard's multipart branch is
+		// deliberately strict (uploaded===total is not proof of completion for
+		// multipart — CompleteMultipartUpload assembles AFTER the last progress
+		// tick), and loosening it risks reintroducing that exact race.
+		//
+		// Trade-off accepted: setProcessingError (below) writes to this same
+		// videoUploads row, so a failure surfacing from optimizeAndFinalizeVideo
+		// AFTER this delete (e.g. a storage-access error, not a plain optimize
+		// failure — those are swallowed inside optimizeAndFinalizeVideo itself)
+		// can no longer be recorded on it. Acceptable: that path is already the
+		// FatalError-only edge case (video row missing / storage misconfigured),
+		// not the normal optimize-failure path, which was never surfaced via
+		// videoUploads either.
 		await db()
 			.delete(videoUploads)
 			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 		// The upload row is gone, so transcribeVideo's in-progress guard passes
-		// from here on. Honour an "AI tahlil" press that arrived while this
-		// workflow was still running.
+		// from here on.
 		await startPendingAiRequest(videoId);
+
+		await optimizeAndFinalizeVideo(videoId, rawFileKey);
 
 		return {
 			success: true,
@@ -101,6 +123,10 @@ async function optimizeAndFinalizeVideo(
 	if (!video) {
 		throw new FatalError("Video does not exist");
 	}
+
+	// A delete landing while this step is running must stop it before the
+	// (expensive) remux even starts — cancel-on-delete, CHANGE 3.
+	await assertVideoNotDeleted(videoId);
 
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
 	const videoUrl = await bucket
@@ -188,7 +214,13 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 				metadata: videos.metadata,
 			})
 			.from(videos)
-			.where(eq(videos.id, videoId as Video.VideoId))
+			// `deletedAt IS NULL` — a video deleted while this workflow was still
+			// optimizing must not have transcription started for it (prod incident:
+			// deleted at 18:15:55, started processing at 18:24:51 because this
+			// query had no such filter).
+			.where(
+				and(eq(videos.id, videoId as Video.VideoId), isNull(videos.deletedAt)),
+			)
 			.limit(1);
 
 		if (!video || video.transcriptionStatus !== null) return;

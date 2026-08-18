@@ -34,6 +34,7 @@ import {
 	TranscriptionQuotaFailureError,
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
+import { assertVideoNotDeleted } from "@/lib/video-alive";
 import { sanitizeAiErrorMessageForUi } from "@/lib/ai-error-message";
 import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
@@ -1214,6 +1215,11 @@ export async function transcribeAudioChunks(
 	const firstChunk = audio.chunks[0];
 	let knownSpeakers: string[] = [];
 	if (firstChunk) {
+		// Delete check lives HERE, in the loop, not inside processChunk's
+		// try/catch — that catch swallows every chunk throw (fault tolerance
+		// for a bad chunk) and the job only fails when every chunk fails, so a
+		// FatalError raised inside it would be silently defeated.
+		await assertVideoNotDeleted(context.videoId);
 		const firstResult = await processChunk(firstChunk, 0, []);
 		knownSpeakers = extractSpeakerLabels(firstResult.vtt);
 		// If the first chunk was reused from the partial (empty freshly-transcribed
@@ -1237,7 +1243,12 @@ export async function transcribeAudioChunks(
 	await mapWithConcurrency(
 		audio.chunks.slice(1),
 		chunkConcurrency,
-		(chunk, sliceIndex) => processChunk(chunk, sliceIndex + 1, knownSpeakers),
+		async (chunk, sliceIndex) => {
+			// Same reasoning as the first-chunk check above: this must run in the
+			// loop callback, never inside processChunk's per-chunk try/catch.
+			await assertVideoNotDeleted(context.videoId);
+			return processChunk(chunk, sliceIndex + 1, knownSpeakers);
+		},
 	);
 
 	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> = [

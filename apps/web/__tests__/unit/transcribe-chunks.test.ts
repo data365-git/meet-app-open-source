@@ -27,6 +27,7 @@ vi.mock("@/lib/generate-ai", () => ({ startAiGeneration: vi.fn() }));
 vi.mock("@/lib/transcription-settings", () => ({
   isTranscriptionDisabled: vi.fn(),
 }));
+vi.mock("@/lib/video-alive", () => ({ assertVideoNotDeleted: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("workflow", () => ({
   FatalError: class FatalError extends Error {

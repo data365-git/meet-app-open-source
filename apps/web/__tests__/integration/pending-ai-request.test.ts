@@ -171,6 +171,15 @@ vi.mock("@cap/database", () => ({
 								predicate.includes("PROCESSING")
 							)
 								return [];
+							// startPendingAiRequest's own query filters on deletedAt IS NULL —
+							// a soft-deleted row must not match, exactly the prod incident
+							// (deleted 18:15:55, started processing 18:24:51 anyway).
+							if (
+								predicate.includes('"isNull"') &&
+								predicate.includes("deletedAt") &&
+								state.videoRow?.deletedAt != null
+							)
+								return [];
 							return state.videoRow ? [state.videoRow] : [];
 						};
 						const result = {
@@ -404,6 +413,26 @@ describe("AI request made while the upload is still processing", () => {
 			aiGenerationEnabled: true,
 		});
 		expect(state.videoRow?.transcriptionStatus).toBe("PROCESSING");
+	});
+
+	it("ignores a soft-deleted video — startPendingAiRequest must not start it (test 5)", async () => {
+		await postGenerate();
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+
+		// Soft-deleted between the "AI tahlil" press and processing finishing —
+		// exactly the prod incident (deleted 18:15:55, started 18:24:51).
+		state.videoRow!.deletedAt = new Date("2026-08-18T18:15:55.000Z");
+
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		await processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: `user-1/${VIDEO_ID}/raw.mp4`,
+			bucketId: null,
+		}).catch(() => {});
+
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+		expect(state.videoRow?.transcriptionStatus).toBeNull();
 	});
 
 	it("does not start anything when no AI request was made", async () => {
