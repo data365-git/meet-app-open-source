@@ -144,6 +144,14 @@ async function optimizeAndFinalizeVideo(
 			const result = await optimizeRemoteVideoToMp4(videoUrl, {
 				onProgress: (percent) => progressWriter.write("optimizing", percent),
 			});
+			// FINDING 3: `write("saving", null)` below fires exactly ONCE, and
+			// `putObject` of a 1-2 GB result.mp4 can run well past
+			// PROCESSING_STAGE_STALE_MS — a heartbeat re-writes on an interval so
+			// `processingUpdatedAt` stays fresh while the save is genuinely alive.
+			const heartbeat = setInterval(
+				() => progressWriter.write("saving", null),
+				PROCESSING_PROGRESS_HEARTBEAT_MS,
+			);
 			try {
 				durationSec = result.metadata?.durationSec ?? null;
 				progressWriter.write("saving", null);
@@ -157,6 +165,7 @@ async function optimizeAndFinalizeVideo(
 					`[process-video] Optimized video for ${videoId}: ${buffer.length} bytes, duration=${durationSec}`,
 				);
 			} finally {
+				clearInterval(heartbeat);
 				await result.cleanup();
 			}
 		} catch (error) {
@@ -196,6 +205,11 @@ async function optimizeAndFinalizeVideo(
 }
 
 const PROCESSING_PROGRESS_THROTTLE_MS = 5000;
+/** Well under PROCESSING_STAGE_STALE_MS (5 min, lib/ai-request-pending.ts) —
+ * a write goes out at least this often even with no stage/percent change, so
+ * a long-running "saving" putObject or a stalled "optimizing" percent never
+ * crosses the staleness cutoff and reads as dead (FINDING 3). */
+const PROCESSING_PROGRESS_HEARTBEAT_MS = 60_000;
 
 interface ProcessingProgressWriteState {
 	lastWriteAt: number;
@@ -216,8 +230,11 @@ export function shouldWriteProcessingProgress(
 ): boolean {
 	const roundedPercent = next.percent == null ? null : Math.round(next.percent);
 	if (next.stage !== state.lastStage) return true;
-	if (roundedPercent === state.lastPercent) return false;
-	return next.now - state.lastWriteAt >= PROCESSING_PROGRESS_THROTTLE_MS;
+	if (roundedPercent !== state.lastPercent)
+		return next.now - state.lastWriteAt >= PROCESSING_PROGRESS_THROTTLE_MS;
+	// Heartbeat: nothing changed, but a write must still go out often enough
+	// to keep processingUpdatedAt fresh — see PROCESSING_PROGRESS_HEARTBEAT_MS.
+	return next.now - state.lastWriteAt >= PROCESSING_PROGRESS_HEARTBEAT_MS;
 }
 
 /**

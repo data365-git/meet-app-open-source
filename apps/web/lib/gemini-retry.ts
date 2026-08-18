@@ -69,7 +69,10 @@ export async function withGeminiRetry<T>(
 			let baseDelay = Math.min(1000 * Math.pow(2, attempt), ceiling);
 			if (options?.honorRetryDelay) {
 				const retryDelayMs = parseRetryDelay(message);
-				if (retryDelayMs !== null) baseDelay = retryDelayMs;
+				// Clamp to the same ceiling as the exponential base: an honored
+				// body can carry a multi-hour retryDelay (e.g. "35994s"), and
+				// without this clamp that sleeps for hours inside a chat request.
+				if (retryDelayMs !== null) baseDelay = Math.min(retryDelayMs, ceiling);
 			}
 			const jitter = Math.floor(Math.random() * 500);
 			await sleepWithAbort(baseDelay + jitter, signal);

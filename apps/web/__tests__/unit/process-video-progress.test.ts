@@ -324,4 +324,45 @@ describe("shouldWriteProcessingProgress — throttle", () => {
 
 		expect(writes).toEqual([{ now: 0, percent: 10 }]);
 	});
+
+	// FINDING 3: `write("saving", null)` fires once and every later call with
+	// the same stage/percent is suppressed — a putObject of a large result.mp4
+	// running past PROCESSING_STAGE_STALE_MS (5 min) then reads as dead. A
+	// heartbeat write must go out even with nothing changed, well before that
+	// 5-minute cutoff.
+	it("writes a heartbeat when unchanged for a long time, even though percent never moves", async () => {
+		const { shouldWriteProcessingProgress } = await import(
+			"@/workflows/process-video"
+		);
+
+		const writerState = {
+			lastWriteAt: -Infinity,
+			lastStage: "saving" as const,
+			lastPercent: undefined as number | null | undefined,
+		};
+		const ticks = [
+			{ now: 0, percent: null },
+			{ now: 30_000, percent: null }, // under the heartbeat interval: suppressed
+			{ now: 65_000, percent: null }, // past it: a heartbeat write must fire
+		];
+		const writes: typeof ticks = [];
+		for (const tick of ticks) {
+			if (
+				shouldWriteProcessingProgress(writerState, {
+					now: tick.now,
+					stage: "saving",
+					percent: tick.percent,
+				})
+			) {
+				writerState.lastWriteAt = tick.now;
+				writerState.lastPercent = tick.percent;
+				writes.push(tick);
+			}
+		}
+
+		expect(writes).toEqual([
+			{ now: 0, percent: null },
+			{ now: 65_000, percent: null },
+		]);
+	});
 });

@@ -1,4 +1,5 @@
 import type { VideoMetadata } from "@cap/database/types";
+import { hasPendingAiGenerationRequest } from "./ai-generation-request";
 
 export type TranscriptionStatusValue =
 	| "PROCESSING"
@@ -157,6 +158,16 @@ export function buildAiStatusFacts({
 	transcriptionStatus: TranscriptionStatusValue | null;
 	aiGenerationStatus: AiGenerationStatusValue | null;
 	aiRequestPending: boolean;
+	/**
+	 * FINDING 1: the durable "the user wants AI" flag (`aiGenerationRequestedAt`,
+	 * never cleared once set — see ai-generation-request.ts). Distinct from
+	 * `aiRequestPending`, which only covers the one-shot upload-in-progress
+	 * banking order: the pipeline writes `transcriptionStatus:"COMPLETE"` several
+	 * "use step" boundaries before `generate-ai.ts` finally writes
+	 * `aiGenerationStatus:"QUEUED"`, and a poll landing in that gap must not
+	 * treat the video as terminal just because nothing has appeared yet.
+	 */
+	aiGenerationRequested: boolean;
 } {
 	const transcription = (transcriptionStatus ??
 		null) as TranscriptionStatusValue | null;
@@ -171,5 +182,6 @@ export function buildAiStatusFacts({
 			aiGenerationStatus,
 			aiStartPendingUpload: metadata.aiStartPendingUpload ?? null,
 		}),
+		aiGenerationRequested: hasPendingAiGenerationRequest(metadata),
 	};
 }

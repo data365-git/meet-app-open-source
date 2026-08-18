@@ -160,9 +160,28 @@ describe("a transcription in flight is never terminal", () => {
 		).toBe(4000);
 	});
 
-	it("still terminal once transcription is COMPLETE with no AI run", () => {
+	it("still terminal once transcription is COMPLETE with no AI ever requested", () => {
 		expect(
-			isAiStatusTerminal({ ...midTranscription, transcriptionStatus: "COMPLETE" }),
+			isAiStatusTerminal({
+				...midTranscription,
+				transcriptionStatus: "COMPLETE",
+				aiGenerationRequested: false,
+			}),
 		).toBe(true);
+	});
+
+	// FINDING 1: transcribe.ts:1980 writes transcriptionStatus:"COMPLETE" with
+	// no aiGenerationStatus several "use step" boundaries before generate-ai.ts
+	// finally writes aiGenerationStatus:"QUEUED". A poll landing in that gap
+	// must not stop — the summary would generate invisibly and the page would
+	// freeze until a manual reload.
+	it("NOT terminal once transcription is COMPLETE while AI was requested but hasn't queued yet", () => {
+		expect(
+			isAiStatusTerminal({
+				...midTranscription,
+				transcriptionStatus: "COMPLETE",
+				aiGenerationRequested: true,
+			}),
+		).toBe(false);
 	});
 });

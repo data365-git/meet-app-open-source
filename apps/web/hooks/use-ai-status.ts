@@ -28,6 +28,9 @@ type AiStatusResult = {
 	/** The user's press is banked (or not yet claimed by the workflow).
 	 * Computed server-side from metadata so it survives polls and remounts. */
 	aiRequestPending: boolean;
+	/** Durable "the user wants AI" flag (never cleared once set). Distinct from
+	 * `aiRequestPending` — see `buildAiStatusFacts` in `lib/ai-request-pending.ts`. */
+	aiGenerationRequested: boolean;
 	aiProcessingStep: AiProcessingStep | null;
 	/** Fine sub-phase inside "transcribe" ("videodan audio ajratilyapti"). */
 	aiProcessingSubStep: AiProcessingSubStep | null;
@@ -71,6 +74,12 @@ export const isAiStatusTerminal = (d: {
 	/** Optional for the same reason. A transcription in flight is the one
 	 * "still working" state that neither of the two fields above reports. */
 	transcriptionStatus?: TranscriptionStatus | null;
+	/** Optional for the same reason. The durable "AI was requested" flag —
+	 * true across the multi-step gap between `transcriptionStatus:"COMPLETE"`
+	 * and `generate-ai.ts` finally writing `aiGenerationStatus:"QUEUED"`. A
+	 * poll landing in that gap must not be treated as terminal, or the summary
+	 * generates invisibly and the page freezes until a manual reload. */
+	aiGenerationRequested?: boolean;
 }): boolean => {
 	if (d.processingStage != null) return false;
 	// A transcription in flight is NOT terminal, and nothing else here says so:
@@ -95,8 +104,10 @@ export const isAiStatusTerminal = (d: {
 	)
 		return true;
 	// No AI run ever started and the optimize/save stage has cleared: nothing
-	// left to wait for, unless a banked request is about to claim the row.
-	return !d.aiRequestPending;
+	// left to wait for, unless a banked request is about to claim the row, or
+	// the durable "AI was requested" flag is set with nothing to show for it
+	// yet (the transcribe.ts:1980 -> generate-ai.ts:120 handoff gap).
+	return !d.aiRequestPending && !d.aiGenerationRequested;
 };
 
 /** Carries the HTTP status so the poll can tell "never" from "not now". */
@@ -179,6 +190,7 @@ export const useAiStatus = (
 				aiGenerationStatus: body.aiGenerationStatus ?? null,
 				transcriptionStatus: body.transcriptionStatus ?? null,
 				aiRequestPending: !!body.aiRequestPending,
+				aiGenerationRequested: !!body.aiGenerationRequested,
 				aiProcessingStep: body.aiProcessingStep ?? null,
 				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
 				hasContent: !!(body.summary || body.chapters),
