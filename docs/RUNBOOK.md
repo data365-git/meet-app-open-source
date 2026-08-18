@@ -1,5 +1,7 @@
 # RUNBOOK — data365 / Ustoz
 
+> ⚠️ **HOST IP CORRECTED 2026-08-18.** Every command below used to say `169.58.12.255`; that address no longer answers on port 22 (connection times out). `data365.duckdns.org` resolves to **169.58.86.149**, and that host is running `data365-web` + `data365-db` right now. The 7 occurrences were updated in place. The key name `~/.ssh/hetzner_ustoz` is still correct despite saying Hetzner. Note also that this file predates the current deploy shape — the live deploy is the `/opt/data365/src-<sha>.tar` → `docker build` → compose-tag-switch flow written up in `docs/plans/2026-08-18-wave1-SPEC.md`, not Coolify.
+
 **Who this is for:** the operator, who is **not a programmer**. Every step here is a thing you can actually do: a menu to click or a command to paste. If a step needs judgement you don't have, the honest answer is in **"When to stop and get help"** at the bottom.
 
 **Rule zero:** *nothing here is true because it is written here.* Every claim below was verified on **2026-07-17** by running it. If something does not match reality, reality wins — fix this file.
@@ -99,7 +101,7 @@ git push origin qa-fixes
 API call:
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 \
   'CT=$(cat /root/.ct); curl -s -X POST \
      -H "Authorization: Bearer $CT" -H "Content-Type: application/json" \
      http://localhost:8000/api/v1/deploy \
@@ -113,7 +115,7 @@ looks stuck.
 `running:unknown`), so check the two things that cannot lie:
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 'docker ps --format "{{.Image}}"'   # tag = your commit sha
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 'docker ps --format "{{.Image}}"'   # tag = your commit sha
 curl -s https://data365.duckdns.org/api/health                                     # db:"ok", storage:"ok"
 ```
 
@@ -122,7 +124,7 @@ curl -s https://data365.duckdns.org/api/health                                  
 | Value | What it is | If it stops working |
 |---|---|---|
 | `~/.ssh/hetzner_ustoz` | SSH private key for the server. Name says Hetzner; the server is Contabo. Legacy name, correct key. | Only on the operator's machine — **if that machine dies, server access dies with it.** Keep a copy in the password manager. |
-| `169.58.12.255` | The VPS IP | Contabo control panel |
+| `169.58.86.149` | The VPS IP | Contabo control panel |
 | `/root/.ct` | File on the server holding the Coolify API token | Regenerate: `docker exec coolify php artisan tinker` → new Sanctum token (must set `team_id` explicitly), write it back to `/root/.ct` |
 | `pokroz1qrj8wfc82bl63ns2c` | Coolify **app** uuid (`ustoz-web`) | Coolify UI → the app → its URL contains the uuid |
 
@@ -141,7 +143,7 @@ the deployment itself what happened (the API's list endpoint returns `[]` once
 the queue drains — you need the uuid the deploy call gave you):
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 \
   'CT=$(cat /root/.ct); curl -s -H "Authorization: Bearer $CT" \
      http://localhost:8000/api/v1/deployments/<deployment_uuid>'
 ```
@@ -170,7 +172,7 @@ password is already in that container's environment, so it never has to be typed
 or stored anywhere:
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255  'docker exec fot1zbunh8jld7l4k67h2zp4 sh -c "mysql -umysql -p\$MYSQL_PASSWORD capdb -e \"SELECT id,transcriptionStatus FROM videos LIMIT 5;\" 2>/dev/null"'
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149  'docker exec fot1zbunh8jld7l4k67h2zp4 sh -c "mysql -umysql -p\$MYSQL_PASSWORD capdb -e \"SELECT id,transcriptionStatus FROM videos LIMIT 5;\" 2>/dev/null"'
 ```
 
 `fot1zbunh8jld7l4k67h2zp4` is the MySQL container (fixed name); the app container
@@ -196,7 +198,7 @@ that column; the dashboard queries that DO touch it would have failed for every
 user. Fixed by hand in seconds once found:
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 \
   'docker exec fot1zbunh8jld7l4k67h2zp4 bash -c "mysql -uroot -p\$MYSQL_ROOT_PASSWORD capdb -e \"ALTER TABLE videos ADD COLUMN libraryKind varchar(16) NULL\""'
 ```
 
@@ -205,7 +207,7 @@ deploy that adds a column must be followed by checking that the column actually
 exists — the migration log line is not evidence:
 
 ```bash
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.12.255 \
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 \
   'docker exec fot1zbunh8jld7l4k67h2zp4 bash -c "mysql -uroot -p\$MYSQL_ROOT_PASSWORD -N -B capdb -e \"SHOW COLUMNS FROM videos\""' | grep <newColumn>
 ```
 
