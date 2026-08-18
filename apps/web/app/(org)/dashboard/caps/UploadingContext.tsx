@@ -16,17 +16,29 @@ export type UploadStatus =
 			status: "converting";
 			capId: string;
 			progress: number;
+			loadedBytes?: number;
+			totalBytes?: number;
+			bytesPerSecond?: number;
+			secondsRemaining?: number;
 	  }
 	| {
 			status: "uploadingThumbnail";
 			capId: string;
 			progress: number;
+			loadedBytes?: number;
+			totalBytes?: number;
+			bytesPerSecond?: number;
+			secondsRemaining?: number;
 	  }
 	| {
 			status: "uploadingVideo";
 			capId: string;
 			progress: number;
 			thumbnailUrl: string | undefined;
+			loadedBytes?: number;
+			totalBytes?: number;
+			bytesPerSecond?: number;
+			secondsRemaining?: number;
 	  }
 	| {
 			status: "serverProcessing";

@@ -193,7 +193,11 @@
 		"timestampRefineNeedsTranscript": "Avval bu fayl uchun AI transkript yarating.",
 		"timestampRefineAlreadyProcessing": "Bu faylning timestamplari allaqachon aniqlashtirilmoqda.",
 		"timestampRefineBudgetExceeded": "AI xarajat limiti tugagan.",
-		"timestampRefineError": "Timestampni aniqlashtirishni boshlab bo'lmadi."
+		"timestampRefineError": "Timestampni aniqlashtirishni boshlab bo'lmadi.",
+		"uploadTimeRemainingCapped": "6+ soat qoldi",
+		"uploadTimeRemainingHoursMinutes": "~{hours} soat {minutes} daqiqa qoldi",
+		"uploadTimeRemainingMinutes": "~{minutes} daqiqa qoldi",
+		"uploadTimeRemainingLessThanMinute": "1 daqiqadan kam qoldi"
 	},
 	"auth": {
 		"signingIn": "Tizimga kiritilmoqda…",
@@ -590,6 +594,8 @@
 		"aiFocalTranscribe": "Audio matnga o'girilmoqda",
 		"aiFocalSummary": "Xulosa yozilmoqda",
 		"aiFocalRefined": "Matn aniqlashtirilmoqda",
+		"processingStageOptimizing": "Video optimallashtirilmoqda",
+		"processingStageSaving": "Video saqlanmoqda",
 		"aiEtaSoon": "Oz qoldi",
 		"aiStageOfTotal": "{current}-bosqich / {total}",
 		"aiAnalysisRunning": "AI tahlil davom etmoqda",

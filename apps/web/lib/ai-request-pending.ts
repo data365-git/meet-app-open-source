@@ -75,6 +75,78 @@ export function isAiRequestPending({
  * `/api/video/ai` GET handler and by ShareVideo's first (server-rendered)
  * paint, so both sides derive "pending" from exactly the same rule.
  */
+/**
+ * A stage is treated as ABSENT once its last write is older than this. The
+ * writer (workflows/process-video.ts, PROCESSING_PROGRESS_THROTTLE_MS)
+ * throttles updates to at most one every 5s while a run is alive, so a live
+ * run never goes this long between writes — only a killed worker leaves the
+ * three metadata keys stranded that long. A few minutes, not seconds, so a
+ * normal gap between throttled writes never gets misread as dead.
+ */
+export const PROCESSING_STAGE_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Interprets the raw `processingStage`/`processingPercent`/`processingUpdatedAt`
+ * metadata trio, discarding a stage whose last write is stale (see
+ * `PROCESSING_STAGE_STALE_MS`) rather than showing a phantom overlay forever.
+ * Shared by the `/api/video/ai` GET handler so every poll response — and by
+ * extension both ShareVideo and CapCard, which only ever read the poll's
+ * `processingStage`/`processingPercent` — apply the same rule in one place.
+ */
+export function buildProcessingProgress({
+	metadata,
+	now = Date.now(),
+}: {
+	metadata: Pick<
+		VideoMetadata,
+		"processingStage" | "processingPercent" | "processingUpdatedAt"
+	>;
+	now?: number;
+}): {
+	processingStage: VideoMetadata["processingStage"] | null;
+	processingPercent: number | null;
+	processingUpdatedAt: string | null;
+} {
+	const updatedAt = metadata.processingUpdatedAt ?? null;
+	const isStale =
+		updatedAt != null &&
+		now - new Date(updatedAt).getTime() > PROCESSING_STAGE_STALE_MS;
+	return {
+		processingStage: isStale ? null : (metadata.processingStage ?? null),
+		processingPercent: isStale ? null : (metadata.processingPercent ?? null),
+		processingUpdatedAt: updatedAt,
+	};
+}
+
+/**
+ * FINDING 1: once the poll has ANY data, it is authoritative — a poll that
+ * authoritatively reports `null` must clear a stale server-rendered value
+ * rather than falling through to it via `??`. Shared by ShareVideo and
+ * CapCard, which each apply this same rule to their own poll/prop pair
+ * (processingStage and processingPercent).
+ */
+export function pollAuthoritativeValue<T>(
+	hasPollData: boolean,
+	pollValue: T,
+	serverValue: T,
+): T {
+	return hasPollData ? pollValue : serverValue;
+}
+
+/**
+ * FINDING 4: should a card whose poller is not running yet turn it ON
+ * because a LATER prop refresh brought in a fresh `processingStage`? The
+ * mount-time seed only covers the FIRST paint's prop — without this, a card
+ * that starts processing after the dashboard tab is already open never
+ * starts polling, so its indicator never appears.
+ */
+export function shouldActivateProcessingPoll(
+	processingActive: boolean,
+	metadataProcessingStage: unknown,
+): boolean {
+	return !processingActive && metadataProcessingStage != null;
+}
+
 export function buildAiStatusFacts({
 	transcriptionStatus,
 	metadata,

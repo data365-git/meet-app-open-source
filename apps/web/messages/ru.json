@@ -193,7 +193,11 @@
 		"timestampRefineNeedsTranscript": "Сначала создайте AI-транскрипт для этого файла.",
 		"timestampRefineAlreadyProcessing": "Таймкоды этого файла уже уточняются.",
 		"timestampRefineBudgetExceeded": "Лимит расходов на AI исчерпан.",
-		"timestampRefineError": "Не удалось запустить уточнение таймкодов."
+		"timestampRefineError": "Не удалось запустить уточнение таймкодов.",
+		"uploadTimeRemainingCapped": "Осталось 6+ ч",
+		"uploadTimeRemainingHoursMinutes": "~{hours} ч {minutes} мин осталось",
+		"uploadTimeRemainingMinutes": "~{minutes} мин осталось",
+		"uploadTimeRemainingLessThanMinute": "Осталось меньше минуты"
 	},
 	"auth": {
 		"signingIn": "Выполняется вход…",
@@ -590,6 +594,8 @@
 		"aiFocalTranscribe": "Расшифровка аудио",
 		"aiFocalSummary": "Составление сводки",
 		"aiFocalRefined": "Уточнение текста",
+		"processingStageOptimizing": "Оптимизация видео",
+		"processingStageSaving": "Сохранение видео",
 		"aiEtaSoon": "Почти готово",
 		"aiStageOfTotal": "Шаг {current} / {total}",
 		"aiAnalysisRunning": "AI-анализ выполняется",

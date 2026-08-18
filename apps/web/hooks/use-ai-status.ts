@@ -38,6 +38,13 @@ type AiStatusResult = {
 	/** Fine-grained summary/refine chunk progress, reset at each stage transition. */
 	aiStageChunksCompleted: number | null;
 	aiStageChunksTotal: number | null;
+	/** The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B) —
+	 * `videoUploads` is already gone by the time this stage runs, so this is
+	 * the only carrier for it. `processingStage` null means this stage is not
+	 * running (either not started yet or already finished). */
+	processingStage: "optimizing" | "saving" | null;
+	processingPercent: number | null;
+	processingUpdatedAt: string | null;
 };
 
 /**
@@ -53,18 +60,43 @@ type AiStatusResult = {
 export const isAiStatusTerminal = (d: {
 	hasContent: boolean;
 	aiGenerationStatus: AiGenerationStatus | null;
+	/** Optional so existing call sites without the field keep compiling; a
+	 * non-null stage means the silent optimize/save stage is still running,
+	 * so the poll must not stop even if old AI content already exists. */
+	processingStage?: "optimizing" | "saving" | null;
+	/** Optional for the same reason. A banked-but-unclaimed AI request means
+	 * there is still something to wait for even with no content and no
+	 * `aiGenerationStatus` yet. */
+	aiRequestPending?: boolean;
+	/** Optional for the same reason. A transcription in flight is the one
+	 * "still working" state that neither of the two fields above reports. */
+	transcriptionStatus?: TranscriptionStatus | null;
 }): boolean => {
+	if (d.processingStage != null) return false;
+	// A transcription in flight is NOT terminal, and nothing else here says so:
+	// `aiRequestPending` is false the moment `transcriptionStatus` is truthy
+	// (isAiRequestPending — "the press was already claimed"), and
+	// `app/api/videos/[videoId]/generate/route.ts:107` deliberately leaves
+	// `aiGenerationStatus` UNSET until the generation stage starts. Without
+	// this line the fall-through below returns TRUE mid-transcription, the
+	// poll stops, and the "Bo'lak N/M" progress line freezes until a manual
+	// reload — the exact defect this file's other fixes exist to remove.
+	if (d.transcriptionStatus === "PROCESSING") return false;
 	if (
 		d.aiGenerationStatus === "QUEUED" ||
 		d.aiGenerationStatus === "PROCESSING"
 	)
 		return false;
-	return (
+	if (
 		d.hasContent ||
 		d.aiGenerationStatus === "COMPLETE" ||
 		d.aiGenerationStatus === "ERROR" ||
 		d.aiGenerationStatus === "SKIPPED"
-	);
+	)
+		return true;
+	// No AI run ever started and the optimize/save stage has cleared: nothing
+	// left to wait for, unless a banked request is about to claim the row.
+	return !d.aiRequestPending;
 };
 
 /** Carries the HTTP status so the poll can tell "never" from "not now". */
@@ -155,6 +187,9 @@ export const useAiStatus = (
 				transcriptionChunksTotal: body.transcriptionChunksTotal ?? null,
 				aiStageChunksCompleted: body.aiStageChunksCompleted ?? null,
 				aiStageChunksTotal: body.aiStageChunksTotal ?? null,
+				processingStage: body.processingStage ?? null,
+				processingPercent: body.processingPercent ?? null,
+				processingUpdatedAt: body.processingUpdatedAt ?? null,
 			};
 		},
 		enabled,

@@ -9,7 +9,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { buildAiStatusFacts } from "@/lib/ai-request-pending";
+import { buildAiStatusFacts, buildProcessingProgress } from "@/lib/ai-request-pending";
 import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
 
 export const dynamic = "force-dynamic";
@@ -115,6 +115,13 @@ export async function GET(request: NextRequest) {
 			aiStageChunksTotal: metadata.aiStageChunksTotal ?? null,
 		};
 
+		// The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B) —
+		// the only place progress for that stage is written, since videoUploads
+		// is deleted before it starts. Included in every branch below, same as
+		// chunkProgress, so the poll behind CapCard/ShareVideo sees it regardless
+		// of whether AI has been requested yet.
+		const processingProgress = buildProcessingProgress({ metadata });
+
 		if (metadata.summary || metadata.chapters) {
 			console.log(
 				`[AI API] Returning existing AI metadata for video ${videoId}`,
@@ -128,6 +135,7 @@ export async function GET(request: NextRequest) {
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
 					...statusFacts,
 					...chunkProgress,
+					...processingProgress,
 				},
 				{ status: 200 },
 			);
@@ -147,6 +155,7 @@ export async function GET(request: NextRequest) {
 					aiProcessingStep: metadata.aiProcessingStep ?? null,
 					...statusFacts,
 					...chunkProgress,
+					...processingProgress,
 				},
 				{ status: 200 },
 			);
@@ -164,6 +173,7 @@ export async function GET(request: NextRequest) {
 				aiProcessingStep: metadata.aiProcessingStep ?? null,
 				...statusFacts,
 				...chunkProgress,
+				...processingProgress,
 			},
 			{ status: 200 },
 		);

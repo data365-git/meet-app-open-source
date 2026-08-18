@@ -48,6 +48,10 @@ import {
   type ImageLoadingStatus,
   VideoThumbnail,
 } from "@/components/VideoThumbnail";
+import {
+  pollAuthoritativeValue,
+  shouldActivateProcessingPoll,
+} from "@/lib/ai-request-pending";
 import { downloadFilename } from "@/lib/download-filename";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
@@ -310,7 +314,33 @@ export const CapCard = ({
   const aiRunning =
     cap.metadata?.aiGenerationStatus === "PROCESSING" ||
     cap.metadata?.aiGenerationStatus === "QUEUED";
-  const aiStatus = useAiStatus(cap.id, aiRunning, 6000);
+  // The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B):
+  // `videoUploads` is already deleted by the time this runs, so
+  // `metadata.processingStage` is the only signal. Seeded from the
+  // server-rendered prop (mirrors the `aiRunning` gate above — no poller
+  // opens on a card that was never processing) and turned back off by the
+  // effect below the moment a poll response reports the stage cleared, so an
+  // idle card never keeps polling forever just because it once processed.
+  const [processingActive, setProcessingActive] = useState(
+    !!cap.metadata?.processingStage,
+  );
+  const aiStatus = useAiStatus(cap.id, aiRunning || processingActive, 6000);
+
+  useEffect(() => {
+    if (!processingActive || !aiStatus.data) return;
+    if (aiStatus.data.processingStage == null) setProcessingActive(false);
+  }, [processingActive, aiStatus.data]);
+  // FINDING 4: the mount-time seed above only covers a card that was already
+  // processing on first paint. On an already-open dashboard tab, a LATER
+  // prop refresh (e.g. `router.refresh()` elsewhere on the grid) can bring
+  // in a fresh `cap.metadata.processingStage` for a card that started
+  // processing after mount — without this, that card never turns its
+  // poller on and the indicator never starts.
+  useEffect(() => {
+    if (shouldActivateProcessingPoll(processingActive, cap.metadata?.processingStage)) {
+      setProcessingActive(true);
+    }
+  }, [processingActive, cap.metadata?.processingStage]);
   const aiStep =
     aiStatus.data?.aiProcessingStep ??
     cap.metadata?.aiProcessingStep ??
@@ -341,6 +371,27 @@ export const CapCard = ({
           total: aiChunkTotal,
         })}`
       : `${aiStageLabel}…`;
+  // FINDING 1: once the poll has ANY data, it is authoritative — a poll
+  // that authoritatively reports `null` must clear the overlay, not fall
+  // through to the stale server-rendered prop via `??`.
+  const processingStage = pollAuthoritativeValue(
+    !!aiStatus.data,
+    aiStatus.data?.processingStage ?? null,
+    cap.metadata?.processingStage ?? null,
+  );
+  const processingPercent = pollAuthoritativeValue(
+    !!aiStatus.data,
+    aiStatus.data?.processingPercent ?? null,
+    cap.metadata?.processingPercent ?? null,
+  );
+  const processingStageLabel =
+    processingStage === "saving"
+      ? tShare("processingStageSaving")
+      : tShare("processingStageOptimizing");
+  const processingLineText =
+    processingPercent != null
+      ? `${processingStageLabel} · ${processingPercent}%`
+      : `${processingStageLabel}…`;
   const hasRawFallback =
     uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
   const hasVisibleUploadProgress =
@@ -963,7 +1014,9 @@ export const CapCard = ({
                               ? "generating_thumbnail"
                               : "uploading",
                         )}
-                        {uploadProgress.status === "uploading" &&
+                        {(uploadProgress.status === "uploading" ||
+                          uploadProgress.status === "processing" ||
+                          uploadProgress.status === "generating_thumbnail") &&
                           uploadProgress.progress > 0 &&
                           ` ${Math.round(uploadProgress.progress)}%`}
                       </span>
@@ -1032,6 +1085,43 @@ export const CapCard = ({
                       )}
                     </>
                   )}
+                </div>
+              </>
+            )}
+
+            {!hasVisibleUploadProgress && processingStage && (
+              <>
+                <div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />
+                <div className="flex absolute bottom-3 left-3 gap-2 items-center z-30">
+                  <span className="text-sm font-semibold text-white">
+                    {processingLineText}
+                  </span>
+                  <svg
+                    className="w-4 h-4 animate-spin"
+                    viewBox="0 0 20 20"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      cx="10"
+                      cy="10"
+                      r="8"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      fill="none"
+                      className="text-white/30"
+                    />
+                    <circle
+                      cx="10"
+                      cy="10"
+                      r="8"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      fill="none"
+                      strokeLinecap="round"
+                      className="text-white"
+                      strokeDasharray="12.5 37.5"
+                    />
+                  </svg>
                 </div>
               </>
             )}

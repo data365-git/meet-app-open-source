@@ -25,7 +25,10 @@ import { getTranscript } from "@/actions/videos/get-transcript";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useQueryClient } from "@tanstack/react-query";
-import { isAiRequestPending } from "@/lib/ai-request-pending";
+import {
+	isAiRequestPending,
+	pollAuthoritativeValue,
+} from "@/lib/ai-request-pending";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { AIChatPopup } from "./AIChatPopup";
@@ -215,10 +218,16 @@ export const ShareVideo = forwardRef<
 		// permanent failure, so it fires once and retires.
 		// The banked-marker arm stays gated — that marker is the owner's own
 		// pending press and means nothing to a visitor.
+		// The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B):
+		// `videoUploads` is already deleted by the time this runs, so
+		// `metadata.processingStage` is the only signal — seed the same poll
+		// this AI status already uses from it, mirroring the CapCard gate.
+		const serverProcessingStage = data.metadata?.processingStage ?? null;
 		const [aiPollEnabled, setAiPollEnabled] = useState(
 			aiGenerationStatus === "QUEUED" ||
 				aiGenerationStatus === "PROCESSING" ||
-				(canGenerate && serverAiPending),
+				(canGenerate && serverAiPending) ||
+				serverProcessingStage != null,
 		);
 		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
 		const queryClient = useQueryClient();
@@ -272,6 +281,11 @@ export const ShareVideo = forwardRef<
 			// Same rule the poll interval uses (one source, no drifting twin):
 			// old content present while a NEW run is QUEUED/PROCESSING is not
 			// terminal — treating it as terminal stopped the poll mid-run.
+			// `isAiStatusTerminal` itself now also requires the optimize/save
+			// stage to be cleared (FINDING 2) and, when there was never an AI
+			// run and no banked request, treats a cleared stage as terminal too
+			// (FINDING 3) — otherwise a share-link visitor with no AI run polls
+			// forever, since none of the AI-terminal branches ever fire.
 			const terminal = isAiStatusTerminal(d);
 			if (terminal && !aiRefreshedRef.current) {
 				aiRefreshedRef.current = true;
@@ -344,6 +358,16 @@ export const ShareVideo = forwardRef<
 			aiStatusQuery.data?.aiProcessingSubStep ??
 			data.metadata?.aiProcessingSubStep ??
 			null;
+		const effectiveProcessingStage = pollAuthoritativeValue(
+			!!aiStatusQuery.data,
+			aiStatusQuery.data?.processingStage ?? null,
+			serverProcessingStage,
+		);
+		const effectiveProcessingPercent = pollAuthoritativeValue(
+			!!aiStatusQuery.data,
+			aiStatusQuery.data?.processingPercent ?? null,
+			data.metadata?.processingPercent ?? null,
+		);
 		// Read from the server prop. ERROR is terminal, so this is correct on any
 		// load; a failure that lands while the page is already open shows the
 		// generic message until the next navigation (the /api/video/ai poll has
@@ -837,6 +861,21 @@ export const ShareVideo = forwardRef<
 							}}
 						/>
 					)}
+					{!data.metadata?.storageMissing &&
+						!isActivelyRecording &&
+						!isProcessingInProgress &&
+						effectiveProcessingStage && (
+							<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30 rounded-md bg-black/60 px-2 py-1">
+								<Loader2Icon className="size-3.5 animate-spin text-white" />
+								<span className="text-sm font-semibold text-white">
+									{effectiveProcessingStage === "saving"
+										? t("processingStageSaving")
+										: t("processingStageOptimizing")}
+									{effectiveProcessingPercent != null &&
+										` · ${effectiveProcessingPercent}%`}
+								</span>
+							</div>
+						)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
 							<div className="flex items-center gap-1.5">

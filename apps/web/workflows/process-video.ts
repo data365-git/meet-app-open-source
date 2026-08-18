@@ -134,48 +134,177 @@ async function optimizeAndFinalizeVideo(
 		.pipe(runPromise);
 
 	let durationSec: number | null = null;
+	// The only carrier for this stage — videoUploads is already gone (deleted
+	// above, wave 1). Cleared in `finally` below so it never survives past
+	// this step regardless of how it ends (2026-08-18 wave 2, Change B).
+	const progressWriter = createProcessingProgressWriter(videoId);
 
 	try {
-		const result = await optimizeRemoteVideoToMp4(videoUrl);
 		try {
-			durationSec = result.metadata?.durationSec ?? null;
-			const buffer = await fs.readFile(result.filePath);
-			await bucket
-				.putObject(`${video.ownerId}/${videoId}/result.mp4`, buffer, {
-					contentType: "video/mp4",
-				})
-				.pipe(runPromise);
-			console.log(
-				`[process-video] Optimized video for ${videoId}: ${buffer.length} bytes, duration=${durationSec}`,
-			);
-		} finally {
-			await result.cleanup();
-		}
-	} catch (error) {
-		console.error(
-			`[process-video] Optimization failed for ${videoId}, keeping the original raw upload playable:`,
-			error,
-		);
-		// Best-effort: even though the encode failed, try to at least learn the
-		// duration so the player's seek bar isn't left stuck blank forever.
-		try {
-			const probe = await probeRemoteVideo(videoUrl);
-			durationSec = probe.durationSec;
-		} catch (probeError) {
+			const result = await optimizeRemoteVideoToMp4(videoUrl, {
+				onProgress: (percent) => progressWriter.write("optimizing", percent),
+			});
+			try {
+				durationSec = result.metadata?.durationSec ?? null;
+				progressWriter.write("saving", null);
+				const buffer = await fs.readFile(result.filePath);
+				await bucket
+					.putObject(`${video.ownerId}/${videoId}/result.mp4`, buffer, {
+						contentType: "video/mp4",
+					})
+					.pipe(runPromise);
+				console.log(
+					`[process-video] Optimized video for ${videoId}: ${buffer.length} bytes, duration=${durationSec}`,
+				);
+			} finally {
+				await result.cleanup();
+			}
+		} catch (error) {
 			console.error(
-				`[process-video] Fallback duration probe also failed for ${videoId}:`,
-				probeError,
+				`[process-video] Optimization failed for ${videoId}, keeping the original raw upload playable:`,
+				error,
 			);
+			// Best-effort: even though the encode failed, try to at least learn the
+			// duration so the player's seek bar isn't left stuck blank forever.
+			try {
+				const probe = await probeRemoteVideo(videoUrl);
+				durationSec = probe.durationSec;
+			} catch (probeError) {
+				console.error(
+					`[process-video] Fallback duration probe also failed for ${videoId}:`,
+					probeError,
+				);
+			}
 		}
-	}
 
-	// Only ever write a real, positive duration — never overwrite an existing
-	// value with null/0 just because this run couldn't determine one.
-	if (durationSec != null && durationSec > 0) {
+		// Only ever write a real, positive duration — never overwrite an existing
+		// value with null/0 just because this run couldn't determine one.
+		if (durationSec != null && durationSec > 0) {
+			await db()
+				.update(videos)
+				.set({ duration: durationSec })
+				.where(eq(videos.id, videoId as Video.VideoId));
+		}
+	} finally {
+		// Wait for every in-flight (fire-and-forget) progress write to settle
+		// BEFORE clearing — otherwise a write from a moment earlier could
+		// resolve AFTER the clear and re-set stale fields nothing will ever
+		// clear again.
+		await progressWriter.flush();
+		await clearProcessingProgress(videoId);
+	}
+}
+
+const PROCESSING_PROGRESS_THROTTLE_MS = 5000;
+
+interface ProcessingProgressWriteState {
+	lastWriteAt: number;
+	lastStage: "optimizing" | "saving" | null;
+	lastPercent: number | null | undefined;
+}
+
+/**
+ * Pure throttle decision — exported so the RED test can drive it with
+ * simulated timestamps instead of real wall-clock sleeps. A write goes out
+ * when the STAGE changes (so "saving" is never delayed behind the optimize
+ * throttle) OR when the rounded integer percent changed AND at least
+ * PROCESSING_PROGRESS_THROTTLE_MS has passed since the last write.
+ */
+export function shouldWriteProcessingProgress(
+	state: ProcessingProgressWriteState,
+	next: { now: number; stage: "optimizing" | "saving"; percent: number | null },
+): boolean {
+	const roundedPercent = next.percent == null ? null : Math.round(next.percent);
+	if (next.stage !== state.lastStage) return true;
+	if (roundedPercent === state.lastPercent) return false;
+	return next.now - state.lastWriteAt >= PROCESSING_PROGRESS_THROTTLE_MS;
+}
+
+/**
+ * Writes `metadata.processingStage/processingPercent/processingUpdatedAt` via
+ * JSON_SET on the existing column — a whole-object overwrite would race the
+ * AI counters written by the transcription pipeline (same rule as
+ * startPendingAiRequest below). Fire-and-forget: a progress-write failure
+ * must never fail the encode it is reporting on.
+ */
+interface ProcessingProgressWriter {
+	write: (stage: "optimizing" | "saving", percent: number | null) => void;
+	/** Resolves once every fire-and-forget write started by `write` has
+	 * settled — see the `finally` block in optimizeAndFinalizeVideo for why
+	 * this must run before the fields are cleared. */
+	flush: () => Promise<void>;
+}
+
+function createProcessingProgressWriter(
+	videoId: string,
+): ProcessingProgressWriter {
+	const state: ProcessingProgressWriteState = {
+		lastWriteAt: -Infinity,
+		lastStage: null,
+		lastPercent: undefined,
+	};
+	const pendingWrites: Promise<unknown>[] = [];
+
+	const write = (
+		stage: "optimizing" | "saving",
+		percent: number | null,
+	): void => {
+		const now = Date.now();
+		if (!shouldWriteProcessingProgress(state, { now, stage, percent })) return;
+		const roundedPercent = percent == null ? null : Math.round(percent);
+		state.lastWriteAt = now;
+		state.lastStage = stage;
+		state.lastPercent = roundedPercent;
+
+		pendingWrites.push(
+			db()
+				.update(videos)
+				.set({
+					metadata: sql`JSON_SET(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.processingStage', ${stage},
+						'$.processingPercent', ${roundedPercent},
+						'$.processingUpdatedAt', ${new Date().toISOString()}
+					)`,
+				})
+				.where(eq(videos.id, videoId as Video.VideoId))
+				.catch((error: unknown) => {
+					console.error(
+						`[process-video] Failed to write processing progress for ${videoId}:`,
+						error,
+					);
+				}),
+		);
+	};
+
+	const flush = async (): Promise<void> => {
+		await Promise.allSettled(pendingWrites);
+	};
+
+	return { write, flush };
+}
+
+/** Cleared on both the success and the failure path — see the `finally` in
+ * optimizeAndFinalizeVideo. Never throws: a clear failure must not turn a
+ * finished (or already-failed) step into a workflow error. */
+async function clearProcessingProgress(videoId: string): Promise<void> {
+	try {
 		await db()
 			.update(videos)
-			.set({ duration: durationSec })
+			.set({
+				metadata: sql`JSON_REMOVE(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.processingStage',
+					'$.processingPercent',
+					'$.processingUpdatedAt'
+				)`,
+			})
 			.where(eq(videos.id, videoId as Video.VideoId));
+	} catch (error) {
+		console.error(
+			`[process-video] Failed to clear processing progress for ${videoId}:`,
+			error,
+		);
 	}
 }
 

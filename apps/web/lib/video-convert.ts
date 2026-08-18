@@ -46,6 +46,15 @@ export interface VideoConversionOptions {
 	 * DEFAULT_COPY_TIMEOUT_MS / DEFAULT_COMPRESS_TIMEOUT_MS above.
 	 */
 	timeoutMs?: number;
+	/**
+	 * Fired as ffmpeg's own `time=HH:MM:SS.ms` progress tokens are parsed out
+	 * of the stderr stream already being accumulated for error reporting — no
+	 * second ffmpeg process, no `-progress pipe:1`. `percent` is clamped to
+	 * 0..99 (100 is reserved for the caller once the file is actually
+	 * written). Called with `null` — never a guessed number — when the
+	 * source duration could not be probed.
+	 */
+	onProgress?: (percent: number | null) => void;
 }
 
 export interface VideoProbeMetadata {
@@ -85,9 +94,45 @@ export function computeCopyTimeoutMs(durationSec: number | null): number {
 	return Math.min(Math.max(scaled, DEFAULT_COPY_TIMEOUT_MS), COPY_TIMEOUT_MAX_MS);
 }
 
+interface RunFfmpegProgress {
+	durationSec: number | null;
+	onProgress: (percent: number | null) => void;
+}
+
+/**
+ * Extracts the LATEST `time=HH:MM:SS.ms` token ffmpeg has printed to stderr
+ * so far — ffmpeg re-prints a fresh progress line periodically, and the
+ * accumulated buffer (already kept for error reporting) can contain several;
+ * only the most recent one reflects current progress.
+ */
+function parseLatestOutTimeSeconds(stderr: string): number | null {
+	const matches = [...stderr.matchAll(/time=(\d+):(\d+):(\d+)\.(\d+)/g)];
+	const last = matches[matches.length - 1];
+	if (!last) return null;
+	const [, h, m, s, cs] = last;
+	return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(`0.${cs}`);
+}
+
+/**
+ * Pure so the RED test can drive it with simulated stderr chunks without
+ * spawning a real ffmpeg process. Clamped to 0..99 — 100 is reserved for the
+ * caller once the output file is actually written. `durationSec` unknown =>
+ * `null`, never an invented percentage.
+ */
+export function computeFfmpegProgressPercent(
+	accumulatedStderr: string,
+	durationSec: number | null,
+): number | null {
+	const outTimeSec = parseLatestOutTimeSeconds(accumulatedStderr);
+	if (outTimeSec == null) return null;
+	if (durationSec == null || durationSec <= 0) return null;
+	return Math.min(99, Math.max(0, (outTimeSec / durationSec) * 100));
+}
+
 function runFfmpeg(
 	args: string[],
 	timeoutMs: number = DEFAULT_COMPRESS_TIMEOUT_MS,
+	progress?: RunFfmpegProgress,
 ): Promise<void> {
 	const ffmpeg = getFfmpegPath();
 
@@ -112,6 +157,17 @@ function runFfmpeg(
 
 		proc.stderr?.on("data", (data: Buffer) => {
 			stderr += data.toString();
+			if (progress) {
+				// Unknown duration still reports `null` on every tick that carries a
+				// time= token, rather than staying silent — the caller (workflow)
+				// decides what an unknown-duration UI looks like.
+				const outTimeSec = parseLatestOutTimeSeconds(stderr);
+				if (outTimeSec != null) {
+					progress.onProgress(
+						computeFfmpegProgressPercent(stderr, progress.durationSec),
+					);
+				}
+			}
 		});
 
 		proc.on("error", (err: Error) => {
@@ -445,11 +501,15 @@ async function convertRemoteVideoToMp4FileInternal(
 ): Promise<void> {
 	const startedAt = Date.now();
 	const copyTimeoutMs = options.timeoutMs ?? computeCopyTimeoutMs(durationSec);
+	const progress = options.onProgress
+		? { durationSec, onProgress: options.onProgress }
+		: undefined;
 
 	try {
 		await runFfmpeg(
 			["-y", "-i", videoUrl, "-c", "copy", "-movflags", "+faststart", outputPath],
 			copyTimeoutMs,
+			progress,
 		);
 		logOptimizeOutcome("copy", durationSec, startedAt, "ok");
 	} catch (error) {
@@ -499,6 +559,7 @@ async function convertRemoteVideoToMp4FileInternal(
 					outputPath,
 				],
 				options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+				progress,
 			);
 			logOptimizeOutcome("compress", durationSec, compressStartedAt, "ok");
 		} catch (compressError) {
@@ -540,6 +601,9 @@ async function optimizeRemoteVideoToMp4FileInternal(
 	}
 
 	const startedAt = Date.now();
+	const progress = options.onProgress
+		? { durationSec, onProgress: options.onProgress }
+		: undefined;
 	try {
 		await runFfmpeg(
 			[
@@ -567,6 +631,7 @@ async function optimizeRemoteVideoToMp4FileInternal(
 				outputPath,
 			],
 			options.timeoutMs ?? DEFAULT_COMPRESS_TIMEOUT_MS,
+			progress,
 		);
 		logOptimizeOutcome("compress", durationSec, startedAt, "ok");
 	} catch (error) {

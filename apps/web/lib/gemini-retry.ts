@@ -11,9 +11,24 @@ export function isTransientGeminiError(status: number, body: string): boolean {
 }
 
 /**
+ * Per-call opt-in knobs. Default behaviour (no options passed) is byte-for-byte
+ * the old 8s-capped exponential backoff, so `gemini-batch-transcribe.ts` and
+ * every other existing caller is unaffected.
+ */
+export interface GeminiRetryOptions {
+	/** Honour the `RetryInfo.retryDelay` a 429 body carries (e.g. `"34s"`)
+	 * instead of the exponential-backoff ceiling. Opt-in per call site. */
+	honorRetryDelay?: boolean;
+	/** Overrides the 8s backoff ceiling used when no retryDelay is honoured. */
+	maxDelayMs?: number;
+}
+
+/**
  * Calls `fn` up to `maxAttempts` times, retrying only on transient Gemini
  * errors (HTTP 429/500/501/503, "overloaded", "high demand", "UNAVAILABLE").
- * Delays: 1s → 2s → 4s → 8s → 8s (capped) + up to 500ms random jitter.
+ * Delays: 1s → 2s → 4s → 8s → 8s (capped) + up to 500ms random jitter, unless
+ * `options.maxDelayMs` raises the ceiling or `options.honorRetryDelay` finds a
+ * `retryDelay` in the error body, in which case that wait is used instead.
  *
  * Pass `maxAttempts = 1` for a single bounded probe (no backoff). An optional
  * `signal` short-circuits the loop and wakes the backoff sleep immediately when
@@ -24,6 +39,7 @@ export async function withGeminiRetry<T>(
 	fn: () => Promise<T>,
 	maxAttempts = 5,
 	signal?: AbortSignal,
+	options?: GeminiRetryOptions,
 ): Promise<T> {
 	let lastError: unknown;
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -49,12 +65,25 @@ export async function withGeminiRetry<T>(
 				signal?.aborted
 			)
 				throw err;
-			const baseDelay = Math.min(1000 * Math.pow(2, attempt), 8000);
+			const ceiling = options?.maxDelayMs ?? 8000;
+			let baseDelay = Math.min(1000 * Math.pow(2, attempt), ceiling);
+			if (options?.honorRetryDelay) {
+				const retryDelayMs = parseRetryDelay(message);
+				if (retryDelayMs !== null) baseDelay = retryDelayMs;
+			}
 			const jitter = Math.floor(Math.random() * 500);
 			await sleepWithAbort(baseDelay + jitter, signal);
 		}
 	}
 	throw lastError;
+}
+
+/** Extracts the seconds from a `"retryDelay": "34s"` RetryInfo detail, if present. */
+function parseRetryDelay(message: string): number | null {
+	const match = message.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+	const seconds = match?.[1];
+	if (!seconds) return null;
+	return Math.round(parseFloat(seconds) * 1000);
 }
 
 /** Sleep that resolves after `ms` or as soon as `signal` aborts (so a bounded

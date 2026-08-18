@@ -193,7 +193,11 @@
 		"timestampRefineNeedsTranscript": "Create an AI transcript for this file first.",
 		"timestampRefineAlreadyProcessing": "This file's timestamps are already being refined.",
 		"timestampRefineBudgetExceeded": "The AI spending limit has been reached.",
-		"timestampRefineError": "Could not start timestamp refinement."
+		"timestampRefineError": "Could not start timestamp refinement.",
+		"uploadTimeRemainingCapped": "6+ hours left",
+		"uploadTimeRemainingHoursMinutes": "~{hours}h {minutes}m left",
+		"uploadTimeRemainingMinutes": "~{minutes}m left",
+		"uploadTimeRemainingLessThanMinute": "Less than a minute left"
 	},
 	"auth": {
 		"signingIn": "Signing you in…",
@@ -590,6 +594,8 @@
 		"aiFocalTranscribe": "Transcribing audio",
 		"aiFocalSummary": "Writing the summary",
 		"aiFocalRefined": "Refining the text",
+		"processingStageOptimizing": "Optimizing video",
+		"processingStageSaving": "Saving video",
 		"aiEtaSoon": "Almost done",
 		"aiStageOfTotal": "Step {current} / {total}",
 		"aiAnalysisRunning": "AI analysis in progress",

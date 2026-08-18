@@ -27,6 +27,66 @@ import { uploadWithTarget } from "@/utils/upload-target";
 export const IMPORT_FILE_ACCEPT =
 	"video/*,audio/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.mp3,.MP3,.wav,.WAV,.m4a,.M4A,.aac,.AAC,.ogg,.OGG,.oga,.opus,.flac,.FLAC";
 
+// Rolling-window speed estimate: bytesPerSecond/secondsRemaining are derived
+// only from samples spanning roughly the last SPEED_WINDOW_MS. Using the
+// whole upload's average would let a slow start (or a network hiccup) poison
+// the ETA for the rest of a multi-hour upload.
+export const SPEED_WINDOW_MS = 8000;
+
+export interface ProgressSample {
+	time: number;
+	loaded: number;
+}
+
+/** Pure, no React — testable without mounting anything. */
+export function computeBytesPerSecond(
+	samples: ProgressSample[],
+	windowMs: number = SPEED_WINDOW_MS,
+): number | undefined {
+	if (samples.length === 0) return undefined;
+	const latest = samples[samples.length - 1];
+	if (!latest) return undefined;
+	const windowStart = latest.time - windowMs;
+	const windowed = samples.filter((s) => s.time >= windowStart);
+	if (windowed.length < 2) return undefined;
+	const first = windowed[0];
+	if (!first) return undefined;
+	const elapsedSeconds = (latest.time - first.time) / 1000;
+	if (elapsedSeconds <= 0) return undefined;
+	const speed = (latest.loaded - first.loaded) / elapsedSeconds;
+	return speed > 0 ? speed : undefined;
+}
+
+/** Pure, no React. Never returns Infinity/NaN — undefined when unknown. */
+export function computeSecondsRemaining(
+	loaded: number,
+	total: number,
+	bytesPerSecond: number | undefined,
+): number | undefined {
+	if (!bytesPerSecond || bytesPerSecond <= 0) return undefined;
+	const remainingBytes = total - loaded;
+	if (remainingBytes <= 0) return 0;
+	return remainingBytes / bytesPerSecond;
+}
+
+/**
+ * Module-scope factory for the rolling sample window kept per upload attempt.
+ * A fresh instance per upload keeps concurrent uploads (and repeated retries
+ * of the same file) from bleeding samples into each other.
+ */
+function createSpeedTracker() {
+	let samples: ProgressSample[] = [];
+	return {
+		record(loaded: number, time: number = Date.now()) {
+			samples.push({ time, loaded });
+			// Bound memory; SPEED_WINDOW_MS worth of ticks never gets close to this.
+			if (samples.length > 60) samples = samples.slice(-60);
+			const bytesPerSecond = computeBytesPerSecond(samples);
+			return { bytesPerSecond };
+		},
+	};
+}
+
 function isAudioFile(file: File) {
 	return (
 		file.type.startsWith("audio/") ||
@@ -148,6 +208,7 @@ async function uploadVideoForServerProcessing(
 		};
 
 		const progressTracker = createProgressTracker();
+		const speedTracker = createSpeedTracker();
 
 		// Large files route through multipart (16MB parts, parallel, per-part
 		// retry + stall timeout — utils/multipart-upload.ts, shared with the web
@@ -171,11 +232,20 @@ async function uploadVideoForServerProcessing(
 					durationInSecs: duration,
 					onProgress: (loaded, total) => {
 						const percent = total > 0 ? (loaded / total) * 100 : 0;
+						const { bytesPerSecond } = speedTracker.record(loaded);
 						setUploadStatus({
 							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
 							thumbnailUrl: undefined,
+							loadedBytes: loaded,
+							totalBytes: total,
+							bytesPerSecond,
+							secondsRemaining: computeSecondsRemaining(
+								loaded,
+								total,
+								bytesPerSecond,
+							),
 						});
 
 						progressTracker.scheduleProgressUpdate(loaded, total);
@@ -221,11 +291,20 @@ async function uploadVideoForServerProcessing(
 					fileName: file.name,
 					onProgress: ({ loaded, total }) => {
 						const percent = (loaded / total) * 100;
+						const { bytesPerSecond } = speedTracker.record(loaded);
 						setUploadStatus({
 							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
 							thumbnailUrl: undefined,
+							loadedBytes: loaded,
+							totalBytes: total,
+							bytesPerSecond,
+							secondsRemaining: computeSecondsRemaining(
+								loaded,
+								total,
+								bytesPerSecond,
+							),
 						});
 
 						progressTracker.scheduleProgressUpdate(loaded, total);

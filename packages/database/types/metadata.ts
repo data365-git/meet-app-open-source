@@ -215,6 +215,19 @@ export interface VideoMetadata {
 	 * time — re-run AI generation to regenerate them against the new timeline.
 	 */
 	chaptersStaleAfterTrim?: boolean;
+	/**
+	 * Carrier for the silent pre-AI optimize/save stage (2026-08-18 wave 2,
+	 * Change B). `videoUploads` cannot carry this — processVideoWorkflow
+	 * deletes that row as its first step on purpose — so this is the only
+	 * place progress for the ffmpeg optimize pass and the result.mp4 upload
+	 * gets written. Cleared (all three together) when the step ends, on both
+	 * the success and the failure path.
+	 */
+	processingStage?: "optimizing" | "saving";
+	/** 0-99, or null when the source duration could not be probed — never a
+	 * guessed number. */
+	processingPercent?: number | null;
+	processingUpdatedAt?: string;
 }
 
 export type VideoEditRange = {
