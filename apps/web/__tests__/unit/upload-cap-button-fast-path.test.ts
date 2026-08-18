@@ -19,7 +19,7 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const { createVideoMock, routerPushMock } = vi.hoisted(() => ({
+const { createVideoMock, routerPushMock, routerRefreshMock } = vi.hoisted(() => ({
 	createVideoMock: vi.fn(async (_args: { folderId?: string }) => ({
 		id: "vid_new",
 		uploadTarget: { url: "https://example.test/put", method: "PUT" as const },
@@ -27,6 +27,7 @@ const { createVideoMock, routerPushMock } = vi.hoisted(() => ({
 		bucketId: "bucket_1",
 	})),
 	routerPushMock: vi.fn(),
+	routerRefreshMock: vi.fn(),
 }));
 
 vi.mock("next-intl", () => ({
@@ -63,7 +64,13 @@ vi.mock("@/components/UpgradeModal", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-	useRouter: () => ({ push: routerPushMock }),
+	// Both router methods this tree actually uses: `push` (useImportUpload
+	// navigates when no onUploadStarted callback is passed) and `refresh`
+	// (UploadCapButton passes one, stays put, and refreshes the
+	// server-rendered list instead). A mock without `refresh` let processFile()
+	// reject AFTER the assertions were already satisfied: every test passed
+	// while the run exited 1 on unhandled rejections.
+	useRouter: () => ({ push: routerPushMock, refresh: routerRefreshMock }),
 }));
 
 vi.mock("@/app/(org)/dashboard/Contexts", () => ({
@@ -160,6 +167,7 @@ async function renderAndPickFile(folderId?: string) {
 afterEach(() => {
 	createVideoMock.mockClear();
 	routerPushMock.mockClear();
+	routerRefreshMock.mockClear();
 });
 
 describe("UploadCapButton one-click upload (folder-aware)", () => {
@@ -177,6 +185,17 @@ describe("UploadCapButton one-click upload (folder-aware)", () => {
 		await renderAndPickFile("fld_target");
 
 		expect(routerPushMock).not.toHaveBeenCalled();
+	});
+
+	// The other half of "stay on the page": staying put is only correct if the
+	// list re-renders. revalidatePath("/dashboard/folder") does not match the
+	// dynamic route /dashboard/folder/[id], so without this refresh the upload
+	// succeeded, the progress placeholder vanished, and the folder still read
+	// "empty" - the user re-uploaded the same file believing it had failed.
+	it("refreshes the server-rendered list instead of navigating (Task 2)", async () => {
+		await renderAndPickFile("fld_target");
+
+		expect(routerRefreshMock).toHaveBeenCalled();
 	});
 
 	it("uploads to root when opened outside a folder (no folderId)", async () => {
