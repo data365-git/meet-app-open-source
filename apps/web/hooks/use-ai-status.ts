@@ -31,10 +31,6 @@ type AiStatusResult = {
 	/** Durable "the user wants AI" flag (never cleared once set). Distinct from
 	 * `aiRequestPending` — see `buildAiStatusFacts` in `lib/ai-request-pending.ts`. */
 	aiGenerationRequested: boolean;
-	/** Server-computed: that durable flag is older than the handoff can take,
-	 * so the run it promised is never coming. Without it the flag is a one-way
-	 * latch and the poll never stops on a job that died. */
-	aiGenerationRequestStale: boolean;
 	aiProcessingStep: AiProcessingStep | null;
 	/** Fine sub-phase inside "transcribe" ("videodan audio ajratilyapti"). */
 	aiProcessingSubStep: AiProcessingSubStep | null;
@@ -84,12 +80,6 @@ export const isAiStatusTerminal = (d: {
 	 * poll landing in that gap must not be treated as terminal, or the summary
 	 * generates invisibly and the page freezes until a manual reload. */
 	aiGenerationRequested?: boolean;
-	/** Optional for the same reason. Server-computed: the durable flag above is
-	 * older than the handoff can legitimately take, so the run it promised is
-	 * never coming (a workflow killed inside the gap). Computed on the SERVER,
-	 * against the clock that wrote the marker — a viewer's device clock can be
-	 * hours off, and this decides whether a poll ever stops. */
-	aiGenerationRequestStale?: boolean;
 }): boolean => {
 	if (d.processingStage != null) return false;
 	// A transcription in flight is NOT terminal, and nothing else here says so:
@@ -118,20 +108,30 @@ export const isAiStatusTerminal = (d: {
 	// we are inside the transcribe.ts:1980 -> generate-ai.ts:120 handoff gap.
 	//
 	// That second exception is deliberately NARROW. Nothing ever clears
-	// `aiGenerationRequestedAt` and no redeemer reads it, so a bare
-	// `!d.aiGenerationRequested` keeps the poll alive FOREVER on every dead
-	// job — transcription ERROR / NO_AUDIO / SKIPPED, or a row an operator
-	// reset — which is the mirror image of the freeze this file exists to fix:
-	// /api/video/ai every 4s for as long as the tab is open, and the panel
-	// never falls through to its error+retry branch. It would also break the
-	// rule ai-request-pending.ts states in its own words: a pending flag must
-	// never trap a dead job. So the flag may hold the poll open only in the
-	// state it was added for — transcription COMPLETE, generation not yet
-	// queued — and only while that wait is still plausible.
+	// `aiGenerationRequestedAt`, so a bare `!d.aiGenerationRequested` keeps the
+	// poll alive FOREVER on every dead job — transcription ERROR / NO_AUDIO /
+	// SKIPPED, or a row an operator reset — which is the mirror image of the
+	// freeze this file exists to fix: /api/video/ai every 4s for as long as the
+	// tab is open, and the panel never falls through to its error+retry branch.
+	// It would also break the rule ai-request-pending.ts states in its own
+	// words: a pending flag must never trap a dead job. So the flag may hold
+	// the poll open in exactly ONE state — transcription COMPLETE, generation
+	// not yet queued.
+	//
+	// NO TIME BOUND ON PURPOSE, and that was measured rather than assumed. A
+	// 10-minute staleness bound was written here and then DISCARDED: the marker
+	// is stamped at PRESS time (generate/route.ts:122, :204) and never
+	// re-anchored when COMPLETE lands, so pressing "AI tahlil" during a long
+	// transcription — a supported flow, and the shape every cron-recovered job
+	// has by construction — read as "stale" throughout a legitimate handoff and
+	// re-created the freeze. Age carries no signal here: transcribe.ts:2038
+	// READS this marker to auto-start generation, so COMPLETE + requested means
+	// a run really is coming, however old the press. What stays open is
+	// narrower and much cheaper than a freeze: a workflow killed inside the gap
+	// leaves that one tab polling. Bounding that needs a COMPLETE-anchored
+	// timestamp, which does not exist today.
 	const awaitingAiHandoff =
-		d.aiGenerationRequested === true &&
-		d.transcriptionStatus === "COMPLETE" &&
-		d.aiGenerationRequestStale !== true;
+		d.aiGenerationRequested === true && d.transcriptionStatus === "COMPLETE";
 	return !d.aiRequestPending && !awaitingAiHandoff;
 };
 
@@ -216,10 +216,6 @@ export const useAiStatus = (
 				transcriptionStatus: body.transcriptionStatus ?? null,
 				aiRequestPending: !!body.aiRequestPending,
 				aiGenerationRequested: !!body.aiGenerationRequested,
-				// Absent (an older server mid-rollout) reads as "not stale", so
-				// the poll behaves exactly as it did before this bound existed
-				// — the narrowing above still closes the dead-job cases.
-				aiGenerationRequestStale: !!body.aiGenerationRequestStale,
 				aiProcessingStep: body.aiProcessingStep ?? null,
 				aiProcessingSubStep: body.aiProcessingSubStep ?? null,
 				hasContent: !!(body.summary || body.chapters),
