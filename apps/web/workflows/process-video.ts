@@ -207,8 +207,17 @@ async function optimizeAndFinalizeVideo(
 const PROCESSING_PROGRESS_THROTTLE_MS = 5000;
 /** Well under PROCESSING_STAGE_STALE_MS (5 min, lib/ai-request-pending.ts) —
  * a write goes out at least this often even with no stage/percent change, so
- * a long-running "saving" putObject or a stalled "optimizing" percent never
- * crosses the staleness cutoff and reads as dead (FINDING 3). */
+ * a long-running "saving" putObject never crosses the staleness cutoff and
+ * reads as dead (FINDING 3).
+ *
+ * KNOWN LIMIT, stated rather than overclaimed: only the "saving" block runs
+ * under the heartbeat interval. During "optimizing" the sole writer is
+ * ffmpeg's own onProgress callback, so if ffmpeg emits NOTHING for 5 minutes
+ * (a hung remux, a stalled read of the source) no write happens at all, this
+ * heartbeat is never consulted, and the overlay clears while the encode is
+ * still alive. Deliberately not widened here: the owner scoped tonight's work
+ * to the upload percentage plus a failed analysis ending in retry, and
+ * touching the ffmpeg progress path is a bigger change than that. */
 const PROCESSING_PROGRESS_HEARTBEAT_MS = 60_000;
 
 interface ProcessingProgressWriteState {

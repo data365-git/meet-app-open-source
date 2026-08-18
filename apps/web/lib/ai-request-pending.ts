@@ -148,12 +148,26 @@ export function shouldActivateProcessingPoll(
 	return !processingActive && metadataProcessingStage != null;
 }
 
+/**
+ * How long `aiGenerationRequestedAt` may still mean "a generation run is about
+ * to start". The real gap is two "use step" boundaries after
+ * `transcriptionStatus:"COMPLETE"` — a partial-file delete and a temp-audio
+ * cleanup — i.e. seconds. Ten minutes is therefore far outside the normal
+ * path on purpose: stopping the poll EARLY would re-create the very freeze
+ * this family of fixes exists to remove, while stopping it LATE only costs a
+ * few background requests on one open tab.
+ */
+export const AI_GENERATION_HANDOFF_MAX_MS = 10 * 60 * 1000;
+
 export function buildAiStatusFacts({
 	transcriptionStatus,
 	metadata,
+	now = Date.now(),
 }: {
 	transcriptionStatus?: TranscriptionStatusValue | string | null;
 	metadata: VideoMetadata;
+	/** Injectable so the staleness rule is assertable without faking a clock. */
+	now?: number;
 }): {
 	transcriptionStatus: TranscriptionStatusValue | null;
 	aiGenerationStatus: AiGenerationStatusValue | null;
@@ -168,12 +182,28 @@ export function buildAiStatusFacts({
 	 * treat the video as terminal just because nothing has appeared yet.
 	 */
 	aiGenerationRequested: boolean;
+	/**
+	 * Is that durable flag too OLD to still mean "a run is about to start"?
+	 * Without this the flag above is a one-way latch: nothing clears
+	 * `aiGenerationRequestedAt`, so a workflow KILLED inside the handoff gap
+	 * would hold the client's poll open for as long as the tab stays open.
+	 * Computed HERE, on the server, against the same clock that wrote the
+	 * marker — the client's device clock can be hours off.
+	 */
+	aiGenerationRequestStale: boolean;
 } {
 	const transcription = (transcriptionStatus ??
 		null) as TranscriptionStatusValue | null;
 	const aiGenerationStatus =
 		(metadata.aiGenerationStatus as AiGenerationStatusValue | undefined) ??
 		null;
+	// An unparseable or missing marker is NOT stale: `aiGenerationRequested` is
+	// false in that case anyway, so nothing is holding the poll open to bound.
+	const requestedAtMs = Date.parse(
+		typeof metadata.aiGenerationRequestedAt === "string"
+			? metadata.aiGenerationRequestedAt
+			: "",
+	);
 	return {
 		transcriptionStatus: transcription,
 		aiGenerationStatus,
@@ -183,5 +213,8 @@ export function buildAiStatusFacts({
 			aiStartPendingUpload: metadata.aiStartPendingUpload ?? null,
 		}),
 		aiGenerationRequested: hasPendingAiGenerationRequest(metadata),
+		aiGenerationRequestStale:
+			Number.isFinite(requestedAtMs) &&
+			now - requestedAtMs > AI_GENERATION_HANDOFF_MAX_MS,
 	};
 }
