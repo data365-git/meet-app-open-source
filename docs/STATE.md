@@ -9,7 +9,28 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE - last point 2026-08-22
+## RESUME HERE - live point 2026-08-31 (data365 AI restored on gemini-3.7-flash)
+
+### 2026-08-31 — DEPLOYED `a8c1bd0`: the paid OpenRouter leg moved to `google/gemini-3.7-flash`
+
+**What broke, measured not guessed.** The owner restricted his OpenRouter key to 3.7 on the dashboard. Our code pinned `google/gemini-3-flash-preview`, so the production key answered **404** and every PAID transcription / summary / translation / chat call threw. Users saw **"AI analysis failed. AI generation error."** — reported on `y71wes3p9q32bg4` ("SHMS - Azizbek bilan suhbat", 121 min, transcription COMPLETE, `aiGenerationStatus = ERROR`). The free Google chain was untouched, which is why short videos looked fine and it went unnoticed for days. Before the fix, prod's last successful OpenRouter row was 2026-08-27 18:37.
+
+**The fix is TWO lines, and the second is the one that mattered.** A model-only swap would have failed every call: 3.7 rejects our `reasoning: { max_tokens: 0 }` with **400 "Reasoning is mandatory for this endpoint and cannot be disabled"**. Measured alternatives on one prompt — `effort: "minimal"` → reasoning_tokens **0**, $0.00032; the field omitted → **457** reasoning tokens, $0.0021, and a 200-token cap truncated the JSON mid-string. So: `OPENROUTER_MODEL = "google/gemini-3.7-flash"` + `reasoning: { effort: "minimal" }`. Comments asserting the now-dead reasoning-off parity were rewritten, not left to lie.
+
+**Evidence gathered before the tag switch** (production key, production request shape):
+- `google/gemini-3.7-flash` on OpenRouter: same input modalities incl. **audio**, same 1,048,576 context, same 65,536 max completion, $0.375/$1.875 per 1M vs $0.50/$3.00.
+- **Real Uzbek audio probe** (45 s voice note, the app's exact `TRANSCRIPTION_INSTRUCTION_PREFIX`, temperature 0.1, effort minimal): HTTP 200, `finish_reason: stop`, **reasoning_tokens 0**, 698 audio-in tokens, $0.00248 → correct **WEBVTT in Uzbek Latin** with real timestamps and no invented speaker labels on a single-speaker note.
+- Structured-output leg: valid JSON, good Uzbek, `finish_reason: stop`.
+- Pricing-table risk **falsified**: `packages/utils/src/ai-pricing.ts` uses `PRICES[model] ?? DEFAULT_PRICE`, and DEFAULT_PRICE is 2.5-flash's *higher* rates, deliberately so an unknown model never under-prices. No $0 rows, spend backstops stay armed. (The `openrouter/`-prefixed key was already absent before this change — pre-existing, not a regression.)
+- Gates by the main session: `tsc -b --force` exit 0 · **179 files / 1527 tests passed**, 26 skipped, exit 0 · no CRLF churn (14 == 14).
+- **Blind non-author review (Fable): GO with conditions.** It caught three things the author missed — the pricing-table question, that the summary A/B does not cover *transcription* parity, and that paid and free legs now run DIFFERENT models so one long video can mix free-Google and paid-3.7 chunks with possible style drift. That last one is accepted and un-mitigated; surface it if transcripts start reading inconsistently.
+
+**Deploy:** `cp docker-compose.app.yml docker-compose.app.yml.bak-a8c1bd0`, one `image:` line → `data365-web:a8c1bd0`, `docker compose -f docker-compose.app.yml up -d`. Live after: container `Up` on `a8c1bd0` · `/api/health` `db:ok storage:ok` · `/login` 200 · `/s/zp46nk5t66cdqfv` 200 · `POST /api/video/ai/chat` → **HTTP 200, 9 token frames, 0 error frames**, a real Uzbek answer with timestamp citations.
+**Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-a8c1bd0 docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` → back to `f70063c`, still on the host.
+
+**⚠️ STILL UNPROVEN IN PRODUCTION, stated not hidden.** That chat probe was served by the **FREE** chain (`gemini-3.5-flash`, $0) — it proves the app is healthy, NOT that the paid OpenRouter leg works end-to-end through our own code. Direct API calls with the production key prove the vendor side; the app-path paid call has not run since the deploy. **The one action that settles it: the owner presses "Retry" on `y71wes3p9q32bg4`.** A 121-minute video exhausts the free quota, so generation falls to the paid leg — his summary and the proof arrive together. Until then, treat the paid path as vendor-verified only. Do not write "paid leg verified" on this board without an `openrouter/google/gemini-3.7-flash` row in `ai_usage_events`.
+
+**A/B baseline saved for the quality comparison he asked for:** the old-model summary of `zp46nk5t66cdqfv` (110 min, 53,201 bytes) is at `scratchpad\ab-3.7\BEFORE-old-model-summary.txt`. A true side-by-side on the SAME model pair is now impossible — his key rejects the old id — so the comparison is stored-old vs regenerated-new, and regenerating that video overwrites its summary (the backup makes that reversible).
 
 ### 2026-08-22 — code package for an outside developer (NO product code changed)
 Owner's order: zip the whole repo for a cheap outside developer/agent, no secrets, required env vars obvious. Delivered to his Telegram:
