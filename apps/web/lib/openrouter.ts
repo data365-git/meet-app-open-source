@@ -11,7 +11,7 @@
  * The request shape below is not a guess. It is the shape verified live on
  * 2026-08-13 across six runs / three real 3-min chunks against the production
  * Gemini path: same coverage (2m26s vs 2m27s), same `Spiker 1/2` labels, same
- * Uzbek Latin script. `temperature: 0.1` and `reasoning: { max_tokens: 0 }` are
+ * Uzbek Latin script. `temperature: 0.1` and `reasoning: { effort: "minimal" }` are
  * REQUIRED for that parity — they are the OpenRouter spelling of the Gemini
  * path's `temperature: 0.1` + `thinkingConfig: { thinkingBudget: 0 }`.
  */
@@ -31,7 +31,7 @@ export const OPENROUTER_COMPLETIONS_URL =
  * uses, served through OpenRouter. Recorded in `ai_usage_events.model` with the
  * `openrouter/` prefix OpenRouter itself uses, so the owner's cost panel shows
  * which vendor was billed. */
-export const OPENROUTER_MODEL = "google/gemini-3-flash-preview";
+export const OPENROUTER_MODEL = "google/gemini-3.7-flash";
 /** What withCostGuard records. Prefixed so a Gemini row and an OpenRouter row
  * are never confused in the spend breakdown. */
 export const OPENROUTER_USAGE_MODEL = `openrouter/${OPENROUTER_MODEL}`;
@@ -99,10 +99,14 @@ export function buildOpenRouterBody(opts: {
 		...(opts.responseFormat
 			? { response_format: { type: opts.responseFormat } }
 			: {}),
-		// Reasoning OFF. Parity requirement, not a cost tweak: the Google path
-		// runs with thinkingBudget 0 and the measured transcript match was taken
-		// with reasoning disabled.
-		reasoning: { max_tokens: 0 },
+		// Reasoning at the FLOOR. 3.7 Flash REJECTS `{ max_tokens: 0 }` with 400
+		// "Reasoning is mandatory for this endpoint and cannot be disabled" (measured
+		// 2026-08-31), so the parity the Google path gets from thinkingBudget 0 is
+		// approximated with the lowest effort tier the endpoint accepts. Same prompt,
+		// measured: effort "minimal" -> reasoning_tokens 0, $0.00032; the field
+		// omitted -> 457 reasoning tokens, $0.0021, and a 200-token cap truncated the
+		// JSON mid-string.
+		reasoning: { effort: "minimal" },
 		// Ask for the real dollar figure back on streamed responses too; harmless
 		// on non-streamed ones, which return `usage` regardless.
 		...(opts.stream ? { stream: true, usage: { include: true } } : {}),

@@ -158,7 +158,7 @@ describe("transcribeWithOpenRouter — the bytes that actually go on the wire", 
 		vi.unstubAllGlobals();
 	});
 
-	it("sends the measured request shape: model, temperature 0.1, reasoning off, the EXACT prompt bytes, and the audio as input_audio", async () => {
+	it("sends the measured request shape: model, temperature 0.1, reasoning at the floor, the EXACT prompt bytes, and the audio as input_audio", async () => {
 		const { calls } = stubFetch({});
 
 		await transcribeWithOpenRouter("https://a/0.mp3", {
@@ -173,7 +173,7 @@ describe("transcribeWithOpenRouter — the bytes that actually go on the wire", 
 			model: string;
 			temperature: number;
 			max_tokens: number;
-			reasoning: { max_tokens: number };
+			reasoning: { effort: string };
 			messages: Array<{
 				role: string;
 				content: Array<Record<string, unknown>>;
@@ -183,9 +183,9 @@ describe("transcribeWithOpenRouter — the bytes that actually go on the wire", 
 		expect(sent.model).toBe(OPENROUTER_MODEL);
 		expect(sent.temperature).toBe(0.1);
 		expect(sent.max_tokens).toBe(TRANSCRIBE_MAX_OUTPUT_TOKENS);
-		// Reasoning OFF — the parity requirement, and the thing a "helpful"
+		// Reasoning at the FLOOR — the parity requirement, and the thing a "helpful"
 		// later edit is most likely to drop.
-		expect(sent.reasoning).toEqual({ max_tokens: 0 });
+		expect(sent.reasoning).toEqual({ effort: "minimal" });
 
 		expect(sent.messages).toHaveLength(1);
 		expect(sent.messages[0]?.role).toBe("user");
