@@ -9,7 +9,25 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE - live point 2026-09-05 evening (all built + reviewed + committed; DEPLOY is the next step, needs his word)
+## RESUME HERE - live point 2026-09-05 ~23:55 (STOPPED MID-DEPLOY: image building for 643babf, tag NOT switched)
+
+### 2026-09-05 ~23:55 — STOPPED MID-DEPLOY on purpose (context ceiling). Image building for `643babf`; the tag is NOT switched.
+
+**Where it stands.** Two commits landed after the ones described below: `a4c5b99` (the feature) and **`643babf`** (the fix a blind review forced). Production is still on **`a8c1bd0`** — nothing user-visible has changed yet. `data365-web:a4c5b99` was built and is now STALE (superseded); the build for `643babf` was running when this session stopped. Check it first: `ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 "docker images | grep 643babf; tail -4 /tmp/build-643babf.log"`. Source is already extracted at `/opt/data365/app-643babf`; if the image is missing, rebuild with `cd /opt/data365/app-643babf && docker build -f apps/web/Dockerfile -t data365-web:643babf .` (the Dockerfile is at `apps/web/Dockerfile`, NOT the repo root — a build from the root fails with "no such file").
+
+**The defect the second review caught, and why it mattered.** The first pass flipped `aiGenerationEnabled` to `false` at all three transcription entry points and declared transcript-first done. It was a NO-OP for the owner's most common flow. `generate/route.ts` also stamped `metadata.aiGenerationRequestedAt` when the press happened during upload; nothing ever clears that marker, and `shouldStartAiAfterTranscription` returns `aiGenerationEnabled || hasPendingAiGenerationRequest(metadata)` — the OR put the auto-chain straight back. Every gate was green because the tests asserted the ARGUMENT that was changed, never the OUTCOME. `643babf` stops writing that marker on a not-yet-transcribed video (the PROCESSING branch still writes it, correctly — there the transcript is already underway so a press really does mean "run AI after"). Two assertions added and **mutation-checked**: restoring the old write turns both RED. Lesson filed in memory as the 11th shape of `feedback_unasserted_rule_is_not_a_rule` — a flag an OR can bypass is not a switch.
+
+**▶ NEXT STEP — three commands, then verify.**
+1. `cd /opt/data365 && cp docker-compose.app.yml docker-compose.app.yml.bak-643babf && sed -i 's|data365-web:a8c1bd0|data365-web:643babf|' docker-compose.app.yml && grep -n 'image:' docker-compose.app.yml`
+2. `docker compose -f docker-compose.app.yml up -d`
+3. Verify: `/api/health` must return `db:ok storage:ok`; `/login` 200; a public share page 200.
+**Rollback, seconds:** `cp docker-compose.app.yml.bak-643babf docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `a8c1bd0` is still on the host.
+
+**What is verified and what is NOT — do not overstate this to him.** Verified by machine: `tsc -b --force` exit 0 · 179 files / **1529 tests** passed, 26 skipped · no CRLF churn · two independent blind Fable reviews, all blocking findings fixed. NOT verified: **no human has clicked any of it** — there is no login credential on this machine, so the two-stage flow and the header buttons have only ever been read, never pressed. One full-suite run failed once and the immediate re-run was green at 1529; the repo already documents `upload-cap-button-fast-path.test.ts` as a known pre-existing flake, but the failing test name was not captured, so treat it as uncharacterised rather than dismissed.
+
+**OWNER TODO (since 2026-09-05):** after the deploy, open a NEW recording and confirm the two-stage flow — the transcript appears and is usable WITHOUT a summary, and pressing "Xulosalash" then produces the summary. He confirmed he usually presses the button before the upload finishes, which is exactly the path `643babf` fixes, so that is the path to test. **Separately, and this one carries real risk:** the header's new "Audioga almashtirish" button permanently destroys the video (audio survives; transcript and AI survive). Test it the FIRST time on a throwaway recording, never a client meeting. Undo valve for everything: tell me and the image tag rolls back in seconds.
+
+**Left open, deliberately, not blockers:** the second review's optional note that the header button reaches the destructive confirm in 2 clicks vs the dashboard's 3 (moving it into the owner-only "..." menu would restore the dashboard's shape); the running stepper still says "stage 1/3" and weights a 65% bar for a run that now stops after transcription; the mobile share-menu download still gates on `isDownloading` rather than the combined flag; `canReplaceWithAudio` is computed in `Share.tsx:509` and threaded to `CapVideoPlayer`, which never uses it — dead plumbing worth deleting when someone is next in that file.
 
 ### 2026-09-05 (evening) — CORRECTED + reviewed + committed, NOT deployed. Deploy is the next step and needs his word.
 
