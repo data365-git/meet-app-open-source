@@ -9,9 +9,15 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE - live point 2026-09-05 ~23:55 (STOPPED MID-DEPLOY: image building for 643babf, tag NOT switched)
+## RESUME HERE - live point 2026-09-06 ~00:10 (DEPLOYED 643babf, live and healthy; only a human click is left)
 
-### 2026-09-05 ~23:55 — STOPPED MID-DEPLOY on purpose (context ceiling). Image building for `643babf`; the tag is NOT switched.
+### 2026-09-06 ~00:10 — ✅ DEPLOYED `643babf`. Live, healthy, and NOT yet clicked by a human.
+
+**Deploy done:** image built, `docker-compose.app.yml` backed up to `.bak-643babf`, the one `image:` line switched from `a8c1bd0`, container recreated. Measured after: `/api/health` 200 `{"status":"ok","checks":{"db":"ok","storage":"ok"}}` · `/login` 200 · public share page 200 · container `data365-web:643babf` Up · logs clean apart from the pre-existing benign `ER_DUP_FIELDNAME` migration notice and the Tinybird-not-configured warning. **Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-643babf docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `a8c1bd0` is still on the host.
+
+**The one thing still unproven: nobody has pressed the buttons.** No login credential exists on this machine, so the two-stage flow and the header buttons have been read and reasoned about, never clicked. That is the whole remaining risk surface.
+
+--- superseded notes from the mid-deploy stop, kept for the reasoning ---
 
 **Where it stands.** Two commits landed after the ones described below: `a4c5b99` (the feature) and **`643babf`** (the fix a blind review forced). Production is still on **`a8c1bd0`** — nothing user-visible has changed yet. `data365-web:a4c5b99` was built and is now STALE (superseded); the build for `643babf` was running when this session stopped. Check it first: `ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 "docker images | grep 643babf; tail -4 /tmp/build-643babf.log"`. Source is already extracted at `/opt/data365/app-643babf`; if the image is missing, rebuild with `cd /opt/data365/app-643babf && docker build -f apps/web/Dockerfile -t data365-web:643babf .` (the Dockerfile is at `apps/web/Dockerfile`, NOT the repo root — a build from the root fails with "no such file").
 
