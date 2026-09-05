@@ -136,11 +136,19 @@ const FREE_TRANSCRIBE_PROBE_MS = 30_000;
 // audios (which were previously one un-reset chunk) also get split.
 // 2026-07-29: 6min → 3min (ladder step ① of the owner's "Gemini-only maximum
 // accuracy" directive). Measured baseline on real meetings with 6-min chunks:
-// median |drift| 5.7s/8.7s, max 11.7s/29.6s (48-min / 25-min). Halving the span
-// halves the room the curvature has to accumulate. REVERT to 6*60 if the same
-// rig shows no real improvement (rig noise ±5s — a <2×SE change is not a result).
-const LONG_AUDIO_CHUNK_DURATION_SEC = 3 * 60;
-const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 4 * 60;
+// median |drift| 5.7s/8.7s, max 11.7s/29.6s (48-min / 25-min).
+// 2026-09-05: back to 6min. The owner asked to trade some of that timestamp
+// margin for free-tier efficiency (fewer Gemini calls per video), conditioned
+// on TEXT quality — content correctness, not timestamp drift. Measured before
+// deciding: a real 13-min single-chunk call (2.2× today's 6-min span) against
+// a real meeting recording reproduced a genuine transcript error on a
+// concrete detail — a client deal size came back as "300 dollar" where the
+// existing 3-min-chunked transcript of the same audio has "1000 dollar" — so
+// 12-15min was rejected. 6min is the point already validated above and never
+// showed that failure mode; going back to it recovers half the per-call
+// savings (2× fewer chunks than 3min) without re-entering unmeasured territory.
+const LONG_AUDIO_CHUNK_DURATION_SEC = 6 * 60;
+const LONG_AUDIO_CHUNK_THRESHOLD_SEC = 7 * 60;
 const ELEVEN_SCRIBE_COST_USD_MICROS_PER_HOUR = 220_000;
 
 export async function transcribeVideoWorkflow(
