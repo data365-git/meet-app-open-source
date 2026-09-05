@@ -385,10 +385,39 @@ describe("AI request made while the upload is still processing", () => {
 		expect(state.videoRow?.transcriptionStatus).toBeNull();
 		// ...but the user's ask is now durable on the row.
 		const metadata = state.videoRow?.metadata as Record<string, unknown>;
-		expect(typeof metadata.aiGenerationRequestedAt).toBe("string");
 		expect(metadata.aiGenerationRequestedBy).toBe("user-1");
 		// The one-shot start order the two redeemers consume.
 		expect(typeof metadata.aiStartPendingUpload).toBe("string");
+		// 2026-09-05 — the OUTCOME that makes transcript-first real for the
+		// owner's most common flow (pressing while the upload still runs).
+		// `aiGenerationRequestedAt` must NOT be stamped here: nothing ever
+		// clears it and shouldStartAiAfterTranscription ORs it back in, so
+		// writing it silently re-enabled the auto-chain and made the
+		// aiGenerationEnabled=false flips in process-video.ts and
+		// recover-stale-ai-jobs a no-op. On a video with no transcript, this
+		// button IS the transcript button.
+		expect(metadata.aiGenerationRequestedAt).toBeUndefined();
+	});
+
+	it("an upload-time press does NOT auto-chain into AI once the transcript lands", async () => {
+		// The end-to-end outcome behind the assertion above: press during
+		// upload -> redeemer starts transcription -> the post-transcript
+		// decision must come out FALSE, so the summary waits for its own press.
+		await postGenerate();
+		const metadata = (state.videoRow?.metadata ?? {}) as Record<
+			string,
+			unknown
+		>;
+		const { shouldStartAiAfterTranscription } = await import(
+			"@/lib/ai-generation-request"
+		);
+		expect(
+			shouldStartAiAfterTranscription({
+				metadata: metadata as never,
+				// what process-video.ts and the recover cron now pass
+				aiGenerationEnabled: false,
+			}),
+		).toBe(false);
 	});
 
 	it("starts transcription when the processing workflow finishes", async () => {

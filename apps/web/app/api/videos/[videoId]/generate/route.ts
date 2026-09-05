@@ -193,10 +193,22 @@ export async function POST(
     // markers).
     //
     // `aiStartPendingUpload` is the ONE-SHOT start order both redeemers
-    // consume (and JSON_REMOVE). `aiGenerationRequestedAt` is still written
-    // beside it, unchanged, because shouldStartAiAfterTranscription reads that
-    // field to run AI once the transcript lands — the two markers mean
-    // different things and only this one is a queue entry.
+    // consume (and JSON_REMOVE).
+    //
+    // `aiGenerationRequestedAt` is deliberately NOT written here (2026-09-05).
+    // On a video with no transcript yet, this button IS the transcript button
+    // — its own copy says so — so the press means "transcribe", not "run AI".
+    // Writing the AI marker made the flag flip in process-video.ts /
+    // recover-stale-ai-jobs a NO-OP: nothing ever clears the marker, and
+    // shouldStartAiAfterTranscription ORs it back in
+    // (ai-generation-request.ts:61), so the transcript still auto-chained into
+    // a summary for the owner's most common flow — pressing while the upload
+    // is still running. Leaving it unwritten also keeps the status poll
+    // honest: `aiGenerationRequested` stays false, so the poll goes terminal
+    // when the transcript lands instead of waiting forever for a handoff that
+    // is not coming. The PROCESSING branch above still writes it, and should:
+    // there the transcript is already underway, so a press there really does
+    // mean "run the AI when it finishes".
     if (result.code === "UPLOAD_IN_PROGRESS") {
       const now = new Date().toISOString();
       await db()
@@ -204,7 +216,6 @@ export async function POST(
         .set({
           metadata: sql`JSON_SET(
             COALESCE(${videos.metadata}, JSON_OBJECT()),
-            '$.aiGenerationRequestedAt', ${now},
             '$.aiGenerationRequestedBy', ${user.id},
             '$.aiStartPendingUpload', ${now}
           )`,
