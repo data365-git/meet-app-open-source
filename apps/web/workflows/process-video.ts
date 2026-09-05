@@ -383,12 +383,17 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 			return;
 
 		console.log(
-			`[process-video] Starting AI requested during upload for ${videoId}`,
+			`[process-video] Starting transcription (upload-time press redeemed) for ${videoId}`,
 		);
+		// aiGenerationEnabled=false (2026-09-05): a press banked DURING upload
+		// used to auto-chain into AI generation the moment transcription
+		// finished. Transcription is now the only thing this redeems; AI
+		// generation is the separate "Xulosalash" step, same as every other
+		// entry point since generate/route.ts stopped auto-chaining.
 		const result = await transcribeVideo(
 			videoId as Video.VideoId,
 			video.ownerId,
-			true,
+			false,
 			false,
 		);
 

@@ -665,14 +665,14 @@ export function GenerateAiPanel({
 	}
 
 	// ── Start button (admin/owner) ────────────────────────────────────────────
-	if (
-		canGenerate &&
-		(!transcriptionStatus ||
-			(transcriptionStatus === "COMPLETE" && aiGenerationStatus !== "COMPLETE"))
-	) {
+	// Two distinct sub-cases now that generate/route.ts no longer auto-chains
+	// AI after transcription: nothing has run yet (button starts transcription
+	// only) vs transcript ready and AI is the optional next step (button
+	// starts AI generation only, since transcription is already COMPLETE).
+	if (canGenerate && !transcriptionStatus) {
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-blue-6 bg-blue-3 px-4 py-4">
-				<p className="text-sm text-gray-12">{tShare("aiNotRunYet")}</p>
+				<p className="text-sm text-gray-12">{tShare("transcriptNotRunYet")}</p>
 				{aiNotice && (
 					<p className="text-xs text-gray-10">
 						{tShare(aiNotice === "long" ? "aiNoticeLong" : "aiNoticeMedium")}
@@ -687,6 +687,36 @@ export function GenerateAiPanel({
 					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
 				>
 					{tShare("aiStartAnalysis")}
+				</button>
+				{loading && (
+					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
+				)}
+			</div>
+		);
+	}
+
+	if (
+		canGenerate &&
+		transcriptionStatus === "COMPLETE" &&
+		aiGenerationStatus !== "COMPLETE"
+	) {
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-blue-6 bg-blue-3 px-4 py-4">
+				<p className="text-sm text-gray-12">{tShare("aiSummaryOptionalHint")}</p>
+				{aiNotice && (
+					<p className="text-xs text-gray-10">
+						{tShare(aiNotice === "long" ? "aiNoticeLong" : "aiNoticeMedium")}
+					</p>
+				)}
+				<p className="text-xs text-gray-10">{tShare("aiFreeFirstHint")}</p>
+				{error && <p className="text-xs text-red-10">{error}</p>}
+				<button
+					type="button"
+					disabled={loading}
+					onClick={() => requestStart(false)}
+					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+				>
+					{tShare("aiStartSummary")}
 				</button>
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>

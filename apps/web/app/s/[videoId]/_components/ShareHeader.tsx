@@ -22,11 +22,13 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
+	AudioLines,
 	Check,
 	Clock,
 	Copy,
 	Download,
 	Ellipsis,
+	FileText,
 	Globe2,
 	Loader2,
 	MessageCircle,
@@ -37,6 +39,7 @@ import {
 	Send,
 	Share2,
 	Sun,
+	Video,
 	X,
 } from "lucide-react";
 import Image from "next/image";
@@ -50,6 +53,8 @@ import {
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
 import type { VideoStatusResult } from "@/actions/videos/get-status";
+import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
@@ -115,6 +120,17 @@ export const ShareHeader = ({
 	const [linkCopied, setLinkCopied] = useState(false);
 	const [isDownloading, setIsDownloading] = useState(false);
 	const [isDownloadingAudio, setIsDownloadingAudio] = useState(false);
+	const [isDownloadingTranscript, setIsDownloadingTranscript] = useState(false);
+	const [confirmReplaceWithAudioOpen, setConfirmReplaceWithAudioOpen] =
+		useState(false);
+	const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
+	// The Download trigger is now a menu, so its spinner/disabled state must
+	// cover EVERY item behind it. Audio extraction in particular runs ffmpeg
+	// over the whole recording on first request (seconds to minutes), and
+	// without this the button looked idle the entire time and silently ate
+	// re-clicks.
+	const isPreparingDownload =
+		isDownloading || isDownloadingAudio || isDownloadingTranscript;
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
 	const [showShareOptions, setShowShareOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
@@ -386,6 +402,66 @@ export const ShareHeader = ({
 		}
 	};
 
+	// Transcript-only download, same signed-in-only rule as the audio download
+	// above (the /api/videos/:id/transcript route requires auth too). No
+	// pre-check of transcript readiness — just attempt the fetch and toast on
+	// 404, which keeps this simple and matches the audio download's pattern.
+	const handleDownloadTranscript = async () => {
+		if (isDownloadingTranscript) return;
+		setIsDownloadingTranscript(true);
+		try {
+			const res = await fetch(`/api/videos/${data.id}/transcript`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = downloadFilename(displayTitle, "txt");
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			toast.error(t("downloadFailed"));
+		} finally {
+			setIsDownloadingTranscript(false);
+		}
+	};
+
+	// Replace the video with its own audio — the SAME server action the
+	// dashboard card has offered since T4b, surfaced here because the owner
+	// wants it where he watches, not only in the list. IRREVERSIBLE: the video
+	// file is overwritten by the extracted audio and the raw upload is
+	// reclaimed, which is why it goes through the same destructive-styled
+	// confirmation the dashboard uses. Transcript and AI analysis survive.
+	const handleReplaceWithAudio = async () => {
+		if (isReplacingWithAudio) return;
+		setIsReplacingWithAudio(true);
+		try {
+			const result = await replaceVideoWithAudio(data.id);
+			if (result.ok) {
+				toast.success(t("replaceWithAudioSuccess"));
+				setConfirmReplaceWithAudioOpen(false);
+				refresh();
+				return;
+			}
+			if (result.reason === "already_audio") {
+				setConfirmReplaceWithAudioOpen(false);
+				refresh();
+				return;
+			}
+			toast.error(
+				result.reason === "unsupported_source"
+					? t("replaceWithAudioErrorUnsupported")
+					: t("replaceWithAudioError"),
+			);
+		} catch {
+			toast.error(t("replaceWithAudioError"));
+		} finally {
+			setIsReplacingWithAudio(false);
+		}
+	};
+
 	const handleSharingUpdated = () => {
 		refresh();
 	};
@@ -574,6 +650,22 @@ export const ShareHeader = ({
 				onPasswordUpdated={() => refresh()}
 				user={user}
 				onUpgradeRequest={setUpgradeModalOpen}
+			/>
+			<ConfirmationDialog
+				open={confirmReplaceWithAudioOpen}
+				icon={<AudioLines className="size-4" />}
+				title={t("replaceWithAudioTitle")}
+				description={t("replaceWithAudioBody")}
+				confirmLabel={
+					isReplacingWithAudio
+						? t("replacingWithAudio")
+						: t("replaceWithAudioConfirm")
+				}
+				cancelLabel={t("replaceWithAudioCancel")}
+				confirmVariant="destructive"
+				loading={isReplacingWithAudio}
+				onConfirm={handleReplaceWithAudio}
+				onCancel={() => setConfirmReplaceWithAudioOpen(false)}
 			/>
 			<div className="mt-5 sm:mt-8">
 				<div className="flex flex-col gap-5">
@@ -780,48 +872,77 @@ export const ShareHeader = ({
 								)}
 							</div>
 
-							<button
-								type="button"
-								onClick={handleDownload}
-								disabled={isDownloading}
-								aria-label={t("downloadAriaLabel")}
-								title={t("downloadAriaLabel")}
-								className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
-							>
-								{isDownloading ? (
-									<Loader2 className="size-3.5 shrink-0 animate-spin" />
-								) : (
-									<Download className="size-3.5 shrink-0" />
-								)}
-								<span className="hidden sm:inline">
-									{isDownloading ? t("downloadPreparing") : t("download")}
-								</span>
-							</button>
+							{/* Download trigger — now a dropdown with Video / Audio /
+							    Transcript, instead of two separate pill buttons. Audio
+							    and Transcript stay signed-in-only (same rule their
+							    routes enforce server-side); Video stays open to
+							    anonymous share-link viewers, matching today's behavior. */}
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<button
+										type="button"
+										disabled={isPreparingDownload}
+										aria-label={t("downloadAriaLabel")}
+										title={t("downloadAriaLabel")}
+										className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
+									>
+										{isPreparingDownload ? (
+											<Loader2 className="size-3.5 shrink-0 animate-spin" />
+										) : (
+											<Download className="size-3.5 shrink-0" />
+										)}
+										<span className="hidden sm:inline">
+											{isPreparingDownload
+												? t("downloadPreparing")
+												: t("download")}
+										</span>
+									</button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end">
+									<DropdownMenuItem onClick={handleDownload}>
+										<Video className="size-3.5 shrink-0" />
+										{t("downloadVideo")}
+									</DropdownMenuItem>
+									{user && (
+										<DropdownMenuItem onClick={handleDownloadAudio}>
+											<Music className="size-3.5 shrink-0" />
+											{t("downloadAudio")}
+										</DropdownMenuItem>
+									)}
+									{user && (
+										<DropdownMenuItem onClick={handleDownloadTranscript}>
+											<FileText className="size-3.5 shrink-0" />
+											{t("downloadTranscript")}
+										</DropdownMenuItem>
+									)}
+								</DropdownMenuContent>
+							</DropdownMenu>
 
-							{/* Audio-only download — signed-in team members ONLY.
-							    Owner's decision 2026-08-05: a meeting's audio file travels
-							    further than a share link, so anonymous link viewers do not
-							    get it even though they can download the video. The route
-							    enforces this too; hiding the button just avoids offering
-							    something that would fail. */}
-							{user && (
+							{/* Replace-with-audio, in the slot the separate Audio
+							    download button used to occupy. The same action the
+							    dashboard card offers, with the same destructive
+							    confirmation — OWNER only (the server action refuses
+							    anyone else) and hidden once the recording is already
+							    audio-only, matching how Share.tsx computes
+							    `canReplaceWithAudio`. */}
+							{isOwner && !data.metadata?.isAudio && (
 								<button
 									type="button"
-									onClick={handleDownloadAudio}
-									disabled={isDownloadingAudio}
-									aria-label={t("downloadAudioAriaLabel")}
-									title={t("downloadAudioAriaLabel")}
+									onClick={() => setConfirmReplaceWithAudioOpen(true)}
+									disabled={isReplacingWithAudio}
+									aria-label={t("replaceWithAudioButton")}
+									title={t("replaceWithAudioButton")}
 									className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
 								>
-									{isDownloadingAudio ? (
+									{isReplacingWithAudio ? (
 										<Loader2 className="size-3.5 shrink-0 animate-spin" />
 									) : (
-										<Music className="size-3.5 shrink-0" />
+										<AudioLines className="size-3.5 shrink-0" />
 									)}
 									<span className="hidden sm:inline">
-										{isDownloadingAudio
-											? t("downloadPreparing")
-											: t("downloadAudio")}
+										{isReplacingWithAudio
+											? t("replacingWithAudio")
+											: t("replaceWithAudioButton")}
 									</span>
 								</button>
 							)}

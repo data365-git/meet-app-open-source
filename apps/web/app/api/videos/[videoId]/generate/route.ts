@@ -169,7 +169,10 @@ export async function POST(
     }
 
     // Transcription not yet started — kick off the full pipeline
-    const result = await transcribeVideo(videoId, video.ownerId, true, false);
+    // aiGenerationEnabled=false: transcription no longer auto-chains into AI
+    // generation. The COMPLETE branch above starts AI as an explicit "step 2"
+    // once the transcript is ready and the user asks for it.
+    const result = await transcribeVideo(videoId, video.ownerId, false, false);
 
     if (!result.success) {
       return Response.json({ error: result.message }, { status: 500 });

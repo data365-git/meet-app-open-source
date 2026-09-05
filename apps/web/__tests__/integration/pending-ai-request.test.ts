@@ -405,12 +405,16 @@ describe("AI request made while the upload is still processing", () => {
 
 		expect(result.success).toBe(true);
 		expect(state.uploadDeleted).toBe(true);
-		// The whole point: the request the user made a minute earlier is honoured.
+		// The whole point: the request the user made a minute earlier is honoured
+		// — it still STARTS the job rather than being silently lost.
+		// `aiGenerationEnabled: false` since 2026-09-05: what it starts is the
+		// TRANSCRIPT. AI summary/tasks are a separate "Xulosalash" press once the
+		// transcript is ready, at every entry point — this redeemer included.
 		expect(transcribeVideoWorkflowMock).toHaveBeenCalledTimes(1);
 		expect(transcribeVideoWorkflowMock).toHaveBeenCalledWith({
 			videoId: VIDEO_ID,
 			userId: "user-1",
-			aiGenerationEnabled: true,
+			aiGenerationEnabled: false,
 		});
 		expect(state.videoRow?.transcriptionStatus).toBe("PROCESSING");
 	});
@@ -607,8 +611,11 @@ describe("AI request made while the upload is still processing", () => {
 		);
 		// The call is written across several lines with a trailing comma, so the
 		// pattern has to tolerate both forms.
+		// 3rd arg is aiGenerationEnabled — `false` since 2026-09-05 (this redeemer
+		// starts the transcript only; AI summary is a separate press). The
+		// invariant this test actually guards is the 5th arg, reclaimProcessing.
 		const pendingCall = src.match(
-			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*true,\s*true,\s*(\w+)\s*,?\s*\)/,
+			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*false,\s*true,\s*(\w+)\s*,?\s*\)/,
 		);
 		expect(
 			pendingCall,

@@ -360,10 +360,14 @@ export async function GET(request: Request) {
 			// CAS would then MATCH and launch a SECOND paid transcription for one
 			// video. Passing false keeps this starter on the NULL/ERROR arm, so a
 			// lost race launches nothing.
+			// aiGenerationEnabled=false (2026-09-05): this cron redeems the same
+			// upload-time press as process-video.ts, and for the same reason it
+			// now starts transcription ONLY. AI generation is the separate
+			// "Xulosalash" step the owner presses once the transcript is ready.
 			const result = await transcribeVideo(
 				candidate.id,
 				candidate.ownerId,
-				true,
+				false,
 				true,
 				false,
 			);

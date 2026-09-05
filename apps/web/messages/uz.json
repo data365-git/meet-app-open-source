@@ -566,6 +566,9 @@
 		"aiStarting": "Boshlanmoqda…",
 		"aiRetry": "Qayta urinish",
 		"aiNotRunYet": "Bu video uchun AI tahlili hali bajarilmagan.",
+		"transcriptNotRunYet": "Transkript hali tayyor emas.",
+		"aiSummaryOptionalHint": "Transkript tayyor. Xulosa, vazifalar va boblarni ham AI tahlil qilib bersinmi?",
+		"aiStartSummary": "Xulosalash",
 		"aiQueuedTitle": "AI tahlil navbatda",
 		"aiQueuedHint": "So‘rovingiz saqlandi. Yozuv qayta ishlanishi tugashi bilan tahlil o‘zi boshlanadi — bu sahifani yopsangiz ham bo‘ladi.",
 		"aiStartAnalysis": "AI tahlilini boshlash",
@@ -606,7 +609,9 @@
 		"aiStageWaiting": "Navbatda",
 		"aiStageActive": "Bajarilmoqda",
 		"downloadAudio": "Audio",
-		"downloadAudioAriaLabel": "Faqat audioni yuklab olish (mp3)"
+		"downloadAudioAriaLabel": "Faqat audioni yuklab olish (mp3)",
+		"downloadVideo": "Video",
+		"downloadTranscript": "Transkript"
 	},
 	"nav": {
 		"searchPlaceholder": "Yozuv yoki Space qidirish…",

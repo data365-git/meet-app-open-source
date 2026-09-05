@@ -566,6 +566,9 @@
 		"aiStarting": "Запуск…",
 		"aiRetry": "Повторить",
 		"aiNotRunYet": "AI-анализ для этого видео ещё не выполнялся.",
+		"transcriptNotRunYet": "Транскрипт ещё не готов.",
+		"aiSummaryOptionalHint": "Транскрипт готов. Пусть AI также сделает резюме, задачи и главы?",
+		"aiStartSummary": "Сделать резюме",
 		"aiQueuedTitle": "AI-анализ в очереди",
 		"aiQueuedHint": "Ваш запрос сохранён. Анализ начнётся сам, как только запись завершит обработку — страницу можно закрыть.",
 		"aiStartAnalysis": "Запустить AI-анализ",
@@ -606,7 +609,9 @@
 		"aiStageWaiting": "В очереди",
 		"aiStageActive": "В процессе",
 		"downloadAudio": "Аудио",
-		"downloadAudioAriaLabel": "Скачать только аудио (mp3)"
+		"downloadAudioAriaLabel": "Скачать только аудио (mp3)",
+		"downloadVideo": "Видео",
+		"downloadTranscript": "Транскрипт"
 	},
 	"nav": {
 		"searchPlaceholder": "Поиск записей…",
