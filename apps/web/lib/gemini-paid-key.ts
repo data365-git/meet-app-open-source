@@ -69,3 +69,9 @@ export function getPaidGeminiKey(use: PaidGeminiUse): string | undefined {
 export function hasPaidGeminiKey(): boolean {
 	return Boolean(serverEnv().GEMINI_API_KEY);
 }
+
+/** The server's "paid" key is literally the free-project key — a call on it is free quota, not spend. */
+export function isServerPaidGeminiKeyFree(): boolean {
+	const env = serverEnv();
+	return Boolean(env.GEMINI_API_KEY) && env.GEMINI_API_KEY === env.GEMINI_API_KEY_FREE;
+}

@@ -21,6 +21,7 @@ import {
 	authorizePaidGeminiUse,
 	getPaidGeminiKey,
 	hasPaidGeminiKey,
+	isServerPaidGeminiKeyFree,
 } from "@/lib/gemini-paid-key";
 import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
 import {
@@ -905,6 +906,7 @@ export async function transcribeAudio(
 			videoId: context.videoId,
 			operation: "transcription",
 			model: "gemini-3-flash-preview",
+			free: !ownerApiKey && isServerPaidGeminiKeyFree(),
 			fn: async () => {
 				const res = await transcribeWithGemini(audioUrl, {
 					apiKey: syncKey,

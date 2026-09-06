@@ -6,7 +6,10 @@ import type {
 	VideoMetadata,
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
+import {
+	getPaidGeminiKey,
+	isServerPaidGeminiKeyFree,
+} from "@/lib/gemini-paid-key";
 import { getOpenRouterKey } from "@/lib/openrouter-key";
 import {
 	OPENROUTER_USAGE_MODEL,
@@ -212,6 +215,7 @@ async function callGeminiJson(
 		videoId: context.videoId,
 		operation: "translate",
 		model: GEMINI_TRANSLATE_MODEL,
+		free: isServerPaidGeminiKeyFree(),
 		fn: async () => {
 			const { data } = await withGeminiRetry(async () => {
 				const res = await fetch(

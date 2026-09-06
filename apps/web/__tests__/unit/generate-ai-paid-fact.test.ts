@@ -135,3 +135,24 @@ describe("round-10 #4 — a partial completion is visible", () => {
 		);
 	});
 });
+
+describe("free-key alias — a paid Gemini leg on the free project records $0 on BOTH legs", () => {
+	it("transcription's runPaidSync declares free from the alias check", () => {
+		expect(TRANSCRIBE_WORKFLOW).toContain(
+			"free: !ownerApiKey && isServerPaidGeminiKeyFree()",
+		);
+	});
+
+	it("generation's callAiApiWithModel call declares free from the alias check", () => {
+		expect(GEN_WORKFLOW).toContain("free: isServerPaidGeminiKeyFree()");
+	});
+
+	it("translation and chat — the other two server-Gemini legs — declare it too", () => {
+		const TRANSLATE_LIB = read("../../lib/translate-ai.ts");
+		const CHAT_ROUTE = read("../../app/api/video/ai/chat/route.ts");
+		expect(TRANSLATE_LIB).toContain("free: isServerPaidGeminiKeyFree()");
+		expect(CHAT_ROUTE).toMatch(
+			/free:\s*!chatOpenRouterKey &&\s*!owner\?\.geminiApiKey &&\s*isServerPaidGeminiKeyFree\(\)/,
+		);
+	});
+});

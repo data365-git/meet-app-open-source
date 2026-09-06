@@ -20,6 +20,7 @@ const emptyResult = {
 	capUsdCents: null as number | null,
 	percentUsed: 0,
 	freeTierSavingsUsdCents: null as number | null,
+	freeEventCount: null as number | null,
 };
 
 export async function getMonthlySpend(scope: {
@@ -34,6 +35,10 @@ export async function getMonthlySpend(scope: {
 	 * $0 free-tier AI usage events, "how much this WOULD have cost at paid
 	 * rates" — the price-honesty complement to totalUsdCents (Wave 2.2). */
 	freeTierSavingsUsdCents: number | null;
+	/** Video scope only (null for user/org): count of this video's $0
+	 * non-embedding AI usage rows — lets the UI tell "free" from "nothing to
+	 * show" even when totalUsdCents is 0. */
+	freeEventCount: number | null;
 }> {
 	const user = await getCurrentUser();
 	if (!user?.id) return emptyResult;
@@ -155,6 +160,7 @@ export async function getMonthlySpend(scope: {
 	// token than text); the panel labels the figure "taxminan" (approximate)
 	// for exactly this reason.
 	let freeTierSavingsUsdCents: number | null = null;
+	let freeEventCount: number | null = null;
 	if (scope.type === "video") {
 		const freeRows = await db()
 			.select({
@@ -182,6 +188,7 @@ export async function getMonthlySpend(scope: {
 		// Fractional for the same reason as the breakdown above: formatUzs is the
 		// single rounding point.
 		freeTierSavingsUsdCents = savingsMicros / 10_000;
+		freeEventCount = freeRows.length;
 	}
 
 	return {
@@ -190,5 +197,6 @@ export async function getMonthlySpend(scope: {
 		capUsdCents,
 		percentUsed,
 		freeTierSavingsUsdCents,
+		freeEventCount,
 	};
 }

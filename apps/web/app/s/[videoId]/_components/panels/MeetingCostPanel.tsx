@@ -3,13 +3,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { getMonthlySpend } from "@/actions/billing/get-monthly-spend";
-import { formatUzs } from "@/lib/format-uzs";
+import { costTier } from "@/lib/ai-cost-tier";
+import { USD_TO_UZS, formatUzs } from "@/lib/format-uzs";
 
 interface MeetingCostPanelProps {
 	videoId: string;
+	running: boolean;
 }
 
-export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
+export const costQueryKey = (videoId: string) => ["cost", videoId] as const;
+
+export function MeetingCostPanel({ videoId, running }: MeetingCostPanelProps) {
 	const t = useTranslations("share");
 	const OPERATIONS: { key: string; label: string }[] = [
 		{ key: "transcription", label: t("costTranscription") },
@@ -18,9 +22,10 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 		{ key: "chat", label: t("costChat") },
 	];
 	const { data, isLoading, error } = useQuery({
-		queryKey: ["cost", videoId],
+		queryKey: costQueryKey(videoId),
 		queryFn: () => getMonthlySpend({ type: "video", id: videoId }),
 		staleTime: 60_000,
+		refetchInterval: running ? 5000 : false,
 	});
 
 	if (isLoading) {
@@ -35,14 +40,27 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 		);
 	}
 
-	const hasActivity = data.totalUsdCents > 0;
-
-	if (!hasActivity) {
-		return null;
-	}
+	const tier = costTier({
+		totalUsdCents: data.totalUsdCents,
+		freeEventCount: data.freeEventCount,
+	});
+	if (!tier) return null;
 
 	const breakdownValues = OPERATIONS.map(({ key }) => data.breakdown[key] ?? 0);
 	const allBreakdownZero = breakdownValues.every((v) => v === 0);
+
+	const pillClasses =
+		tier === "paid"
+			? "inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11"
+			: "inline-flex items-center rounded-full border border-green-6 bg-green-3 px-3 py-1 text-xs font-medium text-green-11";
+
+	const pillText = running
+		? tier === "paid"
+			? t("costLiveSwitchedPaid")
+			: t("costLiveFreeSoFar")
+		: tier === "paid"
+			? t("costBadgePaid")
+			: t("costBadgeFree");
 
 	// shrink-0 on the root: globals.css sets `* { min-height: 0 }`, which
 	// removes every flex item's content-based minimum height. When the sticky
@@ -53,12 +71,13 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 	// excess.
 	return (
 		<div className="flex shrink-0 flex-col gap-4">
-			<div className="flex flex-col items-center gap-1 rounded-xl px-6 py-5 text-center shadow-sm" style={{ background: "var(--gray-1)", border: "1px solid var(--gray-4)" }}>
+			<div className="flex flex-col items-center gap-2 rounded-xl px-6 py-5 text-center shadow-sm" style={{ background: "var(--gray-1)", border: "1px solid var(--gray-4)" }}>
 				<span className="text-xs font-medium" style={{ color: "var(--gray-11)" }}>
 					{t("meetingCost")}
 				</span>
+				<span className={pillClasses}>{pillText}</span>
 				<span className="text-3xl font-bold" style={{ color: "var(--gray-12)" }}>
-					{formatUzs(data.totalUsdCents)}
+					{tier === "paid" ? formatUzs(data.totalUsdCents) : t("costPaidNothing")}
 				</span>
 			</div>
 
@@ -82,20 +101,25 @@ export function MeetingCostPanel({ videoId }: MeetingCostPanelProps) {
 				</div>
 			)}
 
-			{/* Price honesty (Wave 2.2): the total above is REAL paid spend only —
-			    this surfaces the free-tier ("cheap" mode) share so the owner sees
-			    both numbers instead of assuming a low total means AI was cheap.
-			    "taxminan" (approximate) because these events don't record the
-			    audio/text token split (see getMonthlySpend). */}
+			{/* Price honesty (Wave 2.2, extended for the paid/free tier badge above):
+			    when paid, this is the free-tier ("cheap" mode) share alongside the
+			    real spend; when free, it's the plain free-tier-savings line (no
+			    paid spend exists yet). "taxminan" (approximate) because these
+			    events don't record the audio/text token split (see
+			    getMonthlySpend). */}
 			{data.freeTierSavingsUsdCents != null &&
-				data.freeTierSavingsUsdCents > 0 && (
+				Math.round((data.freeTierSavingsUsdCents / 100) * USD_TO_UZS) >= 1 && (
 					<p
 						className="text-center text-xs"
 						style={{ color: "var(--gray-10)" }}
 					>
-						{t("freeTierSavings", {
-							amount: formatUzs(data.freeTierSavingsUsdCents),
-						})}
+						{tier === "paid"
+							? t("costPartlyFree", {
+									amount: formatUzs(data.freeTierSavingsUsdCents),
+								})
+							: t("freeTierSavings", {
+									amount: formatUzs(data.freeTierSavingsUsdCents),
+								})}
 					</p>
 				)}
 		</div>

@@ -4,7 +4,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { aiChatUsage, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { getPaidGeminiKey } from "@/lib/gemini-paid-key";
+import {
+	getPaidGeminiKey,
+	isServerPaidGeminiKeyFree,
+} from "@/lib/gemini-paid-key";
 import { getOpenRouterKey } from "@/lib/openrouter-key";
 import {
 	buildOpenRouterBody,
@@ -484,6 +487,10 @@ export async function POST(request: NextRequest) {
 					model: chatOpenRouterKey
 						? OPENROUTER_USAGE_MODEL
 						: "gemini-2.5-flash",
+					free:
+						!chatOpenRouterKey &&
+						!owner?.geminiApiKey &&
+						isServerPaidGeminiKeyFree(),
 					recordUsageBestEffort: true,
 					fn: async () => {
 				// Retry the initial connect on transient Gemini errors

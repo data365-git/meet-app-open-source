@@ -38,6 +38,7 @@ import { CapVideoPlayer } from "./CapVideoPlayer";
 import { DockableVideo } from "./DockableVideo";
 import { GenerateAiPanel } from "./GenerateAiPanel";
 import { detectShareLanguage } from "./LanguagePicker";
+import { MeetingCostPanel, costQueryKey } from "./panels/MeetingCostPanel";
 import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
@@ -97,7 +98,7 @@ export const ShareVideo = forwardRef<
 		 * existing caller unchanged. */
 		aiChatAvailable?: boolean;
 		/** Owner/member-only cost card rendered above the share panel. */
-		costPanel?: React.ReactNode;
+		showCostPanel?: boolean;
 		/** Comments/activity content for the panel's "Izohlar" tab. */
 		commentsPanel?: React.ReactNode;
 	}
@@ -121,7 +122,7 @@ export const ShareVideo = forwardRef<
 			defaultPlaybackSpeed,
 			canGenerate = false,
 			aiChatAvailable = true,
-			costPanel,
+			showCostPanel,
 			commentsPanel,
 		},
 		ref,
@@ -292,8 +293,9 @@ export const ShareVideo = forwardRef<
 				setAiPollEnabled(false);
 				setOptimisticAiStatus(null);
 				router.refresh();
+				queryClient.invalidateQueries({ queryKey: costQueryKey(data.id) });
 			}
-		}, [aiStatusQuery.data, aiPollEnabled, router]);
+		}, [aiStatusQuery.data, aiPollEnabled, router, queryClient, data.id]);
 
 		useEffect(() => {
 			if (!generatingLanguage) return;
@@ -1128,7 +1130,9 @@ export const ShareVideo = forwardRef<
 					</div>
 
 					<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
-						{costPanel}
+						{showCostPanel && (
+							<MeetingCostPanel videoId={data.id} running={aiPollEnabled} />
+						)}
 						{commentsPanel}
 					</div>
 				</div>

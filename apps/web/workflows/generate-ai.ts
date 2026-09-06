@@ -31,7 +31,11 @@ import {
 	markFreeKeyBrokenForJob,
 	markUnusableAiOutput,
 } from "@/lib/free-tier-health";
-import { getPaidGeminiKey, hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import {
+	getPaidGeminiKey,
+	hasPaidGeminiKey,
+	isServerPaidGeminiKeyFree,
+} from "@/lib/gemini-paid-key";
 import { getOpenRouterKey, hasOpenRouterKey } from "@/lib/openrouter-key";
 import {
 	OPENROUTER_USAGE_MODEL,
@@ -1196,7 +1200,7 @@ export async function callAiApi(
 				json,
 				apiKey,
 				context,
-				{ maxOutputTokens },
+				{ maxOutputTokens, free: isServerPaidGeminiKeyFree() },
 			);
 			if (model !== GEMINI_SUMMARY_MODEL) {
 				console.warn(`[generate-ai] summary fell back to ${model}`);
