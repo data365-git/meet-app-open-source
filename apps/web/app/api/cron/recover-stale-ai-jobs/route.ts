@@ -480,15 +480,21 @@ export async function GET(request: Request) {
 		// transcription loop above): never relaunch an upload that is still
 		// visibly landing bytes.
 		if (upload.updatedAt.getTime() > staleUploadBefore.getTime()) continue;
+		// Narrow the key in JS as well as in SQL. The query already filters
+		// `raw_file_key IS NOT NULL`, but the column is nullable in the schema,
+		// so without this the relaunch below does not typecheck — and a future
+		// edit that loosens the query would silently start passing null.
+		const rawFileKey = upload.rawFileKey;
+		if (!rawFileKey) continue;
 		// Confirm the raw object really is in storage before doing anything. A
 		// zero-length or absent object means the upload genuinely failed —
 		// leave the row completely untouched.
-		if (!(await isRawObjectInStorage(video, upload.rawFileKey))) continue;
+		if (!(await isRawObjectInStorage(video, rawFileKey))) continue;
 		try {
 			await startVideoProcessingWorkflow({
 				videoId: video.id,
 				userId: video.ownerId,
-				rawFileKey: upload.rawFileKey,
+				rawFileKey,
 				bucketId: video.bucket,
 				processingMessage: "Recovering video processing...",
 				startFailureMessage: "Video processing could not be recovered.",
