@@ -9,7 +9,180 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE - live point 2026-09-06 ~17:10 — ✅ DEPLOYED `d2c400c` (FREE/PAID cost pill + alias-key $0 guard); owner glance pending
+## RESUME HERE — live point 2026-09-10 ~19:20 laptop — 2 COMMITS LANDED (refined export + upload-loss recovery), NOT deployed; 2 builds in flight
+
+**Owner's standing order this session:** "barcha ishlarni yakunla mensiz, toxtama bajarilib done bolguncha" — full autonomy, finish everything. Earlier the same session he gave five product orders and one routing order; every open question was answered in two AskUserQuestion batches. **The whole session's decisions and evidence live in `plans/2026-09-10-transcript-options-refined-export-multi-import.md` — read that before touching this work.**
+
+### 🔴 THE FINDING — about 15% of uploads silently never process, and it is ROOT-CAUSED
+Measured on production this session (image `data365-web:d2c400c`, DB `capdb`): 7 rows since 2026-08-01 have `videos.transcriptionStatus IS NULL` **and** no `metadata.processingStartedAt`. Per-day: 08-26 1/5 · 09-02 1/3 · 09-04 2/3 · 09-05 1/2 · **09-10 2/12**.
+
+**Decisive evidence (`video_uploads`, note the snake_case table and column names — `videoUploads.videoId` does not exist):** today's `6b1kdkgr46d3nm5` and `jka07j0jekx883s` both sit at **`phase = 'uploading'` with `uploaded == total`** (165,553,362 and 123,894,845 bytes), `mode` NULL, no `processing_error`. Their `raw-upload.mp4` is complete in R2 and the container log carries "Multipart upload completed successfully" for both. So the bytes arrived, and the hand-off that should have flipped the row to `processing` and launched the pipeline **never took effect**. `videos.updatedAt` never moved after the completion second, which rules out any later write. Right now 2 rows sit in `uploading` and 4 in `error`.
+
+**Root cause (architect agent, HIGH confidence on structure):** the step from "bytes complete" to "processing started" is a single unrecorded, in-process, fire-and-forget call with no reconciler behind it, and transcription has no automatic starter at all. `/api/upload/multipart/complete` (`apps/web/app/api/upload/[...route]/multipart.ts:316-806`) verifies the object with only a ~350 ms retry budget (:555-568), then calls `startVideoProcessingWorkflow` (:624-643) inside a try whose catch logs **without the video id** (:637-642). `apps/web/lib/video-processing.ts:115-117` returns `"already-processing"` **silently without launching**, and `:119-135` runs `processVideoWorkflow(...).catch(...)` un-awaited and outside `after()`. The `"use workflow"` strings are inert: `apps/web/next.config.mjs:230-232` never applies `withWorkflow`, so this is a bare promise in the web process. Crucially, the recovery cron **cannot see these rows**: `apps/web/app/api/cron/recover-stale-ai-jobs/route.ts:191` requires `aiStartPendingUpload <> ''`, so a never-started marker-less row is invisible.
+
+**Why nobody reported it:** people re-upload until it works. `6b1kdkgr46d3nm5` and `3tcqnpjgk139cax` share a byte-identical `raw-upload.mp4` (165,553,362) — the same file uploaded twice, once lost, once fine. Retrying users keep the dashboard clean.
+
+**Do NOT conflate the owner's 09-05 complaint with this.** `mz56jaba64m8z94` ("Platforma_taqdimoti") is a DIFFERENT shape: `phase = 'error'`, `processing_error = 'Upload stalled'`, yet `result.mp4` and `download-audio.mp3` exist in storage, so its video pipeline did finish and only transcription is missing. Whether he pressed the button and it failed, or never pressed, is NOT established — do not claim it either way without the access log.
+
+### COMMITS LANDED THIS SESSION — both gated, neither deployed
+- **`af7cf67`** feat(share): copy + .txt/.docx download on the refined transcript tab.
+  Details in the section below. Blind non-author review returned SHIP WITH FIXES; all three
+  substantive findings were applied before the commit (lazy `await import("docx")` so
+  share-page viewers do not pay ~220 KB gzipped, the recording title threaded as a prop from
+  `ShareVideo.tsx` instead of read out of a react-query cache by literal key, and
+  `stripMarkdownBold` narrowed to PAIRED markers so .txt, .docx and the screen agree).
+- **`cd1b8dc`** + merge **`0938194`** fix(upload): recover uploads whose processing hand-off
+  was lost — the fix for THE FINDING below. Built by GLM-5.3 from the written spec.
+  New reconciliation pass in `apps/web/app/api/cron/recover-stale-ai-jobs/route.ts` keyed on
+  the durable facts (a `video_uploads` row still in `uploading`/`processing`, older than the
+  staleness window, whose raw object is genuinely present in storage) rather than on the
+  marker the lost step writes. Relaunches with `forceRestart: true`, capped at 3 per tick in
+  both SQL and JS because the relaunch runs ffmpeg inline. **No transcription is started and
+  `aiStartPendingUpload` is never written — this costs server CPU and zero AI spend.**
+  Plus the observability fixes: the video id now appears in the two multipart-complete catch
+  logs and on the silent `"already-processing"` return in `apps/web/lib/video-processing.ts`.
+
+**Gates on the merged tree, run by the main session:** `tsc -b --force` exit 0 · full suite
+**183 files / 1558 tests passed**, 26 skipped, exit 0 · the merge commit itself went through
+the repo's pre-commit gate (it BLOCKED the first attempt — GLM's version did not typecheck,
+`rawFileKey` is nullable in the schema; fixed with a JS narrowing guard rather than a cast,
+which also makes a future loosening of the query fail loudly).
+
+**Mutation check re-run by the main session, not trusted from the agent's report:** disabling
+the storage guard makes the "absent object is left untouched" test fail with
+`expected "spy" to not be called at all, but actually been called 1 times`, then pass again
+on revert. Also verified by diff that **zero `expect` lines** were removed or altered in the
+two pre-existing test files whose mocks the agent extended.
+
+**Still open on this fix:** a blind non-author review is running against five questions — can
+the pass ever spend money, can it corrupt a live run, is the candidate query right, does it
+fail safe, and would any of the 4 tests still pass with the feature removed. Read its verdict
+before deploying.
+
+**Fix C remains the owner's call and is NOT built:** making "audio uploaded" mean "audio
+transcribed" without a press would cost roughly $0.5 per import, automatically. Ask him.
+
+### IN FLIGHT (GLM-5.3 children, each in its own worktree)
+- **Only transcript vs Full AI analysis** — `wt-mode`, branch `glm/two-mode-choice`. Note it
+  is also editing `recover-stale-ai-jobs/route.ts` (its spec required a decision on all three
+  upload-press redemption paths), so expect a merge conflict there against `0938194` and
+  resolve it by hand.
+- **Refined blocks collapsible** — `wt-collapse`, branch `glm/refined-collapsible`, from
+  `0938194`. Six defects the client dictated by voice: expand/collapse not working, the
+  chevron missing or clipped, no auto-collapse, plain clicks on a block or title moving audio
+  playback, title click should close, and the first block open by default. The likely cause of
+  the first one is already traced: three `handleChapterSeek` click handlers, two of them on
+  the block and title, so an ordinary click jumps the player and the panel re-renders around
+  the new position — which reads as the block being replaced. Only the play button keeps its
+  seek.
+
+### DONE and VERIFIED this session (uncommitted at the time of writing) - refined-tab export
+The refined (cleaned-up) transcript tab now has a copy button and downloads as **.txt and
+.docx**, matching the plain transcript tab which already had them. Built by a GLM-5.3 child
+from a written spec; verified by the main session, not by the author.
+
+Files: `apps/web/app/s/[videoId]/_components/panels/RefinedTranscriptPanel.tsx` (modified),
+`apps/web/lib/refined-transcript-export.ts` (new, 165 lines),
+`apps/web/__tests__/unit/refined-transcript-export.test.ts` (new, 12 tests), one key
+`downloadDocx` in each of the three locale files, and `docx@^9.7.1` in
+`apps/web/package.json`.
+
+**Gates, run by the main session:** `tsc -b --force` exit 0 - full suite **182 files / 1553
+tests passed**, 26 skipped, exit 0 (baseline 181 / 1540) - **no CRLF churn** (`--shortstat`
+and `-w --shortstat` identical at 455/128) - lockfile churn inspected: no dependency changed
+version, only docx added.
+
+**Mutation check, done and passed:** forcing `bold: false` in the docx run builder turns the
+bold test RED with a value-level message (expected the run XML to contain `<w:b/>`, got
+`<w:b w:val="false"/>`), not a missing-symbol error, then GREEN again on revert. That test
+is a real guard.
+
+**Two defects found in the agent's own tests and fixed by the main session** - the agent
+wrote tests that failed against its own correct implementation: (1) a typo, `"CRM rejesini"`
+where the fixture says `"CRM rejasini"`; (2) assertions on raw text where Word escapes
+apostrophes. **Measured** with docx 9.7.1: an apostrophe is emitted as `&apos;`, so the test
+helper now decodes `&apos;` and `&quot;` only, leaving `&lt;`/`&gt;`/`&amp;` alone so tag
+matching still works. The implementation was never wrong.
+
+**Also measured:** the generated package is structurally a real Word file - 22 parts
+including all four required ones (`[Content_Types].xml`, `_rels/.rels`,
+`word/document.xml`, `word/_rels/document.xml.rels`), so it opens in Word rather than being
+a renamed zip.
+
+**NOT verified and must not be claimed:** nobody has clicked these controls. The refined tab
+sits behind a sign-in and no login credential exists on this machine, so the on-screen
+button placement, the copy confirmation and a real download on a phone remain owner-verified
+only.
+
+### GLM-5.3 ROUTING - measured result, the owner should know this
+His order was to burn the GLM allowance first. Followed. **Measured outcome on the first
+three dispatches, each a written spec via `glm-run.ps1` at a 900 s budget: all three hit the
+timeout (exit 124). Only one had written any files at all; the other two produced nothing in
+15 minutes.** The one that did produce work also damaged the shared dependency tree - after
+its run, `tsc` failed with `Cannot find module 'vitest'` and `@ts-rest/core`, and a root
+`pnpm install` was needed to restore it (7.4 s, no version changes).
+
+Changes made in response, not abandoning his order: the budget is now **2700 s**, and every
+spec carries a TIME BUDGET block telling the child to read only the named files, to run ONLY
+its own new test file, and explicitly NOT to run `tsc -b --force` or the 181-file suite -
+the main session runs those. The full suite alone takes minutes and is the likeliest thing
+that consumed the first attempts. Each job also runs in its **own git worktree** with
+junctioned `node_modules` (under the user's Temp directory as `wt-fixa` and `wt-mode`) so
+two children never write the same tree.
+
+### ▶️ NEXT STEP — Fix A, then the four features, in this order
+**Fix A (safety net, $0 of AI, catches the whole class).** In `recover-stale-ai-jobs/route.ts` after the pending-request loop (~:404): select `video_uploads JOIN videos` where `videos.deletedAt IS NULL AND phase IN ('uploading','processing') AND updated_at <= now-30min AND raw_file_key IS NOT NULL`, `LIMIT 3` (the relaunch runs ffmpeg inline — that is why the neighbouring loops cap at 3). HEAD the raw object (reuse `verifyRawFileUploaded` from `apps/web/actions/video/trigger-processing.ts`); if `ContentLength > 0` call `startVideoProcessingWorkflow({ …, forceRestart: true })` — `video-processing.ts:60-61` already supports it. Object absent → leave untouched. Report a `processingRelaunched` count. Idempotent via the CAS in `apps/web/lib/transcribe.ts:305-339`. Also add the video id to the log calls at `multipart.ts:637-642` and `:748-753` and log the silent `already-processing` outcome — without that, the next incident is again "no line mentions the id".
+Tests (must assert the OUTCOME, then be mutation-checked): stale row + object present → relaunch with `forceRestart:true` · row younger than 30 min → untouched · stale row, object missing → untouched · at most 3 per tick.
+
+**Fix C is an OWNER decision, not a bug fix — do not ship it silently.** Making "audio uploaded" mean "audio transcribed" without a press means writing `aiStartPendingUpload` at birth (`apps/web/actions/video/create-for-processing.ts:128-131`) and costs roughly $0.5 per audio import, automatically. Hukm: shubhali until he says he wants every import billed without a press. Ask before building.
+
+**Then, in order:** the Only-transcript / Full-AI choice · the refined-tab export · upload cancel · multi-file import LAST (it must not ship before Fix A: at a 15% silent loss a 20-file batch loses about three recordings and nobody can tell which three — stated to him in those terms).
+
+### Money — measured today, and it is the real cost story
+2026-09-10: 13 videos, **$4.98** in one day, against a month-to-date total of $7.61. The free Google quota died around midday (free rows per hour 7 → 16 → 23 → 8 → 6 while paid went 24 → 6 → 48 → 111 → 88), so everything after ~12:00 ran on paid OpenRouter (287 paid rows on `openrouter/google/gemini-3.7-flash`). `GEMINI_API_KEY` and `GEMINI_API_KEY_FREE` are still the SAME key on prod (sha256 `075c5dfd8827` both) — one free quota, and the ladder has exactly one free slot (`apps/web/workflows/transcribe.ts:933`, `apps/web/workflows/generate-ai.ts:1008`). Default cap is $100/month and $20/video (`apps/web/lib/ai-cost-guard.ts:34-35`); nothing is near it this month, but at $5 on a heavy day the cap becomes reachable, and hitting it makes AI stop with `BudgetExceededError`.
+
+### Answered for him this session (measured, not guessed)
+He asked why an already-audio upload still says "extracting audio" and whether time is wasted re-converting. It is NOT pointless: `apps/web/lib/audio-extract.ts:70-95` deliberately downmixes to mono, 24 kHz, 64 kbps mp3 so the file sent to Gemini is small and cheap; keeping the original codec would be slower and dearer. The **real** waste is that the source is read from R2 repeatedly — one silence-detection pass over the whole file, then one `-i <signed URL>` per chunk in the loop at `:466-485` (about 16 reads for a 92-minute recording)  instead of fetching once and slicing locally.
+
+**MEASURED the same session, from the container log's own timestamps** (the gap between
+"Local ffmpeg audio check for <id>" and "Extracted N audio chunks for <id>"), across the ten
+recordings processed on 2026-09-10:
+
+| recording | audio length | chunks | extraction wall time |
+|---|---|---|---|
+| 2nc76rs8d16wqsq | 42 min | 7 | 74 s |
+| 3tcqnpjgk139cax | 179 min | 30 | 472 s |
+| qm91w4h7nvnab7e | 144 min | 24 | 277 s |
+| 61wgws9zcj9k4p7 | 132 min | 22 | 240 s |
+| 1d89tjnk2qkjycd | 107 min | 18 | 216 s |
+| sk3h9m6ars30gf2 | 141 min | 24 | 265 s |
+| vbgh19d40dczfn9 | 141 min | 24 | 234 s |
+| 2w0angvrzkh98cs | 172 min | 29 | 356 s |
+| qt40a98b80w1ax9 | 146 min | 24 | 275 s |
+| 6zk3qenctyw0d0x | 213 min | 36 | 424 s |
+
+**About 47 minutes of wall clock went to audio extraction alone today, across 238 chunks —
+a strikingly steady ~11 s per chunk regardless of recording length.** That flat per-chunk
+cost is the signature of per-chunk overhead (a fresh range request and decode of the source
+for every slice) rather than of encoding work, since a 6-minute mono 24 kHz 64 kbps mp3
+encode is a few seconds at most. The window also contains one full-file silence-detection
+pass per recording.
+
+**What is NOT yet proven:** how much of the ~11 s a fetch-once-then-slice-locally design
+would actually save. The mechanism is identified and the baseline is measured; do not quote
+a saving to the owner until a one-file experiment measures it. Note also that today's batch
+was 23.6 hours of audio in one afternoon, which is the real reason the day cost $4.98.
+
+### False alarm, do not chase
+About 86 ERROR lines per 24 h whose entire body is `{"cause":{"name":"NoSuchKey"},"_tag":"S3Error"}` come from `packages/web-backend/src/S3Buckets/S3BucketAccess.ts:35`, where `wrapS3Promise`'s `Effect.tapError(Effect.logError)` fires before any caller `catchTag`/`Effect.option` can swallow it. Most are deliberate existence probes (`apps/web/app/api/playlist/route.ts:116` and `:287`). Fix the CLAIM — log the object key at that same line — do not silence the trigger.
+
+### Worker routing — standing order 2026-09-10
+"barcha arzon ishchi kuchini glm 5.3ga qildir": burn the GLM allowance before the Claude allowance. Cheap DOING goes to `powershell -File C:\Users\mirko\.claude\scripts\glm-run.ps1 -PromptFile <spec> -Dir D:\vibecoding\ustoz-github -Model glm-5.3`. Verified this session: `-Check` → CHECK PASS, glm-5.3, 19.5 s. UNCHANGED: review/judge stays on Claude (same-family reviewers share blind spots) and `~/.claude` never goes to GLM. He also warned GLM can hang — `-TimeoutSec` is the guard, 900 s used here.
+
+### ClickUp — 41 open tasks, and two contradict this board
+All four of his verbal orders were already filed, so none of it is new scope: `z92046pvtu` (transcription-only, high) · `z92046r2vf` (refined blocks collapsible, high) · `z92046jw05` and `z92046jw04` (upload flow) · `86eyh74fk` (title from the uploaded file name — which is why today's batch is named "1".."11"). **Two high-priority reports contradict what this board treats as settled:** `z92046pvu0` says "videoni audioga o'girish ishlamayapti" while this board records the owner confirming "sinaldi hammasi ishlayapti" on 2026-09-06 — one of the two is wrong; and `86eyjtx4p` says AI progress disappears after a page refresh, which may share the root cause above. Settle both before promising him anything about that button.
+
+## (previous) live point 2026-09-06 ~17:10 — ✅ DEPLOYED `d2c400c` (FREE/PAID cost pill + alias-key $0 guard); owner glance pending
 
 ### 2026-09-06 ~17:10 — ✅ DEPLOYED `d2c400c`, live and healthy; NOT yet seen by the owner
 Deploy (scripted, `scratchpad/deploy.sh`): `git archive d2c400c` → host build `BUILD_OK` → `docker-compose.app.yml` backed up to `.bak-d2c400c`, image line `643babf` → `d2c400c`, container recreated. Measured after: container `data365-web:d2c400c` Up · `/api/health` `{"status":"ok","checks":{"db":"ok","storage":"ok"}}` · `/login` 200 · public share `/s/zp46nk5t66cdqfv` 200 · Browser pane, anon share page, mobile viewport: **0 console errors** before AND after (baseline captured pre-deploy) · container logs 5 min: only the pre-existing benign `Duplicate column name 'authorName'` migration notice. **Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-d2c400c docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` (→ `643babf`, still on the host).
@@ -255,4 +428,11 @@ Same class, runtime half: `apps/web/.next/standalone/apps/web/lib/audio-extract.
 - 2026-08-22 [Xavfsizlik] Zip ichida ichki hujjatlar bor: 9 ta faylda 32 joyda serveringiz IP manzili (169.58.86.149), SSH ulanish buyrug'i va ichki hisobotlar yozilgan. NEGA muhim: kodn... -> **Tozalangan zip tayyorla (tavsiya)**
 - 2026-08-22 [Ishga tushirish] Loyihaning eng yuqori papkasida README yo'q ΓÇö qabul qiluvchi kodni ochsa, 'buni qanday ishga tushiraman' degan savolda qoladi. NEGA muhim: birinchi kunini yo'... -> **Ha, qo'sh (tavsiya)**
 - 2026-09-06 [Push] GitHub'ga push qilaymi? NIMA: kompyuteringizdagi kod 19-avgustdan beri GitHub'ga yuborilmagan ΓÇö 10 ta commit faqat shu noutbukda. NEGA: noutbuk buzilsa yoki o... -> **Ha, push qil (tavsiya)**
+- 2026-09-10 [Navbat] Bugun jiddiy nosozlik topdim: yuklangan audio fayllarning ~15% i jimgina ishlanmay qolyapti (bugun 12 tadan 2 tasi; 09-05 dagi "Platforma_taqdimoti" ham shu ΓÇö... -> **Ikkalasi parallel**
+- 2026-09-10 [2 ta yozuv] Bugun ishlanmay qolgan 2 ta yozuv serverda turgan (124 MB va 166 MB). Ularni hozir majburan ishga tushirsam, transcript chiqadi, lekin ~12 000 so'm pullik AI ke... -> **Yo'q, tegmang**
+- 2026-09-10 [Tanlov joyi] "Only transcript" va "Full AI analysis" tanlovi qayerda chiqsin? -> **Video sahifasida (tavsiya)**
+- 2026-09-10 [Fayl turi] Refined (tozalangan) matnni yuklab olish qaysi fayl turida bo'lsin? -> **Ikkalasi ham**
+- 2026-09-10 [Navbat] Bir vaqtda ko'p fayl yuklanganda AI tahlil qanday ishlasin? -> **kop fayl yuklangani bilan ai tahlil alohida qilinadiku bitta bitta**
+- 2026-09-10 [Tanlov] Ko'p fayl yuklaganda "Only transcript / Full AI" tanlovi qanday bo'lsin? -> **[No preference]**
+- 2026-09-10 [Chegara] Bir marta nechta fayl yuklashga ruxsat bo'lsin? -> **20 ta gacha (tavsiya)**
 
