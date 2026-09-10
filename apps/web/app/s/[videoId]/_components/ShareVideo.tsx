@@ -1123,6 +1123,7 @@ export const ShareVideo = forwardRef<
 										onVideoJump={handleSeekAndPlay}
 										duration={data.duration}
 										currentTime={currentTime}
+										videoTitle={data.name}
 									/>
 								}
 							/>

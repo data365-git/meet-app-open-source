@@ -2,7 +2,13 @@
 
 import { Play } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { downloadFilename } from "@/lib/download-filename";
+import {
+	buildRefinedTranscriptDocxBlob,
+	buildRefinedTranscriptPlainText,
+	saveBlobToFile,
+} from "@/lib/refined-transcript-export";
 import {
 	clampStartSec,
 	computeFollowScrollTop,
@@ -22,6 +28,11 @@ interface RefinedTranscriptPanelProps {
 	onVideoJump?: (seconds: number) => void;
 	duration?: number | null;
 	currentTime?: number;
+	/** The recording's current title — used to name the downloaded file and
+	 *  head the .docx, exactly like `videoTitle` on TranscriptPanel. Optional
+	 *  because callers may not thread it down; see `resolveRecordingTitle` for
+	 *  the fallback. */
+	videoTitle?: string | null;
 }
 
 export function RefinedTranscriptPanel({
@@ -29,9 +40,11 @@ export function RefinedTranscriptPanel({
 	onVideoJump,
 	duration,
 	currentTime = 0,
+	videoTitle,
 }: RefinedTranscriptPanelProps) {
 	const t = useTranslations("share");
 	const [closedChapters, setClosedChapters] = useState<Set<number>>(new Set());
+	const [copied, setCopied] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const activeSectionRef = useRef<HTMLElement>(null);
 
@@ -52,6 +65,54 @@ export function RefinedTranscriptPanel({
 		currentTime,
 		duration,
 	);
+
+	// --- Copy / download controls (same affordances as the raw Transcript tab).
+	// The export builders live in lib/refined-transcript-export; notes there
+	// explain the output shapes (readable prose, ** markers handled per format).
+	const plainText = useMemo(
+		() =>
+			refinedTranscript
+				? buildRefinedTranscriptPlainText(refinedTranscript)
+				: "",
+		[refinedTranscript],
+	);
+	const canExport = plainText.length > 0;
+
+	// Downloads are named after the recording via the shared downloadFilename
+	// helper, so a folder of exports stays distinguishable. ShareVideo threads the
+	// recording title down as a prop, the same way it already does for the raw
+	// TranscriptPanel; an earlier version read it out of the `videoStatus`
+	// react-query cache by literal key, which nothing typed or tested, so a rename
+	// of that key would have silently downgraded every export to "recording.txt".
+	function resolveRecordingTitle(): string | null {
+		return videoTitle ?? null;
+	}
+
+	function handleCopy() {
+		if (!canExport) return;
+		navigator.clipboard.writeText(plainText).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	}
+
+	function handleDownloadTxt() {
+		if (!canExport) return;
+		saveBlobToFile(
+			new Blob([plainText], { type: "text/plain" }),
+			downloadFilename(resolveRecordingTitle(), "txt"),
+		);
+	}
+
+	async function handleDownloadDocx() {
+		if (!canExport || !refinedTranscript) return;
+		const recordingTitle = resolveRecordingTitle();
+		const blob = await buildRefinedTranscriptDocxBlob(
+			refinedTranscript,
+			recordingTitle,
+		);
+		saveBlobToFile(blob, downloadFilename(recordingTitle, "docx"));
+	}
 
 	// --- Auto-follow active chapter, scoped to this panel's own scroll container ---
 	// Same pattern as TranscriptPanel: `containerRef` (the panel root) is always
@@ -155,8 +216,150 @@ export function RefinedTranscriptPanel({
 		);
 	}
 
+	// Controls row above the chapters: copy + TXT + DOCX. Button markup mirrors
+	// the Transcript tab's header actions — same styles, icons, titles, hover
+	// treatment and copied confirmation — so the two tabs read as one product.
+	// Buttons disable (rather than hiding) when the builder found no exportable
+	// text, so the tab's affordances stay discoverable but can never download
+	// an empty file.
+	function renderControls() {
+		const baseStyle = {
+			display: "flex",
+			alignItems: "center",
+			gap: "4px",
+			padding: "5px 10px",
+			fontSize: "12px",
+			fontWeight: 500,
+			background: "var(--gray-3)",
+			color: "var(--gray-11)",
+			border: "none",
+			borderRadius: "6px",
+			cursor: canExport ? "pointer" : "not-allowed",
+			transition: "background 150ms, color 150ms",
+			whiteSpace: "nowrap",
+			opacity: canExport ? 1 : 0.55,
+		};
+		const hoverHandlers = canExport
+			? {
+					onMouseEnter: (e: MouseEvent<HTMLButtonElement>) => {
+						e.currentTarget.style.background = "var(--blue-3)";
+						e.currentTarget.style.color = "var(--blue-11)";
+					},
+					onMouseLeave: (e: MouseEvent<HTMLButtonElement>) => {
+						e.currentTarget.style.background = "var(--gray-3)";
+						e.currentTarget.style.color = "var(--gray-11)";
+					},
+				}
+			: {};
+		const downloadIcon = (
+			<svg
+				aria-hidden="true"
+				xmlns="http://www.w3.org/2000/svg"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="2"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+				style={{ width: "12px", height: "12px" }}
+			>
+				<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+				<polyline points="7 10 12 15 17 10" />
+				<line x1="12" y1="15" x2="12" y2="3" />
+			</svg>
+		);
+
+		return (
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: "6px",
+					padding: "4px 0 8px",
+					borderBottom: "1px solid var(--gray-3)",
+				}}
+			>
+				<span style={{ flex: 1 }} />
+
+				{/* Copy */}
+				<button
+					type="button"
+					onClick={handleCopy}
+					disabled={!canExport}
+					title={copied ? t("copied") : t("copyTranscript")}
+					{...hoverHandlers}
+					style={baseStyle}
+				>
+					{copied ? (
+						<>
+							<svg
+								aria-hidden="true"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.5"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								style={{ width: "12px", height: "12px" }}
+							>
+								<polyline points="20 6 9 17 4 12" />
+							</svg>
+							{t("copied")}
+						</>
+					) : (
+						<>
+							<svg
+								aria-hidden="true"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								style={{ width: "12px", height: "12px" }}
+							>
+								<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+								<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+							</svg>
+							{t("copyTranscript")}
+						</>
+					)}
+				</button>
+
+				{/* Download TXT */}
+				<button
+					type="button"
+					onClick={handleDownloadTxt}
+					disabled={!canExport}
+					title={t("downloadTxt")}
+					{...hoverHandlers}
+					style={baseStyle}
+				>
+					{downloadIcon}
+					TXT
+				</button>
+
+				{/* Download DOCX */}
+				<button
+					type="button"
+					onClick={handleDownloadDocx}
+					disabled={!canExport}
+					title={t("downloadDocx")}
+					{...hoverHandlers}
+					style={baseStyle}
+				>
+					{downloadIcon}
+					DOCX
+				</button>
+			</div>
+		);
+	}
+
 	return (
 		<div ref={containerRef} className="flex flex-col gap-4">
+			{renderControls()}
 			{refinedTranscript.chapters.map((chapter) => {
 				const startSec = formatPanelStartSec(chapter.startSec, duration);
 				const isOpen = !closedChapters.has(chapter.startSec);
