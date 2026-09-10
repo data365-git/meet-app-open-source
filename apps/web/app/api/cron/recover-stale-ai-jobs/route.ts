@@ -1,13 +1,17 @@
 import { timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { Effect, Schedule } from "effect";
 import { NextResponse } from "next/server";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { getStorageAccessForVideo } from "@/lib/video-storage";
 import {
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
@@ -24,6 +28,12 @@ export const dynamic = "force-dynamic";
 // and the local REFINE_STALE_MS in actions/video/refine-timestamps.ts — a PROCESSING timestamp
 // refinement older than this is a crashed run, not truly in-flight.
 const REFINE_STALE_JOB_THRESHOLD_MS = 30 * 60 * 1000;
+
+// A video_uploads row older than this in phase 'uploading' or 'processing'
+// means the processing hand-off was lost: a live multipart upload re-stamps
+// updated_at every 2 seconds and a live remux deletes the row within
+// milliseconds of taking over, so neither phase can be healthy at 30 minutes.
+const STALE_UPLOAD_THRESHOLD_MS = 30 * 60 * 1000;
 
 type StaleTranscriptionCandidate = {
 	id: Video.VideoId;
@@ -45,6 +55,35 @@ type StaleRefinementCandidate = {
 	name: string;
 	metadata: VideoMetadata | null;
 };
+
+type StaleUploadCandidate = {
+	video: typeof videos.$inferSelect;
+	upload: typeof videoUploads.$inferSelect;
+};
+
+// Storage is the only trustworthy source for "the bytes really are all
+// there" — the row alone says nothing about a multipart that never
+// assembled. Mirrors verifyRawFileUploaded in actions/video/trigger-processing.ts,
+// but returns a boolean instead of throwing: for this cron an absent or
+// zero-length object means the upload genuinely failed, which is a row to
+// leave alone, not an error to surface.
+async function isRawObjectInStorage(
+	video: typeof videos.$inferSelect,
+	rawFileKey: string,
+): Promise<boolean> {
+	try {
+		const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+		const head = await bucket
+			.headObject(rawFileKey)
+			.pipe(
+				Effect.retry({ times: 3, schedule: Schedule.exponential("100 millis") }),
+				runPromise,
+			);
+		return (head.ContentLength ?? 0) > 0;
+	} catch {
+		return false;
+	}
+}
 
 // NOTE (round-8 deletion): the quota-park ladder branch is GONE from this
 // loop. Cheap transcription no longer parks — each chunk falls back to the
@@ -76,6 +115,7 @@ export async function GET(request: Request) {
 	const fastStaleBeforeIso = fastStaleBefore.toISOString();
 	const refineStaleBefore = new Date(now - REFINE_STALE_JOB_THRESHOLD_MS);
 	const refineStaleBeforeIso = refineStaleBefore.toISOString();
+	const staleUploadBefore = new Date(now - STALE_UPLOAD_THRESHOLD_MS);
 
 	const transcriptionCandidates: StaleTranscriptionCandidate[] = await db()
 		.select({
@@ -216,6 +256,7 @@ export async function GET(request: Request) {
 	let quotaRetried = 0;
 	let refinementReset = 0;
 	let pendingRequestStarted = 0;
+	let staleUploadRelaunched = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -403,6 +444,66 @@ export async function GET(request: Request) {
 		}
 	}
 
+	// Safety net for a lost processing hand-off (2026-09-10 incident, ~15% of
+	// uploads): the multipart complete route verifies the object and then hands
+	// off to startVideoProcessingWorkflow with a single unrecorded, in-process,
+	// fire-and-forget call — nothing reconciles it. When the call does not take
+	// effect the video_uploads row sits at phase 'uploading' forever with every
+	// byte safely in storage and the user told success, and no marker exists
+	// for the loops above to see. phase IN ('uploading','processing') plus the
+	// raw object being present IS the durable fact "bytes complete, hand-off
+	// lost". The relaunch is safe to repeat: forceRestart re-claims the row,
+	// and the transcription claim in lib/transcribe.ts is a compare-and-swap,
+	// so a duplicate hand-off loses the claim and launches nothing paid.
+	// LIMIT 3 for the same reason as the neighbouring loops above — the
+	// relaunch runs ffmpeg inline in this process.
+	const staleUploadCandidates: StaleUploadCandidate[] = await db()
+		.select({ video: videos, upload: videoUploads })
+		.from(videos)
+		.innerJoin(videoUploads, eq(videoUploads.videoId, videos.id))
+		.where(
+			and(
+				isNull(videos.deletedAt),
+				inArray(videoUploads.phase, ["uploading", "processing"]),
+				lte(videoUploads.updatedAt, staleUploadBefore),
+				isNotNull(videoUploads.rawFileKey),
+			),
+		)
+		.limit(3);
+
+	for (const candidate of staleUploadCandidates) {
+		const { video, upload } = candidate;
+		// Hard cap mirroring the SQL LIMIT, so a future edit of that query can
+		// never fan inline ffmpeg launches wider than the neighbouring loops.
+		if (staleUploadRelaunched >= 3) break;
+		// Freshness re-check in JS on the row we actually hold (same law as the
+		// transcription loop above): never relaunch an upload that is still
+		// visibly landing bytes.
+		if (upload.updatedAt.getTime() > staleUploadBefore.getTime()) continue;
+		// Confirm the raw object really is in storage before doing anything. A
+		// zero-length or absent object means the upload genuinely failed —
+		// leave the row completely untouched.
+		if (!(await isRawObjectInStorage(video, upload.rawFileKey))) continue;
+		try {
+			await startVideoProcessingWorkflow({
+				videoId: video.id,
+				userId: video.ownerId,
+				rawFileKey: upload.rawFileKey,
+				bucketId: video.bucket,
+				processingMessage: "Recovering video processing...",
+				startFailureMessage: "Video processing could not be recovered.",
+				mode: upload.mode ?? undefined,
+				forceRestart: true,
+			});
+			staleUploadRelaunched++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to relaunch processing for video ${video.id}:`,
+				error,
+			);
+		}
+	}
+
 	for (const candidate of refinementCandidates) {
 		const metadata = candidate.metadata ?? {};
 		const current = metadata.timestampRefinement;
@@ -452,5 +553,6 @@ export async function GET(request: Request) {
 		quotaRetried,
 		refinementReset,
 		pendingRequestStarted,
+		staleUploadRelaunched,
 	});
 }

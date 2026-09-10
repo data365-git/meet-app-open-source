@@ -23,18 +23,23 @@ const state = vi.hoisted(() => ({
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
-			from: () => ({
-				where: (...args: unknown[]) => {
-					state.whereArgs.push(args);
-					const result =
-						state.selectResults[state.selectCall++] ?? ([] as unknown[]);
-					const promise = Promise.resolve(result) as Promise<unknown[]> & {
-						limit: (n: number) => Promise<unknown[]>;
-					};
-					promise.limit = () => Promise.resolve(result);
-					return promise;
-				},
-			}),
+			from: () => {
+				const builder = {
+					// The stale-upload hand-off pass joins video_uploads onto videos.
+					innerJoin: () => builder,
+					where: (...args: unknown[]) => {
+						state.whereArgs.push(args);
+						const result =
+							state.selectResults[state.selectCall++] ?? ([] as unknown[]);
+						const promise = Promise.resolve(result) as Promise<unknown[]> & {
+							limit: (n: number) => Promise<unknown[]>;
+						};
+						promise.limit = () => Promise.resolve(result);
+						return promise;
+					},
+				};
+				return builder;
+			},
 		}),
 		update: () => ({
 			set: (arg: Record<string, unknown>) => {
@@ -54,12 +59,22 @@ vi.mock("@cap/database/schema", () => ({
 		transcriptionStatus: "videos.transcriptionStatus",
 		deletedAt: "videos.deletedAt",
 	},
+	videoUploads: {
+		videoId: "videoUploads.videoId",
+		phase: "videoUploads.phase",
+		updatedAt: "videoUploads.updatedAt",
+		rawFileKey: "videoUploads.rawFileKey",
+		mode: "videoUploads.mode",
+	},
 }));
 
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values })),
+	isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 			strings,
@@ -102,6 +117,20 @@ const transcribeVideoMock = vi.hoisted(() =>
 );
 vi.mock("@/lib/transcribe", () => ({
 	transcribeVideo: transcribeVideoMock,
+}));
+
+// The stale-upload hand-off pass added these imports to the route; they pull
+// the server-only runtime graph, so they must be mocked like the rest.
+vi.mock("@/lib/server", () => ({
+	runPromise: vi.fn(),
+}));
+
+vi.mock("@/lib/video-processing", () => ({
+	startVideoProcessingWorkflow: vi.fn(() => Promise.resolve("started")),
+}));
+
+vi.mock("@/lib/video-storage", () => ({
+	getStorageAccessForVideo: vi.fn(),
 }));
 
 const { GET } = await import("@/app/api/cron/recover-stale-ai-jobs/route");

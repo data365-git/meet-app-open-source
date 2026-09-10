@@ -113,6 +113,11 @@ export async function startVideoProcessingWorkflow({
 	});
 
 	if (status === "already-processing") {
+		// A duplicate hand-off lands here and launches nothing — until
+		// 2026-09-10 that outcome left no log line at all.
+		console.log(
+			`[startVideoProcessingWorkflow] Video ${videoId} is already processing — not launching a second workflow`,
+		);
 		return status;
 	}
 

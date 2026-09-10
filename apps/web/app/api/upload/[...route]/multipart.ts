@@ -636,7 +636,7 @@ app.post(
 							Effect.map(() => true),
 							Effect.catchAll((error) =>
 								Effect.logError(
-									"Failed to start video processing workflow after raw upload completion",
+									`Failed to start video processing workflow after raw upload completion for video ${videoId}`,
 									error,
 								).pipe(Effect.map(() => false)),
 							),
@@ -747,7 +747,7 @@ app.post(
 						Effect.map(() => true),
 						Effect.catchAll((error) =>
 							Effect.logError(
-								"Failed to start video processing workflow after multipart completion",
+								`Failed to start video processing workflow after multipart completion for video ${videoId}`,
 								error,
 							).pipe(Effect.map(() => false)),
 						),

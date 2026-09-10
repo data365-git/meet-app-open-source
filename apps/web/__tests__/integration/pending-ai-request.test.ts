@@ -35,7 +35,7 @@ const state = vi.hoisted(() => ({
 
 const schemaMocks = vi.hoisted(() => ({
 	videos: { id: "videos.id", metadata: "videos.metadata", ownerId: "videos.ownerId", transcriptionStatus: "videos.transcriptionStatus", deletedAt: "videos.deletedAt", name: "videos.name" },
-	videoUploads: { videoId: "videoUploads.videoId", phase: "videoUploads.phase", uploaded: "videoUploads.uploaded", total: "videoUploads.total", mode: "videoUploads.mode" },
+	videoUploads: { videoId: "videoUploads.videoId", phase: "videoUploads.phase", uploaded: "videoUploads.uploaded", total: "videoUploads.total", mode: "videoUploads.mode", updatedAt: "videoUploads.updatedAt", rawFileKey: "videoUploads.rawFileKey" },
 	organizations: { id: "organizations.id", ownerId: "organizations.ownerId", settings: "organizations.settings", tombstoneAt: "organizations.tombstoneAt" },
 	organizationMembers: {
 		organizationId: "organizationMembers.organizationId",
@@ -136,6 +136,14 @@ vi.mock("@cap/database", () => ({
 						joined = true;
 						return query;
 					},
+					// The recovery cron's stale-upload pass inner-joins video_uploads
+					// onto videos; no fixture here is a lost hand-off, so it must
+					// match nothing.
+					innerJoin: () => ({
+						where: () => ({
+							limit: () => Promise.resolve([]),
+						}),
+					}),
 					where: (condition: unknown) => {
 						if (joined) {
 							// transcribeVideo's video+org lookup, awaited directly.
@@ -253,7 +261,10 @@ vi.mock("@cap/web-domain", () => ({ Video: {} }));
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values })),
+	isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	or: vi.fn((...args: unknown[]) => args),
 	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 		sql: strings.join("?"),
