@@ -9,7 +9,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE — live point 2026-09-10 ~22:30 laptop — 8 COMMITS LANDED, TREE CLEAN, NOTHING DEPLOYED. Deploy is the ONLY step left and it is blocked on one blind review.
+## RESUME HERE — live point 2026-09-11 ~00:30 laptop — DEPLOY OF `2c9dd6b` IN FLIGHT (owner said deploy today after a proper check; the check found and fixed a blocker first)
 
 **Owner's standing order this session:** "barcha ishlarni yakunla mensiz, toxtama bajarilib done bolguncha" — full autonomy, finish everything. Earlier the same session he gave five product orders and one routing order; every open question was answered in two AskUserQuestion batches. **The whole session's decisions and evidence live in `plans/2026-09-10-transcript-options-refined-export-multi-import.md` — read that before touching this work.**
 
@@ -24,49 +24,62 @@ Measured on production this session (image `data365-web:d2c400c`, DB `capdb`): 7
 
 **Do NOT conflate the owner's 09-05 complaint with this.** `mz56jaba64m8z94` ("Platforma_taqdimoti") is a DIFFERENT shape: `phase = 'error'`, `processing_error = 'Upload stalled'`, yet `result.mp4` and `download-audio.mp3` exist in storage, so its video pipeline did finish and only transcription is missing. Whether he pressed the button and it failed, or never pressed, is NOT established — do not claim it either way without the access log.
 
-### START HERE — one thing left, and it needs a review that could not run tonight
-`git log --oneline -3` should show **`24ccad7`** on top and the tree CLEAN. No merge is in
-progress. `tsc -b --force` exits 0 and the full suite is **185 files / 1579 tests passed**,
-26 skipped.
+### IF THIS SESSION DIED MID-DEPLOY, READ THIS FIRST
+A deploy of **`2c9dd6b`** was running. Find out where it got to:
+```
+ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 "grep -n 'image:' /opt/data365/docker-compose.app.yml; docker images | grep 2c9dd6b; docker ps --format '{{.Image}} {{.Status}}' | grep data365-web; tail -20 /tmp/build-2c9dd6b.log"
+```
+- image line still `d2c400c` → nothing switched, safe to re-run the deploy.
+- image built but the line not switched → finish with the three commands in the recipe below.
+- line switched and container Up on `2c9dd6b` → the deploy landed; verify health and move on.
+**Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-2c9dd6b docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `d2c400c` stays on the host.
+The scripted deploy lives at `<scratchpad>/deploy.sh` and takes the sha as its only argument.
 
-**The only remaining step is DEPLOY, and it is deliberately not done.** The second blind
-review of `91962be` (the hardening of the recovery cron) never produced a verdict — the agent
-died with `429 session limit, resets 10pm Europe/Warsaw`. That review is not a formality: the
-cron writes to user rows and can relaunch media processing, so shipping it unreviewed is the
-one thing this session refused to do. **Re-run it first**, with these five questions:
-1. Is the key filter complete? Enumerate every writer of `videoUploads.rawFileKey` and say
-   for each whether its key passes `isRawUploadKey` and whether that is intended.
-2. Is retiring a row to `phase='error'` safe — can it fire on an upload that is actually
-   healthy (slow client, resumed upload, benignly stale `updated_at`), and is anything now
-   unrecoverable that was recoverable before?
-3. Does `rowsAffected` read the shape this project's drizzle/mysql2 driver really returns? If
-   it can return 0 on a successful update, the pass silently does nothing forever.
-4. Did the neighbouring recovery loops break (the `like` import was added to four test mocks)?
-5. Anything new and unrequested.
+### THE PRE-DEPLOY CHECK EARNED ITS KEEP — read this before trusting the recovery pass
+The second blind review plus one production query found that the pass, already committed and
+green on 185 test files, **would have recovered nothing at all**: every orphaned
+`video_uploads` row — including the two from the incident — carries `raw_file_key IS NULL`,
+and the query required it non-null. The fixture had it filled in because the fixture came
+from the same belief as the code. Fixed in `2c9dd6b`: a row with an empty key is admitted and
+the canonical `raw-upload.mp4` / `.webm` is probed instead.
 
-**Both cheap routes were rate-limited when this session ended:** GLM-5.3 returned
-`429 usage limit reached for 5 hour, resets 2026-09-11 03:43:36 UTC`, and a Fable subagent
-returned `429 session limit, resets 10pm Europe/Warsaw`. So the owner's standing "burn the
-GLM allowance first" order cannot be followed until 03:43 UTC. Until then cheap work goes to
-a Sonnet `doer`.
+Three more real findings, all fixed in the same commit:
+- the storage probe was a boolean, so "bucket unreachable" was indistinguishable from "object
+  gone" — and an absent object gets the row RETIRED, so one expired credential would have
+  condemned a whole scan of healthy uploads. Now tri-state; only a real NoSuchKey means
+  absent. **How that is detected was measured:** a `runPromise` rejection is a
+  `FiberFailureImpl` whose only own fields are stack/message/name, with the original name
+  folded into the label `"(FiberFailure) NoSuchKey"` — there is no cause chain to walk.
+- `rowsAffected` was a twin of the existing `getAffectedRows`, and the only shape the test
+  exercised was one this project's driver never returns.
+- the claim did not stamp `updated_at` (no ON UPDATE on that column), so a claimed row whose
+  launch threw would be re-claimed every tick forever, holding a relaunch slot.
 
-**Deploy recipe (unchanged, image-tag switch):** ship the source of `<sha>` to
-`/opt/data365/app-<sha>` on `169.58.86.149`, `docker build -f apps/web/Dockerfile -t data365-web:<sha> .`
-(the Dockerfile is NOT at the repo root — a root build fails), `cp docker-compose.app.yml
-docker-compose.app.yml.bak-<sha>`, switch the one `image:` line, `docker compose -f
-docker-compose.app.yml up -d`. **Verify:** `/api/health` returns `db:ok storage:ok`, `/login`
-200, a public share page 200, container logs clean apart from the pre-existing benign
-`Duplicate column name 'authorName'` notice. **Rollback is seconds:** restore the `.bak-`
-file and `up -d`; `d2c400c` stays on the host.
+**Accepted gap, stated not hidden:** two upload-completion paths (the extension/import
+finalize branch and instant recording) use `result.mp4` as their raw key, and those rows stay
+excluded — admitting them risks re-encoding a finished video onto itself.
 
-**After the deploy, the owner has four things to look at** — one recording is enough for the
-first three: the two start buttons on an unanalysed recording, the refined tab's copy and
-download, and the refined blocks opening one at a time without the audio jumping. The fourth
-is the upload-loss fix, which he cannot see directly: watch whether uploads stop going
-missing over the next few days, and whether the cron's JSON starts reporting
-`staleUploadRetired`.
+### AFTER THE DEPLOY — verify in this order
+1. `/api/health` returns `db:ok storage:ok`; `/login` 200; a public share page 200.
+2. **Trigger the cron by hand instead of waiting 30 minutes** (it is `*/30` in root's crontab
+   as `/root/run-cron.sh recover-stale-ai-jobs`): run that script and read its JSON. Expect
+   `staleUploadRelaunched` to be 1 or more, because `6b1kdkgr46d3nm5` and `jka07j0jekx883s`
+   are sitting there with complete objects.
+3. Then confirm in the database that those two rows moved: `videos.metadata` should gain
+   `processingStartedAt`, and their `video_uploads` row should leave `phase='uploading'`.
+   **No AI money is spent by this** — neither row carries `aiStartPendingUpload`, so nothing
+   transcribes until a person presses the button.
+4. Container logs for 5 minutes: clean apart from the pre-existing benign
+   `Duplicate column name 'authorName'` migration notice.
 
-### The eight commits, newest first — all gated, none deployed
+**Baseline captured before the deploy, for comparison:** prod was `data365-web:d2c400c`, Up 4
+days, health ok, **0 error lines and 0 S3Error lines in the previous hour**, 27G free on
+`/opt`.
+
+**Local is 11+ commits ahead of `origin/qa-fixes` and has NOT been pushed** — the project rule
+requires his word for a push, and he has given it for the deploy only. Ask him.
+
+### The nine commits, newest first — all gated
 - `91962be` fix(cron): **hardening of the recovery pass after the first blind review found
   three real defects.** Worth knowing why this mattered: (a) the object-presence check ran
   after `LIMIT 3`, so three permanently dead rows would have starved every genuinely stuck
