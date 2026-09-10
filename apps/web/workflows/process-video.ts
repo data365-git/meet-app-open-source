@@ -5,7 +5,10 @@ import type { VideoMetadata } from "@cap/database/types";
 import { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { FatalError } from "workflow";
-import { hasPendingUploadStartOrder } from "@/lib/ai-generation-request";
+import {
+	bankedStartRequestsFullAnalysis,
+	hasPendingUploadStartOrder,
+} from "@/lib/ai-generation-request";
 import { persistableProcessingError } from "@/lib/processing-error";
 import { runPromise } from "@/lib/server";
 import { optimizeRemoteVideoToMp4, probeRemoteVideo } from "@/lib/video-convert";
@@ -379,21 +382,23 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 			.limit(1);
 
 		if (!video || video.transcriptionStatus !== null) return;
-		if (!hasPendingUploadStartOrder((video.metadata as VideoMetadata) ?? {}))
-			return;
+		const metadata = (video.metadata as VideoMetadata) ?? {};
+		if (!hasPendingUploadStartOrder(metadata)) return;
 
 		console.log(
 			`[process-video] Starting transcription (upload-time press redeemed) for ${videoId}`,
 		);
-		// aiGenerationEnabled=false (2026-09-05): a press banked DURING upload
-		// used to auto-chain into AI generation the moment transcription
-		// finished. Transcription is now the only thing this redeems; AI
-		// generation is the separate "Xulosalash" step, same as every other
-		// entry point since generate/route.ts stopped auto-chaining.
+		// The banked MODE is the run's switch (2026-09-10): the two-mode chooser
+		// banks `aiStartMode` beside the one-shot order, so this redeemer starts
+		// exactly what was pressed - "Only transcript" stays transcript-only
+		// (false), "Full AI analysis" chains the summary and tasks in the same
+		// run (true) with no second press. The flag travels explicitly instead of
+		// relying on the durable-marker OR in shouldStartAiAfterTranscription,
+		// which is what made the 2026-09-05 flag flips a no-op.
 		const result = await transcribeVideo(
 			videoId as Video.VideoId,
 			video.ownerId,
-			false,
+			bankedStartRequestsFullAnalysis(metadata),
 			false,
 		);
 
@@ -416,7 +421,8 @@ async function startPendingAiRequest(videoId: string): Promise<void> {
 			.set({
 				metadata: sql`JSON_REMOVE(
 					COALESCE(${videos.metadata}, JSON_OBJECT()),
-					'$.aiStartPendingUpload'
+					'$.aiStartPendingUpload',
+					'$.aiStartMode'
 				)`,
 			})
 			.where(eq(videos.id, videoId as Video.VideoId));

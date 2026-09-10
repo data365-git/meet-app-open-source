@@ -12,6 +12,10 @@ import {
   recordReprocessAttempt,
   REPROCESS_RATE_LIMIT_CODE,
 } from "@/lib/reprocess-rate-limit";
+import {
+  bankedStartRequestsFullAnalysis,
+  hasPendingAiGenerationRequest,
+} from "@/lib/ai-generation-request";
 import { transcribeVideo } from "@/lib/transcribe";
 
 export const dynamic = "force-dynamic";
@@ -27,9 +31,21 @@ export async function POST(
     // Owner/admin "Qayta analiz" (retry) re-runs AI on the EXISTING transcript
     // even when content already exists. No re-upload / re-transcription.
     let reprocess = false;
+    // Two explicit start modes (2026-09-10): "Only transcript" stops once the
+    // transcript is ready; "Full AI analysis" chains the summary and tasks in
+    // the same run with no second press. Read exactly like `reprocess` above
+    // - a plain body field, the convention this route already uses. An ABSENT
+    // mode is a press that did not come from the two-mode chooser (error
+    // retry, the banked "press again", legacy callers); each branch below then
+    // keeps its own pre-two-modes default or resolves the user's outstanding
+    // banked intent instead of guessing.
+    let startMode: "transcript" | "full" | null = null;
     try {
       const body = await request.json();
       reprocess = body?.reprocess === true;
+      if (body?.mode === "full" || body?.mode === "transcript") {
+        startMode = body.mode;
+      }
     } catch {
       // no body → normal (non-forced) request
     }
@@ -102,6 +118,8 @@ export async function POST(
       );
     }
 
+    const existingMetadata = (video.metadata as VideoMetadata) || {};
+
     // If transcription is still running, remember the user's explicit AI
     // request so the workflow starts AI analysis as soon as the transcript
     // finishes. Do not set aiGenerationStatus=QUEUED here: startAiGeneration
@@ -113,6 +131,22 @@ export async function POST(
     // handles). This only records the explicit AI request and backfills the
     // job clock if missing.
     if (video.transcriptionStatus === "PROCESSING") {
+      // "Only transcript" pressed while a transcript is already running asks
+      // for nothing beyond it: clear any banked AI request so the durable
+      // marker's OR in shouldStartAiAfterTranscription cannot re-enable the
+      // auto-chain behind the user's back (the 2026-09-05 no-op lesson).
+      if (startMode === "transcript") {
+        await db()
+          .update(videos)
+          .set({
+            metadata: sql`JSON_REMOVE(
+              COALESCE(${videos.metadata}, JSON_OBJECT()),
+              '$.aiGenerationRequestedAt'
+            )`,
+          })
+          .where(eq(videos.id, videoId));
+        return Response.json({ alreadyRunning: true, transcriptOnly: true });
+      }
       const now = new Date().toISOString();
       await db()
         .update(videos)
@@ -168,14 +202,61 @@ export async function POST(
       return Response.json({ started: true });
     }
 
-    // Transcription not yet started — kick off the full pipeline
-    // aiGenerationEnabled=false: transcription no longer auto-chains into AI
-    // generation. The COMPLETE branch above starts AI as an explicit "step 2"
-    // once the transcript is ready and the user asks for it.
-    const result = await transcribeVideo(videoId, video.ownerId, false, false);
+    // Transcription not yet started — kick off the pipeline. The chosen mode
+    // IS the switch (2026-09-10): "Only transcript" reaches the pipeline with
+    // aiGenerationEnabled=false and stops there; "Full AI analysis" reaches it
+    // with true, so the workflow chains summary/tasks with no second press.
+    // An absent mode resolves the user's OUTSTANDING intent: a durable
+    // aiGenerationRequestedAt (banked by a "full" press below or by the
+    // already-PROCESSING branch) means the run being retried was a full one;
+    // otherwise transcript-only - the first press of the two-mode chooser and
+    // what every legacy caller has meant since 2026-09-05.
+    const wantsFullAnalysis =
+      startMode === "full" ||
+      (startMode === null && hasPendingAiGenerationRequest(existingMetadata));
+    const result = await transcribeVideo(
+      videoId,
+      video.ownerId,
+      wantsFullAnalysis,
+      false,
+    );
 
     if (!result.success) {
       return Response.json({ error: result.message }, { status: 500 });
+    }
+
+    // Make the chosen mode stick on the row so the durable-marker OR cannot
+    // flip it later. A full start banks the durable AI request (this is also
+    // what keeps the status poll watching for the transcript-to-QUEUED
+    // handoff instead of going terminal mid-gap); an explicit transcript-only
+    // start clears any stale AI request left by an earlier press. An absent
+    // mode leaves the row as-is - the flag above already matched what was
+    // banked. Skipped while the upload is still running: the banking branch
+    // below writes its own (mode-carrying) markers.
+    if (result.code !== "UPLOAD_IN_PROGRESS") {
+      if (wantsFullAnalysis) {
+        const now = new Date().toISOString();
+        await db()
+          .update(videos)
+          .set({
+            metadata: sql`JSON_SET(
+              COALESCE(${videos.metadata}, JSON_OBJECT()),
+              '$.aiGenerationRequestedAt', ${now},
+              '$.aiGenerationRequestedBy', ${user.id}
+            )`,
+          })
+          .where(eq(videos.id, videoId));
+      } else if (startMode === "transcript") {
+        await db()
+          .update(videos)
+          .set({
+            metadata: sql`JSON_REMOVE(
+              COALESCE(${videos.metadata}, JSON_OBJECT()),
+              '$.aiGenerationRequestedAt'
+            )`,
+          })
+          .where(eq(videos.id, videoId));
+      }
     }
 
     // transcribeVideo refuses while the upload/processing is still running, and
@@ -211,14 +292,45 @@ export async function POST(
     // mean "run the AI when it finishes".
     if (result.code === "UPLOAD_IN_PROGRESS") {
       const now = new Date().toISOString();
+      // The press arrived before the upload finished: bank it as the ONE-SHOT
+      // order carrying the CHOSEN MODE (2026-09-10), so both redeemers start
+      // exactly what was pressed once the bytes land - transcript-only, or the
+      // full chained run. 'full' also stamps the durable AI request: that run
+      // really will chain into AI, and the status poll needs the marker to
+      // keep watching for the transcript-to-QUEUED handoff. 'transcript' banks
+      // NO AI request (and clears a stale one), so nothing downstream -
+      // including the OR in shouldStartAiAfterTranscription - can re-enable
+      // the auto-chain for it. An absent mode keeps whatever mode an earlier
+      // press banked, defaulting to transcript-only.
+      const bankedFull =
+        startMode === "full" ||
+        (startMode === null &&
+          bankedStartRequestsFullAnalysis(existingMetadata));
+      const bankedMode = bankedFull ? "full" : "transcript";
       await db()
         .update(videos)
         .set({
-          metadata: sql`JSON_SET(
-            COALESCE(${videos.metadata}, JSON_OBJECT()),
-            '$.aiGenerationRequestedBy', ${user.id},
-            '$.aiStartPendingUpload', ${now}
-          )`,
+          metadata: bankedFull
+            ? sql`JSON_SET(
+                COALESCE(${videos.metadata}, JSON_OBJECT()),
+                '$.aiGenerationRequestedAt', ${now},
+                '$.aiGenerationRequestedBy', ${user.id},
+                '$.aiJobStartedAt', COALESCE(
+                  JSON_UNQUOTE(JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiJobStartedAt')),
+                  ${now}
+                ),
+                '$.aiStartPendingUpload', ${now},
+                '$.aiStartMode', ${bankedMode}
+              )`
+            : sql`JSON_REMOVE(
+                JSON_SET(
+                  COALESCE(${videos.metadata}, JSON_OBJECT()),
+                  '$.aiGenerationRequestedBy', ${user.id},
+                  '$.aiStartPendingUpload', ${now},
+                  '$.aiStartMode', ${bankedMode}
+                ),
+                '$.aiGenerationRequestedAt'
+              )`,
         })
         .where(eq(videos.id, videoId));
 

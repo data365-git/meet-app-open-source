@@ -5,6 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { bankedStartRequestsFullAnalysis } from "@/lib/ai-generation-request";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -360,14 +361,19 @@ export async function GET(request: Request) {
 			// CAS would then MATCH and launch a SECOND paid transcription for one
 			// video. Passing false keeps this starter on the NULL/ERROR arm, so a
 			// lost race launches nothing.
-			// aiGenerationEnabled=false (2026-09-05): this cron redeems the same
-			// upload-time press as process-video.ts, and for the same reason it
-			// now starts transcription ONLY. AI generation is the separate
-			// "Xulosalash" step the owner presses once the transcript is ready.
+			// The banked MODE is the run's switch (2026-09-10): this cron redeems
+			// the same upload-time press as process-video.ts, carrying the mode the
+			// press banked - "Only transcript" starts transcription only (false);
+			// "Full AI analysis" chains the summary and tasks in the same run
+			// (true) with no second press. An explicit flag, not the durable-marker
+			// OR, so the 2026-09-05 no-op cannot repeat.
+			const wantsFullAnalysis = bankedStartRequestsFullAnalysis(
+				(candidate.metadata as VideoMetadata) ?? {},
+			);
 			const result = await transcribeVideo(
 				candidate.id,
 				candidate.ownerId,
-				false,
+				wantsFullAnalysis,
 				true,
 				false,
 			);
@@ -389,7 +395,8 @@ export async function GET(request: Request) {
 					.set({
 						metadata: sql`JSON_REMOVE(
 							COALESCE(${videos.metadata}, JSON_OBJECT()),
-							'$.aiStartPendingUpload'
+							'$.aiStartPendingUpload',
+							'$.aiStartMode'
 						)`,
 					})
 					.where(eq(videos.id, candidate.id));
