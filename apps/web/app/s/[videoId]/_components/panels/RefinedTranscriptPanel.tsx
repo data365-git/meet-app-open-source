@@ -43,16 +43,37 @@ export function RefinedTranscriptPanel({
 	videoTitle,
 }: RefinedTranscriptPanelProps) {
 	const t = useTranslations("share");
-	const [closedChapters, setClosedChapters] = useState<Set<number>>(new Set());
+	// Null until the user first toggles; the effective set derived below
+	// then defaults to "every chapter closed except the first", instead of
+	// the old empty set that started every chapter open.
+	const [closedChapters, setClosedChapters] = useState<Set<number> | null>(
+		null,
+	);
 	const [copied, setCopied] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const activeSectionRef = useRef<HTMLElement>(null);
 
+	// The set actually in force: the user's set once they have toggled at
+	// least once, otherwise the "only the first chapter open" default.
+	// Derived on every render so a chapter list that arrives asynchronously
+	// after mount still starts with exactly its first block expanded.
+	const effectiveClosedChapters =
+		closedChapters ??
+		getDefaultClosedChapters(refinedTranscript?.chapters ?? []);
+
 	function toggleChapter(startSec: number) {
+		const chapters = refinedTranscript?.chapters ?? [];
 		setClosedChapters((prev) => {
-			const next = new Set(prev);
-			if (next.has(startSec)) {
+			const base = prev ?? getDefaultClosedChapters(chapters);
+			const next = new Set(base);
+			if (base.has(startSec)) {
+				// Opening this chapter — accordion: close every other chapter.
 				next.delete(startSec);
+				for (const chapter of chapters) {
+					if (chapter.startSec !== startSec) {
+						next.add(chapter.startSec);
+					}
+				}
 			} else {
 				next.add(startSec);
 			}
@@ -182,7 +203,7 @@ export function RefinedTranscriptPanel({
 		return () => container.removeEventListener("scroll", handleScroll);
 	}, []);
 
-	// Seeking via chapter click re-enables follow and jumps straight to it.
+	// Seeking via the per-chapter play button re-enables follow and jumps to it.
 	function handleChapterSeek(seconds: number) {
 		followingRef.current = true;
 		onVideoJump?.(seconds);
@@ -362,7 +383,7 @@ export function RefinedTranscriptPanel({
 			{renderControls()}
 			{refinedTranscript.chapters.map((chapter) => {
 				const startSec = formatPanelStartSec(chapter.startSec, duration);
-				const isOpen = !closedChapters.has(chapter.startSec);
+				const isOpen = !effectiveClosedChapters.has(chapter.startSec);
 				const isActive = chapter.startSec === activeStartSec;
 				return (
 					<section
@@ -379,23 +400,23 @@ export function RefinedTranscriptPanel({
 						}
 					>
 						<div className="mb-3 flex items-center gap-2">
-							<button
-								type="button"
-								onClick={() => handleChapterSeek(startSec)}
-								className="rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors"
+							{/* Timestamp is informational only — audio plays from the play */}
+							{/* button alone, so it renders as a plain styled element. */}
+							<span
+								className="rounded-md px-2 py-0.5 font-mono text-xs font-medium"
 								style={{
 									background: "var(--brand-wash)",
 									color: "var(--brand)",
 								}}
 							>
 								{formatTimeMinutes(startSec)}
-							</button>
+							</span>
 							<button
 								type="button"
 								onClick={() => toggleChapter(chapter.startSec)}
 								aria-expanded={isOpen}
 								aria-label={t("toggleChapter")}
-								className="flex shrink-0 items-center justify-center"
+								className="flex size-5 shrink-0 items-center justify-center"
 								style={{
 									background: "transparent",
 									border: "none",
@@ -413,9 +434,11 @@ export function RefinedTranscriptPanel({
 									strokeLinecap="round"
 									strokeLinejoin="round"
 									style={{
+										display: "block",
 										width: "14px",
 										height: "14px",
 										flexShrink: 0,
+										overflow: "visible",
 										transform: isOpen ? "rotate(180deg)" : "rotate(0deg)",
 										transition: "transform 150ms",
 									}}
@@ -425,7 +448,8 @@ export function RefinedTranscriptPanel({
 							</button>
 							<button
 								type="button"
-								onClick={() => handleChapterSeek(startSec)}
+								onClick={() => toggleChapter(chapter.startSec)}
+								aria-expanded={isOpen}
 								className="flex-1 text-left text-base font-bold text-gray-12"
 								style={{
 									background: "transparent",
@@ -473,6 +497,15 @@ function formatPanelStartSec(
 	duration?: number | null,
 ): number {
 	return clampStartSec(startSec, duration ?? undefined);
+}
+
+// Default open state: only the first chapter is open, every later one closed.
+// A plain helper (not state) so the default can be re-derived whenever the
+// chapter list (re)loads or changes.
+function getDefaultClosedChapters(
+	chapters: Array<{ startSec: number }>,
+): Set<number> {
+	return new Set(chapters.slice(1).map((chapter) => chapter.startSec));
 }
 
 export function getActiveRefinedChapterStartSec(
