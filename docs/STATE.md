@@ -9,7 +9,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE — live point 2026-09-10 ~21:00 laptop — 6 COMMITS LANDED, NOTHING DEPLOYED; one merge STAGED-BUT-UNCOMMITTED
+## RESUME HERE — live point 2026-09-10 ~22:30 laptop — 8 COMMITS LANDED, TREE CLEAN, NOTHING DEPLOYED. Deploy is the ONLY step left and it is blocked on one blind review.
 
 **Owner's standing order this session:** "barcha ishlarni yakunla mensiz, toxtama bajarilib done bolguncha" — full autonomy, finish everything. Earlier the same session he gave five product orders and one routing order; every open question was answered in two AskUserQuestion batches. **The whole session's decisions and evidence live in `plans/2026-09-10-transcript-options-refined-export-multi-import.md` — read that before touching this work.**
 
@@ -24,38 +24,49 @@ Measured on production this session (image `data365-web:d2c400c`, DB `capdb`): 7
 
 **Do NOT conflate the owner's 09-05 complaint with this.** `mz56jaba64m8z94` ("Platforma_taqdimoti") is a DIFFERENT shape: `phase = 'error'`, `processing_error = 'Upload stalled'`, yet `result.mp4` and `download-audio.mp3` exist in storage, so its video pipeline did finish and only transcription is missing. Whether he pressed the button and it failed, or never pressed, is NOT established — do not claim it either way without the access log.
 
-### START HERE, in this order — the tree is mid-merge, so read this before running anything
-`git log --oneline -6` should show `91962be` on top. **`git status` will show a STAGED, UNCOMMITTED merge** of `glm/refined-collapsible` (`.git/MERGE_HEAD` exists) — the refined-blocks work. Do not reset it; finish it:
+### START HERE — one thing left, and it needs a review that could not run tonight
+`git log --oneline -3` should show **`24ccad7`** on top and the tree CLEAN. No merge is in
+progress. `tsc -b --force` exits 0 and the full suite is **185 files / 1579 tests passed**,
+26 skipped.
 
-1. **DO IT BY HAND — the GLM route is exhausted.** The child dispatched for this returned
-   `API Error: Request rejected (429) [Usage limit reached for 5 hour. Your limit will reset
-   at 2026-09-11 03:43:36]` and changed NO files. So the owner's standing "burn the GLM
-   allowance first" order cannot be followed again until **2026-09-11 03:43 UTC**; until then
-   cheap work goes to a Sonnet `doer` as before. The task itself: fix ~26 strict-null type
-   errors in the merged-in
-   `apps/web/__tests__/unit/refined-transcript-panel-collapse.test.ts`. That file is the ONLY
-   thing making `tsc -b --force` red; the full suite is already green at **185 files / 1579
-   tests** with the merge staged. Spec:
-   `<scratchpad>/spec-fix-test-types.md`. If the child did not finish, do it by hand: add
-   local helpers that THROW on a missing element instead of using `!` or `as`, and give the
-   intl provider its `children`. Never weaken an assertion to clear a type error.
-2. **A second blind review of `91962be` was running** (the hardening of the recovery pass —
-   its five questions were: is the key filter complete, is retiring a row to `phase='error'`
-   safe, is `rowsAffected` reading the shape this driver really returns, did the neighbouring
-   loops break, anything unrequested). **Read its verdict before deploying** — the pass writes
-   to user rows and can relaunch media processing. If the verdict is lost, re-run that review.
-3. Then: `tsc -b --force` → full suite → commit the merge → **deploy** → live-verify.
+**The only remaining step is DEPLOY, and it is deliberately not done.** The second blind
+review of `91962be` (the hardening of the recovery cron) never produced a verdict — the agent
+died with `429 session limit, resets 10pm Europe/Warsaw`. That review is not a formality: the
+cron writes to user rows and can relaunch media processing, so shipping it unreviewed is the
+one thing this session refused to do. **Re-run it first**, with these five questions:
+1. Is the key filter complete? Enumerate every writer of `videoUploads.rawFileKey` and say
+   for each whether its key passes `isRawUploadKey` and whether that is intended.
+2. Is retiring a row to `phase='error'` safe — can it fire on an upload that is actually
+   healthy (slow client, resumed upload, benignly stale `updated_at`), and is anything now
+   unrecoverable that was recoverable before?
+3. Does `rowsAffected` read the shape this project's drizzle/mysql2 driver really returns? If
+   it can return 0 on a successful update, the pass silently does nothing forever.
+4. Did the neighbouring recovery loops break (the `like` import was added to four test mocks)?
+5. Anything new and unrequested.
+
+**Both cheap routes were rate-limited when this session ended:** GLM-5.3 returned
+`429 usage limit reached for 5 hour, resets 2026-09-11 03:43:36 UTC`, and a Fable subagent
+returned `429 session limit, resets 10pm Europe/Warsaw`. So the owner's standing "burn the
+GLM allowance first" order cannot be followed until 03:43 UTC. Until then cheap work goes to
+a Sonnet `doer`.
 
 **Deploy recipe (unchanged, image-tag switch):** ship the source of `<sha>` to
 `/opt/data365/app-<sha>` on `169.58.86.149`, `docker build -f apps/web/Dockerfile -t data365-web:<sha> .`
 (the Dockerfile is NOT at the repo root — a root build fails), `cp docker-compose.app.yml
 docker-compose.app.yml.bak-<sha>`, switch the one `image:` line, `docker compose -f
-docker-compose.app.yml up -d`. **Verify:** `/api/health` must return `db:ok storage:ok`,
-`/login` 200, a public share page 200, and container logs clean apart from the pre-existing
-benign `Duplicate column name 'authorName'` notice. **Rollback is seconds:** restore the
-`.bak-` file and `up -d`; `d2c400c` stays on the host.
+docker-compose.app.yml up -d`. **Verify:** `/api/health` returns `db:ok storage:ok`, `/login`
+200, a public share page 200, container logs clean apart from the pre-existing benign
+`Duplicate column name 'authorName'` notice. **Rollback is seconds:** restore the `.bak-`
+file and `up -d`; `d2c400c` stays on the host.
 
-### The six commits, newest first — all gated, none deployed
+**After the deploy, the owner has four things to look at** — one recording is enough for the
+first three: the two start buttons on an unanalysed recording, the refined tab's copy and
+download, and the refined blocks opening one at a time without the audio jumping. The fourth
+is the upload-loss fix, which he cannot see directly: watch whether uploads stop going
+missing over the next few days, and whether the cron's JSON starts reporting
+`staleUploadRetired`.
+
+### The eight commits, newest first — all gated, none deployed
 - `91962be` fix(cron): **hardening of the recovery pass after the first blind review found
   three real defects.** Worth knowing why this mattered: (a) the object-presence check ran
   after `LIMIT 3`, so three permanently dead rows would have starved every genuinely stuck
@@ -75,6 +86,15 @@ benign `Duplicate column name 'authorName'` notice. **Rollback is seconds:** res
 - `945e15a` docs(state).
 - `0938194` merge + `cd1b8dc` fix(upload): the recovery pass itself.
 - `af7cf67` feat(share): refined-tab copy and `.txt`/`.docx` download.
+- `24ccad7` merge + `f8bd476` fix(share): **refined blocks expand, collapse and stop
+  hijacking audio** — the six defects he dictated by voice. The first one was not the toggle
+  at all: three click handlers seeked the player, two of them on the block and the title, so
+  an ordinary click jumped playback and the panel re-rendered around the new position, which
+  is exactly what "the block gets replaced" looks like. Only the play button seeks now.
+  7 jsdom tests that drive the real component; mutation-checked twice at value level. The
+  child's ~26 strict-null type errors were fixed by the main session with helpers that THROW
+  and name what is missing — zero non-null assertions, no new casts, every assertion
+  unchanged.
 
 ### Owner-confirmed today, close these
 - **"videoni audioga ogirish ishlayapti"** — his words. ClickUp `z92046pvu0`'s bug claim is
