@@ -1016,6 +1016,11 @@ export const ShareVideo = forwardRef<
 											aiProcessingStep={effectiveAiProcessingStep}
 											aiProcessingSubStep={effectiveAiProcessingSubStep}
 											transcriptionErrorCode={effectiveTranscriptionErrorCode}
+											// The durable "this run includes AI" fact, for the stepper after a remount.
+											aiGenerationRequested={
+												aiStatusQuery.data?.aiGenerationRequested ??
+												typeof data.metadata?.aiGenerationRequestedAt === "string"
+											}
 											aiIncomplete={aiIncomplete}
 											duration={data.duration}
 											transcriptionChunksCompleted={

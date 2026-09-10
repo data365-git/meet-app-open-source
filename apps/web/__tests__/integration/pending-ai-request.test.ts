@@ -341,13 +341,13 @@ function freshVideoRow() {
 	};
 }
 
-async function postGenerate() {
+async function postGenerate(body: Record<string, unknown> = {}) {
 	const { POST } = await import("@/app/api/videos/[videoId]/generate/route");
 	return POST(
 		new Request("http://localhost", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({}),
+			body: JSON.stringify(body),
 		}) as unknown as NextRequest,
 		{ params: Promise.resolve({ videoId: VIDEO_ID }) },
 	);
@@ -457,6 +457,48 @@ describe("AI request made while the upload is still processing", () => {
 			aiGenerationEnabled: false,
 		});
 		expect(state.videoRow?.transcriptionStatus).toBe("PROCESSING");
+	});
+
+	it("a FULL upload-time press redeems with AI generation ON (process-video)", async () => {
+		// 2026-09-10 two-mode chooser: "Full AI analysis" pressed while the upload
+		// still runs banks aiStartMode='full'. The redemption must reach the
+		// pipeline with the run's REAL switch ON — the summary and tasks chain in
+		// the same run, with no second press.
+		await postGenerate({ mode: "full" });
+		expect(transcribeVideoWorkflowMock).not.toHaveBeenCalled();
+
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		const result = await processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: `user-1/${VIDEO_ID}/raw.mp4`,
+			bucketId: null,
+		});
+
+		expect(result.success).toBe(true);
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledWith({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			aiGenerationEnabled: true,
+		});
+		expect(state.videoRow?.transcriptionStatus).toBe("PROCESSING");
+	});
+
+	it("a FULL upload-time press redeems with AI generation ON (recovery cron)", async () => {
+		// The restart-proof redeemer carries the same mode: app restarted after
+		// the full press, the cron still starts the chained run, not a bare
+		// transcript that would need a second press the owner does not know about.
+		await postGenerate({ mode: "full" });
+		state.uploadRow = null;
+
+		const body = await runRecoveryCron();
+
+		expect(body.pendingRequestStarted).toBe(1);
+		expect(transcribeVideoWorkflowMock).toHaveBeenCalledWith({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			aiGenerationEnabled: true,
+		});
 	});
 
 	it("ignores a soft-deleted video — startPendingAiRequest must not start it (test 5)", async () => {
@@ -651,16 +693,19 @@ describe("AI request made while the upload is still processing", () => {
 		);
 		// The call is written across several lines with a trailing comma, so the
 		// pattern has to tolerate both forms.
-		// 3rd arg is aiGenerationEnabled — `false` since 2026-09-05 (this redeemer
-		// starts the transcript only; AI summary is a separate press). The
-		// invariant this test actually guards is the 5th arg, reclaimProcessing.
+		// 3rd arg is aiGenerationEnabled — since 2026-09-10 it is the BANKED
+		// MODE's flag (wantsFullAnalysis, read from aiStartMode), not a literal:
+		// "Only transcript" redeems OFF, "Full AI analysis" redeems ON (the two
+		// behavior tests above prove the outcomes; this pins the wiring). The
+		// invariant this test directly guards is the 5th arg, reclaimProcessing.
 		const pendingCall = src.match(
-			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*false,\s*true,\s*(\w+)\s*,?\s*\)/,
+			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*(\w+),\s*true,\s*(\w+)\s*,?\s*\)/,
 		);
 		expect(
 			pendingCall,
-			"the pending-request start must pass reclaimProcessing explicitly",
+			"the pending-request start must pass aiGenerationEnabled and reclaimProcessing explicitly",
 		).not.toBeNull();
-		expect(pendingCall?.[1]).toBe("false");
+		expect(pendingCall?.[1]).toBe("wantsFullAnalysis");
+		expect(pendingCall?.[2]).toBe("false");
 	});
 });

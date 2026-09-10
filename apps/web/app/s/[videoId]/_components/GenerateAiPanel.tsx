@@ -75,6 +75,12 @@ interface GenerateAiPanelProps {
 	 * comes from the same status poll as the other fields, so it survives polls
 	 * and remounts until the server says the job started, failed or completed. */
 	aiRequestPending?: boolean;
+	/** The durable "the user's outstanding run includes AI" fact, from the same
+	 * status poll as the other fields (server fallback:
+	 * metadata.aiGenerationRequestedAt). It is what keeps the stepper honest
+	 * after a remount, when the local memory of which button was pressed is
+	 * gone: a transcript-only run must show ONE stage, not three. */
+	aiGenerationRequested?: boolean;
 	/** Called after a successful POST so the parent can refetch status */
 	onStarted?: () => void;
 }
@@ -132,12 +138,20 @@ export function GenerateAiPanel({
 	processingStartedAt,
 	aiProcessingStartedAt,
 	aiRequestPending = false,
+	aiGenerationRequested = false,
 	onStarted,
 }: GenerateAiPanelProps) {
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const inFlightRef = useRef(false);
+	// Which of the two start buttons was pressed in THIS session (null = the
+	// press was not the two-mode chooser, e.g. error retry, or the panel just
+	// remounted). Mirrors the mode sent to the generate route so the running
+	// stepper below can show only the stages this run will actually do.
+	const [chosenMode, setChosenMode] = useState<"transcript" | "full" | null>(
+		null,
+	);
 	// Keeps the min ETA seen for the CURRENT stage so the caption never flaps
 	// upward between polls; reset whenever the active stage changes.
 	const etaMinRef = useRef<{ step: AiProcessingStep; value: number } | null>(
@@ -161,9 +175,18 @@ export function GenerateAiPanel({
 		transcriptionStatus === "ERROR" || aiGenerationStatus === "ERROR";
 	const aiNotice = getAiAnalysisNotice(duration);
 
-	// Fires the generation POST directly: one behaviour, no mode chooser —
-	// pressing the AI-analysis action starts the job (owner, 2026-08-13).
-	const requestStart = (reprocess = false) => {
+	// Fires the generation POST directly. `mode` carries the explicit
+	// two-mode choice (2026-09-10): "transcript" = transcribe and stop there,
+	// "full" = transcribe then summary/tasks in one run with no second press.
+	// Buttons that are NOT the two-mode chooser (error retry, the banked
+	// "press again") pass null and let the route resolve the user's outstanding
+	// intent — but any press that starts AI generation itself says "full" so
+	// the stepper never hides stages that really are coming.
+	const requestStart = (
+		reprocess = false,
+		mode: "transcript" | "full" | null = null,
+	) => {
+		setChosenMode(mode);
 		// Synchronous in-flight guard: a very fast double-click can fire before the
 		// `loading` state re-renders the disabled buttons, sending two POSTs.
 		// The ref blocks the second call instantly.
@@ -176,7 +199,7 @@ export function GenerateAiPanel({
 				const res = await fetch(`/api/videos/${videoId}/generate`, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ reprocess }),
+					body: JSON.stringify(mode ? { reprocess, mode } : { reprocess }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -290,6 +313,26 @@ export function GenerateAiPanel({
 			},
 		];
 
+		// Does THIS run include the AI stages? The two-mode chooser means it may
+		// not: a live AI status always wins (those stages are really running),
+		// otherwise the locally remembered press decides, and after a remount the
+		// server's durable "AI requested" fact does. A transcript-only stepper
+		// that still lists summary/refined and weights the bar for stages that
+		// will never run is a progress line that lies.
+		const aiPhaseLive =
+			aiGenerationStatus === "QUEUED" || aiGenerationStatus === "PROCESSING";
+		const runIncludesAi =
+			aiPhaseLive ||
+			chosenMode === "full" ||
+			(chosenMode === null && aiGenerationRequested);
+		const visibleStages = runIncludesAi
+			? runningStages
+			: runningStages.filter((stage) => stage.key === "transcribe");
+		const visibleIdx = Math.min(currentIdx, visibleStages.length - 1);
+		const visibleWeights: typeof STAGE_WEIGHTS = runIncludesAi
+			? STAGE_WEIGHTS
+			: { transcribe: 100, summary: 0, refined: 0 };
+
 		// Single glance-level readout the owner asked for: WHAT is happening now
 		// (the active stage's verb) + WHERE in the whole pipeline we are (stage
 		// N/3 + one overall bar) + roughly how long left (ETA). The per-stage list
@@ -301,7 +344,7 @@ export function GenerateAiPanel({
 			done: tShare("stepDone"),
 		};
 		const currentFocalLabel = focalByStep[currentStep];
-		const activeStage = runningStages[currentIdx];
+		const activeStage = visibleStages[visibleIdx];
 		const withinFraction =
 			activeStage && activeStage.total > 0
 				? Math.min(1, activeStage.completed / activeStage.total)
@@ -317,15 +360,15 @@ export function GenerateAiPanel({
 		const overallPct = Math.min(
 			99,
 			Math.round(
-				runningStages.reduce((sum, stage, i) => {
-					const weight = STAGE_WEIGHTS[stage.key];
-					if (i < currentIdx) return sum + weight;
-					if (i === currentIdx) return sum + weight * withinFraction;
+				visibleStages.reduce((sum, stage, i) => {
+					const weight = visibleWeights[stage.key];
+					if (i < visibleIdx) return sum + weight;
+					if (i === visibleIdx) return sum + weight * withinFraction;
 					return sum;
 				}, 0),
 			),
 		);
-		const stageNumber = Math.min(currentIdx + 1, runningStages.length);
+		const stageNumber = Math.min(currentIdx + 1, visibleStages.length);
 		// The active stage's detail line ("16 bo'lakdan 5-si yuborilmoqda"),
 		// shared by the glance header below and that stage's row in the list.
 		const activeDetail =
@@ -386,7 +429,7 @@ export function GenerateAiPanel({
 							<p className="mt-0.5 text-sm font-semibold text-gray-12">
 								{tShare("aiStageOfTotal", {
 									current: stageNumber,
-									total: runningStages.length,
+									total: visibleStages.length,
 								})}
 							</p>
 						</div>
@@ -406,7 +449,7 @@ export function GenerateAiPanel({
 						aria-valuemin={0}
 						aria-valuemax={100}
 						aria-valuenow={overallPct}
-						aria-valuetext={`${stageNumber}/${runningStages.length}, ${etaLabel}`}
+						aria-valuetext={`${stageNumber}/${visibleStages.length}, ${etaLabel}`}
 						className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-5"
 					>
 						<div
@@ -431,7 +474,7 @@ export function GenerateAiPanel({
 					className="flex flex-col gap-1"
 					aria-label={tShare("aiAnalysisStage")}
 				>
-					{runningStages.map((stage, i) => {
+					{visibleStages.map((stage, i) => {
 						const state =
 							i < currentIdx ? "done" : i === currentIdx ? "active" : "pending";
 						const hasTotal = stage.total > 0;
@@ -579,7 +622,7 @@ export function GenerateAiPanel({
 					<button
 						type="button"
 						disabled={loading}
-						onClick={() => requestStart(true)}
+						onClick={() => requestStart(true, "full")}
 						className="self-start rounded-lg border border-gray-5 bg-gray-3 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
 					>
 						{loading ? tShare("aiStarting") : tShare("aiReanalyze")}
@@ -605,7 +648,7 @@ export function GenerateAiPanel({
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem
 							disabled={loading}
-							onClick={() => requestStart(true)}
+							onClick={() => requestStart(true, "full")}
 						>
 							{tShare("aiReanalyze")}
 						</DropdownMenuItem>
@@ -680,14 +723,28 @@ export function GenerateAiPanel({
 				)}
 				<p className="text-xs text-gray-10">{tShare("aiFreeFirstHint")}</p>
 				{error && <p className="text-xs text-red-10">{error}</p>}
-				<button
-					type="button"
-					disabled={loading}
-					onClick={() => requestStart(false)}
-					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
-				>
-					{tShare("aiStartAnalysis")}
-				</button>
+				{/* The explicit two-mode choice (2026-09-10): one press, no hidden
+				    second step. "Full AI analysis" = transcript + summary/tasks in
+				    one run; "Only transcript" = transcribe and stop there. Stacked
+				    on a phone, side by side from sm up — neither label may wrap. */}
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => requestStart(false, "full")}
+						className="rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
+					>
+						{tShare("aiStartFullAnalysis")}
+					</button>
+					<button
+						type="button"
+						disabled={loading}
+						onClick={() => requestStart(false, "transcript")}
+						className="rounded-lg border border-gray-5 bg-gray-3 px-4 py-2.5 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-4 disabled:opacity-60"
+					>
+						{tShare("aiStartTranscriptOnly")}
+					</button>
+				</div>
 				{loading && (
 					<p className="text-xs text-gray-10">{tShare("aiStarting")}</p>
 				)}
@@ -713,7 +770,7 @@ export function GenerateAiPanel({
 				<button
 					type="button"
 					disabled={loading}
-					onClick={() => requestStart(false)}
+					onClick={() => requestStart(false, "full")}
 					className="self-start rounded-lg bg-[var(--brand)] px-4 py-2.5 text-sm font-semibold text-[var(--brand-fg)] transition-opacity hover:opacity-90 disabled:opacity-60"
 				>
 					{tShare("aiStartSummary")}

@@ -127,7 +127,12 @@ describe("share panel state for a pending AI request", () => {
 		});
 		expect(facts.aiRequestPending).toBe(false);
 		expect(text).not.toContain("aiQueuedTitle");
-		expect(text).toContain("aiStartAnalysis");
+		// The row must still offer a way to START, which is the point of this
+		// test — an unclaimed row that renders "queued" with no button is the
+		// trap. Since 2026-09-10 the start UI is TWO explicit buttons instead of
+		// the single aiStartAnalysis one, so both must be present.
+		expect(text).toContain("aiStartTranscriptOnly");
+		expect(text).toContain("aiStartFullAnalysis");
 	});
 
 	it("never shows a public share-link viewer a request they did not make", () => {

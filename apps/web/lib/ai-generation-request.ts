@@ -51,6 +51,26 @@ export function hasPendingUploadStartOrder(metadata: VideoMetadata): boolean {
 	);
 }
 
+/**
+ * Did the press banked while the upload was still processing ask for the
+ * FULL analysis (transcript chained into summary/tasks in one run)?
+ *
+ * `aiStartMode` is written beside `aiStartPendingUpload` by the generate
+ * route's UPLOAD_IN_PROGRESS branch, and both redeemers (processVideoWorkflow,
+ * the recover-stale-ai-jobs cron) read it to pass the run's REAL switch -
+ * `transcribeVideo`'s `aiGenerationEnabled` - so the chosen mode travels as a
+ * flag instead of via the durable-marker OR in
+ * `shouldStartAiAfterTranscription` (2026-09-05: that OR is what silently
+ * re-enabled the auto-chain once). "Only transcript" banks no `aiStartMode`
+ * (or 'transcript'), so nothing downstream can re-enable AI for it.
+ */
+export function bankedStartRequestsFullAnalysis(
+	metadata: VideoMetadata,
+): boolean {
+	const mode = (metadata as { aiStartMode?: unknown }).aiStartMode;
+	return mode === "full";
+}
+
 export function shouldStartAiAfterTranscription({
 	metadata,
 	aiGenerationEnabled,

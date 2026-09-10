@@ -579,6 +579,8 @@
 		"aiQueuedTitle": "AI analysis is queued",
 		"aiQueuedHint": "Your request is saved. The analysis starts on its own as soon as the recording finishes processing — you can leave this page.",
 		"aiStartAnalysis": "Start AI analysis",
+		"aiStartTranscriptOnly": "Only transcript",
+		"aiStartFullAnalysis": "Full AI analysis",
 		"aiFreeFirstHint": "Uses the free AI allowance first; once it runs out, the analysis continues on the paid path immediately, without waiting.",
 		"aiCostEstimate": "Estimated cost: ~{amount}",
 		"aiReanalyze": "Re-analyze",
