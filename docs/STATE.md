@@ -9,7 +9,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
-## RESUME HERE — live point 2026-09-11 ~00:30 laptop — DEPLOY OF `2c9dd6b` IN FLIGHT (owner said deploy today after a proper check; the check found and fixed a blocker first)
+## RESUME HERE — live point 2026-09-11 ~00:45 laptop — ✅ DEPLOYED `2c9dd6b`, live and healthy, and the upload-recovery fix is PROVEN IN PRODUCTION on a real lost recording
 
 **Owner's standing order this session:** "barcha ishlarni yakunla mensiz, toxtama bajarilib done bolguncha" — full autonomy, finish everything. Earlier the same session he gave five product orders and one routing order; every open question was answered in two AskUserQuestion batches. **The whole session's decisions and evidence live in `plans/2026-09-10-transcript-options-refined-export-multi-import.md` — read that before touching this work.**
 
@@ -24,16 +24,50 @@ Measured on production this session (image `data365-web:d2c400c`, DB `capdb`): 7
 
 **Do NOT conflate the owner's 09-05 complaint with this.** `mz56jaba64m8z94` ("Platforma_taqdimoti") is a DIFFERENT shape: `phase = 'error'`, `processing_error = 'Upload stalled'`, yet `result.mp4` and `download-audio.mp3` exist in storage, so its video pipeline did finish and only transcription is missing. Whether he pressed the button and it failed, or never pressed, is NOT established — do not claim it either way without the access log.
 
-### IF THIS SESSION DIED MID-DEPLOY, READ THIS FIRST
-A deploy of **`2c9dd6b`** was running. Find out where it got to:
-```
-ssh -i ~/.ssh/hetzner_ustoz root@169.58.86.149 "grep -n 'image:' /opt/data365/docker-compose.app.yml; docker images | grep 2c9dd6b; docker ps --format '{{.Image}} {{.Status}}' | grep data365-web; tail -20 /tmp/build-2c9dd6b.log"
-```
-- image line still `d2c400c` → nothing switched, safe to re-run the deploy.
-- image built but the line not switched → finish with the three commands in the recipe below.
-- line switched and container Up on `2c9dd6b` → the deploy landed; verify health and move on.
-**Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-2c9dd6b docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `d2c400c` stays on the host.
-The scripted deploy lives at `<scratchpad>/deploy.sh` and takes the sha as its only argument.
+### DEPLOYED AND PROVEN — 2026-09-11 ~00:45
+Container `data365-web:2c9dd6b` Up · `/api/health` `{"status":"ok","checks":{"db":"ok","storage":"ok"}}` · `/login` 200 · public share page 200. Baseline before the switch, for comparison: `d2c400c`, Up 4 days, health ok, 0 error and 0 S3Error lines in the previous hour, 27G free on `/opt`.
+**Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-2c9dd6b docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `d2c400c` is still on the host.
+
+**The recovery pass fired on real production data, not a fixture.** Triggered by hand rather
+than waiting for the `*/30` cron (`/root/run-cron.sh recover-stale-ai-jobs`), it returned
+`"staleUploadRelaunched":1`. The recovered recording is **`jka07j0jekx883s`** — the genuinely
+lost upload from 2026-09-10 13:33. Its `video_uploads` row is gone (which is what a
+successful relaunch does: `processVideoWorkflow` deletes it as step one) and the container
+logged `[process-video] Optimization failed for jka07j0jekx883s, keeping the original raw
+upload playable: Compress skipped: durationSec=8544.78 exceeds the 3600s compress limit` —
+the pre-existing benign branch for a 142-minute recording, so it is playable. A second cron
+run returned 0, correctly: nothing else was eligible.
+
+**No AI money was spent.** Neither row carried `aiStartPendingUpload`, so nothing transcribes
+until a person presses the button — exactly as the owner instructed.
+
+### ⚠️ I OVERSTATED THE PROBLEM — the corrected numbers
+The "~15% of uploads silently lost" figure repeated all through this board was **wrong**: it
+counted rows the USER had deleted as losses. Re-measured with `deletedAt IS NULL`:
+
+| date | uploads | genuinely lost | deleted by the user while un-transcribed |
+|---|---|---|---|
+| 2026-08-26 | 5 | 1 | 0 |
+| 2026-09-02 | 3 | 1 | 0 |
+| 2026-09-04 | 3 | 0 | 2 |
+| 2026-09-05 | 2 | 0 | 1 |
+| 2026-09-10 | 13 | 1 | 1 |
+
+**Since 2026-08-01: 60 uploads, 3 genuinely lost — about 5%, not 15%.** The second "stuck"
+row from 2026-09-10, `6b1kdkgr46d3nm5`, carries `deletedAt = 11:33:56`: the user deleted it
+nine seconds after creating it, which also explains the byte-identical duplicate found
+earlier. The pass correctly leaves it alone — resurrecting a deleted video would be a defect.
+Say 5% to him, not 15%, and do not quietly drop the correction.
+
+Caveat worth keeping: some of those four deletions may be downstream of the bug — the user
+gave up and deleted. `mz56jaba64m8z94` ("Platforma_taqdimoti", the one he screenshotted as
+stuck on 2026-09-05) is in that bucket. That is a suspicion, not a measurement.
+
+### KNOWN GAP, not fixed: rows that reached `phase='error'` are never recovered
+The pass admits `phase IN ('uploading','processing')` only. The two older lost recordings
+(2026-08-26 and 2026-09-02) sit in `error` rows and stay lost. Recovering those is a scope
+decision, not a bug fix: an `error` row can also be a genuinely failed upload, and retrying
+it burns server work for nothing. Ask him before widening it.
 
 ### THE PRE-DEPLOY CHECK EARNED ITS KEEP — read this before trusting the recovery pass
 The second blind review plus one production query found that the pass, already committed and
