@@ -198,3 +198,26 @@ Confirming the first half properly needs one signed-in click, which this machine
 (no login credential exists here), so it stays owner-verified and must not be reported as
 proven.
 
+
+## Deploy-day loop, 2026-09-11 — the recovery pass keyed on an empty column
+
+SCOPE: The recovery pass committed in 91962be cannot recover the incident it was built for.
+Measured on production this session: all six orphaned `video_uploads` rows, including the two
+from 2026-09-10 (`6b1kdkgr46d3nm5`, `jka07j0jekx883s`), carry `raw_file_key IS NULL` and
+`mode IS NULL`. The pass required `raw_file_key IS NOT NULL`, so it would have selected none
+of them. Reproduce with: `SELECT video_id, phase, raw_file_key, mode FROM video_uploads WHERE
+phase IN ('uploading','error');` on the prod database.
+
+METRIC: a script-computable count, not a judgement. (1) The unit file
+`__tests__/unit/recover-stale-upload-handoff.test.ts` must contain a case where
+`upload.rawFileKey` is null and the relaunch still fires with the derived key
+`owner-1/<videoId>/raw-upload.mp4`; that case must go RED when the derivation is removed.
+(2) `tsc -b --force` exit 0 and the full suite at or above 185 files / 1579 tests passing.
+(3) After deploy, the cron's own JSON must report `staleUploadRelaunched >= 1` on the first
+tick that sees those two rows, and their `videos.metadata` must gain `processingStartedAt`.
+
+DIRECTION: one change, measure, keep or discard. Change made: admit a row whose key is NULL
+(`or(isNull(rawFileKey), like(rawFileKey, '%/raw-upload.%'))`) and derive the key by probing
+the canonical `raw-upload.mp4` then `.webm` in storage, which doubles as the
+bytes-really-there check. Edit rows and admin-reprocess rows always carry a non-null non-raw
+key, so they stay excluded. Kept only if the metric above holds.

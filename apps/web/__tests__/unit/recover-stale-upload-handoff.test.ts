@@ -15,8 +15,10 @@ const state = vi.hoisted(() => ({
 	/** One entry per db() select, in call order; shifted as GET runs. */
 	selectResults: [] as unknown[][],
 	updateCalls: 0,
-	/** Raw-object size the storage head reports; null = head fails (absent). */
+	/** Raw-object size the storage head reports; null = head fails. */
 	contentLength: 165553362 as number | null,
+	/** When the head fails, was it a real 404 or an unreachable bucket? */
+	headFailure: "notfound" as "notfound" | "unreachable",
 }));
 
 vi.mock("@cap/database", () => ({
@@ -41,7 +43,10 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: () => {
 				state.updateCalls++;
-				return { where: () => Promise.resolve({ rowsAffected: 1 }) };
+				// mysql2 hands drizzle a [ResultSetHeader, FieldPacket[]] tuple; the
+				// bare-object shape is a different driver's and was never exercised
+				// here, so the production path went untested.
+				return { where: () => Promise.resolve([{ affectedRows: 1 }]) };
 			},
 		}),
 	}),
@@ -72,6 +77,7 @@ vi.mock("drizzle-orm", () => ({
 	isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
 	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
+	or: vi.fn((...args: unknown[]) => ({ or: args })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
@@ -127,7 +133,15 @@ vi.mock("@/lib/video-storage", async () => {
 				{
 					headObject: () =>
 						state.contentLength === null
-							? Effect.fail(new Error("NoSuchKey: object absent"))
+							? Effect.fail(
+									state.headFailure === "notfound"
+										? Object.assign(new Error("Object not found"), {
+												name: "NoSuchKey",
+											})
+										: Object.assign(new Error("connect ETIMEDOUT"), {
+												name: "TimeoutError",
+											}),
+								)
 							: Effect.succeed({ ContentLength: state.contentLength }),
 				},
 			]),
@@ -168,7 +182,9 @@ function stuckUploadRow(id = "video-stuck") {
 			uploaded: 165553362,
 			total: 165553362,
 			mode: null,
-			rawFileKey: `owner-1/${id}/raw-upload.mp4`,
+			// Nullable on purpose: the measured production rows carried NULL here,
+			// and one test sets it to null to pin that path.
+			rawFileKey: `owner-1/${id}/raw-upload.mp4` as string | null,
 			updatedAt: new Date(Date.now() - HOUR_MS),
 		},
 	};
@@ -190,6 +206,7 @@ describe("recover-stale-ai-jobs — lost processing hand-off (stale upload rows)
 		state.selectResults = [];
 		state.updateCalls = 0;
 		state.contentLength = 165553362;
+		state.headFailure = "notfound";
 		process.env.CRON_SECRET = CRON_SECRET;
 	});
 
@@ -203,6 +220,30 @@ describe("recover-stale-ai-jobs — lost processing hand-off (stale upload rows)
 				videoId: "video-stuck",
 				userId: "owner-1",
 				rawFileKey: "owner-1/video-stuck/raw-upload.mp4",
+				forceRestart: true,
+			}),
+		);
+		expect(body.staleUploadRelaunched).toBe(1);
+	});
+
+	it("recovers a row that recorded NO rawFileKey, by deriving the canonical key", async () => {
+		// THIS is the shape the production incident actually had, measured on
+		// 2026-09-10: every stuck row carried `raw_file_key IS NULL` and
+		// `mode IS NULL`. An earlier version of this pass required the column to
+		// be set and would therefore have recovered NOTHING - the same mistake
+		// as the marker the old cron keyed on, a condition only the successful
+		// path fills in. The key is derivable from owner and video id, so the
+		// pass probes it instead of trusting the column.
+		const row = stuckUploadRow("video-nokey");
+		row.upload.rawFileKey = null;
+		armStaleUploadRows([row]);
+		const { body } = await runCron();
+
+		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledTimes(1);
+		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				videoId: "video-nokey",
+				rawFileKey: "owner-1/video-nokey/raw-upload.mp4",
 				forceRestart: true,
 			}),
 		);
@@ -237,6 +278,26 @@ describe("recover-stale-ai-jobs — lost processing hand-off (stale upload rows)
 		expect(body.staleUploadRetired).toBe(1);
 		// Exactly one write: the retirement. Not a relaunch claim.
 		expect(state.updateCalls).toBe(1);
+	});
+
+	it("when STORAGE cannot be reached it retires nothing and writes nothing", async () => {
+		// The most damaging failure this pass could have: a blind review caught
+		// that a boolean probe made "bucket unreachable" look identical to
+		// "object genuinely gone", and an absent object gets the row retired.
+		// One expired credential or a brief outage would then have condemned a
+		// whole scan's worth of healthy, bytes-present uploads with a false
+		// "Upload never completed" that only a manual retry undoes - and the
+		// user this pass exists for never clicks it. Only a real 404 may mean
+		// absent; anything else must wait for the next tick.
+		state.contentLength = null;
+		state.headFailure = "unreachable";
+		armStaleUploadRows([stuckUploadRow(), stuckUploadRow("video-stuck-2")]);
+		const { body } = await runCron();
+
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		expect(body.staleUploadRelaunched).toBe(0);
+		expect(body.staleUploadRetired).toBe(0);
+		expect(state.updateCalls).toBe(0);
 	});
 
 	it("NEVER relaunches a row whose key is an edit source or a result.mp4", async () => {

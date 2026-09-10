@@ -3,9 +3,10 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, inArray, isNotNull, isNull, like, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
 import { Effect, Schedule } from "effect";
 import { NextResponse } from "next/server";
+import { getAffectedRows } from "@/lib/affected-rows";
 import { bankedStartRequestsFullAnalysis } from "@/lib/ai-generation-request";
 import { sendOpsAlert } from "@/lib/ops-alert";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -79,30 +80,24 @@ function isRawUploadKey(key: string): boolean {
 	return lastSegment.startsWith("raw-upload.");
 }
 
-// drizzle's mysql2 driver reports the affected-row count in one of two shapes
-// depending on version; read whichever is present so a conditional claim can
-// tell "I own this row" from "somebody else does".
-function rowsAffected(result: unknown): number {
-	if (Array.isArray(result)) {
-		const header = result[0] as { affectedRows?: number } | undefined;
-		return header?.affectedRows ?? 0;
-	}
-	const r = result as
-		| { rowsAffected?: number; affectedRows?: number }
-		| undefined;
-	return r?.rowsAffected ?? r?.affectedRows ?? 0;
-}
-
 // Storage is the only trustworthy source for "the bytes really are all
-// there" — the row alone says nothing about a multipart that never
-// assembled. Mirrors verifyRawFileUploaded in actions/video/trigger-processing.ts,
-// but returns a boolean instead of throwing: for this cron an absent or
-// zero-length object means the upload genuinely failed, which is a row to
-// leave alone, not an error to surface.
-async function isRawObjectInStorage(
+// there" — the row alone says nothing about a multipart that never assembled.
+type RawObjectProbe = "present" | "absent" | "unknown";
+
+// TRI-STATE ON PURPOSE. A blind review caught that collapsing this to a boolean
+// makes "storage unreachable" indistinguishable from "object genuinely gone" —
+// and the caller RETIRES an absent row, so one expired bucket credential or a
+// brief S3 outage would have condemned up to a whole scan's worth of healthy,
+// bytes-present uploads with a false "Upload never completed", which only a
+// manual retry can undo and the affected user never clicks.
+//
+// `S3BucketAccess.headObject` rethrows a real 404 as an Error named NoSuchKey
+// and passes every other failure through untouched, so that name is the only
+// thing allowed to mean "absent".
+async function probeRawObject(
 	video: typeof videos.$inferSelect,
 	rawFileKey: string,
-): Promise<boolean> {
+): Promise<RawObjectProbe> {
 	try {
 		const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
 		const head = await bucket
@@ -111,10 +106,89 @@ async function isRawObjectInStorage(
 				Effect.retry({ times: 3, schedule: Schedule.exponential("100 millis") }),
 				runPromise,
 			);
-		return (head.ContentLength ?? 0) > 0;
-	} catch {
-		return false;
+		return (head.ContentLength ?? 0) > 0 ? "present" : "absent";
+	} catch (error) {
+		return isNotFoundError(error) ? "absent" : "unknown";
 	}
+}
+
+// Is this rejection a genuine "the object is not there", as opposed to any
+// other storage failure?
+//
+// The name has to be dug out rather than read off the top: a rejection from
+// `runPromise` is an Effect FiberFailure whose real error sits inside a Cause
+// under `cause`, and the S3 layer wraps it again in an S3Error. So walk the
+// small set of fields those wrappers use, bounded in both depth and breadth so
+// a cyclic or huge object can never turn this into a hang.
+const NOT_FOUND_NAMES = new Set(["NoSuchKey", "NotFound"]);
+
+// MEASURED, not assumed: a rejection out of `runPromise` is a FiberFailureImpl
+// whose only own fields are stack/message/name, and whose name is the string
+// "(FiberFailure) NoSuchKey" - the original name is folded into that label
+// rather than kept in a nested field. So strip the label before comparing, and
+// compare the NAME only. Matching the message instead would fire on any error
+// that merely mentions the key.
+function isNotFoundName(name: string): boolean {
+	const bare = name.replace(/^\(FiberFailure\)\s*/, "").trim();
+	return NOT_FOUND_NAMES.has(name) || NOT_FOUND_NAMES.has(bare);
+}
+const WRAPPER_FIELDS = ["cause", "error", "defect", "failure", "left"] as const;
+
+function isNotFoundError(error: unknown): boolean {
+	const queue: unknown[] = [error];
+	const seen = new Set<unknown>();
+	while (queue.length > 0 && seen.size < 40) {
+		const current = queue.shift();
+		if (current === null || typeof current !== "object" || seen.has(current)) {
+			continue;
+		}
+		seen.add(current);
+		const named = current as Record<string, unknown>;
+		if (typeof named.name === "string" && isNotFoundName(named.name)) {
+			return true;
+		}
+		for (const field of WRAPPER_FIELDS) {
+			if (named[field] !== undefined) queue.push(named[field]);
+		}
+	}
+	return false;
+}
+
+// Resolve the raw-upload key to relaunch from, and confirm its bytes are
+// really in storage.
+//
+// `recorded` is whatever the row carries, which on the real production
+// incident was NULL for every stuck row. In that case the key is derivable:
+// create-for-processing.ts and loom.ts both build
+// `<ownerId>/<videoId>/raw-upload.mp4`, and replace-with-audio.ts treats
+// `.mp4` and `.webm` as the two raw-upload names, so those are the only
+// candidates worth probing.
+//
+// Returns the key whose object exists and is non-empty; "absent" only when
+// storage said so plainly, and "unknown" when it could not be asked at all.
+async function resolveRawUploadKey(
+	video: typeof videos.$inferSelect,
+	recorded: string | null,
+): Promise<
+	| { status: "present"; key: string }
+	| { status: "absent" }
+	| { status: "unknown" }
+> {
+	const candidates = recorded
+		? [recorded]
+		: [
+				`${video.ownerId}/${video.id}/raw-upload.mp4`,
+				`${video.ownerId}/${video.id}/raw-upload.webm`,
+			];
+	let sawUnknown = false;
+	for (const key of candidates) {
+		const probe = await probeRawObject(video, key);
+		if (probe === "present") return { status: "present", key };
+		if (probe === "unknown") sawUnknown = true;
+	}
+	// One unreadable candidate is enough to withhold a verdict: retiring a row
+	// on a storage failure is the damaging direction.
+	return sawUnknown ? { status: "unknown" } : { status: "absent" };
 }
 
 // NOTE (round-8 deletion): the quota-park ladder branch is GONE from this
@@ -493,9 +567,10 @@ export async function GET(request: Request) {
 	// byte safely in storage and the user told success, and no marker exists
 	// for the loops above to see. phase IN ('uploading','processing') plus the
 	// raw object being present IS the durable fact "bytes complete, hand-off
-	// lost". The relaunch is safe to repeat: forceRestart re-claims the row,
-	// and the transcription claim in lib/transcribe.ts is a compare-and-swap,
-	// so a duplicate hand-off loses the claim and launches nothing paid.
+	// lost". The relaunch is safe to repeat because THIS loop claims the row
+	// with its own conditional UPDATE below before launching anything — and
+	// because the transcription claim in lib/transcribe.ts is a compare-and-set,
+	// so even a duplicate hand-off launches nothing paid.
 	// The SCAN is wide, the RELAUNCH is capped at 3 (enforced in JS below,
 	// where ffmpeg is actually launched). A blind review caught that limiting
 	// the SELECT to 3 and only then checking storage lets three permanently
@@ -512,14 +587,26 @@ export async function GET(request: Request) {
 				isNull(videos.deletedAt),
 				inArray(videoUploads.phase, ["uploading", "processing"]),
 				lte(videoUploads.updatedAt, staleUploadBefore),
-				isNotNull(videoUploads.rawFileKey),
-				// ONLY rows the upload-completion routes wrote. An edit row
-				// carries `<owner>/<video>/source/original.mp4` and an
-				// admin-reprocess row carries `result.mp4`; relaunching either
-				// would re-encode the PRE-EDIT original (silently reverting a
-				// user's trim) or re-encode result.mp4 onto itself. Both have
-				// their own owners elsewhere.
-				like(videoUploads.rawFileKey, "%/raw-upload.%"),
+				// MEASURED ON PRODUCTION 2026-09-10, and it decides this query:
+				// the real stuck rows carry `raw_file_key IS NULL` AND
+				// `mode IS NULL` — including the two from the incident this pass
+				// exists for. An earlier version required the column to be set
+				// and would therefore have recovered NOTHING, which is the same
+				// mistake as the marker the old cron keyed on: a condition only
+				// the successful path fills in.
+				//
+				// So: admit a row whose key is EMPTY (we derive the canonical
+				// one below), and otherwise only a key the upload-completion
+				// routes wrote. An edit row carries
+				// `<owner>/<video>/source/original.mp4` and an admin-reprocess
+				// row carries `result.mp4`; relaunching either would re-encode
+				// the PRE-EDIT original — silently reverting a user's trim — or
+				// re-encode result.mp4 onto itself. Both always have a non-null
+				// key, so this predicate keeps excluding them.
+				or(
+					isNull(videoUploads.rawFileKey),
+					like(videoUploads.rawFileKey, "%/raw-upload.%"),
+				),
 			),
 		)
 		.limit(STALE_UPLOAD_SCAN_LIMIT);
@@ -533,54 +620,90 @@ export async function GET(request: Request) {
 		// transcription loop above): never relaunch an upload that is still
 		// visibly landing bytes.
 		if (upload.updatedAt.getTime() > staleUploadBefore.getTime()) continue;
-		// Narrow the key in JS as well as in SQL. The query already filters
-		// `raw_file_key IS NOT NULL`, but the column is nullable in the schema,
-		// so without this the relaunch below does not typecheck — and a future
-		// edit that loosens the query would silently start passing null.
-		const rawFileKey = upload.rawFileKey;
-		if (!rawFileKey) continue;
-		// Belt and suspenders on the SQL filter above: only an upload-completion
-		// key may be relaunched, never an edit source or a result.mp4.
-		if (!isRawUploadKey(rawFileKey)) continue;
-		// Confirm the raw object really is in storage before doing anything.
-		if (!(await isRawObjectInStorage(video, rawFileKey))) {
-			// The object is absent or empty and the row has been quiet for the
-			// whole staleness window: this upload genuinely failed. Retire the
-			// row so it stops occupying the candidate set on every future tick
-			// and so the UI stops implying an upload is still in flight.
-			await db()
+		// Belt and suspenders on the SQL filter above: a key that IS set must be
+		// an upload-completion key, never an edit source or a result.mp4.
+		if (upload.rawFileKey && !isRawUploadKey(upload.rawFileKey)) continue;
+		// Resolve the key. When the row never recorded one — the shape the real
+		// production incident had — probe the canonical raw-upload names in
+		// turn. `create-for-processing.ts` and `loom.ts` both build exactly
+		// `<ownerId>/<videoId>/raw-upload.mp4`, and `replace-with-audio.ts`
+		// treats `.mp4` and `.webm` as the two raw-upload names, so those are
+		// the only candidates.
+		const resolved = await resolveRawUploadKey(video, upload.rawFileKey);
+		// Storage could not answer. Say nothing and try again next tick: a
+		// retirement here would condemn a healthy upload on an S3 blip.
+		if (resolved.status === "unknown") continue;
+		if (resolved.status === "absent") {
+			// The object is genuinely gone (a real NoSuchKey) and the row has
+			// been quiet for the whole staleness window: this upload failed.
+			// Retire the row so it stops occupying the candidate set on every
+			// future tick and the UI stops implying an upload is in flight.
+			try {
+				const retire = await db()
+					.update(videoUploads)
+					.set({
+						phase: "error",
+						processingError: "Upload never completed",
+						updatedAt: new Date(),
+					})
+					.where(
+						and(
+							eq(videoUploads.videoId, video.id),
+							inArray(videoUploads.phase, ["uploading", "processing"]),
+							lte(videoUploads.updatedAt, staleUploadBefore),
+						),
+					);
+				// Count only writes that landed, so the number stays a number he
+				// can act on rather than an attempt counter.
+				if (getAffectedRows(retire) > 0) staleUploadRetired++;
+			} catch (error) {
+				console.error(
+					`[recover-stale-ai-jobs] Failed to retire the dead upload row for video ${video.id}:`,
+					error,
+				);
+			}
+			continue;
+		}
+		const rawFileKey = resolved.key;
+		// CLAIM THE ROW FIRST, conditionally. `forceRestart` deliberately drops
+		// the phase guard inside startVideoProcessingWorkflow, and the freshness
+		// check above reads the SELECT snapshot rather than the live row — so
+		// without this a row claimed by a real upload completing in that window
+		// would receive a SECOND concurrent processVideoWorkflow and two ffmpeg
+		// runs would race on result.mp4. The transcription compare-and-set
+		// protects money, not the media. This UPDATE is the claim: if it changes
+		// no row, somebody else owns it and we walk away.
+		//
+		// `updatedAt` is stamped because the column has no ON UPDATE clause;
+		// without it a claimed row whose launch then throws keeps its stale
+		// timestamp and is re-claimed on every tick with no backoff, occupying
+		// a relaunch slot forever — the starvation shape through another door.
+		let claimed = false;
+		try {
+			const claim = await db()
 				.update(videoUploads)
-				.set({ phase: "error", processingError: "Upload never completed" })
+				.set({
+					phase: "processing",
+					processingMessage: "Recovering...",
+					updatedAt: new Date(),
+				})
 				.where(
 					and(
 						eq(videoUploads.videoId, video.id),
 						inArray(videoUploads.phase, ["uploading", "processing"]),
 						lte(videoUploads.updatedAt, staleUploadBefore),
 					),
-				)
-				.catch(() => {});
-			staleUploadRetired++;
-			continue;
-		}
-		// CLAIM THE ROW FIRST, conditionally. `forceRestart` drops the
-		// phase guard inside startVideoProcessingWorkflow, and the freshness
-		// check above reads the SELECT snapshot, not the live row — so without
-		// this a row claimed by a real upload completing in that window would
-		// receive a SECOND concurrent processVideoWorkflow and two ffmpeg runs
-		// would race on result.mp4. The transcription compare-and-set protects
-		// money, not the media. This UPDATE is the claim: if it changes no row,
-		// somebody else owns it and we walk away.
-		const claim = await db()
-			.update(videoUploads)
-			.set({ phase: "processing", processingMessage: "Recovering..." })
-			.where(
-				and(
-					eq(videoUploads.videoId, video.id),
-					inArray(videoUploads.phase, ["uploading", "processing"]),
-					lte(videoUploads.updatedAt, staleUploadBefore),
-				),
+				);
+			claimed = getAffectedRows(claim) > 0;
+		} catch (error) {
+			// A failed claim must not abort the rest of this cron run — the
+			// timestamp-refinement loop still has work to do after this one.
+			console.error(
+				`[recover-stale-ai-jobs] Failed to claim the stale upload row for video ${video.id}:`,
+				error,
 			);
-		if (rowsAffected(claim) === 0) continue;
+		}
+		if (!claimed) continue;
 		try {
 			await startVideoProcessingWorkflow({
 				videoId: video.id,
