@@ -264,6 +264,7 @@ vi.mock("drizzle-orm", () => ({
 	inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values })),
 	isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	or: vi.fn((...args: unknown[]) => args),
 	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({

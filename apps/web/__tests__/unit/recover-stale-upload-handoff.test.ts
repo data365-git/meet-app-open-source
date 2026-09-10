@@ -71,6 +71,7 @@ vi.mock("drizzle-orm", () => ({
 	inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values })),
 	isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
+	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
@@ -219,14 +220,44 @@ describe("recover-stale-ai-jobs — lost processing hand-off (stale upload rows)
 		expect(body.staleUploadRelaunched).toBe(0);
 	});
 
-	it("a stale row whose raw object is ABSENT from storage is left completely untouched", async () => {
+	it("a stale row whose raw object is ABSENT is never relaunched, and is RETIRED so it stops starving live rows", async () => {
+		// Changed deliberately on 2026-09-10 after a blind review: leaving such a
+		// row alone forever was the bug, not the fix. A row created with a
+		// rawFileKey at phase 'uploading' and then abandoned never gets an
+		// object and nothing else removes it, so three of them would occupy the
+		// candidate set on every tick and starve every genuinely stuck upload —
+		// a safety net that exists and never fires. It must never be relaunched
+		// (the bytes are not there), and it must leave the set.
 		state.contentLength = null; // the head request finds no object
 		armStaleUploadRows([stuckUploadRow()]);
 		const { body } = await runCron();
 
 		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
-		expect(state.updateCalls).toBe(0);
 		expect(body.staleUploadRelaunched).toBe(0);
+		expect(body.staleUploadRetired).toBe(1);
+		// Exactly one write: the retirement. Not a relaunch claim.
+		expect(state.updateCalls).toBe(1);
+	});
+
+	it("NEVER relaunches a row whose key is an edit source or a result.mp4", async () => {
+		// A blind review caught this on 2026-09-10. video_uploads rows are also
+		// written by the editor (`<owner>/<video>/source/original.mp4`) and by
+		// admin reprocess (`result.mp4`). Relaunching either re-encodes the
+		// WRONG source: a trim whose row-delete was lost would be silently
+		// reverted half an hour later, and a finished video would be re-encoded
+		// onto itself. Only keys the upload-completion routes write are ours.
+		const editRow = stuckUploadRow("video-edit-1");
+		editRow.upload.rawFileKey = "user-1/video-edit-1/source/original.mp4";
+		const reprocessRow = stuckUploadRow("video-reprocess-1");
+		reprocessRow.upload.rawFileKey = "user-1/video-reprocess-1/result.mp4";
+		armStaleUploadRows([editRow, reprocessRow]);
+		const { body } = await runCron();
+
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		expect(body.staleUploadRelaunched).toBe(0);
+		// Not ours to retire either — the editor has its own reconciler.
+		expect(body.staleUploadRetired).toBe(0);
+		expect(state.updateCalls).toBe(0);
 	});
 
 	it("relaunches at most 3 rows per invocation, however many are eligible", async () => {

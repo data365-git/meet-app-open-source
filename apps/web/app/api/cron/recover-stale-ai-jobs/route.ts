@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, like, lte, sql } from "drizzle-orm";
 import { Effect, Schedule } from "effect";
 import { NextResponse } from "next/server";
 import { bankedStartRequestsFullAnalysis } from "@/lib/ai-generation-request";
@@ -61,6 +61,37 @@ type StaleUploadCandidate = {
 	video: typeof videos.$inferSelect;
 	upload: typeof videoUploads.$inferSelect;
 };
+
+// How many stale rows to LOOK at per tick. Deliberately much larger than the
+// number we may relaunch: most candidates are cheap to reject (a storage HEAD),
+// and a small SELECT let permanently dead rows starve the live ones.
+const STALE_UPLOAD_SCAN_LIMIT = 50;
+// How many may actually be relaunched per tick — the expensive part, since the
+// relaunch runs ffmpeg inline in this process. Same figure the neighbouring
+// recovery loops use.
+const STALE_UPLOAD_RELAUNCH_LIMIT = 3;
+
+// Only the upload-completion routes write a `raw-upload.*` object; an edit row
+// carries `<owner>/<video>/source/original.mp4` and an admin reprocess carries
+// `result.mp4`. Relaunching those would re-encode the wrong source.
+function isRawUploadKey(key: string): boolean {
+	const lastSegment = key.split("/").pop() ?? "";
+	return lastSegment.startsWith("raw-upload.");
+}
+
+// drizzle's mysql2 driver reports the affected-row count in one of two shapes
+// depending on version; read whichever is present so a conditional claim can
+// tell "I own this row" from "somebody else does".
+function rowsAffected(result: unknown): number {
+	if (Array.isArray(result)) {
+		const header = result[0] as { affectedRows?: number } | undefined;
+		return header?.affectedRows ?? 0;
+	}
+	const r = result as
+		| { rowsAffected?: number; affectedRows?: number }
+		| undefined;
+	return r?.rowsAffected ?? r?.affectedRows ?? 0;
+}
 
 // Storage is the only trustworthy source for "the bytes really are all
 // there" — the row alone says nothing about a multipart that never
@@ -258,6 +289,9 @@ export async function GET(request: Request) {
 	let refinementReset = 0;
 	let pendingRequestStarted = 0;
 	let staleUploadRelaunched = 0;
+	// Rows retired because their object never appeared - reported so a spike is
+	// visible instead of silent.
+	let staleUploadRetired = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -462,8 +496,13 @@ export async function GET(request: Request) {
 	// lost". The relaunch is safe to repeat: forceRestart re-claims the row,
 	// and the transcription claim in lib/transcribe.ts is a compare-and-swap,
 	// so a duplicate hand-off loses the claim and launches nothing paid.
-	// LIMIT 3 for the same reason as the neighbouring loops above — the
-	// relaunch runs ffmpeg inline in this process.
+	// The SCAN is wide, the RELAUNCH is capped at 3 (enforced in JS below,
+	// where ffmpeg is actually launched). A blind review caught that limiting
+	// the SELECT to 3 and only then checking storage lets three permanently
+	// dead rows — created with a rawFileKey at phase 'uploading' and then
+	// abandoned, so their object never appeared and nothing ever removes them —
+	// starve every genuinely stuck row forever. The safety net would have
+	// existed and never fired, which is the failure mode it was built to end.
 	const staleUploadCandidates: StaleUploadCandidate[] = await db()
 		.select({ video: videos, upload: videoUploads })
 		.from(videos)
@@ -474,15 +513,22 @@ export async function GET(request: Request) {
 				inArray(videoUploads.phase, ["uploading", "processing"]),
 				lte(videoUploads.updatedAt, staleUploadBefore),
 				isNotNull(videoUploads.rawFileKey),
+				// ONLY rows the upload-completion routes wrote. An edit row
+				// carries `<owner>/<video>/source/original.mp4` and an
+				// admin-reprocess row carries `result.mp4`; relaunching either
+				// would re-encode the PRE-EDIT original (silently reverting a
+				// user's trim) or re-encode result.mp4 onto itself. Both have
+				// their own owners elsewhere.
+				like(videoUploads.rawFileKey, "%/raw-upload.%"),
 			),
 		)
-		.limit(3);
+		.limit(STALE_UPLOAD_SCAN_LIMIT);
 
 	for (const candidate of staleUploadCandidates) {
 		const { video, upload } = candidate;
 		// Hard cap mirroring the SQL LIMIT, so a future edit of that query can
 		// never fan inline ffmpeg launches wider than the neighbouring loops.
-		if (staleUploadRelaunched >= 3) break;
+		if (staleUploadRelaunched >= STALE_UPLOAD_RELAUNCH_LIMIT) break;
 		// Freshness re-check in JS on the row we actually hold (same law as the
 		// transcription loop above): never relaunch an upload that is still
 		// visibly landing bytes.
@@ -493,10 +539,48 @@ export async function GET(request: Request) {
 		// edit that loosens the query would silently start passing null.
 		const rawFileKey = upload.rawFileKey;
 		if (!rawFileKey) continue;
-		// Confirm the raw object really is in storage before doing anything. A
-		// zero-length or absent object means the upload genuinely failed —
-		// leave the row completely untouched.
-		if (!(await isRawObjectInStorage(video, rawFileKey))) continue;
+		// Belt and suspenders on the SQL filter above: only an upload-completion
+		// key may be relaunched, never an edit source or a result.mp4.
+		if (!isRawUploadKey(rawFileKey)) continue;
+		// Confirm the raw object really is in storage before doing anything.
+		if (!(await isRawObjectInStorage(video, rawFileKey))) {
+			// The object is absent or empty and the row has been quiet for the
+			// whole staleness window: this upload genuinely failed. Retire the
+			// row so it stops occupying the candidate set on every future tick
+			// and so the UI stops implying an upload is still in flight.
+			await db()
+				.update(videoUploads)
+				.set({ phase: "error", processingError: "Upload never completed" })
+				.where(
+					and(
+						eq(videoUploads.videoId, video.id),
+						inArray(videoUploads.phase, ["uploading", "processing"]),
+						lte(videoUploads.updatedAt, staleUploadBefore),
+					),
+				)
+				.catch(() => {});
+			staleUploadRetired++;
+			continue;
+		}
+		// CLAIM THE ROW FIRST, conditionally. `forceRestart` drops the
+		// phase guard inside startVideoProcessingWorkflow, and the freshness
+		// check above reads the SELECT snapshot, not the live row — so without
+		// this a row claimed by a real upload completing in that window would
+		// receive a SECOND concurrent processVideoWorkflow and two ffmpeg runs
+		// would race on result.mp4. The transcription compare-and-set protects
+		// money, not the media. This UPDATE is the claim: if it changes no row,
+		// somebody else owns it and we walk away.
+		const claim = await db()
+			.update(videoUploads)
+			.set({ phase: "processing", processingMessage: "Recovering..." })
+			.where(
+				and(
+					eq(videoUploads.videoId, video.id),
+					inArray(videoUploads.phase, ["uploading", "processing"]),
+					lte(videoUploads.updatedAt, staleUploadBefore),
+				),
+			);
+		if (rowsAffected(claim) === 0) continue;
 		try {
 			await startVideoProcessingWorkflow({
 				videoId: video.id,
@@ -567,5 +651,6 @@ export async function GET(request: Request) {
 		refinementReset,
 		pendingRequestStarted,
 		staleUploadRelaunched,
+		staleUploadRetired,
 	});
 }
