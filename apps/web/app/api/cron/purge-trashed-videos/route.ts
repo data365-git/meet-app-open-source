@@ -8,12 +8,13 @@ import { purgeTrashedVideo } from "./purge-helpers";
 export const dynamic = "force-dynamic";
 
 // The other half of the Trash promise: /api/video/delete soft-deletes with
-// "kept for 7 days so it can be restored", so this nightly cron makes the
-// 7-day expiry real. Each eligible video goes through the REUSED
-// Videos.permanentlyDelete (see purge-helpers.ts) — storage first, row last,
-// idempotent — so a partial failure simply retries the next night.
+// "kept for 3 days so it can be restored" (owner-shortened from 7 on
+// 2026-09-11), so this nightly cron makes the 3-day expiry real. Each
+// eligible video goes through the REUSED Videos.permanentlyDelete (see
+// purge-helpers.ts) — storage first, row last, idempotent — so a partial
+// failure simply retries the next night.
 
-const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const TRASH_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 // Heavier per item than reconcile-storage's 200: each purge lists and
 // deletes the video's storage objects, then its rows. A backlog larger than
 // this drains over successive nights; `remaining` reports what is left.

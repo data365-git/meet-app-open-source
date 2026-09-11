@@ -19,12 +19,13 @@ import { Effect, Exit, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The Trash promise is two-sided. /api/video/delete soft-deletes with the
-// comment "media + uploads are kept for 7 days so it can be restored" — which
-// implies the other half: after 7 days it is actually GONE. This suite covers
-// that purge half (the purge-trashed-videos cron):
+// comment "media + uploads are kept for 3 days so it can be restored"
+// (owner-shortened from 7 on 2026-09-11) — which implies the other half:
+// after 3 days it is actually GONE. This suite covers that purge half
+// (the purge-trashed-videos cron):
 //   1. auth follows the exact CRON_SECRET convention of the sibling crons,
 //   2. the candidate query is provably scoped: only soft-deleted rows past the
-//      7-day cutoff, oldest first, with a bounded batch per run,
+//      3-day cutoff, oldest first, with a bounded batch per run,
 //   3. each video is purged through the REUSED Videos.permanentlyDelete as its
 //      OWN owner — identities are never cross-paired (tenant safety), and no
 //      second copy of the storage-delete logic exists (twin rule),
@@ -100,7 +101,7 @@ vi.mock("@/app/api/cron/purge-trashed-videos/purge-helpers", () => ({
 const { GET } = await import("@/app/api/cron/purge-trashed-videos/route");
 
 const SECRET = "cron-secret-xyz";
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const TRASH_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 function authedRequest(secret = SECRET) {
 	return new Request("http://localhost/api/cron/purge-trashed-videos", {
@@ -152,21 +153,21 @@ describe("purge-trashed-videos GET — auth guards", () => {
 });
 
 describe("purge-trashed-videos GET — candidate selection", () => {
-	it("selects ONLY soft-deleted videos past the 7-day cutoff, oldest first, with a bounded batch", async () => {
+	it("selects ONLY soft-deleted videos past the 3-day cutoff, oldest first, with a bounded batch", async () => {
 		const res = await GET(authedRequest());
 		expect(res.status).toBe(200);
 
 		const clauses = clausesOf(H.capturedWheres[0]);
 		// isNotNull(deletedAt): a live video can NEVER be a candidate.
 		expect(clauses).toContainEqual({ isNotNull: "videos.deletedAt" });
-		// lt(deletedAt, now - 7d): a video trashed 2 days ago must survive.
+		// lt(deletedAt, now - 3d): a video trashed 1 day ago must survive.
 		const ltClause = clauses.find((c) => "lt" in c) as
 			| { lt: [unknown, Date] }
 			| undefined;
 		expect(ltClause).toBeDefined();
 		expect(ltClause?.lt[0]).toBe("videos.deletedAt");
 		const cutoffMs = ltClause?.lt[1].getTime() ?? 0;
-		expect(Math.abs(Date.now() - SEVEN_DAYS_MS - cutoffMs)).toBeLessThan(
+		expect(Math.abs(Date.now() - TRASH_RETENTION_MS - cutoffMs)).toBeLessThan(
 			60_000,
 		);
 

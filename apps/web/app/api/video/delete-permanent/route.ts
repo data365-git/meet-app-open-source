@@ -12,7 +12,8 @@ import { apiToHandler } from "@/lib/server";
 
 // Irreversible erase, for the recorder's "permanently discard". This is
 // deliberately a SEPARATE route from /api/video/delete: that one soft-deletes
-// into the 7-day Trash, which is a wanted feature and must keep working.
+// into the 3-day Trash (owner-shortened from 7 on 2026-09-11), which is a
+// wanted feature and must keep working.
 //
 // There is no NotFound error here on purpose — an already-erased video is the
 // state the caller asked for, so `permanentlyDelete` succeeds quietly and this
