@@ -9,6 +9,33 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
+## ✅ DEPLOYED `a0d43a7` — 2026-09-25 ~00:45 laptop (supersedes the "in flight" line in the block below)
+Evidence: container `data365-web:a0d43a7` **Up** · `/api/health` 200 `db:ok storage:ok` · `/login` 200 · the new code is grep-CONFIRMED inside the running container (`'quota/credits exhausted'` + the quotaRetryAttempts cron filter in `/app/apps/web/.next/server/`) · only the benign `ER_DUP_FIELDNAME authorName` migration notice in the first 5 min of logs. Branch pushed `c40d044..a0d43a7` (git is the backup). **Rollback, seconds:** `cd /opt/data365 && cp docker-compose.app.yml.bak-a0d43a7 docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` — `2c9dd6b` is still on the host. Remaining for the fix to be VISIBLE: the owner's OpenRouter top-up (OWNER TODO below), then repair + live-verify steps in the block below.
+
+## RESUME HERE — live point 2026-09-25 ~00:30 laptop — 3h-audio "half transcript" bug ROOT-CAUSED, fix `a0d43a7` committed, deploy in flight at write time
+
+**Owner complaint (2026-09-24):** "data365 da 3soatlik audiolar to'liq qilinmayapti, yarmi qilinyapti." All measured on prod; SCOPE/METRIC/DIRECTION in `docs/plans/2026-09-24-3h-audio-half-transcript-SCOPE.md`.
+
+### ROOT CAUSE (measured, not guessed)
+dars3 `060m9ty4kqqspxp` (204 min, marked COMPLETE): free Gemini leg 429'd ~72 min in, paid OpenRouter leg 402'd — **"This request requires at least $0.50 in balance for audio"** — so 22/34 chunks died, every failure quota-shaped, yet the workflow wrote `transcriptionStatus=COMPLETE` with `transcriptionGaps [{4315→12265}]` (transcript silently stops at 72 min). COMPLETE rows are invisible to the recovery cron (ERROR+QUOTA only), so the damage was terminal. Paid TEXT calls (summary) kept working — OpenRouter's **$0.50 floor applies to AUDIO requests only** — which made the account look alive. Cost truth from `ai_usage_events`: a 123-min audio = **$0.44** paid transcription → 3h ≈ **$1**.
+
+### THE FIX — `a0d43a7` on `qa-fixes` (root typecheck clean · 86/86 touched-suite tests · blind judge GO-WITH-CONDITIONS, both conditions landed)
+Partial all-quota death now throws `TranscriptionQuotaFailureError` (same path as all-chunks-failed): markError records QUOTA → the */30 cron re-kicks and **resumes from the partial checkpoint, re-transcribing only uncovered chunks** once credits return. Judge conditions: markError ops-alerts on every QUOTA death; the cron's LIMIT-3 quota query filters exhausted rows. Tests: C2/C3 in `transcribe-chunks.test.ts` + the reversed MIXED pin in `transcribe-quota-failure.test.ts` (updated with incident citation, not weakened). Deploy health-check evidence lands in the NEXT block above this one (append-only discipline).
+
+### WAITING ON THE OWNER (the money half of the fix)
+**OWNER TODO (since 2026-09-25): OpenRouter balansni to'ldirish** — openrouter.ai → Settings → Credits → add funds. Past $0.50 the audio floor clears; **$10 ≈ 10 ta 3-soatlik audio (~$1 each)**. He will SEE: 3h audios finish COMPLETE, full transcript, cron auto-fills within ~30 min of top-up. Undo/adjust: any amount works; without it new 3h audios honestly sit ERROR "AI balance" instead of pretending done.
+
+### AFTER TOP-UP (my next steps, in order)
+1. Repair the 4 damaged non-deleted audios by flipping rows to ERROR+QUOTA so the cron re-runs them (~$5): `pgc1r9a0h4j31af` (gap 6109→12538), `ccgg9nqjwmw8ehy` (3598→5738), `y71wes3p9q32bg4` (6254→6979), `2creq6ysyk7b074` (6161→6880). dars3/etb are soft-deleted by the user — skip unless asked.
+2. Live-verify the honest path: after top-up, watch one re-kick reach COMPLETE with `transcriptionGaps` empty (the METRIC).
+
+### OPEN, NOT THIS BUG (do not lose)
+- **Shape-A never-started RECURRED post-2c9dd6b:** 09-17 `pcmkzh2rbm4aga9`, 09-23 `2meg0g659zqppfk`/`7efxdvdppfwpn1m` at `transcriptionStatus NULL`, metadata `{"isAudio": true}` — the shape the 09-11 fix claimed dead. Separate defect, history in the 2026-09-10 plan.
+- **Another session's UNCOMMITTED upload work sits in this tree** (multipart-upload*, useImportUpload, UploadingContext, UploadPlaceholderCard, messages/*.json; 5 upload tests red). Not ours — do not commit/stash/revert.
+- Accepted edge (judge finding 3, money-only, self-healing): a swallowed checkpoint-save failure makes a re-kick re-bill covered chunks.
+
+⬇ The 2026-09-11 block below is HISTORY (its "RESUME HERE" heading predates this one).
+
 ## RESUME HERE — live point 2026-09-11 ~00:45 laptop — ✅ DEPLOYED `2c9dd6b`, live and healthy, and the upload-recovery fix is PROVEN IN PRODUCTION on a real lost recording
 
 **Owner's standing order this session:** "barcha ishlarni yakunla mensiz, toxtama bajarilib done bolguncha" — full autonomy, finish everything. Earlier the same session he gave five product orders and one routing order; every open question was answered in two AskUserQuestion batches. **The whole session's decisions and evidence live in `plans/2026-09-10-transcript-options-refined-export-multi-import.md` — read that before touching this work.**
