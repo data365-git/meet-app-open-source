@@ -115,6 +115,15 @@ describe("extract_audio marker honesty — the live line must never lie", () => 
 		expect(bodyOf("markNoAudio")).toMatch(CLEAR_MARKER);
 	});
 
+	it("a QUOTA death reaches ops immediately — markError alerts (2026-09-24 blind-review finding 1)", () => {
+		// The partial-quota class lost its only signal ("completed PARTIALLY")
+		// when it joined the QUOTA path, and retry exhaustion parks the row
+		// silently — so the alert now lives on the QUOTA terminal write itself.
+		const body = bodyOf("markError");
+		expect(body).toMatch(/reason\.code === "QUOTA"/);
+		expect(body).toMatch(/sendOpsAlert/);
+	});
+
 	it("nothing outside extractAudio ever SETS the marker (no invented claims)", () => {
 		const allSets = SRC.match(/aiProcessingSubStep:\s*"extract_audio"/g) ?? [];
 		const inExtract =

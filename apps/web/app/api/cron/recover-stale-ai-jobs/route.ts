@@ -18,6 +18,7 @@ import {
 	FAST_STALE_JOB_THRESHOLD_MS,
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
+	MAX_QUOTA_RETRY_ATTEMPTS,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
 	withIncrementedAutoRecoverAttempts,
@@ -272,6 +273,13 @@ export async function GET(request: Request) {
 				eq(videos.transcriptionStatus, "ERROR"),
 				isNull(videos.deletedAt),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.transcriptionError.code')) = 'QUOTA'`,
+				// Exhausted rows (attempts >= MAX) can never pass
+				// isQuotaRetryDue again, yet they keep matching this query —
+				// without the filter they squat in the LIMIT 3 window forever
+				// and starve FRESH quota deaths of their re-kicks (blind-review
+				// finding 2, 2026-09-24; reachable now that every partial-quota
+				// death also lands here).
+				sql`COALESCE(CAST(JSON_EXTRACT(${videos.metadata}, '$.quotaRetryAttempts') AS UNSIGNED), 0) < ${MAX_QUOTA_RETRY_ATTEMPTS}`,
 			),
 		)
 		.limit(3);

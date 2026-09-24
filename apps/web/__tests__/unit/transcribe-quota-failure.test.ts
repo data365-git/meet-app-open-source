@@ -283,22 +283,30 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		expect((err as Error).message).toContain("transcription chunks failed");
 	});
 
-	it("fast + MIXED (one chunk ok, one 429): does not fail the job at all", async () => {
-		// A partial transcript is usable, so this must NOT be recorded as a quota
-		// death — otherwise the cron would re-run an already-saved video.
+	it("fast + MIXED (one chunk ok, one 429): QUOTA-classified (2026-09-24 reversal) — the cron resumes and fills the gap", async () => {
+		// Until 2026-09-24 a quota-partial was saved as COMPLETE to keep the cron
+		// from re-running a saved video. Production proved terminal-COMPLETE is
+		// the worse evil (dars3 `060m9ty4kqqspxp`: free 429 + paid 402 left
+		// 22/34 chunks missing, the transcript silently stopped at 72 min of
+		// 204, and a COMPLETE row is invisible to the recovery cron FOREVER —
+		// the owner's "3-hour audios come out half-done" complaint). Now
+		// every-failed-chunk-quota => TranscriptionQuotaFailureError, and the
+		// cron's re-kick resumes from the partial checkpoint, re-transcribing
+		// ONLY the uncovered chunks — so the re-run the old comment feared is
+		// near-free and the user never sees a fake-finished transcript.
 		const fn = chunkFn(async (startSec) => {
 			if (startSec === 0) return "WEBVTT\n\nOK";
 			throw quotaError();
 		});
 
-		const out = await transcribeAudioChunks(
+		const err = await transcribeAudioChunks(
 			TWO_CHUNKS,
 			null,
 			CTX,
 			fn,
-		);
+		).catch((e) => e);
 
-		expect(out).toContain("OK");
+		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
 	});
 
 	it("fast + SINGLE chunk 429: still QUOTA-classified (single-chunk path bypasses the chunk loop)", async () => {

@@ -37,6 +37,7 @@ vi.mock("workflow", () => ({
 
 // ─── Import AFTER mocks ───────────────────────────────────────────────────────
 import { FatalError } from "workflow";
+import { TranscriptionQuotaFailureError } from "@/lib/ai-quota-wait";
 import { mergeChunkedWebVtt } from "@/lib/gemini-transcribe";
 import {
   isChunkCoveredByPartial,
@@ -132,6 +133,54 @@ describe("transcribeAudioChunks", () => {
     await expect(
       transcribeAudioChunks(audio, null, CTX, stub),
     ).rejects.toThrow(/All 3 .*chunks failed/);
+  });
+
+  // C2) THE 2026-09-24 FIX (dars3 shape: free 429'd mid-run, paid leg
+  // OpenRouter-402'd "requires at least $0.50 in balance for audio", 22/34
+  // chunks died, yet the run wrote COMPLETE with a transcript that silently
+  // stopped at 72 min of a 204-min audio). SOME chunks succeed, EVERY failure
+  // is quota/credit-shaped => the run is money-blocked: it must REJECT with
+  // TranscriptionQuotaFailureError so markError records code=QUOTA and the
+  // recovery cron re-runs the video once credits return — never a silent
+  // COMPLETE with holes. RED against the pre-fix workflow (it resolved).
+  it("C2) partial quota-death (quota on every failed chunk): rejects with TranscriptionQuotaFailureError, not a partial resolve", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(
+      async ({ chunk }: { chunk: { startSec: number } }) => {
+        if (chunk.startSec === 900) {
+          throw new Error(
+            'OpenRouter completion failed (HTTP 402): {"error":{"message":"This request requires at least $0.50 in balance for audio"}}',
+          );
+        }
+        return chunkVtt(`chunk-at-${chunk.startSec}`, 1);
+      },
+    );
+
+    await expect(transcribeAudioChunks(audio, null, CTX, stub)).rejects.toBeInstanceOf(
+      TranscriptionQuotaFailureError,
+    );
+  });
+
+  // C3) Mixed failure (one quota, one NOT) keeps the tolerant behaviour: the
+  // run is not money-blocked, so it still resolves with a gap (test B's
+  // contract, pinned against the new quota gate over-firing).
+  it("C3) mixed partial-failure (quota + non-quota): still resolves with a gap", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(
+      async ({ chunk }: { chunk: { startSec: number } }) => {
+        if (chunk.startSec === 0) throw new Error("HTTP 429 quota exceeded");
+        if (chunk.startSec === 900) throw new Error("transient API error");
+        return chunkVtt(`chunk-at-${chunk.startSec}`, 1);
+      },
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub);
+
+    expect(result).not.toContain("chunk-at-0");
+    expect(result).not.toContain("chunk-at-900");
+    expect(result).toContain("chunk-at-1800");
   });
 
   // G) onProgress is called once per chunk with monotonically increasing completed counts

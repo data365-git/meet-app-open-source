@@ -625,6 +625,18 @@ async function markError(
 		.update(videos)
 		.set({ transcriptionStatus: "ERROR" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	// A QUOTA death must reach ops the MOMENT it happens (blind-review finding
+	// 1, 2026-09-24): the partial-quota path used to be the only quota shape
+	// with a signal (the "completed PARTIALLY" alert, now unreachable for this
+	// class), and when the ~4.4-day retry ladder exhausts, the cron parks the
+	// row silently — discovered by complaint, not by ops. Best-effort, after
+	// the status write so the alert describes persisted state.
+	if (reason.code === "QUOTA") {
+		await sendOpsAlert(
+			`Transcription for video ${videoId} stopped on AI quota/credits: ${reason.message.slice(0, 160)}. The recovery cron retries automatically; top up the AI balance to let it finish.`,
+		).catch(() => {});
+	}
 }
 
 async function extractAudio(
@@ -1293,6 +1305,25 @@ export async function transcribeAudioChunks(
 		}
 		throw new Error(
 			`All ${failedChunkCount} transcription chunks failed for ${context.videoId}`,
+		);
+	}
+	// PARTIAL quota death (2026-09-24, dars3 `060m9ty4kqqspxp`: free leg 429'd
+	// mid-run, paid leg OpenRouter-402'd "requires at least $0.50 in balance for
+	// audio", 22/34 chunks died) used to fall through to COMPLETE — the user saw
+	// a "done" transcript that silently stopped at 72 min of a 204-min audio,
+	// and the row was terminal: the recovery cron only re-selects ERROR+QUOTA.
+	// Every failed chunk being quota-like means BOTH legs are out of money, so
+	// gap-fill cannot rescue it either (its short spans are free-only). Route it
+	// down the same QUOTA path as the all-chunks case: markError records QUOTA,
+	// the partial checkpoint stays in storage for resume, and the cron finishes
+	// the missing chunks once credits return.
+	if (
+		failedChunkCount > 0 &&
+		failedChunkCount < audio.chunks.length &&
+		quotaFailedChunkCount === failedChunkCount
+	) {
+		throw new TranscriptionQuotaFailureError(
+			`${failedChunkCount}/${audio.chunks.length} transcription chunks failed for ${context.videoId} on quota/credits: AI quota/credits exhausted`,
 		);
 	}
 	if (failedChunkCount > 0) {
