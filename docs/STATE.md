@@ -13,7 +13,9 @@ data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) an
 - Inserted a `video_uploads` row for `h4tvk8raknrgq5b` (phase 'processing', raw_file_key NULL, updated_at now-2h) → `/root/run-cron.sh recover-stale-ai-jobs` returned `staleUploadRelaunched: 1` → log `Optimization failed ... Compress skipped: durationSec=4082.65` (the benign >3600 s branch, raw kept playable) → upload row gone, `videos.duration` = 4082.65. It is playable; it is NOT transcribed (no press recorded, zero AI spent — by design). `processingStartedAt` is not visible afterwards because the finally-block clears it; the upload-row deletion + log line are the proof.
 - Owner said "menimcha qilib bo'lingan" — checked: the 4 cancel fixes were NOT in any branch or worktree (`cancel-upload.ts` has no phase guard, toast still hard-coded English). A doer is on them in a worktree, branch `fix/cancel-review`.
 - **Agent routing snag:** `~/.claude/settings.json` env maps `sonnet`→`glm-4.7` and `opus`→`glm-5.3`; the desktop app sends those names to the Anthropic API → HTTP 404 model_not_found. A `model: sonnet` doer died on it. Owner/system decision.
-- Option 1 (PREVENT: durable `metadata.processedAt`) still unbuilt.
+- **Owner answers 2026-09-25 (batch):** (a) 4 damaged audios — "if all one recording, do one and delete the rest; if different, just fix" → measured: 4 DIFFERENT recordings (Samanizade / MS aka AI agent talk 2 / Dars pedagogika #1 / SHMS - Azizbek) → fixed all 4; (b) PREVENT (durable `processedAt`) = YES, building; (c) GLM env block removed from `~/.claude/settings.json`; (d) ultra-tezkor → NORMAL rejim (`.ultra-mode` flag removed).
+- **4-audio repair, ~06:17 UTC:** backup of the 4 rows at `/root/repair-4audio-backup-2026-09-25.tsv` on the VPS; flipped COMPLETE → ERROR + `transcriptionError.code=QUOTA` (SQL in `/root/repair-4audio.sql`); cron by hand → `quotaRetried: 3`, the 4th goes on the next */30 tick. No partial checkpoint exists for COMPLETE rows (deleted at `transcribe.ts:2024`), so each is a FULL re-transcription — est. ~$2 total vs $4.99 balance. **NEXT: verify all 4 reach COMPLETE with `transcriptionGaps` empty (the METRIC), and re-read the OpenRouter balance.**
+- In flight: doer on `fix/cancel-review` (cancel fixes 1-6); doer on `fix/processed-marker` (PREVENT + rowless recovery pass with a 2026-09-25 createdAt cutoff). Each needs a fresh non-author judge before merge → one image deploy.
 
 ## ▶️ LIVE POINT 2026-09-25 ~06:30 UTC — session closed at the context ceiling; resume HERE
 Owner's order: "Muammo hal boʻldimi endi jonliga ham chiqar" — make it actually solved, then deploy. Nothing new is deployed yet; prod is still `a0d43a7`.
@@ -647,4 +649,8 @@ Same class, runtime half: `apps/web/.next/standalone/apps/web/lib/audio-extract.
 - 2026-09-10 [Navbat] Bir vaqtda ko'p fayl yuklanganda AI tahlil qanday ishlasin? -> **kop fayl yuklangani bilan ai tahlil alohida qilinadiku bitta bitta**
 - 2026-09-10 [Tanlov] Ko'p fayl yuklaganda "Only transcript / Full AI" tanlovi qanday bo'lsin? -> **[No preference]**
 - 2026-09-10 [Chegara] Bir marta nechta fayl yuklashga ruxsat bo'lsin? -> **20 ta gacha (tavsiya)**
+- 2026-09-25 [Himoya] Kelajakda yuklangan yozuv jim yo'qolib qolmasligi uchun tizim har bir fayl oxirigacha ishlanganini belgilab qo'yadigan qilaymi? AI puli ketmaydi. -> **Ha, qil (Tavsiya)**
+- 2026-09-25 [4 audio] Matni yarmida uzilib qolgan 4 ta uzun audioni qayta ishlash taxminan $5 turadi, hisobda esa $4.99 bor. Nima qilamiz? -> **Agar hammasi 1ta audio bo╩╗lsa 1tasini qil va qolganini o╩╗chir, agar bir xil bo╩╗lmasa shunchaki tuzat keyin o╩╗zimiz k...**
+- 2026-09-25 [GLM] Sozlamalarda arzon modellar GLM nomiga bog'langan, shu sababli yordamchi agentlar xato berib to'xtayapti. Bu bog'lamani olib tashlaymi? -> **Olib tashla (Tavsiya)**
+- 2026-09-25 [Rejim] Ultra-tezkor rejim 14 kundan beri yoqilgan. Hali kerakmi? -> **Normal rejim**
 
