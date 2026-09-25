@@ -45,9 +45,20 @@ export type UploadStatus =
 			capId: string;
 	  };
 
+interface UploadingStoreState {
+	uploadStatus?: UploadStatus;
+	/** Owner order 2026-09-11: a Cancel control on an in-progress upload. Set
+	 *  by useImportUpload for the duration of one upload attempt, cleared in
+	 *  every terminal path (success, failure, or cancel itself) — undefined
+	 *  means there is nothing cancellable right now, whatever uploadStatus
+	 *  says (e.g. once server processing has genuinely started). */
+	cancelHandler?: () => void;
+}
+
 interface UploadingContextType {
-	uploadingStore: Store<{ uploadStatus?: UploadStatus }>;
+	uploadingStore: Store<UploadingStoreState>;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
+	setCancelHandler: (handler: (() => void) | undefined) => void;
 }
 
 const UploadingContext = createContext<UploadingContextType | undefined>(
@@ -78,7 +89,7 @@ export function useUploadingStatus() {
 }
 
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const [uploadingStore] = useState<Store<{ uploadStatus?: UploadStatus }>>(
+	const [uploadingStore] = useState<Store<UploadingStoreState>>(
 		() => new Store({}),
 	);
 
@@ -90,6 +101,12 @@ export function UploadingProvider({ children }: { children: React.ReactNode }) {
 					uploadingStore.setState((state) => ({
 						...state,
 						uploadStatus: status,
+					}));
+				},
+				setCancelHandler: (handler: (() => void) | undefined) => {
+					uploadingStore.setState((state) => ({
+						...state,
+						cancelHandler: handler,
 					}));
 				},
 			}}

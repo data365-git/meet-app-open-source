@@ -197,7 +197,13 @@
 		"uploadTimeRemainingCapped": "6+ soat qoldi",
 		"uploadTimeRemainingHoursMinutes": "~{hours} soat {minutes} daqiqa qoldi",
 		"uploadTimeRemainingMinutes": "~{minutes} daqiqa qoldi",
-		"uploadTimeRemainingLessThanMinute": "1 daqiqadan kam qoldi"
+		"uploadTimeRemainingLessThanMinute": "1 daqiqadan kam qoldi",
+		"cancelUploadButton": "Bekor qilish",
+		"cancelUploadConfirmTitle": "Yuklashni bekor qilasizmi?",
+		"cancelUploadConfirmDescription": "Hozirgacha yuklangan qism o'chiriladi. Buni ortga qaytarib bo'lmaydi.",
+		"cancelUploadConfirmAction": "Ha, bekor qil",
+		"cancelUploadConfirmCancel": "Yo'q",
+		"uploadCancelled": "Yuklash bekor qilindi."
 	},
 	"auth": {
 		"signingIn": "Tizimga kiritilmoqda…",

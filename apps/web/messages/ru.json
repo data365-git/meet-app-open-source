@@ -197,7 +197,13 @@
 		"uploadTimeRemainingCapped": "Осталось 6+ ч",
 		"uploadTimeRemainingHoursMinutes": "~{hours} ч {minutes} мин осталось",
 		"uploadTimeRemainingMinutes": "~{minutes} мин осталось",
-		"uploadTimeRemainingLessThanMinute": "Осталось меньше минуты"
+		"uploadTimeRemainingLessThanMinute": "Осталось меньше минуты",
+		"cancelUploadButton": "Отмена",
+		"cancelUploadConfirmTitle": "Отменить загрузку?",
+		"cancelUploadConfirmDescription": "Уже загруженная часть будет удалена. Это необратимо.",
+		"cancelUploadConfirmAction": "Да, отменить",
+		"cancelUploadConfirmCancel": "Нет",
+		"uploadCancelled": "Загрузка отменена."
 	},
 	"auth": {
 		"signingIn": "Выполняется вход…",

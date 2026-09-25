@@ -439,6 +439,98 @@ describe("uploadBlobMultipart", () => {
 			`bytes ${16 * MB}-${20 * MB - 1}/${20 * MB}`,
 		);
 	});
+
+	// Owner order 2026-09-11: a Cancel control on an in-progress upload that
+	// takes effect within a couple of seconds (not a network timeout) and
+	// deletes whatever bytes were already sent. These prove the CLIENT half:
+	// the in-flight part is aborted immediately and the multipart upload is
+	// aborted server-side, releasing the parts already sent.
+	it("cancels immediately: aborts the in-flight part, aborts server-side, rejects with CancelledUploadError", async () => {
+		let abortCalled = false;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = input.toString();
+				if (url === "/api/upload/multipart/initiate") {
+					return makeJsonResponse({ uploadId: "upload-1" });
+				}
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: "https://uploads.example/part-1",
+					});
+				}
+				if (url === "/api/upload/multipart/abort") {
+					abortCalled = true;
+					return makeJsonResponse({ success: true });
+				}
+				throw new Error(`Unexpected fetch call: ${url}`);
+			}),
+		);
+		// "pending" never settles on its own — only a real xhr.abort() (fired by
+		// the signal) ends this part, proving cancellation does not wait for a
+		// timeout.
+		MockXMLHttpRequest.setOutcomes([{ type: "pending" }]);
+
+		const controller = new AbortController();
+		const resultPromise = uploadBlobMultipart({
+			videoId: "video-1",
+			blob: makeBlob(5 * MB),
+			contentType: "video/mp4",
+			subpath: "raw-upload.mp4",
+			partSizeBytes: 16 * MB,
+			signal: controller.signal,
+		});
+
+		// Let initiate/presign resolve and the part's xhr.send() actually fire
+		// (each is a real awaited fetch, so a fixed microtask count is fragile)
+		// before cancelling — the outcome is only shifted off once send() runs.
+		while (MockXMLHttpRequest.outcomes.length > 0) {
+			await Promise.resolve();
+		}
+		controller.abort();
+
+		await expect(resultPromise).rejects.toBeInstanceOf(CancelledUploadError);
+		expect(MockXMLHttpRequest.abortedCount).toBe(1);
+		expect(abortCalled).toBe(true);
+	});
+
+	it("cancelling never retries a part, even though a retryable error would", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = input.toString();
+				if (url === "/api/upload/multipart/initiate") {
+					return makeJsonResponse({ uploadId: "upload-1" });
+				}
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: "https://uploads.example/part-1",
+					});
+				}
+				if (url === "/api/upload/multipart/abort") {
+					return makeJsonResponse({ success: true });
+				}
+				throw new Error(`Unexpected fetch call: ${url}`);
+			}),
+		);
+		// Only ONE outcome is provided. A network error alone would retry
+		// (MAX_PART_UPLOAD_ATTEMPTS > 1) and throw "Missing upload outcome" when
+		// the outcomes queue runs dry — cancellation must never reach that retry.
+		MockXMLHttpRequest.setOutcomes([{ type: "network-error" }]);
+
+		const controller = new AbortController();
+		controller.abort(); // already cancelled before the part is even attempted
+		const resultPromise = uploadBlobMultipart({
+			videoId: "video-1",
+			blob: makeBlob(5 * MB),
+			contentType: "video/mp4",
+			subpath: "raw-upload.mp4",
+			partSizeBytes: 16 * MB,
+			signal: controller.signal,
+		});
+
+		await expect(resultPromise).rejects.toBeInstanceOf(CancelledUploadError);
+	});
 });
 
 describe("uploadPartBlob", () => {

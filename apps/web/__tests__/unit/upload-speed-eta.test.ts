@@ -41,6 +41,9 @@ vi.mock("@/app/(org)/dashboard/caps/components/sendProgressUpdate", () => ({
 vi.mock("@/actions/video/create-for-processing", () => ({
 	createVideoForServerProcessing: vi.fn(),
 }));
+vi.mock("@/actions/video/cancel-upload", () => ({
+	cancelUpload: vi.fn(),
+}));
 vi.mock("@/actions/video/mark-upload-failed", () => ({
 	markUploadFailed: vi.fn(),
 }));
@@ -51,6 +54,7 @@ vi.mock("@/actions/videos/save-edits", () => ({
 	saveVideoEdits: vi.fn(),
 }));
 vi.mock("@/utils/multipart-upload", () => ({
+	CancelledUploadError: class CancelledUploadError extends Error {},
 	MULTIPART_UPLOAD_THRESHOLD_BYTES: 50 * 1024 * 1024,
 	MultipartCompletionUncertainError: class MultipartCompletionUncertainError extends Error {},
 	uploadBlobMultipart: vi.fn(),
@@ -71,6 +75,14 @@ vi.mock("next-intl", () => ({
 
 vi.mock("@cap/ui", () => ({
 	LogoSpinner: () => null,
+	// ConfirmationDialog (the upload-cancel confirm, 2026-09-11) pulls these;
+	// passthroughs are enough - these tests never open the dialog.
+	Button: ({ children }: { children?: unknown }) => children ?? null,
+	Dialog: ({ children }: { children?: unknown }) => children ?? null,
+	DialogContent: ({ children }: { children?: unknown }) => children ?? null,
+	DialogFooter: ({ children }: { children?: unknown }) => children ?? null,
+	DialogHeader: ({ children }: { children?: unknown }) => children ?? null,
+	DialogTitle: ({ children }: { children?: unknown }) => children ?? null,
 }));
 
 vi.mock("@cap/utils", () => ({
@@ -92,6 +104,7 @@ vi.mock("@/app/(org)/dashboard/caps/UploadingContext", async () => {
 			// this snapshot-at-call-time is all it needs.
 			uploadingStore: new Store({ uploadStatus: uploadStatusRef.current }),
 			setUploadStatus: () => {},
+			setCancelHandler: () => {},
 		}),
 	};
 });

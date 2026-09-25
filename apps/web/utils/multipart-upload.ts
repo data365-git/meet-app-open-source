@@ -221,6 +221,7 @@ export function uploadPartBlob({
 	stallTimeoutMs,
 	onProgress,
 	isCancelled,
+	signal,
 	onRequestCreated,
 }: {
 	url: string;
@@ -230,10 +231,18 @@ export function uploadPartBlob({
 	stallTimeoutMs: number;
 	onProgress?: (loaded: number, total: number) => void;
 	isCancelled?: () => boolean;
+	/**
+	 * When provided, aborts an ALREADY-IN-FLIGHT request immediately — the
+	 * request-body upload of a large part can run for many seconds, and
+	 * `isCancelled` alone is only ever checked before a request starts, so a
+	 * user-initiated cancel would otherwise wait for the current part to
+	 * finish or stall out before it took effect.
+	 */
+	signal?: AbortSignal;
 	onRequestCreated?: (xhr: XMLHttpRequest) => void;
 }): Promise<PartUploadResult> {
 	return new Promise((resolve, reject) => {
-		if (isCancelled?.()) {
+		if (isCancelled?.() || signal?.aborted) {
 			reject(new CancelledUploadError());
 			return;
 		}
@@ -248,6 +257,7 @@ export function uploadPartBlob({
 			}
 		}
 		onRequestCreated?.(xhr);
+		signal?.addEventListener("abort", () => xhr.abort(), { once: true });
 
 		let stallTimeoutId: number | null = null;
 		const clearStallTimeout = () => {
@@ -291,7 +301,9 @@ export function uploadPartBlob({
 		};
 		xhr.onabort = () => {
 			clearStallTimeout();
-			reject(isCancelled?.() ? new CancelledUploadError() : new Error("stalled"));
+			reject(
+				isCancelled?.() ? new CancelledUploadError() : new Error("stalled"),
+			);
 		};
 
 		xhr.send(part);
@@ -353,6 +365,7 @@ export async function uploadBlobMultipart({
 	partSizeBytes = DEFAULT_MULTIPART_PART_SIZE_BYTES,
 	parallelism = DEFAULT_MULTIPART_PARALLELISM,
 	onProgress,
+	signal,
 }: {
 	videoId: string;
 	blob: Blob;
@@ -365,7 +378,13 @@ export async function uploadBlobMultipart({
 	partSizeBytes?: number;
 	parallelism?: number;
 	onProgress?: (uploaded: number, total: number) => void;
+	/** Cancels the whole upload: no further parts start, the current part's
+	 *  in-flight request is aborted immediately, and the multipart upload is
+	 *  aborted server-side (releasing the parts already sent) before this
+	 *  rejects with `CancelledUploadError`. */
+	signal?: AbortSignal;
 }): Promise<BlobMultipartUploadResult> {
+	if (signal?.aborted) throw new CancelledUploadError();
 	const totalBytes = blob.size;
 	if (totalBytes === 0) {
 		throw new Error("Cannot upload empty file");
@@ -379,7 +398,9 @@ export async function uploadBlobMultipart({
 
 	const ranges = computePartRanges(totalBytes, partSizeBytes);
 	const effectiveParallelism =
-		provider === "googleDrive" ? 1 : Math.max(1, Math.min(parallelism, ranges.length));
+		provider === "googleDrive"
+			? 1
+			: Math.max(1, Math.min(parallelism, ranges.length));
 
 	const uploadedBytesByPart = new Map<number, number>();
 	const emitProgress = () => {
@@ -393,8 +414,7 @@ export async function uploadBlobMultipart({
 		range: PartRange,
 	): Promise<UploadedPartPayload> => {
 		const partBlob = blob.slice(range.start, range.end, contentType);
-		const isFinalPart =
-			provider === "googleDrive" && range.end >= totalBytes;
+		const isFinalPart = provider === "googleDrive" && range.end >= totalBytes;
 
 		let attempt = 0;
 		let lastError: unknown;
@@ -424,6 +444,8 @@ export async function uploadBlobMultipart({
 					headers,
 					timeoutMs: PART_UPLOAD_REQUEST_TIMEOUT_MS,
 					stallTimeoutMs: PART_UPLOAD_STALL_TIMEOUT_MS,
+					isCancelled: () => signal?.aborted ?? false,
+					signal,
 					onProgress: (loaded) => {
 						uploadedBytesByPart.set(range.partNumber, loaded);
 						emitProgress();
@@ -455,7 +477,9 @@ export async function uploadBlobMultipart({
 				// surfaced failure message is actionable instead of generic.
 				lastError =
 					error instanceof Error &&
-					!error.message.startsWith(`Failed to upload part ${range.partNumber}`) &&
+					!error.message.startsWith(
+						`Failed to upload part ${range.partNumber}`,
+					) &&
 					(error.message === "network error" ||
 						error.message === "timed out" ||
 						error.message === "stalled")

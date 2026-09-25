@@ -1,4 +1,5 @@
 import type { Storage } from "@cap/web-domain";
+import { CancelledUploadError } from "./multipart-upload";
 
 type UploadTarget =
 	| Storage.UploadTarget
@@ -52,11 +53,15 @@ export function uploadWithTarget({
 	body,
 	fileName,
 	onProgress,
+	signal,
 }: {
 	target: UploadTarget;
 	body: Blob;
 	fileName?: string;
 	onProgress?: (progress: UploadProgress) => void;
+	/** Cancels the upload: aborts an in-flight request immediately and skips
+	 *  every further retry attempt. */
+	signal?: AbortSignal;
 }) {
 	const waitForRetry = (attempt: number) =>
 		new Promise<void>((resolve) => {
@@ -95,7 +100,11 @@ export function uploadWithTarget({
 		};
 		xhr.onabort = () => {
 			clearStallTimeout();
-			reject(new Error("Upload stalled"));
+			reject(
+				signal?.aborted
+					? new CancelledUploadError()
+					: new Error("Upload stalled"),
+			);
 		};
 
 		return { clearStallTimeout, refreshStallTimeout };
@@ -103,7 +112,13 @@ export function uploadWithTarget({
 
 	const uploadOnce = () =>
 		new Promise<void>((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(new CancelledUploadError());
+				return;
+			}
+
 			const xhr = new XMLHttpRequest();
+			signal?.addEventListener("abort", () => xhr.abort(), { once: true });
 
 			if (isPostTarget(target)) {
 				const formData = new FormData();
@@ -178,7 +193,11 @@ export function uploadWithTarget({
 				return;
 			} catch (error) {
 				lastError = error;
-				if (!shouldRetryUpload(error) || attempt >= MAX_UPLOAD_ATTEMPTS) {
+				if (
+					error instanceof CancelledUploadError ||
+					!shouldRetryUpload(error) ||
+					attempt >= MAX_UPLOAD_ATTEMPTS
+				) {
 					break;
 				}
 				await waitForRetry(attempt);

@@ -7,6 +7,7 @@ import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
+import { cancelUpload } from "@/actions/video/cancel-upload";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { markUploadFailed } from "@/actions/video/mark-upload-failed";
 import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
@@ -18,6 +19,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import {
+	CancelledUploadError,
 	MULTIPART_UPLOAD_THRESHOLD_BYTES,
 	MultipartCompletionUncertainError,
 	uploadBlobMultipart,
@@ -99,6 +101,7 @@ async function uploadVideoForServerProcessing(
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	signal: AbortSignal,
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
 	let createdVideoId:
@@ -230,6 +233,7 @@ async function uploadVideoForServerProcessing(
 						file.type || (isAudioFile(file) ? "audio/mpeg" : "video/mp4"),
 					subpath: "raw-upload.mp4",
 					durationInSecs: duration,
+					signal,
 					onProgress: (loaded, total) => {
 						const percent = total > 0 ? (loaded / total) * 100 : 0;
 						const { bytesPerSecond } = speedTracker.record(loaded);
@@ -289,6 +293,7 @@ async function uploadVideoForServerProcessing(
 					target: videoData.uploadTarget,
 					body: file,
 					fileName: file.name,
+					signal,
 					onProgress: ({ loaded, total }) => {
 						const percent = (loaded / total) * 100;
 						const { bytesPerSecond } = speedTracker.record(loaded);
@@ -350,6 +355,27 @@ async function uploadVideoForServerProcessing(
 		);
 		return uploadId;
 	} catch (err) {
+		// Owner order 2026-09-11: a cancelled upload is not a failure — no error
+		// toast, no markUploadFailed (that would leave a permanent "error" row
+		// behind for something the user asked to go away entirely). Discard the
+		// row and whatever bytes were already sent via the same permanent-erase
+		// path the account-deletion and Trash flows already use.
+		if (err instanceof CancelledUploadError) {
+			if (createdVideoId) {
+				try {
+					const result = await cancelUpload(createdVideoId);
+					if (!result.ok) {
+						console.error("cancelUpload failed:", result.error);
+					}
+				} catch (cleanupErr) {
+					console.error("Failed to cancel upload:", cleanupErr);
+				}
+			}
+			toast.info("Upload cancelled.");
+			setUploadStatus(undefined);
+			return null;
+		}
+
 		console.error("Video upload failed", err);
 
 		// Mark the orphaned upload row as errored so it doesn't stay stuck at
@@ -393,7 +419,8 @@ export function useImportUpload({
 	const { user, activeOrganization } = useDashboardContext();
 	const router = useRouter();
 	const inputRef = useRef<HTMLInputElement>(null);
-	const { uploadingStore, setUploadStatus } = useUploadingContext();
+	const { uploadingStore, setUploadStatus, setCancelHandler } =
+		useUploadingContext();
 	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(
 		buildEnv.NEXT_PUBLIC_IS_CAP ? !user?.isPro : false,
@@ -412,12 +439,25 @@ export function useImportUpload({
 				return;
 			}
 
-			const createdId = await uploadVideoForServerProcessing(
-				file,
-				folderId ? Folder.FolderId.make(folderId) : undefined,
-				activeOrganization.organization.id,
-				setUploadStatus,
-			);
+			// Owned by this call, not by the upload function: `processFile` is the
+			// one place that knows an upload attempt has started and ended, so it
+			// registers/clears the Cancel control around the whole call rather
+			// than the upload function reaching back out to the context itself.
+			const abortController = new AbortController();
+			setCancelHandler(() => abortController.abort());
+
+			let createdId: string | null;
+			try {
+				createdId = await uploadVideoForServerProcessing(
+					file,
+					folderId ? Folder.FolderId.make(folderId) : undefined,
+					activeOrganization.organization.id,
+					setUploadStatus,
+					abortController.signal,
+				);
+			} finally {
+				setCancelHandler(undefined);
+			}
 			if (createdId) {
 				if (serverTrim) {
 					const trimId = createdId as Video.VideoId;

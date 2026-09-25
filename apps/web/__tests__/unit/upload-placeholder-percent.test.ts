@@ -23,6 +23,14 @@ vi.mock("next-intl", () => ({
 vi.mock("@cap/ui", () => ({
 	LogoSpinner: ({ className }: { className?: string }) =>
 		createElement("div", { className, "data-testid": "logo-spinner" }),
+	// ConfirmationDialog (the upload-cancel confirm, 2026-09-11) pulls these;
+	// passthroughs are enough - these tests never open the dialog.
+	Button: ({ children }: { children?: unknown }) => children ?? null,
+	Dialog: ({ children }: { children?: unknown }) => children ?? null,
+	DialogContent: ({ children }: { children?: unknown }) => children ?? null,
+	DialogFooter: ({ children }: { children?: unknown }) => children ?? null,
+	DialogHeader: ({ children }: { children?: unknown }) => children ?? null,
+	DialogTitle: ({ children }: { children?: unknown }) => children ?? null,
 }));
 
 vi.mock("@cap/utils", () => ({

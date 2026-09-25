@@ -221,3 +221,37 @@ DIRECTION: one change, measure, keep or discard. Change made: admit a row whose 
 the canonical `raw-upload.mp4` then `.webm` in storage, which doubles as the
 bytes-really-there check. Edit rows and admin-reprocess rows always carry a non-null non-raw
 key, so they stay excluded. Kept only if the metric above holds.
+
+## Owner order 2026-09-11 — cancel an upload mid-flight, and delete what was already sent
+
+SCOPE: The file-import upload (dashboard "Import file" and drag-drop) has no way to cancel.
+When the wrong file is picked, or an upload hangs, the owner must wait for it to finish or
+time out on its own. His words: "bazida xato yuklanish bo'lyapti shuni cancel qilish imkoni
+ham bo'lishi kk ko'p kutmaslik uchun va cancelda yuklangan qism ham o'chib ketishi kk" — a
+Cancel control, taking effect within a couple of seconds (not a network timeout), and on
+cancel the bytes already sent must be deleted, not left as an orphaned object or a stuck row.
+
+METRIC (script-computable, not a judgement call):
+1. New unit tests prove: cancelling a multipart upload calls `abortMultipartUpload` (which
+   issues the real S3 AbortMultipartUpload, releasing already-uploaded parts) and the created
+   video row is hard-deleted via `Videos.permanentlyDelete`, never left at `error`/`uploading`.
+   Cancelling the single-PUT path aborts the in-flight XHR immediately (not after any timeout)
+   and hard-deletes the row the same way.
+2. `tsc -b --force` exit 0; full suite at or above the pre-existing baseline, no regressions.
+3. Mutation-check: removing the abort-signal wiring must turn a cancellation test RED with a
+   value-level assertion (the xhr never actually aborts, or the delete action is never called).
+4. Safety pinned by a test: the new cancel action REFUSES on a video whose transcription has
+   already started or that already has a `processingStartedAt` marker — cancel can never reach
+   a real, finished-or-finishing recording, only a genuinely incomplete upload.
+
+DIRECTION: reuse what already exists rather than build twice — `uploadPartBlob` already
+accepts an `isCancelled` callback and throws `CancelledUploadError`, and the retry loop in
+`uploadBlobMultipart` already stops retrying and calls `abortMultipartUpload` on that error;
+none of it was ever wired to a real caller (a working tool with zero callers, the
+`feedback_unasserted_rule_is_not_a_rule` pattern). Add an `AbortSignal` parameter threaded
+through both upload paths (multipart and single-PUT), a new `cancelUpload` server action that
+calls the already-proven `Videos.permanentlyDelete` (same path `delete-account.ts` uses via
+`makeCurrentUserLayer`) rather than the Trash soft-delete — there is nothing worth keeping in
+Trash for an upload that never finished. Wire a Cancel button into the existing upload
+progress card, gated to the phases before server processing starts (once processing has
+begun, cancel is refused server-side anyway).

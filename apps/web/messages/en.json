@@ -197,7 +197,13 @@
 		"uploadTimeRemainingCapped": "6+ hours left",
 		"uploadTimeRemainingHoursMinutes": "~{hours}h {minutes}m left",
 		"uploadTimeRemainingMinutes": "~{minutes}m left",
-		"uploadTimeRemainingLessThanMinute": "Less than a minute left"
+		"uploadTimeRemainingLessThanMinute": "Less than a minute left",
+		"cancelUploadButton": "Cancel",
+		"cancelUploadConfirmTitle": "Cancel this upload?",
+		"cancelUploadConfirmDescription": "Whatever has already been uploaded will be deleted. This cannot be undone.",
+		"cancelUploadConfirmAction": "Yes, cancel it",
+		"cancelUploadConfirmCancel": "No",
+		"uploadCancelled": "Upload cancelled."
 	},
 	"auth": {
 		"signingIn": "Signing you in…",

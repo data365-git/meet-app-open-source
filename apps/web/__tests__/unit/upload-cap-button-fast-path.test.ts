@@ -89,6 +89,7 @@ vi.mock("@/app/(org)/dashboard/caps/UploadingContext", async () => {
 			setUploadStatus: (status: unknown) => {
 				store.setState((s) => ({ ...s, uploadStatus: status }));
 			},
+			setCancelHandler: () => {},
 		}),
 	};
 });
@@ -100,6 +101,9 @@ vi.mock("@/app/(org)/dashboard/caps/components/sendProgressUpdate", () => ({
 vi.mock("@/actions/video/create-for-processing", () => ({
 	createVideoForServerProcessing: createVideoMock,
 }));
+vi.mock("@/actions/video/cancel-upload", () => ({
+	cancelUpload: vi.fn(async () => ({ ok: true })),
+}));
 vi.mock("@/actions/video/mark-upload-failed", () => ({
 	markUploadFailed: vi.fn(async () => {}),
 }));
@@ -110,6 +114,7 @@ vi.mock("@/actions/videos/save-edits", () => ({
 	saveVideoEdits: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("@/utils/multipart-upload", () => ({
+	CancelledUploadError: class CancelledUploadError extends Error {},
 	MULTIPART_UPLOAD_THRESHOLD_BYTES: 50 * 1024 * 1024,
 	MultipartCompletionUncertainError: class MultipartCompletionUncertainError extends Error {},
 	uploadBlobMultipart: vi.fn(async () => ({ processingStarted: true })),
