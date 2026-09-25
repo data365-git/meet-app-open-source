@@ -5,7 +5,7 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 > **2026-09-25 ~21:20 — DEPLOYED `3b41198` (both GLM jobs shipped). Last point:**
 > - JOB B processed-marker `7e57210` (blind GLM review SHIP) + JOB A honest-ai-status `19d2338` (review FIX-FIRST -> 4 findings fixed by GLM: public summary-quota line no longer claims transcript failed, 402 w/o numbers no longer shows $0.00/$0.00, 2 dead-code items removed). Merged into qa-fixes; combined HEAD: typecheck 0, 193/193 test files green.
 > - Live: container Up on data365-web:3b41198, health db/storage ok, login 200, share page renders with no console errors (mobile). Rollback: `cd /opt/data365 && cp docker-compose.app.yml.bak-3b41198 docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` (-> 5a8b8ac).
-> - ccgg9nqjwmw8ehy had ended aiGenerationStatus=ERROR (free Gemini 429 + paid Gemini 503 at 13:32); re-queued 19:18 UTC via ERROR->PROCESSING + cron re-kick (`retried:1`). **NEXT: confirm ccgg summary COMPLETE.**
+> - ccgg9nqjwmw8ehy had ended aiGenerationStatus=ERROR (free Gemini 429 + paid Gemini 503 at 13:32); re-queued 19:18 UTC via ERROR->PROCESSING + cron re-kick (`retried:1`). ccgg summary COMPLETE (verified in DB + live page, Uzbek summary renders).
 > - GAP found live: spec state "S5 OTHER" (e.g. provider 503) was deliberately left as the bare "AI analysis failed. AI generation error." — contradicts the owner's "never a bare failure". Proposed follow-up (not built): an honest transient line + retry. Handoff flow now: Opus writes spec -> `glm-run.ps1 -Handoff` -> GLM blind review -> Opus spot-check -> commit/deploy.
 > - qa-fixes is ahead of origin (not pushed — push needs owner OK).
 
