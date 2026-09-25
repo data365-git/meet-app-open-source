@@ -304,6 +304,10 @@ describe("processVideoWorkflow — durable processedAt marker", () => {
 		expect(new Date(stamped).toISOString()).toBe(metadata.processedAt);
 		expect(stamped).toBeGreaterThanOrEqual(before - 1000);
 		expect(metadata.processingStage).toBeUndefined();
+		// The run's own life sign, written when it deleted the upload row.
+		expect(Date.parse(metadata.processingRunAt as string)).toBeGreaterThanOrEqual(
+			before - 1000,
+		);
 	});
 
 	it("writes metadata.processedAt on the benign optimize-skipped branch (raw kept playable)", async () => {

@@ -64,6 +64,20 @@ export async function processVideoWorkflow(
 		// FatalError-only edge case (video row missing / storage misconfigured),
 		// not the normal optimize-failure path, which was never surfaced via
 		// videoUploads either.
+		//
+		// Stamp `processingRunAt` BEFORE the row goes away: from the delete
+		// until ffmpeg's first progress tick nothing else says this run is
+		// alive, and the recover-stale-ai-jobs rowless pass would otherwise read
+		// a live run as a dead one and start a second (2026-09-25 review).
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.processingRunAt', ${new Date().toISOString()}
+				)`,
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
 		await db()
 			.delete(videoUploads)
 			.where(eq(videoUploads.videoId, videoId as Video.VideoId));

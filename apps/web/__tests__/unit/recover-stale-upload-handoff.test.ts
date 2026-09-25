@@ -9,7 +9,7 @@
  * with forceRestart, or leave the row completely alone, and how many), never
  * on a function having been called for its own sake.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
 	/** One entry per db() select, in call order; shifted as GET runs. */
@@ -23,6 +23,12 @@ const state = vi.hoisted(() => ({
 	contentLength: 165553362 as number | null,
 	/** When the head fails, was it a real 404 or an unreachable bucket? */
 	headFailure: "notfound" as "notfound" | "unreachable",
+	/** The edit source (source/original.mp4) — absent unless a test says so. */
+	editSource: "absent" as "absent" | "present" | "unreachable",
+	/** affectedRows the INSERT IGNORE claim reports (0 = a row already existed). */
+	insertAffected: 1,
+	/** Arguments of the LAST where() on a select — the stale-upload scan's. */
+	lastSelectWhere: [] as unknown[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -42,7 +48,10 @@ vi.mock("@cap/database", () => ({
 				promise.innerJoin = chain;
 				promise.leftJoin = chain;
 				promise.orderBy = chain;
-				promise.where = chain;
+				promise.where = (...args: unknown[]) => {
+					state.lastSelectWhere = args;
+					return chain();
+				};
 				promise.limit = chain;
 				return promise;
 			};
@@ -62,7 +71,7 @@ vi.mock("@cap/database", () => ({
 			ignore: () => ({
 				values: (arg: Record<string, unknown>) => {
 					state.inserts.push(arg);
-					return Promise.resolve([{ affectedRows: 1 }]);
+					return Promise.resolve([{ affectedRows: state.insertAffected }]);
 				},
 			}),
 		}),
@@ -77,6 +86,7 @@ vi.mock("@cap/database/schema", () => ({
 		metadata: "videos.metadata",
 		transcriptionStatus: "videos.transcriptionStatus",
 		deletedAt: "videos.deletedAt",
+		createdAt: "videos.createdAt",
 	},
 	videoUploads: {
 		videoId: "videoUploads.videoId",
@@ -96,6 +106,7 @@ vi.mock("drizzle-orm", () => ({
 	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	or: vi.fn((...args: unknown[]) => ({ or: args })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	gte: vi.fn((field: unknown, value: unknown) => ({ gte: field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 			strings,
@@ -148,8 +159,20 @@ vi.mock("@/lib/video-storage", async () => {
 		getStorageAccessForVideo: () =>
 			Effect.succeed([
 				{
-					headObject: () =>
-						state.contentLength === null
+					headObject: (key: string) =>
+						key.endsWith("/source/original.mp4")
+							? state.editSource === "present"
+								? Effect.succeed({ ContentLength: 1000 })
+								: Effect.fail(
+										state.editSource === "unreachable"
+											? Object.assign(new Error("connect ETIMEDOUT"), {
+													name: "TimeoutError",
+												})
+											: Object.assign(new Error("Object not found"), {
+													name: "NoSuchKey",
+												}),
+									)
+							: state.contentLength === null
 							? Effect.fail(
 									state.headFailure === "notfound"
 										? Object.assign(new Error("Object not found"), {
@@ -166,6 +189,9 @@ vi.mock("@/lib/video-storage", async () => {
 });
 
 const { GET } = await import("@/app/api/cron/recover-stale-ai-jobs/route");
+const { ROWLESS_UPLOAD_CUTOFF } = await import(
+	"@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers"
+);
 
 const CRON_SECRET = "test-cron-secret";
 
@@ -385,7 +411,18 @@ describe("recover-stale-ai-jobs — rowless lost upload (no video_uploads row)",
 		startVideoProcessingWorkflowMock.mockClear();
 		state.contentLength = 165553362;
 		state.headFailure = "notfound";
+		state.editSource = "absent";
+		state.insertAffected = 1;
+		state.lastSelectWhere = [];
 		process.env.CRON_SECRET = CRON_SECRET;
+		// Two hours past the deploy cutoff, whatever the real clock says, so
+		// these pins survive the cutoff being moved to the real deploy time.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(ROWLESS_UPLOAD_CUTOFF.getTime() + 2 * HOUR_MS);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("rowless + no processedAt + after the cutoff + raw object present → relaunched through a recreated upload row", async () => {
@@ -443,7 +480,7 @@ describe("recover-stale-ai-jobs — rowless lost upload (no video_uploads row)",
 
 	it("a video created BEFORE the marker cutoff is left untouched", async () => {
 		const row = rowlessRow();
-		row.video.createdAt = new Date("2026-09-24T23:00:00Z");
+		row.video.createdAt = new Date(ROWLESS_UPLOAD_CUTOFF.getTime() - 60 * 1000);
 		armStaleUploadRows([row]);
 		expectUntouched((await runCron()).body);
 	});
@@ -494,5 +531,90 @@ describe("recover-stale-ai-jobs — rowless lost upload (no video_uploads row)",
 		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledTimes(3);
 		expect(body.staleUploadRelaunched).toBe(2);
 		expect(body.staleUploadRowlessRelaunched).toBe(1);
+	});
+});
+
+describe("recover-stale-ai-jobs — rowless pass: review fixes (2026-09-25)", () => {
+	beforeEach(() => {
+		state.selectResults = [];
+		state.updateCalls = 0;
+		state.setArgs = [];
+		state.inserts = [];
+		startVideoProcessingWorkflowMock.mockClear();
+		state.contentLength = 165553362;
+		state.headFailure = "notfound";
+		state.editSource = "absent";
+		state.insertAffected = 1;
+		state.lastSelectWhere = [];
+		process.env.CRON_SECRET = CRON_SECRET;
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(ROWLESS_UPLOAD_CUTOFF.getTime() + 2 * HOUR_MS);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function expectNoRelaunch(body: Record<string, unknown>) {
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		expect(body.staleUploadRowlessRelaunched).toBe(0);
+	}
+
+	it("an EDITED video (source/original.mp4 present) is never relaunched from its pre-edit raw", async () => {
+		state.editSource = "present";
+		armStaleUploadRows([rowlessRow()]);
+		const { body } = await runCron();
+
+		expectNoRelaunch(body);
+		expect(state.inserts).toEqual([]);
+		expect(state.updateCalls).toBe(0);
+	});
+
+	it("when the edit-source probe cannot reach storage, nothing is relaunched", async () => {
+		state.editSource = "unreachable";
+		armStaleUploadRows([rowlessRow()]);
+		const { body } = await runCron();
+
+		expectNoRelaunch(body);
+		expect(state.inserts).toEqual([]);
+		expect(state.updateCalls).toBe(0);
+	});
+
+	it("a live run that just deleted its row (fresh processingRunAt, no progress yet) is left untouched", async () => {
+		const row = rowlessRow();
+		row.video.metadata.processingRunAt = new Date(
+			Date.now() - 60 * 1000,
+		).toISOString();
+		armStaleUploadRows([row]);
+		const { body } = await runCron();
+
+		expectNoRelaunch(body);
+		expect(state.inserts).toEqual([]);
+		expect(state.updateCalls).toBe(0);
+	});
+
+	it("when the INSERT IGNORE claim affects 0 rows (a row appeared meanwhile), nothing is launched", async () => {
+		state.insertAffected = 0;
+		armStaleUploadRows([rowlessRow()]);
+		const { body } = await runCron();
+
+		expect(state.inserts).toHaveLength(1);
+		expectNoRelaunch(body);
+	});
+
+	it("the scan SQL carries every rowless predicate", async () => {
+		armStaleUploadRows([]);
+		await runCron();
+
+		// Dates serialise to their ISO string.
+		const flat = JSON.stringify(state.lastSelectWhere);
+		expect(flat).toContain('{"isNull":"videoUploads.videoId"}');
+		expect(flat).toContain('{"isNull":"videos.transcriptionStatus"}');
+		expect(flat).toContain("$.processedAt') IS NULL");
+		expect(flat).toContain(
+			`{"gte":"videos.createdAt","value":"${ROWLESS_UPLOAD_CUTOFF.toISOString()}"}`,
+		);
+		expect(flat).toContain("$.processingRunAt");
+		expect(flat).toContain("$.rowlessRelaunchAttempts') AS UNSIGNED), 0) < ");
 	});
 });

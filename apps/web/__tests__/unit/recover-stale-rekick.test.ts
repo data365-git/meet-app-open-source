@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
 	selectCall: 0,
 	setCalls: [] as Array<Record<string, unknown>>,
 	whereArgs: [] as unknown[][],
+	/** where() arguments of each update, index-aligned with setCalls. */
+	updateWheres: [] as unknown[][],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -47,7 +49,12 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (arg: Record<string, unknown>) => {
 				state.setCalls.push(arg);
-				return { where: () => Promise.resolve() };
+				return {
+					where: (...args: unknown[]) => {
+						state.updateWheres.push(args);
+						return Promise.resolve([{ affectedRows: 1 }]);
+					},
+				};
 			},
 		}),
 	}),
@@ -80,6 +87,7 @@ vi.mock("drizzle-orm", () => ({
 	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	or: vi.fn((...args: unknown[]) => ({ or: args })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	gte: vi.fn((field: unknown, value: unknown) => ({ gte: field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 			strings,
@@ -391,6 +399,7 @@ describe("recover-stale-ai-jobs quota re-kick — a refused start must stay reco
 		state.selectCall = 0;
 		state.setCalls = [];
 		state.whereArgs = [];
+		state.updateWheres = [];
 		process.env.CRON_SECRET = CRON_SECRET;
 	});
 
@@ -447,6 +456,12 @@ describe("recover-stale-ai-jobs quota re-kick — a refused start must stay reco
 
 		expect(transcribeVideoMock).toHaveBeenCalledTimes(1);
 		expect(restoredQuotaWrites()).toHaveLength(1);
+		// The restore is guarded on the row STILL being ERROR, so a concurrent
+		// claim (PROCESSING) is never stomped with a stale QUOTA code.
+		const restoreIndex = state.setCalls.indexOf(restoredQuotaWrites()[0] as Record<string, unknown>);
+		expect(JSON.stringify(state.updateWheres[restoreIndex])).toContain(
+			'{"field":"videos.transcriptionStatus","value":"ERROR"}',
+		);
 		const booked = state.setCalls.find(
 			(setArg) =>
 				(setArg.metadata as { quotaRetryAttempts?: number } | undefined)

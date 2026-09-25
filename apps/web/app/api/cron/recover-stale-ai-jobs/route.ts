@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
 import { Effect, Schedule } from "effect";
 import { NextResponse } from "next/server";
 import { getAffectedRows } from "@/lib/affected-rows";
@@ -19,6 +19,7 @@ import {
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
 	MAX_QUOTA_RETRY_ATTEMPTS,
+	ROWLESS_UPLOAD_CUTOFF,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
 	withIncrementedAutoRecoverAttempts,
@@ -75,8 +76,8 @@ type StaleUploadCandidate = {
 // HARD CUTOFF: rows created before the marker existed have NO processedAt, so
 // every one of them — healthy or not — would look unprocessed and be
 // re-encoded. Only rows created on/after this instant are admitted. It must
-// not be earlier than the deploy that ships the marker writers.
-const ROWLESS_UPLOAD_CUTOFF = new Date("2026-09-25T00:00:00Z");
+// not be earlier than the deploy that ships the marker writers — the constant
+// (ROWLESS_UPLOAD_CUTOFF, stale-job-helpers.ts) is set to the deploy time.
 // Per-video relaunch budget for the rowless shape: a video whose processing
 // fails terminally every time (storage misconfigured, corrupt source) would
 // otherwise be relaunched on every tick and hold a shared relaunch slot forever.
@@ -84,9 +85,11 @@ const MAX_ROWLESS_RELAUNCH_ATTEMPTS = 2;
 
 // The JS twin of the rowless SQL predicate, re-checked on the row we actually
 // hold (same belt-and-suspenders law as the freshness re-check below).
-// Staleness is measured from the LATEST sign of life: creation, the optimize
-// progress heartbeat (a live run re-stamps processingUpdatedAt), and our own
-// previous relaunch — so a relaunch still starting up is never relaunched again.
+// Staleness is measured from the LATEST sign of life: creation, the moment a
+// processing run deleted its row (processingRunAt — covers the gap before
+// ffmpeg's first progress tick), the optimize progress heartbeat
+// (processingUpdatedAt), and our own previous relaunch — so a live run, or a
+// relaunch still starting up, is never relaunched again.
 function isRowlessRelaunchCandidate(
 	video: typeof videos.$inferSelect,
 	staleBefore: Date,
@@ -100,6 +103,7 @@ function isRowlessRelaunchCandidate(
 	if (attempts >= MAX_ROWLESS_RELAUNCH_ATTEMPTS) return false;
 	const lifeSigns = [
 		video.createdAt.getTime(),
+		Date.parse(String(extra.processingRunAt ?? "")),
 		Date.parse(String(extra.processingUpdatedAt ?? "")),
 		Date.parse(String(extra.rowlessRelaunchAt ?? "")),
 	].filter((ms) => Number.isFinite(ms));
@@ -500,11 +504,16 @@ export async function GET(request: Request) {
 				.update(videos)
 				.set({ metadata: nextMetadata })
 				.where(eq(videos.id, candidate.id));
+			// reclaimProcessing = FALSE: this loop only ever restarts an ERROR row.
+			// With the PROCESSING arm, a user Retry landing between the SELECT and
+			// the claim would be re-claimed in place and double-started. The
+			// ERROR/NULL arm is unchanged, so the quota semantics are too.
 			const result = await transcribeVideo(
 				candidate.id,
 				candidate.ownerId,
 				true,
 				true,
+				false,
 			);
 			// success:false ("AI budget exceeded", no key, launch failure) and
 			// UPLOAD_IN_PROGRESS all return having launched nothing, with the row
@@ -527,7 +536,7 @@ export async function GET(request: Request) {
 		// waits for its slot instead of firing every tick. Conditional on the
 		// row still being ERROR, so a concurrent claim is never stomped.
 		try {
-			await db()
+			const restore = await db()
 				.update(videos)
 				.set({
 					metadata: sql`JSON_SET(
@@ -544,7 +553,9 @@ export async function GET(request: Request) {
 						eq(videos.transcriptionStatus, "ERROR"),
 					),
 				);
-			quotaRetryBlocked++;
+			// Count only a restore that landed (a concurrent claim moved the row
+			// off ERROR otherwise).
+			if (getAffectedRows(restore) > 0) quotaRetryBlocked++;
 		} catch (error) {
 			console.error(
 				`[recover-stale-ai-jobs] Failed to restore the QUOTA code for video ${candidate.id}:`,
@@ -717,9 +728,10 @@ export async function GET(request: Request) {
 						isNull(videoUploads.videoId),
 						isNull(videos.transcriptionStatus),
 						sql`JSON_EXTRACT(${videos.metadata}, '$.processedAt') IS NULL`,
-						sql`${videos.createdAt} >= ${ROWLESS_UPLOAD_CUTOFF}`,
+						gte(videos.createdAt, ROWLESS_UPLOAD_CUTOFF),
 						lte(videos.createdAt, staleUploadBefore),
 						sql`GREATEST(
+							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingRunAt')), ''),
 							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingUpdatedAt')), ''),
 							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.rowlessRelaunchAt')), '')
 						) <= ${staleUploadBefore.toISOString()}`,
@@ -745,6 +757,15 @@ export async function GET(request: Request) {
 			break;
 		if (!upload) {
 			if (!isRowlessRelaunchCandidate(video, staleUploadBefore)) continue;
+			// An EDITED video keeps its pre-edit raw-upload.* (save-edits.ts copies
+			// it to source/original.mp4 and never deletes it): relaunching from
+			// that raw would silently undo the trim. Only a plain "no edit source"
+			// may proceed — "unknown" waits, like every probe in this pass.
+			const editSource = await probeRawObject(
+				video,
+				`${video.ownerId}/${video.id}/source/original.mp4`,
+			);
+			if (editSource !== "absent") continue;
 			const resolvedRowless = await resolveRawUploadKey(video, null);
 			if (resolvedRowless.status === "unknown") continue;
 			if (resolvedRowless.status === "absent") {

@@ -36,6 +36,8 @@ const H = vi.hoisted(() => ({
 	),
 	revalidatePath: vi.fn(),
 	getStorageAccessForVideo: vi.fn(),
+	/** Keys every metadata JSON_SET wrote, in call order. */
+	jsonSetKeys: [] as string[],
 }));
 
 function makeBucket() {
@@ -92,6 +94,18 @@ vi.mock("@cap/database", () => ({
 				where: async () => (H.video ? [H.video] : []),
 			}),
 		}),
+		update: () => ({
+			set: (values: { metadata?: { sql?: string } }) => ({
+				where: async () => {
+					for (const m of (values.metadata?.sql ?? "").matchAll(
+						/'\$\.([A-Za-z0-9_]+)'/g,
+					)) {
+						H.jsonSetKeys.push(m[1] as string);
+					}
+					return [{ affectedRows: 1 }];
+				},
+			}),
+		}),
 	}),
 }));
 vi.mock("@cap/database/auth/session", () => ({
@@ -102,6 +116,10 @@ vi.mock("@cap/database/schema", () => ({
 }));
 vi.mock("drizzle-orm", () => ({
 	eq: (f: unknown, v: unknown) => ({ f, v }),
+	sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+		sql: strings.join("?"),
+		values,
+	}),
 }));
 vi.mock("next/cache", () => ({
 	revalidatePath: (path: string) => H.revalidatePath(path),
@@ -146,6 +164,7 @@ beforeEach(() => {
 		) => patch({}),
 	);
 	H.revalidatePath.mockReset();
+	H.jsonSetKeys = [];
 	H.getStorageAccessForVideo
 		.mockReset()
 		.mockImplementation(() => ({ pipe: () => Promise.resolve([makeBucket()]) }));
@@ -253,6 +272,9 @@ describe("replaceVideoWithAudio", () => {
 		});
 
 		expect(H.revalidatePath).toHaveBeenCalledWith(`/s/${VIDEO_ID}`);
+		// Durable success marker, written BEFORE the reclaim delete, so a failed
+		// delete can never leave a marker-less raw for the rowless recovery pass.
+		expect(H.jsonSetKeys).toEqual(["processedAt"]);
 	});
 
 	it("5. SAFETY: verify failure after put means deleteObject is NEVER called", async () => {
@@ -272,6 +294,7 @@ describe("replaceVideoWithAudio", () => {
 		// the raw upload (still the only real copy) survives.
 		expect(H.deleteObjectCalls).toHaveLength(0);
 		expect(H.patchVideoMetadata).not.toHaveBeenCalled();
+		expect(H.jsonSetKeys).toEqual([]);
 	});
 
 	it("6. extraction failure -> extract_failed, no put, no delete", async () => {

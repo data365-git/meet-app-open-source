@@ -274,6 +274,7 @@ vi.mock("drizzle-orm", () => ({
 	isNull: vi.fn((field: unknown) => ({ isNull: field })),
 	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	gte: vi.fn((field: unknown, value: unknown) => ({ gte: field, value })),
 	or: vi.fn((...args: unknown[]) => args),
 	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 		sql: strings.join("?"),
@@ -707,9 +708,15 @@ describe("AI request made while the upload is still processing", () => {
 		// "Only transcript" redeems OFF, "Full AI analysis" redeems ON (the two
 		// behavior tests above prove the outcomes; this pins the wiring). The
 		// invariant this test directly guards is the 5th arg, reclaimProcessing.
-		const pendingCall = src.match(
-			/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*(\w+),\s*true,\s*(\w+)\s*,?\s*\)/,
-		);
+		// The quota loop now also passes an explicit 5th argument, so pick the
+		// pending starter's call out of every match by its 3rd argument.
+		const pendingCalls = [
+			...src.matchAll(
+				/transcribeVideo\(\s*candidate\.id,\s*candidate\.ownerId,\s*(\w+),\s*true,\s*(\w+)\s*,?\s*\)/g,
+			),
+		].filter((match) => match[1] === "wantsFullAnalysis");
+		expect(pendingCalls).toHaveLength(1);
+		const pendingCall = pendingCalls[0] ?? null;
 		expect(
 			pendingCall,
 			"the pending-request start must pass aiGenerationEnabled and reclaimProcessing explicitly",

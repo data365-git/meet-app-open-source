@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { extractAudioForDownload } from "@/lib/audio-extract";
 import { runPromise } from "@/lib/server";
@@ -119,6 +119,21 @@ export async function replaceVideoWithAudio(
 		verified = false;
 	}
 	if (!verified) return { ok: false, reason: "verify_failed" };
+
+	// Durable `metadata.processedAt` success marker (see process-video.ts's
+	// markProcessingFinished), written BEFORE the best-effort reclaim below: a
+	// raw-upload.* whose delete fails must not let the recover-stale-ai-jobs
+	// rowless pass re-encode the old video over this audio. JSON_SET, never a
+	// whole-object overwrite.
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
+		.where(eq(videos.id, videoId as typeof videos.$inferSelect.id));
 
 	const reclaimedFrom: string[] = [];
 	for (const name of RECLAIM_CANDIDATE_NAMES) {
