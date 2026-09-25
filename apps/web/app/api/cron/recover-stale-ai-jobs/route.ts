@@ -61,8 +61,50 @@ type StaleRefinementCandidate = {
 
 type StaleUploadCandidate = {
 	video: typeof videos.$inferSelect;
-	upload: typeof videoUploads.$inferSelect;
+	// NULL = the rowless shape (LEFT JOIN found no video_uploads row).
+	upload: typeof videoUploads.$inferSelect | null;
 };
+
+// The ROWLESS lost upload (prod 2026-09-25): processVideoWorkflow deletes the
+// video_uploads row as its FIRST step, so a run that dies right after leaves
+// no row, transcriptionStatus NULL and a complete raw-upload.* — invisible to
+// the row-based pass. `metadata.processedAt` (written as the last step of every
+// finished run, and by a finished Loom import) is what separates that from a
+// healthy video waiting for its analyse press.
+//
+// HARD CUTOFF: rows created before the marker existed have NO processedAt, so
+// every one of them — healthy or not — would look unprocessed and be
+// re-encoded. Only rows created on/after this instant are admitted. It must
+// not be earlier than the deploy that ships the marker writers.
+const ROWLESS_UPLOAD_CUTOFF = new Date("2026-09-25T00:00:00Z");
+// Per-video relaunch budget for the rowless shape: a video whose processing
+// fails terminally every time (storage misconfigured, corrupt source) would
+// otherwise be relaunched on every tick and hold a shared relaunch slot forever.
+const MAX_ROWLESS_RELAUNCH_ATTEMPTS = 2;
+
+// The JS twin of the rowless SQL predicate, re-checked on the row we actually
+// hold (same belt-and-suspenders law as the freshness re-check below).
+// Staleness is measured from the LATEST sign of life: creation, the optimize
+// progress heartbeat (a live run re-stamps processingUpdatedAt), and our own
+// previous relaunch — so a relaunch still starting up is never relaunched again.
+function isRowlessRelaunchCandidate(
+	video: typeof videos.$inferSelect,
+	staleBefore: Date,
+): boolean {
+	const extra = (video.metadata ?? {}) as Record<string, unknown>;
+	if (video.deletedAt) return false;
+	if (video.transcriptionStatus !== null) return false;
+	if (extra.processedAt) return false;
+	if (video.createdAt.getTime() < ROWLESS_UPLOAD_CUTOFF.getTime()) return false;
+	const attempts = Number(extra.rowlessRelaunchAttempts ?? 0);
+	if (attempts >= MAX_ROWLESS_RELAUNCH_ATTEMPTS) return false;
+	const lifeSigns = [
+		video.createdAt.getTime(),
+		Date.parse(String(extra.processingUpdatedAt ?? "")),
+		Date.parse(String(extra.rowlessRelaunchAt ?? "")),
+	].filter((ms) => Number.isFinite(ms));
+	return Math.max(...lifeSigns) <= staleBefore.getTime();
+}
 
 // How many stale rows to LOOK at per tick. Deliberately much larger than the
 // number we may relaunch: most candidates are cheap to reject (a storage HEAD),
@@ -368,12 +410,18 @@ export async function GET(request: Request) {
 	let skippedForBatch = 0;
 	let skippedAlive = 0;
 	let quotaRetried = 0;
+	// Quota re-kicks whose transcribeVideo launched nothing (budget, no key,
+	// launch failure) — the QUOTA code is restored so they retry later.
+	let quotaRetryBlocked = 0;
 	let refinementReset = 0;
 	let pendingRequestStarted = 0;
 	let staleUploadRelaunched = 0;
 	// Rows retired because their object never appeared - reported so a spike is
 	// visible instead of silent.
 	let staleUploadRetired = 0;
+	// Rowless lost uploads relaunched (see ROWLESS_UPLOAD_CUTOFF). Shares
+	// STALE_UPLOAD_RELAUNCH_LIMIT with staleUploadRelaunched.
+	let staleUploadRowlessRelaunched = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -439,6 +487,7 @@ export async function GET(request: Request) {
 	for (const candidate of quotaBlockedCandidates) {
 		const metadata = candidate.metadata ?? {};
 		if (!shouldRetryQuotaBlocked(metadata, now)) continue;
+		let started = false;
 		try {
 			const nextMetadata: VideoMetadata = {
 				...withQuotaRetryScheduled(metadata, now),
@@ -451,11 +500,54 @@ export async function GET(request: Request) {
 				.update(videos)
 				.set({ metadata: nextMetadata })
 				.where(eq(videos.id, candidate.id));
-			await transcribeVideo(candidate.id, candidate.ownerId, true, true);
-			quotaRetried++;
+			const result = await transcribeVideo(
+				candidate.id,
+				candidate.ownerId,
+				true,
+				true,
+			);
+			// success:false ("AI budget exceeded", no key, launch failure) and
+			// UPLOAD_IN_PROGRESS all return having launched nothing, with the row
+			// still at ERROR (same refusal set as the pending-request loop below).
+			started = result.success && result.code !== "UPLOAD_IN_PROGRESS";
 		} catch (error) {
 			console.error(
 				`[recover-stale-ai-jobs] Failed to retry quota-blocked video ${candidate.id}:`,
+				error,
+			);
+		}
+		if (started) {
+			quotaRetried++;
+			continue;
+		}
+		// Nothing started: put the QUOTA code back. The write above removed it,
+		// and an ERROR row with no code matches NO recovery query — prod
+		// 2026-09-25, three rows left that way by "AI budget exceeded". The
+		// booked backoff (quotaRetryAttempts/NextAt) is kept, so the next try
+		// waits for its slot instead of firing every tick. Conditional on the
+		// row still being ERROR, so a concurrent claim is never stomped.
+		try {
+			await db()
+				.update(videos)
+				.set({
+					metadata: sql`JSON_SET(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.transcriptionError', CAST(${JSON.stringify({
+							...metadata.transcriptionError,
+							code: "QUOTA",
+						})} AS JSON)
+					)`,
+				})
+				.where(
+					and(
+						eq(videos.id, candidate.id),
+						eq(videos.transcriptionStatus, "ERROR"),
+					),
+				);
+			quotaRetryBlocked++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to restore the QUOTA code for video ${candidate.id}:`,
 				error,
 			);
 		}
@@ -589,41 +681,161 @@ export async function GET(request: Request) {
 	const staleUploadCandidates: StaleUploadCandidate[] = await db()
 		.select({ video: videos, upload: videoUploads })
 		.from(videos)
-		.innerJoin(videoUploads, eq(videoUploads.videoId, videos.id))
+		// LEFT JOIN: the second arm below admits the ROWLESS shape.
+		.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 		.where(
 			and(
 				isNull(videos.deletedAt),
-				inArray(videoUploads.phase, ["uploading", "processing"]),
-				lte(videoUploads.updatedAt, staleUploadBefore),
-				// MEASURED ON PRODUCTION 2026-09-10, and it decides this query:
-				// the real stuck rows carry `raw_file_key IS NULL` AND
-				// `mode IS NULL` — including the two from the incident this pass
-				// exists for. An earlier version required the column to be set
-				// and would therefore have recovered NOTHING, which is the same
-				// mistake as the marker the old cron keyed on: a condition only
-				// the successful path fills in.
-				//
-				// So: admit a row whose key is EMPTY (we derive the canonical
-				// one below), and otherwise only a key the upload-completion
-				// routes wrote. An edit row carries
-				// `<owner>/<video>/source/original.mp4` and an admin-reprocess
-				// row carries `result.mp4`; relaunching either would re-encode
-				// the PRE-EDIT original — silently reverting a user's trim — or
-				// re-encode result.mp4 onto itself. Both always have a non-null
-				// key, so this predicate keeps excluding them.
 				or(
-					isNull(videoUploads.rawFileKey),
-					like(videoUploads.rawFileKey, "%/raw-upload.%"),
+					and(
+						inArray(videoUploads.phase, ["uploading", "processing"]),
+						lte(videoUploads.updatedAt, staleUploadBefore),
+						// MEASURED ON PRODUCTION 2026-09-10, and it decides this query:
+						// the real stuck rows carry `raw_file_key IS NULL` AND
+						// `mode IS NULL` — including the two from the incident this pass
+						// exists for. An earlier version required the column to be set
+						// and would therefore have recovered NOTHING, which is the same
+						// mistake as the marker the old cron keyed on: a condition only
+						// the successful path fills in.
+						//
+						// So: admit a row whose key is EMPTY (we derive the canonical
+						// one below), and otherwise only a key the upload-completion
+						// routes wrote. An edit row carries
+						// `<owner>/<video>/source/original.mp4` and an admin-reprocess
+						// row carries `result.mp4`; relaunching either would re-encode
+						// the PRE-EDIT original — silently reverting a user's trim — or
+						// re-encode result.mp4 onto itself. Both always have a non-null
+						// key, so this predicate keeps excluding them.
+						or(
+							isNull(videoUploads.rawFileKey),
+							like(videoUploads.rawFileKey, "%/raw-upload.%"),
+						),
+					),
+					// ROWLESS arm — see ROWLESS_UPLOAD_CUTOFF and
+					// isRowlessRelaunchCandidate, its JS twin.
+					and(
+						isNull(videoUploads.videoId),
+						isNull(videos.transcriptionStatus),
+						sql`JSON_EXTRACT(${videos.metadata}, '$.processedAt') IS NULL`,
+						sql`${videos.createdAt} >= ${ROWLESS_UPLOAD_CUTOFF}`,
+						lte(videos.createdAt, staleUploadBefore),
+						sql`GREATEST(
+							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingUpdatedAt')), ''),
+							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.rowlessRelaunchAt')), '')
+						) <= ${staleUploadBefore.toISOString()}`,
+						sql`COALESCE(CAST(JSON_EXTRACT(${videos.metadata}, '$.rowlessRelaunchAttempts') AS UNSIGNED), 0) < ${MAX_ROWLESS_RELAUNCH_ATTEMPTS}`,
+					),
 				),
 			),
 		)
+		// Row-backed candidates first, so rowless ones can never crowd them out
+		// of the scan window.
+		.orderBy(sql`${videoUploads.videoId} IS NULL`)
 		.limit(STALE_UPLOAD_SCAN_LIMIT);
 
 	for (const candidate of staleUploadCandidates) {
 		const { video, upload } = candidate;
 		// Hard cap mirroring the SQL LIMIT, so a future edit of that query can
 		// never fan inline ffmpeg launches wider than the neighbouring loops.
-		if (staleUploadRelaunched >= STALE_UPLOAD_RELAUNCH_LIMIT) break;
+		// The cap is SHARED by both shapes: every relaunch runs ffmpeg inline.
+		if (
+			staleUploadRelaunched + staleUploadRowlessRelaunched >=
+			STALE_UPLOAD_RELAUNCH_LIMIT
+		)
+			break;
+		if (!upload) {
+			if (!isRowlessRelaunchCandidate(video, staleUploadBefore)) continue;
+			const resolvedRowless = await resolveRawUploadKey(video, null);
+			if (resolvedRowless.status === "unknown") continue;
+			if (resolvedRowless.status === "absent") {
+				// No canonical raw-upload object: the instant-recording/extension
+				// paths use result.mp4 as their raw, and a reclaimed raw never
+				// returns — there is nothing to relaunch from, ever. Spend the
+				// budget so the row leaves the scan instead of costing a probe on
+				// every tick.
+				try {
+					await db()
+						.update(videos)
+						.set({
+							metadata: sql`JSON_SET(
+								COALESCE(${videos.metadata}, JSON_OBJECT()),
+								'$.rowlessRelaunchAttempts', ${MAX_ROWLESS_RELAUNCH_ATTEMPTS}
+							)`,
+						})
+						.where(eq(videos.id, video.id));
+				} catch (error) {
+					console.error(
+						`[recover-stale-ai-jobs] Failed to retire the rowless candidate ${video.id}:`,
+						error,
+					);
+				}
+				continue;
+			}
+			// Book the attempt BEFORE claiming or launching, so a launch that
+			// keeps dying is bounded by MAX_ROWLESS_RELAUNCH_ATTEMPTS. The
+			// relaunch time restarts the staleness clock, so a run still starting
+			// up is not relaunched again next tick.
+			try {
+				await db()
+					.update(videos)
+					.set({
+						metadata: sql`JSON_SET(
+							COALESCE(${videos.metadata}, JSON_OBJECT()),
+							'$.rowlessRelaunchAttempts',
+							COALESCE(CAST(JSON_EXTRACT(${videos.metadata}, '$.rowlessRelaunchAttempts') AS UNSIGNED), 0) + 1,
+							'$.rowlessRelaunchAt', ${new Date().toISOString()}
+						)`,
+					})
+					.where(eq(videos.id, video.id));
+			} catch (error) {
+				console.error(
+					`[recover-stale-ai-jobs] Failed to book the rowless relaunch for video ${video.id}:`,
+					error,
+				);
+				continue;
+			}
+			// CLAIM by recreating the upload row startVideoProcessingWorkflow
+			// requires ("No upload record found" otherwise). INSERT IGNORE: if a
+			// row appeared since the SELECT, somebody else owns this video.
+			let rowlessClaimed = false;
+			try {
+				const claim = await db()
+					.insert(videoUploads)
+					.ignore()
+					.values({
+						videoId: video.id,
+						phase: "processing",
+						processingMessage: "Recovering...",
+						rawFileKey: resolvedRowless.key,
+						updatedAt: new Date(),
+					});
+				rowlessClaimed = getAffectedRows(claim) > 0;
+			} catch (error) {
+				console.error(
+					`[recover-stale-ai-jobs] Failed to recreate the upload row for video ${video.id}:`,
+					error,
+				);
+			}
+			if (!rowlessClaimed) continue;
+			try {
+				await startVideoProcessingWorkflow({
+					videoId: video.id,
+					userId: video.ownerId,
+					rawFileKey: resolvedRowless.key,
+					bucketId: video.bucket,
+					processingMessage: "Recovering video processing...",
+					startFailureMessage: "Video processing could not be recovered.",
+					forceRestart: true,
+				});
+				staleUploadRowlessRelaunched++;
+			} catch (error) {
+				console.error(
+					`[recover-stale-ai-jobs] Failed to relaunch rowless processing for video ${video.id}:`,
+					error,
+				);
+			}
+			continue;
+		}
 		// Freshness re-check in JS on the row we actually hold (same law as the
 		// transcription loop above): never relaunch an upload that is still
 		// visibly landing bytes.
@@ -779,9 +991,11 @@ export async function GET(request: Request) {
 		skippedForBatch,
 		skippedAlive,
 		quotaRetried,
+		quotaRetryBlocked,
 		refinementReset,
 		pendingRequestStarted,
 		staleUploadRelaunched,
 		staleUploadRetired,
+		staleUploadRowlessRelaunched,
 	});
 }

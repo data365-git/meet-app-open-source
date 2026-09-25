@@ -131,14 +131,22 @@ vi.mock("@cap/database", () => ({
 
 				// videos
 				let joined = false;
+				// The recovery cron's stale-upload pass LEFT-joins video_uploads
+				// onto videos; no fixture here is a lost hand-off (row-backed or
+				// rowless), so it must match nothing.
+				const staleUploadScan = {
+					where: () => ({
+						orderBy: () => ({
+							limit: () => Promise.resolve([]),
+						}),
+					}),
+				};
 				const query = {
-					leftJoin: () => {
+					leftJoin: (joinedTable: unknown) => {
+						if (joinedTable === schemaMocks.videoUploads) return staleUploadScan;
 						joined = true;
 						return query;
 					},
-					// The recovery cron's stale-upload pass inner-joins video_uploads
-					// onto videos; no fixture here is a lost hand-off, so it must
-					// match nothing.
 					innerJoin: () => ({
 						where: () => ({
 							limit: () => Promise.resolve([]),
