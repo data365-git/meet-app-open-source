@@ -203,7 +203,8 @@
 		"cancelUploadConfirmDescription": "Whatever has already been uploaded will be deleted. This cannot be undone.",
 		"cancelUploadConfirmAction": "Yes, cancel it",
 		"cancelUploadConfirmCancel": "No",
-		"uploadCancelled": "Upload cancelled."
+		"uploadCancelled": "Upload cancelled.",
+		"cancelUploadFailed": "Could not cancel the upload. Please try again."
 	},
 	"auth": {
 		"signingIn": "Signing you in…",

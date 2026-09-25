@@ -203,7 +203,8 @@
 		"cancelUploadConfirmDescription": "Уже загруженная часть будет удалена. Это необратимо.",
 		"cancelUploadConfirmAction": "Да, отменить",
 		"cancelUploadConfirmCancel": "Нет",
-		"uploadCancelled": "Загрузка отменена."
+		"uploadCancelled": "Загрузка отменена.",
+		"cancelUploadFailed": "Не удалось отменить загрузку. Попробуйте ещё раз."
 	},
 	"auth": {
 		"signingIn": "Выполняется вход…",

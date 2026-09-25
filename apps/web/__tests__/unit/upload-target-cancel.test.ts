@@ -16,12 +16,16 @@ import { uploadWithTarget } from "@/utils/upload-target";
 type UploadOutcome =
 	| { type: "success"; status?: number }
 	| { type: "network-error" }
-	| { type: "pending" };
+	| { type: "pending" }
+	// Pending until aborted, then surfaces a plain network error instead of an
+	// abort — a flaky connection racing the user's cancel.
+	| { type: "network-error-on-abort" };
 
 class MockXMLHttpRequest {
 	static outcomes: UploadOutcome[] = [];
 	static abortedCount = 0;
 	static sendCount = 0;
+	private errorOnAbort = false;
 
 	upload = {
 		onprogress: null as ((event: ProgressEvent<EventTarget>) => void) | null,
@@ -56,6 +60,10 @@ class MockXMLHttpRequest {
 		} as ProgressEvent<EventTarget>);
 
 		if (outcome.type === "pending") return;
+		if (outcome.type === "network-error-on-abort") {
+			this.errorOnAbort = true;
+			return;
+		}
 		if (outcome.type === "network-error") {
 			this.completed = true;
 			this.onerror?.();
@@ -70,6 +78,10 @@ class MockXMLHttpRequest {
 		if (this.completed) return;
 		this.completed = true;
 		MockXMLHttpRequest.abortedCount += 1;
+		if (this.errorOnAbort) {
+			this.onerror?.();
+			return;
+		}
 		this.onabort?.();
 	}
 }
@@ -93,6 +105,7 @@ describe("uploadWithTarget — cancellation", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it("aborts the in-flight request immediately and rejects with CancelledUploadError", async () => {
@@ -147,6 +160,33 @@ describe("uploadWithTarget — cancellation", () => {
 				signal: controller.signal,
 			}),
 		).rejects.toBeInstanceOf(CancelledUploadError);
+	});
+
+	it("a network error surfacing after the cancel on the last attempt still rejects with CancelledUploadError", async () => {
+		vi.useFakeTimers();
+		// Two retryable failures use up the retries; the final attempt is in
+		// flight when the user cancels and reports a network error, not an abort.
+		MockXMLHttpRequest.setOutcomes([
+			{ type: "network-error" },
+			{ type: "network-error" },
+			{ type: "network-error-on-abort" },
+		]);
+		const controller = new AbortController();
+
+		const resultPromise = uploadWithTarget({
+			target: putTarget,
+			body: new Blob(["x"]),
+			signal: controller.signal,
+		});
+		const settled = resultPromise.catch((error: unknown) => error);
+
+		while (MockXMLHttpRequest.outcomes.length > 0) {
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		controller.abort();
+
+		expect(await settled).toBeInstanceOf(CancelledUploadError);
+		expect(MockXMLHttpRequest.sendCount).toBe(3);
 	});
 
 	it("an ordinary success still resolves when no cancellation happens", async () => {
