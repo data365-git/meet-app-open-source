@@ -203,7 +203,9 @@
 		"cancelUploadConfirmDescription": "Hozirgacha yuklangan qism o'chiriladi. Buni ortga qaytarib bo'lmaydi.",
 		"cancelUploadConfirmAction": "Ha, bekor qil",
 		"cancelUploadConfirmCancel": "Yo'q",
-		"uploadCancelled": "Yuklash bekor qilindi."
+		"uploadCancelled": "Yuklash bekor qilindi.",
+		"cancelUploadRefused": "Yuklashni bekor qilib bo'lmadi. Yozuv saqlab qolindi.",
+		"cancelUploadFailed": "Yuklashni bekor qilib bo'lmadi."
 	},
 	"auth": {
 		"signingIn": "Tizimga kiritilmoqda…",

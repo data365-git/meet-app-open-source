@@ -5,6 +5,7 @@ import type { Organisation } from "@cap/web-domain";
 import { Folder, type Video } from "@cap/web-domain";
 import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cancelUpload } from "@/actions/video/cancel-upload";
@@ -102,6 +103,11 @@ async function uploadVideoForServerProcessing(
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	signal: AbortSignal,
+	cancelMessages: {
+		cancelled: string;
+		cancelRefused: string;
+		cancelFailed: string;
+	},
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
 	let createdVideoId:
@@ -360,18 +366,30 @@ async function uploadVideoForServerProcessing(
 		// behind for something the user asked to go away entirely). Discard the
 		// row and whatever bytes were already sent via the same permanent-erase
 		// path the account-deletion and Trash flows already use.
-		if (err instanceof CancelledUploadError) {
+		// Any failure once the signal is aborted is the cancel, not a new error:
+		// a request that carries no signal (e.g. initiate) can still reject with
+		// "Failed to fetch" after the user pressed Cancel.
+		if (err instanceof CancelledUploadError || signal.aborted) {
+			let outcome: "cancelled" | "refused" | "failed" = "cancelled";
 			if (createdVideoId) {
 				try {
 					const result = await cancelUpload(createdVideoId);
 					if (!result.ok) {
+						outcome = "refused";
 						console.error("cancelUpload failed:", result.error);
 					}
 				} catch (cleanupErr) {
+					outcome = "failed";
 					console.error("Failed to cancel upload:", cleanupErr);
 				}
 			}
-			toast.info("Upload cancelled.");
+			if (outcome === "cancelled") {
+				toast.info(cancelMessages.cancelled);
+			} else if (outcome === "refused") {
+				toast.error(cancelMessages.cancelRefused);
+			} else {
+				toast.error(cancelMessages.cancelFailed);
+			}
 			setUploadStatus(undefined);
 			return null;
 		}
@@ -419,6 +437,7 @@ export function useImportUpload({
 	const { user, activeOrganization } = useDashboardContext();
 	const router = useRouter();
 	const inputRef = useRef<HTMLInputElement>(null);
+	const t = useTranslations("library");
 	const { uploadingStore, setUploadStatus, setCancelHandler } =
 		useUploadingContext();
 	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
@@ -454,6 +473,11 @@ export function useImportUpload({
 					activeOrganization.organization.id,
 					setUploadStatus,
 					abortController.signal,
+					{
+						cancelled: t("uploadCancelled"),
+						cancelRefused: t("cancelUploadRefused"),
+						cancelFailed: t("cancelUploadFailed"),
+					},
 				);
 			} finally {
 				setCancelHandler(undefined);
@@ -501,6 +525,7 @@ export function useImportUpload({
 			router,
 			folderId,
 			onUploadStarted,
+			t,
 		],
 	);
 

@@ -16,13 +16,17 @@ import {
 type UploadOutcome =
 	| { type: "success"; etag?: string; status?: number }
 	| { type: "network-error" }
-	| { type: "pending" };
+	| { type: "pending" }
+	// Pending until aborted, then surfaces a plain network error instead of an
+	// abort — a flaky connection racing the user's cancel.
+	| { type: "network-error-on-abort" };
 
 class MockXMLHttpRequest {
 	static outcomes: UploadOutcome[] = [];
 	static abortedCount = 0;
 	static recordedHeaders: Array<Map<string, string>> = [];
 	static sentUrls: string[] = [];
+	private errorOnAbort = false;
 
 	upload = {
 		onprogress: null as ((event: ProgressEvent<EventTarget>) => void) | null,
@@ -74,6 +78,11 @@ class MockXMLHttpRequest {
 
 		if (outcome.type === "pending") return;
 
+		if (outcome.type === "network-error-on-abort") {
+			this.errorOnAbort = true;
+			return;
+		}
+
 		if (outcome.type === "network-error") {
 			this.completed = true;
 			this.onerror?.();
@@ -91,6 +100,10 @@ class MockXMLHttpRequest {
 		if (this.completed) return;
 		this.completed = true;
 		MockXMLHttpRequest.abortedCount += 1;
+		if (this.errorOnAbort) {
+			this.onerror?.();
+			return;
+		}
 		this.onabort?.();
 	}
 }
@@ -530,6 +543,62 @@ describe("uploadBlobMultipart", () => {
 		});
 
 		await expect(resultPromise).rejects.toBeInstanceOf(CancelledUploadError);
+	});
+
+	it("a parallel worker's network error arriving after the cancel still rejects with CancelledUploadError", async () => {
+		vi.useFakeTimers();
+		let abortCalled = false;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = input.toString();
+				if (url === "/api/upload/multipart/initiate") {
+					return makeJsonResponse({ uploadId: "upload-1" });
+				}
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: "https://uploads.example/part",
+					});
+				}
+				if (url === "/api/upload/multipart/abort") {
+					abortCalled = true;
+					return makeJsonResponse({ success: true });
+				}
+				throw new Error(`Unexpected fetch call: ${url}`);
+			}),
+		);
+		// Two parts, two workers. Part 1 is in flight and is aborted normally
+		// (CancelledUploadError lands in firstError first). Part 2 burns its
+		// retries on network errors; its final attempt is in flight at cancel
+		// time and reports a network error instead of an abort — a later error
+		// that must not replace the cancel.
+		MockXMLHttpRequest.setOutcomes([
+			{ type: "pending" },
+			{ type: "network-error" },
+			{ type: "network-error" },
+			{ type: "network-error-on-abort" },
+		]);
+
+		const controller = new AbortController();
+		const resultPromise = uploadBlobMultipart({
+			videoId: "video-1",
+			blob: makeBlob(32 * MB),
+			contentType: "video/mp4",
+			subpath: "raw-upload.mp4",
+			partSizeBytes: 16 * MB,
+			parallelism: 2,
+			signal: controller.signal,
+		});
+		const settled = resultPromise.catch((error: unknown) => error);
+
+		while (MockXMLHttpRequest.outcomes.length > 0) {
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		controller.abort();
+
+		expect(await settled).toBeInstanceOf(CancelledUploadError);
+		expect(MockXMLHttpRequest.abortedCount).toBe(2);
+		expect(abortCalled).toBe(true);
 	});
 });
 

@@ -301,9 +301,7 @@ export function uploadPartBlob({
 		};
 		xhr.onabort = () => {
 			clearStallTimeout();
-			reject(
-				isCancelled?.() ? new CancelledUploadError() : new Error("stalled"),
-			);
+			reject(isCancelled?.() || signal?.aborted ? new CancelledUploadError() : new Error("stalled"));
 		};
 
 		xhr.send(part);
@@ -398,9 +396,7 @@ export async function uploadBlobMultipart({
 
 	const ranges = computePartRanges(totalBytes, partSizeBytes);
 	const effectiveParallelism =
-		provider === "googleDrive"
-			? 1
-			: Math.max(1, Math.min(parallelism, ranges.length));
+		provider === "googleDrive" ? 1 : Math.max(1, Math.min(parallelism, ranges.length));
 
 	const uploadedBytesByPart = new Map<number, number>();
 	const emitProgress = () => {
@@ -414,7 +410,8 @@ export async function uploadBlobMultipart({
 		range: PartRange,
 	): Promise<UploadedPartPayload> => {
 		const partBlob = blob.slice(range.start, range.end, contentType);
-		const isFinalPart = provider === "googleDrive" && range.end >= totalBytes;
+		const isFinalPart =
+			provider === "googleDrive" && range.end >= totalBytes;
 
 		let attempt = 0;
 		let lastError: unknown;
@@ -444,7 +441,6 @@ export async function uploadBlobMultipart({
 					headers,
 					timeoutMs: PART_UPLOAD_REQUEST_TIMEOUT_MS,
 					stallTimeoutMs: PART_UPLOAD_STALL_TIMEOUT_MS,
-					isCancelled: () => signal?.aborted ?? false,
 					signal,
 					onProgress: (loaded) => {
 						uploadedBytesByPart.set(range.partNumber, loaded);
@@ -477,9 +473,7 @@ export async function uploadBlobMultipart({
 				// surfaced failure message is actionable instead of generic.
 				lastError =
 					error instanceof Error &&
-					!error.message.startsWith(
-						`Failed to upload part ${range.partNumber}`,
-					) &&
+					!error.message.startsWith(`Failed to upload part ${range.partNumber}`) &&
 					(error.message === "network error" ||
 						error.message === "timed out" ||
 						error.message === "stalled")
@@ -488,6 +482,7 @@ export async function uploadBlobMultipart({
 							)
 						: error;
 				if (
+					signal?.aborted ||
 					error instanceof CancelledUploadError ||
 					attempt >= MAX_PART_UPLOAD_ATTEMPTS
 				) {
@@ -535,6 +530,10 @@ export async function uploadBlobMultipart({
 		} catch (abortError) {
 			console.error("Failed to abort multipart upload", abortError);
 		}
+		// A cancel wins over whatever error was recorded: a parallel worker's
+		// late "network error" can overwrite a CancelledUploadError in
+		// firstError, and the caller must still treat it as a cancel.
+		if (signal?.aborted) throw new CancelledUploadError();
 		throw firstError instanceof Error
 			? firstError
 			: new Error(String(firstError));

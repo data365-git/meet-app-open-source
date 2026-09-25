@@ -4,7 +4,7 @@ import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import { useStore } from "@tanstack/react-store";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { type UploadStatus, useUploadingContext } from "../UploadingContext";
 
@@ -38,8 +38,7 @@ export function getRemainingTimeParts(seconds: number): RemainingTimeParts {
 			minutes: totalMinutes % 60,
 		};
 	}
-	if (seconds >= 60)
-		return { kind: "minutes", minutes: Math.floor(seconds / 60) };
+	if (seconds >= 60) return { kind: "minutes", minutes: Math.floor(seconds / 60) };
 	return { kind: "lessThanMinute" };
 }
 
@@ -89,10 +88,7 @@ export const UploadPlaceholderCard = () => {
 			uploadStatus.status === "uploadingVideo")
 			? uploadStatus.progress
 			: null;
-	const strokeDashoffset = calculateStrokeDashoffset(
-		percent ?? 0,
-		circumference,
-	);
+	const strokeDashoffset = calculateStrokeDashoffset(percent ?? 0, circumference);
 
 	// Speed/ETA piggyback on the same three progress-carrying statuses. Only
 	// rendered when both byte counts are known — never a placeholder, never a
@@ -112,11 +108,30 @@ export const UploadPlaceholderCard = () => {
 			uploadStatus.status === "uploadingThumbnail" ||
 			uploadStatus.status === "uploadingVideo") &&
 		uploadStatus.secondsRemaining !== undefined
-			? formatRemainingTime(
-					t,
-					getRemainingTimeParts(uploadStatus.secondsRemaining),
-				)
+			? formatRemainingTime(t, getRemainingTimeParts(uploadStatus.secondsRemaining))
 			: null;
+
+	// Once every byte is sent, the rest (/complete, progress POST) is moments
+	// from "serverProcessing"; a cancel confirmed in that window would delete
+	// nothing yet claim it did, so the control goes away as soon as the bytes
+	// are all out.
+	const allBytesSent =
+		uploadStatus?.status === "uploadingVideo" &&
+		uploadStatus.loadedBytes !== undefined &&
+		uploadStatus.totalBytes !== undefined &&
+		uploadStatus.loadedBytes >= uploadStatus.totalBytes;
+	const canCancel =
+		!!cancelHandler &&
+		!!uploadStatus &&
+		uploadStatus.status !== "serverProcessing" &&
+		!allBytesSent;
+
+	// A confirm left open after cancelling stopped being possible would claim
+	// a deletion that cannot happen; close it. Keyed on canCancel only, so
+	// ordinary phase changes (parsing -> creating -> uploading) keep it open.
+	useEffect(() => {
+		if (!canCancel) setConfirmingCancel(false);
+	}, [canCancel]);
 
 	if (!uploadStatus) return null;
 	return (
@@ -142,27 +157,30 @@ export const UploadPlaceholderCard = () => {
 				    server processing has genuinely started (cancelUpload would
 				    correctly refuse at that point anyway — this just avoids
 				    offering a control that no longer does anything). */}
-					{cancelHandler && uploadStatus.status !== "serverProcessing" && (
+					{canCancel && (
 						<button
 							type="button"
 							onClick={() => setConfirmingCancel(true)}
 							aria-label={t("cancelUploadButton")}
 							title={t("cancelUploadButton")}
-							className="flex absolute top-2 right-2 justify-center items-center w-7 h-7 text-white rounded-full transition-colors bg-black/50 hover:bg-black/80"
+							className="flex absolute top-0 right-0 justify-center items-center w-11 h-11 text-white group/cancel"
 						>
-							<svg
-								className="w-4 h-4"
-								viewBox="0 0 20 20"
-								fill="none"
-								aria-hidden="true"
-							>
-								<path
-									d="M5 5L15 15M15 5L5 15"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-								/>
-							</svg>
+							{/* 44px touch target around the same 28px disc. */}
+							<span className="flex justify-center items-center w-7 h-7 rounded-full transition-colors bg-black/50 group-hover/cancel:bg-black/80">
+								<svg
+									className="w-4 h-4"
+									viewBox="0 0 20 20"
+									fill="none"
+									aria-hidden="true"
+								>
+									<path
+										d="M5 5L15 15M15 5L5 15"
+										stroke="currentColor"
+										strokeWidth="2"
+										strokeLinecap="round"
+									/>
+								</svg>
+							</span>
 						</button>
 					)}
 
@@ -174,8 +192,7 @@ export const UploadPlaceholderCard = () => {
 							</span>
 							{bytesInfo && (
 								<span className="text-xs text-white/80 truncate">
-									{formatBytes(bytesInfo.loaded)} /{" "}
-									{formatBytes(bytesInfo.total)}
+									{formatBytes(bytesInfo.loaded)} / {formatBytes(bytesInfo.total)}
 									{remainingLabel && ` · ${remainingLabel}`}
 								</span>
 							)}
@@ -262,7 +279,7 @@ export const UploadPlaceholderCard = () => {
 				confirmVariant="destructive"
 				onConfirm={() => {
 					setConfirmingCancel(false);
-					cancelHandler?.();
+					if (canCancel) cancelHandler?.();
 				}}
 				onCancel={() => setConfirmingCancel(false)}
 			/>

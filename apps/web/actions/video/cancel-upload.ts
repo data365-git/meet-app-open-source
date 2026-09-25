@@ -2,12 +2,13 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { videos } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { makeCurrentUserLayer, Videos } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { getAffectedRows } from "@/lib/affected-rows";
 import { runPromise } from "@/lib/server";
 
 /**
@@ -25,10 +26,10 @@ import { runPromise } from "@/lib/server";
  * — safe to call twice if the client retries), rather than hand-rolling a
  * second copy of that logic.
  *
- * SAFETY: refuses unless the row is still genuinely mid-upload — never
- * reachable once transcription has started or a processingStartedAt marker
- * exists, so a Cancel button can never discard a real, finished-or-finishing
- * recording, whatever the client sends.
+ * SAFETY: refuses unless the row is still mid-upload — a video_uploads row
+ * in phase 'uploading' must exist, and transcription must not have started
+ * nor a processingStartedAt marker exist — so, whatever the client sends,
+ * this cannot erase a recording once processing has claimed the row.
  */
 export async function cancelUpload(
 	videoId: Video.VideoId,
@@ -55,13 +56,38 @@ export async function cancelUpload(
 	const processingStarted =
 		video.transcriptionStatus !== null ||
 		typeof metadata?.processingStartedAt === "string";
-	if (processingStarted) {
-		return {
-			ok: false,
-			error:
-				"This recording already started processing and can no longer be cancelled.",
-		};
-	}
+	const refused = {
+		ok: false as const,
+		error:
+			"This recording already started processing and can no longer be cancelled.",
+	};
+	if (processingStarted) return refused;
+
+	// Race-safety: claim the upload by a CONDITIONAL delete of its
+	// video_uploads row (only while phase = 'uploading') and proceed only if
+	// that delete hit a row. A separate read-then-delete would leave a window
+	// where /complete flips the row to 'processing' between the two; the
+	// conditional delete is one atomic statement. Once the row is gone,
+	// transitionVideoToProcessing (lib/video-processing.ts) updates zero rows
+	// and throws "No upload record found", so processing can no longer start
+	// on a video this call is about to erase. The row is read first only to
+	// restore it if the erase below fails, so a retried Cancel still works.
+	const [upload] = await db()
+		.select()
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId))
+		.limit(1);
+	if (!upload || upload.phase !== "uploading") return refused;
+
+	const claim = await db()
+		.delete(videoUploads)
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId),
+				eq(videoUploads.phase, "uploading"),
+			),
+		);
+	if (getAffectedRows(claim) === 0) return refused;
 
 	try {
 		await runPromise(
@@ -72,6 +98,11 @@ export async function cancelUpload(
 		);
 	} catch (error) {
 		console.error("cancelUpload: permanentlyDelete failed", error);
+		try {
+			await db().insert(videoUploads).values(upload);
+		} catch (restoreError) {
+			console.error("cancelUpload: restoring upload row failed", restoreError);
+		}
 		return {
 			ok: false,
 			error: "Could not cancel the upload. Please try again.",

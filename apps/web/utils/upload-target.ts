@@ -194,6 +194,7 @@ export function uploadWithTarget({
 			} catch (error) {
 				lastError = error;
 				if (
+					signal?.aborted ||
 					error instanceof CancelledUploadError ||
 					!shouldRetryUpload(error) ||
 					attempt >= MAX_UPLOAD_ATTEMPTS
@@ -204,6 +205,9 @@ export function uploadWithTarget({
 			}
 		}
 
+		// A cancel wins over the recorded error: the in-flight request can
+		// surface a plain failure (e.g. "Upload failed") instead of an abort.
+		if (signal?.aborted) throw new CancelledUploadError();
 		throw lastError instanceof Error ? lastError : new Error("Upload failed");
 	})();
 }

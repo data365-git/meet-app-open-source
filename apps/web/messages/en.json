@@ -203,7 +203,9 @@
 		"cancelUploadConfirmDescription": "Whatever has already been uploaded will be deleted. This cannot be undone.",
 		"cancelUploadConfirmAction": "Yes, cancel it",
 		"cancelUploadConfirmCancel": "No",
-		"uploadCancelled": "Upload cancelled."
+		"uploadCancelled": "Upload cancelled.",
+		"cancelUploadRefused": "The upload could not be cancelled. The recording was kept.",
+		"cancelUploadFailed": "Could not cancel the upload."
 	},
 	"auth": {
 		"signingIn": "Signing you in…",
