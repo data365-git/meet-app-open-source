@@ -9,6 +9,12 @@ _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume.
 ## GOAL — what "done" looks like
 data365 runs on the team's own Contabo server (`https://data365.duckdns.org`) and is **boringly reliable**: uploads finish, AI analysis simply works, the system restarts what stalls, and the owner stops hearing complaints from the team. He is a non-programmer — every screen must say what is happening in a number he can act on.
 
+## ▶️ UPDATE 2026-09-25 ~06:05 UTC (new session) — dars6.3 RECOVERED on prod (option 2 done)
+- Inserted a `video_uploads` row for `h4tvk8raknrgq5b` (phase 'processing', raw_file_key NULL, updated_at now-2h) → `/root/run-cron.sh recover-stale-ai-jobs` returned `staleUploadRelaunched: 1` → log `Optimization failed ... Compress skipped: durationSec=4082.65` (the benign >3600 s branch, raw kept playable) → upload row gone, `videos.duration` = 4082.65. It is playable; it is NOT transcribed (no press recorded, zero AI spent — by design). `processingStartedAt` is not visible afterwards because the finally-block clears it; the upload-row deletion + log line are the proof.
+- Owner said "menimcha qilib bo'lingan" — checked: the 4 cancel fixes were NOT in any branch or worktree (`cancel-upload.ts` has no phase guard, toast still hard-coded English). A doer is on them in a worktree, branch `fix/cancel-review`.
+- **Agent routing snag:** `~/.claude/settings.json` env maps `sonnet`→`glm-4.7` and `opus`→`glm-5.3`; the desktop app sends those names to the Anthropic API → HTTP 404 model_not_found. A `model: sonnet` doer died on it. Owner/system decision.
+- Option 1 (PREVENT: durable `metadata.processedAt`) still unbuilt.
+
 ## ▶️ LIVE POINT 2026-09-25 ~06:30 UTC — session closed at the context ceiling; resume HERE
 Owner's order: "Muammo hal boʻldimi endi jonliga ham chiqar" — make it actually solved, then deploy. Nothing new is deployed yet; prod is still `a0d43a7`.
 - **Committed, NOT deployed:** `9aac82c` upload-CANCEL feature (owner order 2026-09-11). Gates green (tsc 0, 187 files / 1596 tests).
