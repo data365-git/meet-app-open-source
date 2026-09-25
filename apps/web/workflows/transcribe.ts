@@ -1126,16 +1126,31 @@ export async function transcribeAudioChunks(
 	// 0 = already absolute, the same pattern fillTranscriptGaps uses) so every
 	// chunk it already covers is skipped below — a retry never re-bills Gemini.
 	const hasPartial = hasUsablePartial;
-	const seedParts: Array<{ vtt: string; offsetSec: number }> = hasPartial
-		? [{ vtt: existingPartialVtt as string, offsetSec: 0 }]
-		: [];
+	// Absolute [startSec, endSec) windows of RE-transcribed chunks whose fresh
+	// cues have arrived. The seed still holds that chunk's old (under-covered)
+	// cues; merging both duplicated every caption there (mergeChunkedWebVtt
+	// does no dedup). A window is added ONLY once fresh cues exist, so a chunk
+	// whose re-transcription fails keeps its old seed text.
+	const replacedWindows: Array<{ startSec: number; endSec: number }> = [];
+	const seedParts = (): Array<{ vtt: string; offsetSec: number }> =>
+		hasPartial
+			? [
+					{
+						vtt: dropVttCuesStartingIn(
+							existingPartialVtt as string,
+							replacedWindows,
+						),
+						offsetSec: 0,
+					},
+				]
+			: [];
 
 	const fireProgress = async (): Promise<void> => {
 		if (!onProgress) return;
 		try {
 			await onProgress({
 				transcribedChunks: [
-					...seedParts,
+					...seedParts(),
 					...completedResults.filter(
 						(r): r is { vtt: string; offsetSec: number } => r !== undefined,
 					),
@@ -1218,6 +1233,16 @@ export async function transcribeAudioChunks(
 				);
 			}
 			result = { vtt: rescaled.vtt, offsetSec: chunk.startSec };
+			if (hasPartial && rescaled.vtt.includes("-->")) {
+				replacedWindows.push({
+					startSec: chunk.startSec,
+					// No duration → the chunk runs to the next chunk's start.
+					endSec:
+						chunk.durationSec != null
+							? chunk.startSec + chunk.durationSec
+							: (audio.chunks[i + 1]?.startSec ?? Number.POSITIVE_INFINITY),
+				});
+			}
 		} catch (error) {
 			// FAULT TOLERANCE (long-video fix): a single bad chunk must NOT discard the
 			// whole transcript. Previously one failed chunk threw -> the outer catch marked
@@ -1280,7 +1305,7 @@ export async function transcribeAudioChunks(
 	);
 
 	const transcribedChunks: Array<{ vtt: string; offsetSec: number }> = [
-		...seedParts,
+		...seedParts(),
 		...completedResults.filter(
 			(r): r is { vtt: string; offsetSec: number } => r !== undefined,
 		),
@@ -1464,6 +1489,36 @@ export function isChunkCoveredByPartial(
 	return (
 		reach >= durationSec * MIN_CHUNK_COVERAGE && largestGap <= MAX_CHUNK_GAP_SEC
 	);
+}
+
+/**
+ * Drop every cue whose START lies inside one of the absolute [startSec, endSec)
+ * windows; all other blocks (header, cues outside) are kept verbatim. Used on
+ * resume to strip a re-transcribed chunk's stale seed cues before its fresh
+ * cues are merged in.
+ */
+export function dropVttCuesStartingIn(
+	vtt: string,
+	windows: Array<{ startSec: number; endSec: number }>,
+): string {
+	if (windows.length === 0) return vtt;
+	return vtt
+		.split(/\r?\n\r?\n/)
+		.filter((block) => {
+			const timing = block.split(/\r?\n/).find((line) => line.includes("-->"));
+			if (!timing) return true;
+			const m = timing
+				.slice(0, timing.indexOf("-->"))
+				.match(/(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})/);
+			if (!m) return true;
+			const start =
+				(m[1] ? Number(m[1]) : 0) * 3600 +
+				Number(m[2]) * 60 +
+				Number(m[3]) +
+				Number(m[4]) / 1000;
+			return !windows.some((w) => start >= w.startSec && start < w.endSec);
+		})
+		.join("\n\n");
 }
 
 export interface VttGap {
