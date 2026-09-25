@@ -49,6 +49,13 @@ import { SummaryPanel } from "./panels/SummaryPanel";
 import { TasksPanel } from "./panels/TasksPanel";
 import { TranscriptPanel } from "./panels/TranscriptPanel";
 import {
+	classifyAiGenerationError,
+	formatTranscriptGapRanges,
+} from "./transcription-error-message";
+// Pure constants/helpers only (the module imports nothing but a type) — the
+// retry-ladder ceiling must not be duplicated client-side.
+import { MAX_QUOTA_RETRY_ATTEMPTS } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
+import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 	StorageMissingOverlay,
@@ -377,6 +384,19 @@ export const ShareVideo = forwardRef<
 		// threading the code through for that window).
 		const effectiveTranscriptionErrorCode =
 			data.metadata?.transcriptionError?.code ?? null;
+
+		// Honest AI status (owner order 2026-09-25: "pul tugasa pul tugadi
+		// desin — nima muammoligini va aniq statusni ko'rsatsin"). All
+		// terminal-state facts come from the server-rendered metadata, same
+		// source as effectiveTranscriptionErrorCode above.
+		const effectiveQuotaRetriesExhausted =
+			effectiveTranscriptionErrorCode === "QUOTA" &&
+			(data.metadata?.quotaRetryAttempts ?? 0) >=
+				MAX_QUOTA_RETRY_ATTEMPTS;
+		const effectiveAiGenerationErrorCode =
+			effectiveAiStatus === "ERROR"
+				? classifyAiGenerationError(data.metadata?.aiGenerationError)
+				: null;
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
@@ -1016,6 +1036,9 @@ export const ShareVideo = forwardRef<
 											aiProcessingStep={effectiveAiProcessingStep}
 											aiProcessingSubStep={effectiveAiProcessingSubStep}
 											transcriptionErrorCode={effectiveTranscriptionErrorCode}
+											quotaRetriesExhausted={effectiveQuotaRetriesExhausted}
+											aiQuotaWaiting={!!data.metadata?.aiQuotaWaiting}
+											aiGenerationErrorCode={effectiveAiGenerationErrorCode}
 											// The durable "this run includes AI" fact, for the stepper after a remount.
 											aiGenerationRequested={
 												aiStatusQuery.data?.aiGenerationRequested ??
@@ -1117,6 +1140,20 @@ export const ShareVideo = forwardRef<
 												chapters={transcriptChapters}
 												videoTitle={data.name}
 											/>
+										)}
+										{/* S3 (owner order 2026-09-25): a COMPLETE transcript with
+										    recorded gaps must say WHERE text is missing — a silent
+										    hole reads as "done", which is the lie this whole change
+										    exists to remove. */}
+										{effectiveTranscriptionStatus === "COMPLETE" &&
+										(data.metadata?.transcriptionGaps?.length ?? 0) > 0 && (
+											<p className="mt-2 text-xs text-gray-10">
+												{t("aiTranscriptGaps", {
+													ranges: formatTranscriptGapRanges(
+														data.metadata?.transcriptionGaps ?? [],
+													),
+												})}
+											</p>
 										)}
 									</>
 								}

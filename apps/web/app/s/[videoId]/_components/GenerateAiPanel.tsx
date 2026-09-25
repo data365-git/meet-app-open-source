@@ -57,6 +57,17 @@ interface GenerateAiPanelProps {
 	/** Why transcription failed. QUOTA = the AI account ran out of credits —
 	 * the recording is safe and the recovery cron will re-run it. */
 	transcriptionErrorCode?: "QUOTA" | "FAILED" | null;
+	/** The recovery cron's retry ladder is spent for a QUOTA death — the
+	 * "we retry automatically" promise must not be shown (owner order
+	 * 2026-09-25: never a false promise, never a bare "failed"). */
+	quotaRetriesExhausted?: boolean;
+	/** S4: the run is parked waiting for the FREE quota window (legacy
+	 * metadata state) — show the waiting line instead of a bare stepper. */
+	aiQuotaWaiting?: boolean;
+	/** S5: why the AI GENERATION stage failed, classified from
+	 * metadata.aiGenerationError (see classifyAiGenerationError). The monthly
+	 * cap (BUDGET) and the provider balance (QUOTA) need different truths. */
+	aiGenerationErrorCode?: "BUDGET" | "QUOTA" | "OTHER" | null;
 	duration?: number | null;
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
@@ -129,6 +140,9 @@ export function GenerateAiPanel({
 	aiProcessingStep,
 	aiProcessingSubStep,
 	transcriptionErrorCode = null,
+	quotaRetriesExhausted = false,
+	aiQuotaWaiting = false,
+	aiGenerationErrorCode = null,
 	duration,
 	aiIncomplete = false,
 	transcriptionChunksCompleted,
@@ -144,6 +158,13 @@ export function GenerateAiPanel({
 	const tShare = useTranslations("share");
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// S2 immediate: set when the generate POST answered HTTP 402
+	// AI_BUDGET_EXCEEDED — the press itself did not fail, the monthly cap
+	// did, so the raw English error string must never reach the owner.
+	const [budgetBlocked, setBudgetBlocked] = useState<{
+		spentUsd: number;
+		capUsd: number;
+	} | null>(null);
 	const inFlightRef = useRef(false);
 	// Which of the two start buttons was pressed in THIS session (null = the
 	// press was not the two-mode chooser, e.g. error retry, or the panel just
@@ -203,7 +224,26 @@ export function GenerateAiPanel({
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
-					setError((body as { error?: string }).error ?? "An error occurred");
+					if ((body as { code?: string }).code === "AI_BUDGET_EXCEEDED") {
+						// Never default missing money numbers to 0 — a $0.00/$0.00
+						// line would be fabricated. Store the pair only when the 402
+						// body actually carries BOTH numbers; otherwise keep null so
+						// the numbers-free honest variant (aiBudgetBlockedPlain)
+						// renders instead.
+						const numbers = body as { spentUsd?: number; capUsd?: number };
+						if (
+							typeof numbers.spentUsd === "number" &&
+							typeof numbers.capUsd === "number"
+						) {
+							setBudgetBlocked({
+								spentUsd: numbers.spentUsd,
+								capUsd: numbers.capUsd,
+							});
+						}
+						setError(null);
+					} else {
+						setError((body as { error?: string }).error ?? "An error occurred");
+					}
 				} else {
 					onStarted?.();
 				}
@@ -560,6 +600,14 @@ export function GenerateAiPanel({
 				</ol>
 
 				{error && <p className="text-xs text-red-10">{error}</p>}
+				{/* S4 (owner order 2026-09-25): a run parked for the FREE quota
+				    window is alive and will continue on its own — the stepper
+				    alone cannot say that, and silence reads as "stuck". */}
+				{aiQuotaWaiting && (
+					<p className="text-xs text-amber-11">
+						{tShare("aiQuotaQueueWaiting")}
+					</p>
+				)}
 			</div>
 		);
 	}
@@ -569,20 +617,65 @@ export function GenerateAiPanel({
 	// vanish with no explanation. The RETRY BUTTON stays owner-only — it spends
 	// real Gemini money.
 	if (hasError) {
-		const messageKey = transcriptionErrorMessageKey({
-			transcriptionStatus,
-			transcriptionErrorCode,
-			canGenerate,
-		});
-		const quotaBlocked = messageKey.startsWith("aiTranscriptionQuotaFailed");
+		// S5: the failure is in AI GENERATION (the transcript itself is fine) —
+		// the reason must say WHICH wall was hit: the monthly cap is fixed by an
+		// admin in settings, the provider balance by a top-up. Only the owner is
+		// ever told the money facts; the public gets a neutral pause line.
+		const generationKind =
+			transcriptionStatus === "ERROR" ? null : aiGenerationErrorCode;
+		let messageKey: string;
+		let messageValues: Record<string, string> | undefined;
+		let calmLine = false;
+		if (generationKind === "BUDGET") {
+			calmLine = true;
+			if (!canGenerate) {
+				messageKey = "aiBudgetBlockedPublic";
+			} else {
+				// The numbers come only from the 402 response seen in THIS
+				// session (budgetBlocked state). No server-side prop feeds them:
+				// on a reload the owner gets the numbers-free honest variant
+				// rather than a fabricated pair.
+				if (budgetBlocked) {
+					messageKey = "aiBudgetBlocked";
+					messageValues = {
+						spent: `$${budgetBlocked.spentUsd.toFixed(2)}`,
+						cap: `$${budgetBlocked.capUsd.toFixed(2)}`,
+					};
+				} else {
+					messageKey = "aiBudgetBlockedPlain";
+				}
+			}
+		} else if (generationKind === "QUOTA") {
+			calmLine = true;
+			// S5-QUOTA, public viewer: the transcript IS made (this branch only
+			// renders when transcriptionStatus !== "ERROR"), so the
+			// transcription-quota text ("the transcript could not be made — we
+			// retry automatically") would be a double lie here. The public gets
+			// its own neutral line: recording safe, summary not available yet.
+			messageKey = canGenerate
+				? "aiSummaryQuotaFailed"
+				: "aiSummaryUnavailablePublic";
+		} else {
+			messageKey = transcriptionErrorMessageKey({
+				transcriptionStatus,
+				transcriptionErrorCode,
+				canGenerate,
+				quotaRetriesExhausted,
+			});
+			calmLine = messageKey.startsWith("aiTranscriptionQuota");
+		}
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-red-6 bg-red-3 px-4 py-4">
 				<p className="text-sm text-red-11">
-					{/* A credits failure is not an "analysis failed" event — the
+					{/* A credits/cap failure is not an "analysis failed" event — the
 					    recording is intact, so it gets its own calmer sentence
 					    instead of being prefixed with the generic alarm. */}
-					{quotaBlocked ? (
-						tShare(messageKey)
+					{calmLine ? (
+						messageValues ? (
+							tShare(messageKey, messageValues)
+						) : (
+							tShare(messageKey)
+						)
 					) : (
 						<>
 							{tShare("aiAnalysisFailed")} {tShare(messageKey)}
@@ -685,7 +778,16 @@ export function GenerateAiPanel({
 					<p className="mt-0.5 text-xs text-gray-10">
 						{tShare("aiQueuedHint")}
 					</p>
-					{error && <p className="mt-1 text-xs text-red-10">{error}</p>}
+					{budgetBlocked && canGenerate ? (
+						<p className="mt-1 text-xs text-red-11">
+							{tShare("aiBudgetBlocked", {
+								spent: `$${budgetBlocked.spentUsd.toFixed(2)}`,
+								cap: `$${budgetBlocked.capUsd.toFixed(2)}`,
+							})}
+						</p>
+					) : (
+						error && <p className="mt-1 text-xs text-red-10">{error}</p>
+					)}
 					{/* A screen with no action is a trap. The banked marker is only
 					    cleared by a redeemer that takes the job, and the recovery
 					    cron deliberately KEEPS it when it refuses for a reason that
@@ -722,7 +824,16 @@ export function GenerateAiPanel({
 					</p>
 				)}
 				<p className="text-xs text-gray-10">{tShare("aiFreeFirstHint")}</p>
-				{error && <p className="text-xs text-red-10">{error}</p>}
+				{budgetBlocked && canGenerate ? (
+					<p className="text-xs text-red-11">
+						{tShare("aiBudgetBlocked", {
+							spent: `$${budgetBlocked.spentUsd.toFixed(2)}`,
+							cap: `$${budgetBlocked.capUsd.toFixed(2)}`,
+						})}
+					</p>
+				) : (
+					error && <p className="text-xs text-red-10">{error}</p>
+				)}
 				{/* The explicit two-mode choice (2026-09-10): one press, no hidden
 				    second step. "Full AI analysis" = transcript + summary/tasks in
 				    one run; "Only transcript" = transcribe and stop there. Stacked
@@ -766,7 +877,16 @@ export function GenerateAiPanel({
 					</p>
 				)}
 				<p className="text-xs text-gray-10">{tShare("aiFreeFirstHint")}</p>
-				{error && <p className="text-xs text-red-10">{error}</p>}
+				{budgetBlocked && canGenerate ? (
+					<p className="text-xs text-red-11">
+						{tShare("aiBudgetBlocked", {
+							spent: `$${budgetBlocked.spentUsd.toFixed(2)}`,
+							cap: `$${budgetBlocked.capUsd.toFixed(2)}`,
+						})}
+					</p>
+				) : (
+					error && <p className="text-xs text-red-10">{error}</p>
+				)}
 				<button
 					type="button"
 					disabled={loading}
