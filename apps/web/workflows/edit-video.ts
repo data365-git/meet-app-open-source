@@ -8,7 +8,7 @@ import type {
 	VideoMetadata,
 } from "@cap/database/types";
 import { Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
@@ -67,6 +67,10 @@ export async function editVideoWorkflow(
 	try {
 		const metadata = await applyTrimAndUpload(payload);
 		await remapTranscriptAndArtifacts(videoId, payload.editSpec);
+		// BEFORE the row delete: an edited video keeps its pre-edit
+		// raw-upload.*, so without the marker the recover-stale-ai-jobs rowless
+		// pass would relaunch processing from that raw and silently undo the trim.
+		await markEditProcessed(videoId);
 		await clearEditProcessingState(videoId, sourceKey);
 		return { metadata };
 	} catch (error) {
@@ -265,6 +269,22 @@ async function remapTranscriptAndArtifacts(
 	await db()
 		.update(videos)
 		.set({ metadata: nextMetadata })
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
+/** The durable `metadata.processedAt` success marker (see process-video.ts's
+ * markProcessingFinished). JSON_SET, never a whole-object overwrite. */
+async function markEditProcessed(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 

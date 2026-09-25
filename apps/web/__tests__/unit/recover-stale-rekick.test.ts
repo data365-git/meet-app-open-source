@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
 	selectCall: 0,
 	setCalls: [] as Array<Record<string, unknown>>,
 	whereArgs: [] as unknown[][],
+	/** where() arguments of each update, index-aligned with setCalls. */
+	updateWheres: [] as unknown[][],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -27,14 +29,17 @@ vi.mock("@cap/database", () => ({
 				const builder = {
 					// The stale-upload hand-off pass joins video_uploads onto videos.
 					innerJoin: () => builder,
+					leftJoin: () => builder,
 					where: (...args: unknown[]) => {
 						state.whereArgs.push(args);
 						const result =
 							state.selectResults[state.selectCall++] ?? ([] as unknown[]);
 						const promise = Promise.resolve(result) as Promise<unknown[]> & {
 							limit: (n: number) => Promise<unknown[]>;
+							orderBy: () => unknown;
 						};
 						promise.limit = () => Promise.resolve(result);
+						promise.orderBy = () => promise;
 						return promise;
 					},
 				};
@@ -44,7 +49,12 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (arg: Record<string, unknown>) => {
 				state.setCalls.push(arg);
-				return { where: () => Promise.resolve() };
+				return {
+					where: (...args: unknown[]) => {
+						state.updateWheres.push(args);
+						return Promise.resolve([{ affectedRows: 1 }]);
+					},
+				};
 			},
 		}),
 	}),
@@ -77,6 +87,7 @@ vi.mock("drizzle-orm", () => ({
 	like: vi.fn((field: unknown, pattern: unknown) => ({ like: field, pattern })),
 	or: vi.fn((...args: unknown[]) => ({ or: args })),
 	lte: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	gte: vi.fn((field: unknown, value: unknown) => ({ gte: field, value })),
 	sql: Object.assign(
 		vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 			strings,
@@ -379,4 +390,112 @@ describe("recover-stale-ai-jobs re-kick (transcription)", () => {
 	// (round-3's "offered the PAID path before death" test was deliberately
 	// REMOVED in round 6: the owner's decision forbids any automatic
 	// cheap→full-price continuation — see the terminal-ERROR tests above.)
+});
+
+describe("recover-stale-ai-jobs quota re-kick — a refused start must stay recoverable", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		state.selectResults = [];
+		state.selectCall = 0;
+		state.setCalls = [];
+		state.whereArgs = [];
+		state.updateWheres = [];
+		process.env.CRON_SECRET = CRON_SECRET;
+	});
+
+	function armQuotaBlocked() {
+		// Query order: stale transcription, quota-blocked, ...
+		state.selectResults = [
+			[],
+			[
+				{
+					id: "vid-quota-1",
+					ownerId: "owner-1",
+					name: "Quota-blocked recording",
+					metadata: {
+						transcriptionError: {
+							code: "QUOTA",
+							message: "credits depleted",
+							at: "2026-09-25T00:00:00.000Z",
+						},
+					},
+				},
+			],
+			[],
+			[],
+		];
+	}
+
+	function restoredQuotaWrites() {
+		return state.setCalls.filter((setArg) => {
+			const metadata = setArg.metadata as
+				| { strings?: TemplateStringsArray; values?: unknown[] }
+				| undefined;
+			if (!metadata?.strings) return false;
+			return (
+				metadata.strings.join("?").includes("$.transcriptionError") &&
+				(metadata.values ?? []).some(
+					(value) =>
+						typeof value === "string" && value.includes('"code":"QUOTA"'),
+				)
+			);
+		});
+	}
+
+	it("'AI budget exceeded' (nothing started) restores the QUOTA code, keeps the booked backoff, and is not counted as retried", async () => {
+		// Prod 2026-09-25: three rows left ERROR with NO code after this exact
+		// refusal — invisible to every recovery pass forever.
+		armQuotaBlocked();
+		transcribeVideoMock.mockResolvedValueOnce({
+			success: false,
+			message: "AI budget exceeded",
+		});
+
+		const res = await GET(cronRequest());
+		const body = (await res.json()) as Record<string, unknown>;
+
+		expect(transcribeVideoMock).toHaveBeenCalledTimes(1);
+		// reclaimProcessing = false: this loop may only restart the ERROR row,
+		// never take over a PROCESSING row a user Retry just claimed.
+		expect(transcribeVideoMock).toHaveBeenCalledWith(
+			"vid-quota-1",
+			"owner-1",
+			true,
+			true,
+			false,
+		);
+		expect(restoredQuotaWrites()).toHaveLength(1);
+		// The restore is guarded on the row STILL being ERROR, so a concurrent
+		// claim (PROCESSING) is never stomped with a stale QUOTA code.
+		const restoreIndex = state.setCalls.indexOf(restoredQuotaWrites()[0] as Record<string, unknown>);
+		expect(JSON.stringify(state.updateWheres[restoreIndex])).toContain(
+			'{"field":"videos.transcriptionStatus","value":"ERROR"}',
+		);
+		const booked = state.setCalls.find(
+			(setArg) =>
+				(setArg.metadata as { quotaRetryAttempts?: number } | undefined)
+					?.quotaRetryAttempts === 1,
+		);
+		expect(
+			(booked?.metadata as { quotaRetryNextAt?: string } | undefined)
+				?.quotaRetryNextAt,
+		).toEqual(expect.any(String));
+		expect(body.quotaRetried).toBe(0);
+		expect(body.quotaRetryBlocked).toBe(1);
+	});
+
+	it("a start that took is counted as retried and the code is NOT restored", async () => {
+		armQuotaBlocked();
+		transcribeVideoMock.mockResolvedValueOnce({
+			success: true,
+			message: "Transcription started inline",
+		});
+
+		const res = await GET(cronRequest());
+		const body = (await res.json()) as Record<string, unknown>;
+
+		expect(restoredQuotaWrites()).toHaveLength(0);
+		expect(body.quotaRetried).toBe(1);
+		expect(body.quotaRetryBlocked).toBe(0);
+	});
 });

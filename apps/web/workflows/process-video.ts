@@ -64,6 +64,20 @@ export async function processVideoWorkflow(
 		// FatalError-only edge case (video row missing / storage misconfigured),
 		// not the normal optimize-failure path, which was never surfaced via
 		// videoUploads either.
+		//
+		// Stamp `processingRunAt` BEFORE the row goes away: from the delete
+		// until ffmpeg's first progress tick nothing else says this run is
+		// alive, and the recover-stale-ai-jobs rowless pass would otherwise read
+		// a live run as a dead one and start a second (2026-09-25 review).
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(
+					COALESCE(${videos.metadata}, JSON_OBJECT()),
+					'$.processingRunAt', ${new Date().toISOString()}
+				)`,
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
 		await db()
 			.delete(videoUploads)
 			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
@@ -73,6 +87,10 @@ export async function processVideoWorkflow(
 		await startPendingAiRequest(videoId);
 
 		await optimizeAndFinalizeVideo(videoId, rawFileKey);
+
+		// LAST step, after optimizeAndFinalizeVideo's own `finally` cleanup has
+		// run, so nothing in this run can remove it again.
+		await markProcessingFinished(videoId);
 
 		return {
 			success: true,
@@ -321,11 +339,18 @@ async function clearProcessingProgress(videoId: string): Promise<void> {
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_REMOVE(
-					COALESCE(${videos.metadata}, JSON_OBJECT()),
-					'$.processingStage',
-					'$.processingPercent',
-					'$.processingUpdatedAt'
+				// Re-stamp processingRunAt in the SAME statement: the heartbeat is
+				// being removed, and on a run longer than the recovery window the
+				// original stamp is already stale — without this, the gap until
+				// processedAt lands would read as a dead run.
+				metadata: sql`JSON_SET(
+					JSON_REMOVE(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.processingStage',
+						'$.processingPercent',
+						'$.processingUpdatedAt'
+					),
+					'$.processingRunAt', ${new Date().toISOString()}
 				)`,
 			})
 			.where(eq(videos.id, videoId as Video.VideoId));
@@ -335,6 +360,39 @@ async function clearProcessingProgress(videoId: string): Promise<void> {
 			error,
 		);
 	}
+}
+
+/**
+ * Writes the durable `metadata.processedAt` (ISO) success marker. Before it
+ * existed, nothing stored separated "processing died right after deleting the
+ * upload row" from "processed fine, waiting for the analyse press": the
+ * progress fields are cleared in `finally`, `result.mp4` is not proof (the
+ * optimize can be skipped and swallowed), and duration/width come from the
+ * client (prod incident 2026-09-25, a rowless never-processed upload).
+ *
+ * Written on every run that FINISHED — including the benign "optimize failed
+ * or was skipped, raw upload kept playable" branch, which is a normal return
+ * from optimizeAndFinalizeVideo. Deliberately NOT written on the terminal
+ * failure path (the catch in processVideoWorkflow): a run that threw must
+ * stay distinguishable from a finished one so it remains recoverable.
+ *
+ * JSON_SET on the existing column, never a whole-object overwrite — the same
+ * rule as the progress writer, so it cannot race the AI counters. Not
+ * swallowed: a lost marker makes a finished video look unprocessed, so a
+ * failure here surfaces like any other step error instead of passing silently.
+ */
+async function markProcessingFinished(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
 /**

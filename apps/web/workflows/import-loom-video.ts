@@ -5,7 +5,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage, validateLoomDownloadUrl } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { persistableProcessingError } from "@/lib/processing-error";
@@ -302,6 +302,22 @@ async function downloadLoomToS3(
 
 async function completeImport(videoId: string): Promise<void> {
 	"use step";
+
+	// A finished Loom import leaves a raw-upload.mp4, no upload row and never
+	// runs processVideoWorkflow — the exact shape the recover-stale-ai-jobs
+	// rowless pass treats as "processing died". The same durable success marker
+	// process-video.ts writes (markProcessingFinished) keeps it out of that
+	// pass. Written BEFORE the row delete so there is no marker-less rowless
+	// moment. JSON_SET, never a whole-object overwrite.
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
 
 	await db()
 		.delete(videoUploads)

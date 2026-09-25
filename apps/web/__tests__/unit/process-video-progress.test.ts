@@ -18,6 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const state = vi.hoisted(() => ({
 	videoRow: null as Record<string, unknown> | null,
+	/** Every DB write in call order: "delete" or "update:<json paths>". */
+	writes: [] as string[],
 }));
 
 const schemaMocks = vi.hoisted(() => ({
@@ -94,6 +96,9 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (values: Record<string, unknown>) => ({
 				where: () => {
+					state.writes.push(
+						`update:${isSqlExpression(values.metadata) ? values.metadata.sql : Object.keys(values).join(",")}`,
+					);
 					if (state.videoRow) {
 						for (const [key, value] of Object.entries(values)) {
 							if (key === "metadata" && isSqlExpression(value)) {
@@ -110,7 +115,12 @@ vi.mock("@cap/database", () => ({
 				},
 			}),
 		}),
-		delete: () => ({ where: () => Promise.resolve([]) }),
+		delete: () => ({
+			where: () => {
+				state.writes.push("delete");
+				return Promise.resolve([]);
+			},
+		}),
 	}),
 }));
 
@@ -251,6 +261,116 @@ describe("processVideoWorkflow — silent optimize/save stage carrier", () => {
 		expect(metadata.processingStage).toBeUndefined();
 		expect(metadata.processingPercent).toBeUndefined();
 		expect(metadata.processingUpdatedAt).toBeUndefined();
+	});
+});
+
+// 2026-09-25 prod incident: a rowless video with transcriptionStatus NULL and
+// a complete raw upload was indistinguishable from a finished one — nothing
+// durable recorded that processing had actually finished.
+describe("processVideoWorkflow — durable processedAt marker", () => {
+	beforeAll(async () => {
+		optimizedFile.path = join(tmpdir(), `process-video-marker-${Date.now()}.mp4`);
+		await fs.writeFile(optimizedFile.path, Buffer.from([0, 1, 2, 3]));
+	});
+
+	afterAll(async () => {
+		await fs.rm(optimizedFile.path, { force: true });
+	});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		state.videoRow = freshVideoRow();
+		state.writes = [];
+		optimizeMock.mockReset();
+		probeMock.mockReset();
+		probeMock.mockImplementation(() => Promise.resolve({ durationSec: 42 }));
+	});
+
+	const run = async () => {
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		return processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: "raw/key.mp4",
+			bucketId: null,
+		});
+	};
+
+	it("writes metadata.processedAt (ISO) on a successful run, surviving the progress cleanup", async () => {
+		optimizeMock.mockImplementation(() =>
+			Promise.resolve({
+				filePath: optimizedFile.path,
+				metadata: { durationSec: 42 },
+				cleanup: () => Promise.resolve(),
+			}),
+		);
+		const before = Date.now();
+
+		const result = await run();
+
+		expect(result.success).toBe(true);
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(typeof metadata.processedAt).toBe("string");
+		const stamped = Date.parse(metadata.processedAt as string);
+		expect(new Date(stamped).toISOString()).toBe(metadata.processedAt);
+		expect(stamped).toBeGreaterThanOrEqual(before - 1000);
+		expect(metadata.processingStage).toBeUndefined();
+		// The run's own life sign, written when it deleted the upload row.
+		expect(Date.parse(metadata.processingRunAt as string)).toBeGreaterThanOrEqual(
+			before - 1000,
+		);
+		// ORDER: the run's life sign is stamped BEFORE the upload row goes away,
+		// so there is never a rowless moment without it.
+		const firstRunAtStamp = state.writes.findIndex(
+			(write) => write.startsWith("update:") && write.includes("$.processingRunAt"),
+		);
+		const rowDelete = state.writes.indexOf("delete");
+		expect(firstRunAtStamp).toBeGreaterThanOrEqual(0);
+		expect(rowDelete).toBeGreaterThan(firstRunAtStamp);
+
+		// ITEM 3 (2026-09-25): clearProcessingProgress re-stamps
+		// processingRunAt in the SAME statement that removes the progress
+		// keys. On a run longer than the recovery window the original
+		// pre-delete stamp is already stale by the time the heartbeat keys go
+		// away — without the re-stamp, the gap until processedAt lands reads
+		// as a dead run and the cron re-encodes a healthy video. The
+		// discriminator: ONE write carrying both the removal ($.processingStage)
+		// and the life sign ($.processingRunAt).
+		const clearRestamp = state.writes.find(
+			(write) =>
+				write.startsWith("update:") &&
+				write.includes("$.processingStage") &&
+				write.includes("$.processingRunAt"),
+		);
+		expect(clearRestamp).toBeDefined();
+	});
+
+	it("writes metadata.processedAt on the benign optimize-skipped branch (raw kept playable)", async () => {
+		optimizeMock.mockImplementation(() =>
+			Promise.reject(new Error("optimize skipped")),
+		);
+
+		const result = await run();
+
+		expect(result.success).toBe(true);
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(typeof metadata.processedAt).toBe("string");
+		expect(Number.isNaN(Date.parse(metadata.processedAt as string))).toBe(false);
+	});
+
+	it("does NOT write metadata.processedAt when the run fails terminally (stays recoverable)", async () => {
+		const { getStorageAccessForVideo } = await import("@/lib/video-storage");
+		vi.mocked(getStorageAccessForVideo).mockImplementationOnce(
+			() =>
+				({
+					pipe: () => Promise.reject(new Error("storage misconfigured")),
+				}) as never,
+		);
+
+		await expect(run()).rejects.toThrow("storage misconfigured");
+
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(metadata.processedAt).toBeUndefined();
 	});
 });
 
