@@ -8,19 +8,21 @@ import { saveAiBudget } from "@/actions/billing/save-ai-budget";
 import { useDashboardContext } from "../../../Contexts";
 
 export const AiBudgetCard = () => {
-	const { user } = useDashboardContext();
+	const { user, userPreferences } = useDashboardContext();
 
+	// Read from userPreferences (loaded fresh from the DB in dashboard-data.ts),
+	// NOT from `user`: resolveCurrentUser strips `preferences`, so reading it
+	// there showed the $10 default after every refresh and a re-save wrote that
+	// default over the real cap.
 	const savedBudget = (
-		user as {
-			preferences?: {
-				aiBudget?: {
-					monthlyUsdCents: number;
-					alertAtPct: number;
-					enabled: boolean;
-				};
-			} | null;
-		}
-	)?.preferences?.aiBudget;
+		userPreferences as {
+			aiBudget?: {
+				monthlyUsdCents: number;
+				alertAtPct: number;
+				enabled: boolean;
+			};
+		} | null
+	)?.aiBudget;
 
 	const [enabled, setEnabled] = useState(savedBudget?.enabled ?? false);
 	const [dollars, setDollars] = useState(

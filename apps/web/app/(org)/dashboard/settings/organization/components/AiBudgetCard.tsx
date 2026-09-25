@@ -19,7 +19,7 @@ type AiBudgetSettings = {
 };
 
 export const AiBudgetCard = () => {
-	const { activeOrganization, user } = useDashboardContext();
+	const { activeOrganization, user, userPreferences } = useDashboardContext();
 
 	const currentMember = activeOrganization?.members.find(
 		(member) => member.userId === user.id,
@@ -39,9 +39,10 @@ export const AiBudgetCard = () => {
 		| undefined;
 	const savedBudget = orgSettings?.aiBudget;
 
+	// userPreferences, not `user`: resolveCurrentUser strips `preferences`.
 	const userBudget = (
-		user as { preferences?: { aiBudget?: AiBudgetSettings } | null }
-	)?.preferences?.aiBudget;
+		userPreferences as { aiBudget?: AiBudgetSettings } | null
+	)?.aiBudget;
 
 	const [enabled, setEnabled] = useState(savedBudget?.enabled ?? false);
 	const [som, setSom] = useState(
