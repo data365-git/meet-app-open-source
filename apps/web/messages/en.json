@@ -204,7 +204,8 @@
 		"cancelUploadConfirmAction": "Yes, cancel it",
 		"cancelUploadConfirmCancel": "No",
 		"uploadCancelled": "Upload cancelled.",
-		"cancelUploadFailed": "Could not cancel the upload. Please try again."
+		"cancelUploadRefused": "The upload could not be cancelled. The recording was kept.",
+		"cancelUploadFailed": "Could not cancel the upload."
 	},
 	"auth": {
 		"signingIn": "Signing you in…",

@@ -26,11 +26,10 @@ import { runPromise } from "@/lib/server";
  * — safe to call twice if the client retries), rather than hand-rolling a
  * second copy of that logic.
  *
- * SAFETY: refuses unless the row is still genuinely mid-upload — a
- * video_uploads row in phase 'uploading' must exist, and transcription must
- * not have started nor a processingStartedAt marker exist — so a Cancel
- * button can never discard a real, finished-or-finishing recording, whatever
- * the client sends.
+ * SAFETY: refuses unless the row is still mid-upload — a video_uploads row
+ * in phase 'uploading' must exist, and transcription must not have started
+ * nor a processingStartedAt marker exist — so, whatever the client sends,
+ * this cannot erase a recording once processing has claimed the row.
  */
 export async function cancelUpload(
 	videoId: Video.VideoId,

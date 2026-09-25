@@ -36,6 +36,7 @@ vi.mock("@cap/database/auth/session", () => ({
 const uploadRow = vi.hoisted(() => ({
 	value: null as { videoId: string; phase: string } | null,
 	deleteAffectedRows: null as number | null,
+	deleteWhere: [] as unknown[],
 	inserted: [] as unknown[],
 }));
 
@@ -54,14 +55,16 @@ vi.mock("@cap/database", () => ({
 			}),
 		}),
 		delete: () => ({
-			where: () =>
-				Promise.resolve([
+			where: (condition: unknown) => {
+				uploadRow.deleteWhere.push(condition);
+				return Promise.resolve([
 					{
 						affectedRows:
 							uploadRow.deleteAffectedRows ??
 							(uploadRow.value?.phase === "uploading" ? 1 : 0),
 					},
-				]),
+				]);
+			},
 		}),
 		insert: () => ({
 			values: (row: unknown) => {
@@ -135,6 +138,7 @@ describe("cancelUpload", () => {
 		videoRow.value = null;
 		uploadRow.value = null;
 		uploadRow.deleteAffectedRows = null;
+		uploadRow.deleteWhere = [];
 		uploadRow.inserted = [];
 	});
 
@@ -159,6 +163,8 @@ describe("cancelUpload", () => {
 			transcriptionStatus: "PROCESSING",
 			metadata: null,
 		};
+		// An 'uploading' row, so only the transcription guard can refuse.
+		uploadRow.value = { videoId: "video-started", phase: "uploading" };
 		const result = await cancelUpload(makeVideoId("video-started"));
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
@@ -175,6 +181,8 @@ describe("cancelUpload", () => {
 			transcriptionStatus: null,
 			metadata: { processingStartedAt: "2026-09-11T00:00:00.000Z" },
 		};
+		// An 'uploading' row, so only the marker guard can refuse.
+		uploadRow.value = { videoId: "video-marked", phase: "uploading" };
 		const result = await cancelUpload(makeVideoId("video-marked"));
 		expect(result.ok).toBe(false);
 		expect(runPromiseMock).not.toHaveBeenCalled();
@@ -260,6 +268,12 @@ describe("cancelUpload", () => {
 			const result = await cancelUpload(makeVideoId("video-x"));
 			expect(result).toEqual({ ok: true });
 			expect(runPromiseMock).toHaveBeenCalledTimes(1);
+			// The claim is conditional on the phase, not a bare delete by id.
+			expect(uploadRow.deleteWhere).toEqual([
+				expect.arrayContaining([
+					{ field: "videoUploads.phase", value: "uploading" },
+				]),
+			]);
 		});
 	});
 });

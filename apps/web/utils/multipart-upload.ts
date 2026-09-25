@@ -482,6 +482,7 @@ export async function uploadBlobMultipart({
 							)
 						: error;
 				if (
+					signal?.aborted ||
 					error instanceof CancelledUploadError ||
 					attempt >= MAX_PART_UPLOAD_ATTEMPTS
 				) {

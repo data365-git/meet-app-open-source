@@ -204,7 +204,8 @@
 		"cancelUploadConfirmAction": "Да, отменить",
 		"cancelUploadConfirmCancel": "Нет",
 		"uploadCancelled": "Загрузка отменена.",
-		"cancelUploadFailed": "Не удалось отменить загрузку. Попробуйте ещё раз."
+		"cancelUploadRefused": "Загрузку не удалось отменить. Запись сохранена.",
+		"cancelUploadFailed": "Не удалось отменить загрузку."
 	},
 	"auth": {
 		"signingIn": "Выполняется вход…",

@@ -103,7 +103,11 @@ async function uploadVideoForServerProcessing(
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	signal: AbortSignal,
-	cancelMessages: { cancelled: string; cancelFailed: string },
+	cancelMessages: {
+		cancelled: string;
+		cancelRefused: string;
+		cancelFailed: string;
+	},
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
 	let createdVideoId:
@@ -362,22 +366,27 @@ async function uploadVideoForServerProcessing(
 		// behind for something the user asked to go away entirely). Discard the
 		// row and whatever bytes were already sent via the same permanent-erase
 		// path the account-deletion and Trash flows already use.
-		if (err instanceof CancelledUploadError) {
-			let cancelled = true;
+		// Any failure once the signal is aborted is the cancel, not a new error:
+		// a request that carries no signal (e.g. initiate) can still reject with
+		// "Failed to fetch" after the user pressed Cancel.
+		if (err instanceof CancelledUploadError || signal.aborted) {
+			let outcome: "cancelled" | "refused" | "failed" = "cancelled";
 			if (createdVideoId) {
 				try {
 					const result = await cancelUpload(createdVideoId);
 					if (!result.ok) {
-						cancelled = false;
+						outcome = "refused";
 						console.error("cancelUpload failed:", result.error);
 					}
 				} catch (cleanupErr) {
-					cancelled = false;
+					outcome = "failed";
 					console.error("Failed to cancel upload:", cleanupErr);
 				}
 			}
-			if (cancelled) {
+			if (outcome === "cancelled") {
 				toast.info(cancelMessages.cancelled);
+			} else if (outcome === "refused") {
+				toast.error(cancelMessages.cancelRefused);
 			} else {
 				toast.error(cancelMessages.cancelFailed);
 			}
@@ -466,6 +475,7 @@ export function useImportUpload({
 					abortController.signal,
 					{
 						cancelled: t("uploadCancelled"),
+						cancelRefused: t("cancelUploadRefused"),
 						cancelFailed: t("cancelUploadFailed"),
 					},
 				);

@@ -189,6 +189,32 @@ describe("uploadWithTarget — cancellation", () => {
 		expect(MockXMLHttpRequest.sendCount).toBe(3);
 	});
 
+	it("a network error surfacing after the cancel on a NON-final attempt settles at once, with no retry backoff", async () => {
+		vi.useFakeTimers();
+		// One outcome only: a retry would wait out the backoff and then reach
+		// the queue, so settling before any timer advances proves no retry ran.
+		MockXMLHttpRequest.setOutcomes([{ type: "network-error-on-abort" }]);
+		const controller = new AbortController();
+
+		let settledWith: unknown = "pending";
+		void uploadWithTarget({
+			target: putTarget,
+			body: new Blob(["x"]),
+			signal: controller.signal,
+		}).catch((error: unknown) => {
+			settledWith = error;
+		});
+
+		while (MockXMLHttpRequest.outcomes.length > 0) {
+			await Promise.resolve();
+		}
+		controller.abort();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(settledWith).toBeInstanceOf(CancelledUploadError);
+		expect(MockXMLHttpRequest.sendCount).toBe(1);
+	});
+
 	it("an ordinary success still resolves when no cancellation happens", async () => {
 		MockXMLHttpRequest.setOutcomes([{ type: "success" }]);
 		await expect(

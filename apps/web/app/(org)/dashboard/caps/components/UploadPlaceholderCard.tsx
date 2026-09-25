@@ -126,12 +126,12 @@ export const UploadPlaceholderCard = () => {
 		uploadStatus.status !== "serverProcessing" &&
 		!allBytesSent;
 
-	// A confirm left open across a status change would act on a state the
-	// user never saw; close it and let them decide again.
-	const statusKind = uploadStatus?.status;
+	// A confirm left open after cancelling stopped being possible would claim
+	// a deletion that cannot happen; close it. Keyed on canCancel only, so
+	// ordinary phase changes (parsing -> creating -> uploading) keep it open.
 	useEffect(() => {
-		setConfirmingCancel(false);
-	}, [statusKind, canCancel]);
+		if (!canCancel) setConfirmingCancel(false);
+	}, [canCancel]);
 
 	if (!uploadStatus) return null;
 	return (

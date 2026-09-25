@@ -204,7 +204,8 @@
 		"cancelUploadConfirmAction": "Ha, bekor qil",
 		"cancelUploadConfirmCancel": "Yo'q",
 		"uploadCancelled": "Yuklash bekor qilindi.",
-		"cancelUploadFailed": "Yuklashni bekor qilib bo'lmadi. Qaytadan urinib ko'ring."
+		"cancelUploadRefused": "Yuklashni bekor qilib bo'lmadi. Yozuv saqlab qolindi.",
+		"cancelUploadFailed": "Yuklashni bekor qilib bo'lmadi."
 	},
 	"auth": {
 		"signingIn": "Tizimga kiritilmoqda…",
