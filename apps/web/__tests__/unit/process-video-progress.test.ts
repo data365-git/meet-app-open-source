@@ -18,6 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const state = vi.hoisted(() => ({
 	videoRow: null as Record<string, unknown> | null,
+	/** Every DB write in call order: "delete" or "update:<json paths>". */
+	writes: [] as string[],
 }));
 
 const schemaMocks = vi.hoisted(() => ({
@@ -94,6 +96,9 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (values: Record<string, unknown>) => ({
 				where: () => {
+					state.writes.push(
+						`update:${isSqlExpression(values.metadata) ? values.metadata.sql : Object.keys(values).join(",")}`,
+					);
 					if (state.videoRow) {
 						for (const [key, value] of Object.entries(values)) {
 							if (key === "metadata" && isSqlExpression(value)) {
@@ -110,7 +115,12 @@ vi.mock("@cap/database", () => ({
 				},
 			}),
 		}),
-		delete: () => ({ where: () => Promise.resolve([]) }),
+		delete: () => ({
+			where: () => {
+				state.writes.push("delete");
+				return Promise.resolve([]);
+			},
+		}),
 	}),
 }));
 
@@ -270,6 +280,7 @@ describe("processVideoWorkflow — durable processedAt marker", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		state.videoRow = freshVideoRow();
+		state.writes = [];
 		optimizeMock.mockReset();
 		probeMock.mockReset();
 		probeMock.mockImplementation(() => Promise.resolve({ durationSec: 42 }));
@@ -308,6 +319,30 @@ describe("processVideoWorkflow — durable processedAt marker", () => {
 		expect(Date.parse(metadata.processingRunAt as string)).toBeGreaterThanOrEqual(
 			before - 1000,
 		);
+		// ORDER: the run's life sign is stamped BEFORE the upload row goes away,
+		// so there is never a rowless moment without it.
+		const firstRunAtStamp = state.writes.findIndex(
+			(write) => write.startsWith("update:") && write.includes("$.processingRunAt"),
+		);
+		const rowDelete = state.writes.indexOf("delete");
+		expect(firstRunAtStamp).toBeGreaterThanOrEqual(0);
+		expect(rowDelete).toBeGreaterThan(firstRunAtStamp);
+
+		// ITEM 3 (2026-09-25): clearProcessingProgress re-stamps
+		// processingRunAt in the SAME statement that removes the progress
+		// keys. On a run longer than the recovery window the original
+		// pre-delete stamp is already stale by the time the heartbeat keys go
+		// away — without the re-stamp, the gap until processedAt lands reads
+		// as a dead run and the cron re-encodes a healthy video. The
+		// discriminator: ONE write carrying both the removal ($.processingStage)
+		// and the life sign ($.processingRunAt).
+		const clearRestamp = state.writes.find(
+			(write) =>
+				write.startsWith("update:") &&
+				write.includes("$.processingStage") &&
+				write.includes("$.processingRunAt"),
+		);
+		expect(clearRestamp).toBeDefined();
 	});
 
 	it("writes metadata.processedAt on the benign optimize-skipped branch (raw kept playable)", async () => {

@@ -339,11 +339,18 @@ async function clearProcessingProgress(videoId: string): Promise<void> {
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_REMOVE(
-					COALESCE(${videos.metadata}, JSON_OBJECT()),
-					'$.processingStage',
-					'$.processingPercent',
-					'$.processingUpdatedAt'
+				// Re-stamp processingRunAt in the SAME statement: the heartbeat is
+				// being removed, and on a run longer than the recovery window the
+				// original stamp is already stale — without this, the gap until
+				// processedAt lands would read as a dead run.
+				metadata: sql`JSON_SET(
+					JSON_REMOVE(
+						COALESCE(${videos.metadata}, JSON_OBJECT()),
+						'$.processingStage',
+						'$.processingPercent',
+						'$.processingUpdatedAt'
+					),
+					'$.processingRunAt', ${new Date().toISOString()}
 				)`,
 			})
 			.where(eq(videos.id, videoId as Video.VideoId));

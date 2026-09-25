@@ -189,9 +189,6 @@ vi.mock("@/lib/video-storage", async () => {
 });
 
 const { GET } = await import("@/app/api/cron/recover-stale-ai-jobs/route");
-const { ROWLESS_UPLOAD_CUTOFF } = await import(
-	"@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers"
-);
 
 const CRON_SECRET = "test-cron-secret";
 
@@ -386,7 +383,12 @@ function rowlessRow(id = "video-rowless") {
 			orgId: "org-1",
 			name: "Rowless upload",
 			bucket: null,
-			metadata: { isAudio: true } as Record<string, unknown>,
+			// processingRunAt = a new-code processing run started an hour ago and
+			// then died (no processedAt, no progress since).
+			metadata: {
+				isAudio: true,
+				processingRunAt: new Date(Date.now() - HOUR_MS).toISOString(),
+			} as Record<string, unknown>,
 			deletedAt: null as Date | null,
 			transcriptionStatus: null as string | null,
 			createdAt: new Date(Date.now() - HOUR_MS),
@@ -415,10 +417,6 @@ describe("recover-stale-ai-jobs — rowless lost upload (no video_uploads row)",
 		state.insertAffected = 1;
 		state.lastSelectWhere = [];
 		process.env.CRON_SECRET = CRON_SECRET;
-		// Two hours past the deploy cutoff, whatever the real clock says, so
-		// these pins survive the cutoff being moved to the real deploy time.
-		vi.useFakeTimers({ toFake: ["Date"] });
-		vi.setSystemTime(ROWLESS_UPLOAD_CUTOFF.getTime() + 2 * HOUR_MS);
 	});
 
 	afterEach(() => {
@@ -478,9 +476,9 @@ describe("recover-stale-ai-jobs — rowless lost upload (no video_uploads row)",
 		expectUntouched((await runCron()).body);
 	});
 
-	it("a video created BEFORE the marker cutoff is left untouched", async () => {
+	it("a video with NO processingRunAt (no new-code run ever started — e.g. it predates the marker) is left untouched", async () => {
 		const row = rowlessRow();
-		row.video.createdAt = new Date(ROWLESS_UPLOAD_CUTOFF.getTime() - 60 * 1000);
+		delete row.video.metadata.processingRunAt;
 		armStaleUploadRows([row]);
 		expectUntouched((await runCron()).body);
 	});
@@ -547,8 +545,6 @@ describe("recover-stale-ai-jobs — rowless pass: review fixes (2026-09-25)", ()
 		state.insertAffected = 1;
 		state.lastSelectWhere = [];
 		process.env.CRON_SECRET = CRON_SECRET;
-		vi.useFakeTimers({ toFake: ["Date"] });
-		vi.setSystemTime(ROWLESS_UPLOAD_CUTOFF.getTime() + 2 * HOUR_MS);
 	});
 
 	afterEach(() => {
@@ -611,9 +607,7 @@ describe("recover-stale-ai-jobs — rowless pass: review fixes (2026-09-25)", ()
 		expect(flat).toContain('{"isNull":"videoUploads.videoId"}');
 		expect(flat).toContain('{"isNull":"videos.transcriptionStatus"}');
 		expect(flat).toContain("$.processedAt') IS NULL");
-		expect(flat).toContain(
-			`{"gte":"videos.createdAt","value":"${ROWLESS_UPLOAD_CUTOFF.toISOString()}"}`,
-		);
+		expect(flat).toContain("$.processingRunAt') IS NOT NULL");
 		expect(flat).toContain("$.processingRunAt");
 		expect(flat).toContain("$.rowlessRelaunchAttempts') AS UNSIGNED), 0) < ");
 	});

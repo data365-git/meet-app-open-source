@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { and, eq, gte, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
 import { Effect, Schedule } from "effect";
 import { NextResponse } from "next/server";
 import { getAffectedRows } from "@/lib/affected-rows";
@@ -19,7 +19,6 @@ import {
 	hasPendingBatchJobs,
 	isTranscriptionJobStale,
 	MAX_QUOTA_RETRY_ATTEMPTS,
-	ROWLESS_UPLOAD_CUTOFF,
 	shouldAutoRetry,
 	shouldRetryQuotaBlocked,
 	withIncrementedAutoRecoverAttempts,
@@ -73,11 +72,13 @@ type StaleUploadCandidate = {
 // finished run, and by a finished Loom import) is what separates that from a
 // healthy video waiting for its analyse press.
 //
-// HARD CUTOFF: rows created before the marker existed have NO processedAt, so
-// every one of them — healthy or not — would look unprocessed and be
-// re-encoded. Only rows created on/after this instant are admitted. It must
-// not be earlier than the deploy that ships the marker writers — the constant
-// (ROWLESS_UPLOAD_CUTOFF, stale-job-helpers.ts) is set to the deploy time.
+// ADMISSION IS A DATA FACT, not a date: only a video carrying
+// `metadata.processingRunAt` is admitted. processVideoWorkflow stamps it just
+// before deleting the upload row, and only code that also writes processedAt
+// on success does so — so a row predating the marker (no processedAt, and
+// healthy or not it would look unprocessed) can never match. A hand-set date
+// cutoff was replaced by this in the 2026-09-25 review: it depended on being
+// moved to the deploy time by hand.
 // Per-video relaunch budget for the rowless shape: a video whose processing
 // fails terminally every time (storage misconfigured, corrupt source) would
 // otherwise be relaunched on every tick and hold a shared relaunch slot forever.
@@ -98,7 +99,7 @@ function isRowlessRelaunchCandidate(
 	if (video.deletedAt) return false;
 	if (video.transcriptionStatus !== null) return false;
 	if (extra.processedAt) return false;
-	if (video.createdAt.getTime() < ROWLESS_UPLOAD_CUTOFF.getTime()) return false;
+	if (!extra.processingRunAt) return false;
 	const attempts = Number(extra.rowlessRelaunchAttempts ?? 0);
 	if (attempts >= MAX_ROWLESS_RELAUNCH_ATTEMPTS) return false;
 	const lifeSigns = [
@@ -423,7 +424,7 @@ export async function GET(request: Request) {
 	// Rows retired because their object never appeared - reported so a spike is
 	// visible instead of silent.
 	let staleUploadRetired = 0;
-	// Rowless lost uploads relaunched (see ROWLESS_UPLOAD_CUTOFF). Shares
+	// Rowless lost uploads relaunched (see isRowlessRelaunchCandidate). Shares
 	// STALE_UPLOAD_RELAUNCH_LIMIT with staleUploadRelaunched.
 	let staleUploadRowlessRelaunched = 0;
 
@@ -722,13 +723,13 @@ export async function GET(request: Request) {
 							like(videoUploads.rawFileKey, "%/raw-upload.%"),
 						),
 					),
-					// ROWLESS arm — see ROWLESS_UPLOAD_CUTOFF and
-					// isRowlessRelaunchCandidate, its JS twin.
+					// ROWLESS arm — see isRowlessRelaunchCandidate, its JS twin.
 					and(
 						isNull(videoUploads.videoId),
 						isNull(videos.transcriptionStatus),
 						sql`JSON_EXTRACT(${videos.metadata}, '$.processedAt') IS NULL`,
-						gte(videos.createdAt, ROWLESS_UPLOAD_CUTOFF),
+						// Admission fact: a new-code processing run started here.
+						sql`JSON_EXTRACT(${videos.metadata}, '$.processingRunAt') IS NOT NULL`,
 						lte(videos.createdAt, staleUploadBefore),
 						sql`GREATEST(
 							COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.processingRunAt')), ''),

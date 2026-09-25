@@ -1,10 +1,5 @@
 import type { VideoMetadata } from "@cap/database/types";
 
-// Rowless-upload recovery admits only videos created on/after this instant:
-// older rows have no metadata.processedAt and would ALL look unprocessed. It
-// must be >= the deploy that ships the marker writers (see route.ts).
-export const ROWLESS_UPLOAD_CUTOFF = new Date("2026-09-25T23:59:00Z"); // SET TO DEPLOY TIME
-
 export const FAST_STALE_JOB_THRESHOLD_MS = 60 * 60 * 1000;
 // This threshold is TIME SINCE LAST PROGRESS (the aiProgressAt heartbeat,
 // falling back to processingStartedAt for rows claimed before the heartbeat

@@ -455,6 +455,15 @@ describe("recover-stale-ai-jobs quota re-kick — a refused start must stay reco
 		const body = (await res.json()) as Record<string, unknown>;
 
 		expect(transcribeVideoMock).toHaveBeenCalledTimes(1);
+		// reclaimProcessing = false: this loop may only restart the ERROR row,
+		// never take over a PROCESSING row a user Retry just claimed.
+		expect(transcribeVideoMock).toHaveBeenCalledWith(
+			"vid-quota-1",
+			"owner-1",
+			true,
+			true,
+			false,
+		);
 		expect(restoredQuotaWrites()).toHaveLength(1);
 		// The restore is guarded on the row STILL being ERROR, so a concurrent
 		// claim (PROCESSING) is never stomped with a stale QUOTA code.
