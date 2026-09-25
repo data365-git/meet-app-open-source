@@ -254,6 +254,87 @@ describe("processVideoWorkflow — silent optimize/save stage carrier", () => {
 	});
 });
 
+// 2026-09-25 prod incident: a rowless video with transcriptionStatus NULL and
+// a complete raw upload was indistinguishable from a finished one — nothing
+// durable recorded that processing had actually finished.
+describe("processVideoWorkflow — durable processedAt marker", () => {
+	beforeAll(async () => {
+		optimizedFile.path = join(tmpdir(), `process-video-marker-${Date.now()}.mp4`);
+		await fs.writeFile(optimizedFile.path, Buffer.from([0, 1, 2, 3]));
+	});
+
+	afterAll(async () => {
+		await fs.rm(optimizedFile.path, { force: true });
+	});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		state.videoRow = freshVideoRow();
+		optimizeMock.mockReset();
+		probeMock.mockReset();
+		probeMock.mockImplementation(() => Promise.resolve({ durationSec: 42 }));
+	});
+
+	const run = async () => {
+		const { processVideoWorkflow } = await import("@/workflows/process-video");
+		return processVideoWorkflow({
+			videoId: VIDEO_ID,
+			userId: "user-1",
+			rawFileKey: "raw/key.mp4",
+			bucketId: null,
+		});
+	};
+
+	it("writes metadata.processedAt (ISO) on a successful run, surviving the progress cleanup", async () => {
+		optimizeMock.mockImplementation(() =>
+			Promise.resolve({
+				filePath: optimizedFile.path,
+				metadata: { durationSec: 42 },
+				cleanup: () => Promise.resolve(),
+			}),
+		);
+		const before = Date.now();
+
+		const result = await run();
+
+		expect(result.success).toBe(true);
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(typeof metadata.processedAt).toBe("string");
+		const stamped = Date.parse(metadata.processedAt as string);
+		expect(new Date(stamped).toISOString()).toBe(metadata.processedAt);
+		expect(stamped).toBeGreaterThanOrEqual(before - 1000);
+		expect(metadata.processingStage).toBeUndefined();
+	});
+
+	it("writes metadata.processedAt on the benign optimize-skipped branch (raw kept playable)", async () => {
+		optimizeMock.mockImplementation(() =>
+			Promise.reject(new Error("optimize skipped")),
+		);
+
+		const result = await run();
+
+		expect(result.success).toBe(true);
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(typeof metadata.processedAt).toBe("string");
+		expect(Number.isNaN(Date.parse(metadata.processedAt as string))).toBe(false);
+	});
+
+	it("does NOT write metadata.processedAt when the run fails terminally (stays recoverable)", async () => {
+		const { getStorageAccessForVideo } = await import("@/lib/video-storage");
+		vi.mocked(getStorageAccessForVideo).mockImplementationOnce(
+			() =>
+				({
+					pipe: () => Promise.reject(new Error("storage misconfigured")),
+				}) as never,
+		);
+
+		await expect(run()).rejects.toThrow("storage misconfigured");
+
+		const metadata = state.videoRow?.metadata as Record<string, unknown>;
+		expect(metadata.processedAt).toBeUndefined();
+	});
+});
+
 describe("shouldWriteProcessingProgress — throttle", () => {
 	it("writes at most once per 5s of simulated time, and skips a write when the integer percent is unchanged", async () => {
 		const { shouldWriteProcessingProgress } = await import(
