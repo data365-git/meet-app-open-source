@@ -61,7 +61,11 @@ function currentBillingMonth(): string {
 	return `${year}-${month}`;
 }
 
-async function getMonthlySpendMicros(
+// Exported (2026-09-25, honest-AI-status): the generate route reports the
+// monthly-cap numbers with its 402 refusal — one spend query, one definition.
+export { currentBillingMonth };
+
+export async function getMonthlySpendMicros(
 	column: "orgId" | "userId",
 	id: string,
 	billingMonth: string,

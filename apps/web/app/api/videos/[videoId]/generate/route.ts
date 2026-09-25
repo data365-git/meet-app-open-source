@@ -16,7 +16,60 @@ import {
   bankedStartRequestsFullAnalysis,
   hasPendingAiGenerationRequest,
 } from "@/lib/ai-generation-request";
+import {
+  currentBillingMonth,
+  getAiBudgetCapsMicros,
+  getMonthlySpendMicros,
+} from "@/lib/ai-cost-guard";
 import { transcribeVideo } from "@/lib/transcribe";
+
+/**
+ * S2 (owner order 2026-09-25: "pul tugasa pul tugadi desin"): a monthly-cap
+ * refusal is NOT a server error. Answer HTTP 402 with a machine code so the
+ * panel shows the money truth (with spent/cap numbers) instead of the raw
+ * English string — the numbers come from the same cost-guard helpers the
+ * refusal itself used, so the line can never disagree with the block.
+ */
+async function budgetExceededRefusal(video: {
+  orgId: string | null;
+  ownerId: string;
+}): Promise<Response> {
+  let spentUsd = 0;
+  let capUsd = 0;
+  try {
+    const month = currentBillingMonth();
+    const caps = await getAiBudgetCapsMicros({
+      orgId: (video.orgId ?? "") as never,
+      userId: video.ownerId,
+    });
+    const capsList = [
+      { cap: caps.budgetCapOrgMicros, org: true },
+      { cap: caps.budgetCapUserMicros, org: false },
+    ].filter((c): c is { cap: number; org: boolean } => c.cap != null);
+    // The EFFECTIVE blocker is the smallest reached cap; show that pair.
+    for (const { cap, org } of capsList) {
+      const spend = await getMonthlySpendMicros(
+        org ? "orgId" : "userId",
+        org ? (video.orgId as string) : video.ownerId,
+        month,
+      );
+      if (spend >= cap && (capUsd === 0 || cap / 1e6 < capUsd)) {
+        spentUsd = spend / 1e6;
+        capUsd = cap / 1e6;
+      }
+    }
+  } catch (error) {
+    console.error("[generate] budget numbers lookup failed:", error);
+  }
+  return Response.json(
+    {
+      error: "AI budget exceeded",
+      code: "AI_BUDGET_EXCEEDED",
+      ...(spentUsd > 0 ? { spentUsd, capUsd } : {}),
+    },
+    { status: 402 },
+  );
+}
 
 export const dynamic = "force-dynamic";
 
@@ -197,6 +250,9 @@ export async function POST(
         force: reprocess,
       });
       if (!result.success) {
+        if (result.message === "AI budget exceeded") {
+          return budgetExceededRefusal(video);
+        }
         return Response.json({ error: result.message }, { status: 500 });
       }
       return Response.json({ started: true });
@@ -222,6 +278,9 @@ export async function POST(
     );
 
     if (!result.success) {
+      if (result.message === "AI budget exceeded") {
+        return budgetExceededRefusal(video);
+      }
       return Response.json({ error: result.message }, { status: 500 });
     }
 
