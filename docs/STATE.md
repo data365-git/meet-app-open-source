@@ -2,6 +2,13 @@
 
 _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume._
 
+> **2026-09-25 ~21:20 — DEPLOYED `3b41198` (both GLM jobs shipped). Last point:**
+> - JOB B processed-marker `7e57210` (blind GLM review SHIP) + JOB A honest-ai-status `19d2338` (review FIX-FIRST -> 4 findings fixed by GLM: public summary-quota line no longer claims transcript failed, 402 w/o numbers no longer shows $0.00/$0.00, 2 dead-code items removed). Merged into qa-fixes; combined HEAD: typecheck 0, 193/193 test files green.
+> - Live: container Up on data365-web:3b41198, health db/storage ok, login 200, share page renders with no console errors (mobile). Rollback: `cd /opt/data365 && cp docker-compose.app.yml.bak-3b41198 docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` (-> 5a8b8ac).
+> - ccgg9nqjwmw8ehy had ended aiGenerationStatus=ERROR (free Gemini 429 + paid Gemini 503 at 13:32); re-queued 19:18 UTC via ERROR->PROCESSING + cron re-kick (`retried:1`). **NEXT: confirm ccgg summary COMPLETE.**
+> - GAP found live: spec state "S5 OTHER" (e.g. provider 503) was deliberately left as the bare "AI analysis failed. AI generation error." — contradicts the owner's "never a bare failure". Proposed follow-up (not built): an honest transient line + retry. Handoff flow now: Opus writes spec -> `glm-run.ps1 -Handoff` -> GLM blind review -> Opus spot-check -> commit/deploy.
+> - qa-fixes is ahead of origin (not pushed — push needs owner OK).
+
 > **2026-09-25 (later session, budget+deploy):** owner ordered the monthly AI limit raised to $100; prod had `monthlyUsdCents=100000000` (= **$1,000,000**, a units mistake — the code multiplies cents ×10,000, `ai-cost-guard.ts:101-104`, so $100 = 10000) — **corrected to 10000 and verified in DB**; month spend $14.02/$100. Also **deployed `e61a9ed`** (cancel-mid-upload review fixes + the 2026-09-24 quota-honesty fix): container Up, health 200 db/storage ok, login 200, only the benign `authorName` migration notice. Rollback: `cp docker-compose.app.yml.bak-e61a9ed` + `up -d`. **The real remaining wall is the OpenRouter balance: $2.52** (35 credits − 32.48 used; ~$1 per 3h audio) — owner top-up pending. Repairs: y71 ✅ gaps NULL · 2creq ✅ 2 gaps = proven real silence · pgc1 ✅ one 196s gap (speech-unmeasured) · ccgg PROCESSING at check time.
 <!-- KEEP THIS LINE IN THE TOP 10 LINES. The state-pointer hook reads the quoted
      phrases from the first 10 lines of this file to route the owner's word
