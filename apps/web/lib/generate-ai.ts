@@ -10,7 +10,10 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { assertAiBudgetAvailable, BudgetExceededError } from "@/lib/ai-cost-guard";
 import { sanitizeAiErrorMessageForUi } from "@/lib/ai-error-message";
-import { clearFreeTierVerdict } from "@/lib/free-tier-health";
+import {
+	clearFreeTierVerdict,
+	isUnusableAiOutputError,
+} from "@/lib/free-tier-health";
 import { after } from "next/server";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
@@ -202,7 +205,10 @@ export async function startAiGeneration(
 								// Ordered classifier (BUDGET > QUOTA > TRANSIENT), NOT the bare
 							// transient regex: that regex also matches 429, and a quota
 							// 429 must stay a top-up problem, never a re-kick.
-							classifyAiGenerationError(rawMessage) === "TRANSIENT" ||
+							// Model-output failures (JSON parse "...position 503")
+							// must never reach the message regex.
+							(!isUnusableAiOutputError(err) &&
+								classifyAiGenerationError(rawMessage) === "TRANSIENT") ||
 								undefined,
 						} as VideoMetadata,
 					})

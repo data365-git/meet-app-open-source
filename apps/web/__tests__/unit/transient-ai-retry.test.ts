@@ -193,9 +193,28 @@ const state = vi.hoisted(() => ({
 	bookingAffected: 1,
 }));
 
+// Walk nested and()/or() arrays and objects so a raw sql fragment anywhere
+// in a WHERE tree lands in rawStrings (a top-level-only scan missed them all).
+const collectSqlStrings = vi.hoisted(() => {
+	const walk = (node: unknown, out: string[], seen = new Set<unknown>()): void => {
+		if (typeof node !== "object" || node === null || seen.has(node)) return;
+		seen.add(node);
+		if (Array.isArray(node)) {
+			for (const n of node) walk(n, out, seen);
+			return;
+		}
+		const rec = node as Record<string, unknown>;
+		if (Array.isArray(rec.strings)) out.push(...(rec.strings as string[]));
+		for (const v of Object.values(rec)) walk(v, out, seen);
+	};
+	return walk;
+});
 const updateSetMock = vi.hoisted(() =>
 	vi.fn((_arg: Record<string, unknown>) => ({
-		where: () => Promise.resolve([{ affectedRows: state.bookingAffected }]),
+		where: (...args: unknown[]) => {
+			collectSqlStrings(args, state.rawStrings);
+			return Promise.resolve([{ affectedRows: state.bookingAffected }]);
+		},
 	})),
 );
 const startAiGenerationMock = vi.hoisted(() =>
@@ -212,6 +231,7 @@ vi.mock("@cap/database", () => ({
 				const builder = {
 					leftJoin: () => builder,
 					where: (...args: unknown[]) => {
+						collectSqlStrings(args, state.rawStrings);
 						// Serialize drizzle sql fragments (strings.join("?")) and the
 						// eq/isNull/or shapes, so WHERE-clause content is assertable.
 						for (const arg of args) {
@@ -224,7 +244,6 @@ vi.mock("@cap/database", () => ({
 									strings: TemplateStringsArray;
 									values?: unknown[];
 								};
-								state.rawStrings.push(...frag.strings);
 								state.whereArgs.push(
 									`${frag.strings.join("?")} ${JSON.stringify(frag.values ?? [])}`,
 								);

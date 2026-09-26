@@ -2,7 +2,6 @@
 
 _Trigger words: "ustoz", "cap", "cap-v2", "data365". Source of truth for resume._
 
-> **2026-09-26 - THIS worktree (fix/transient-ai-retry @7853248): transient AI auto-retry, review-fixed, NOT merged/deployed.** NEXT: full suite, fresh judge re-review, merge to qa-fixes, deploy. The canonical board is D:\vibecoding\ustoz-github\docs\STATE.md (top block).
 > **2026-09-25 ~21:20 — DEPLOYED `3b41198` (both GLM jobs shipped). Last point:**
 > - JOB B processed-marker `7e57210` (blind GLM review SHIP) + JOB A honest-ai-status `19d2338` (review FIX-FIRST -> 4 findings fixed by GLM: public summary-quota line no longer claims transcript failed, 402 w/o numbers no longer shows $0.00/$0.00, 2 dead-code items removed). Merged into qa-fixes; combined HEAD: typecheck 0, 193/193 test files green.
 > - Live: container Up on data365-web:3b41198, health db/storage ok, login 200, share page renders with no console errors (mobile). Rollback: `cd /opt/data365 && cp docker-compose.app.yml.bak-3b41198 docker-compose.app.yml && docker compose -f docker-compose.app.yml up -d` (-> 5a8b8ac).

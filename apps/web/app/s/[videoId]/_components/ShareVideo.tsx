@@ -398,6 +398,18 @@ export const ShareVideo = forwardRef<
 				? aiGenerationErrorKindForPage(data.metadata)
 				: null;
 
+		// ERROR stops the poll, so an open page would keep saying "retrying
+		// (n/3)" after the cron's ladder is spent or its retry succeeded.
+		// While the retrying line is on screen, re-read the server every 60 s.
+		const transientRetryPending =
+			effectiveAiGenerationErrorCode === "TRANSIENT" &&
+			(data.metadata?.aiTransientRetryAttempts ?? 0) < 3;
+		useEffect(() => {
+			if (!transientRetryPending) return;
+			const id = setInterval(() => router.refresh(), 60_000);
+			return () => clearInterval(id);
+		}, [transientRetryPending, router]);
+
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
 		const aiProcessing =
