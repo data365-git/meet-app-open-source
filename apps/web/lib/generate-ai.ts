@@ -4,6 +4,7 @@ import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { classifyAiGenerationError } from "@/app/s/[videoId]/_components/transcription-error-message";
 import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -136,8 +137,16 @@ export async function startAiGeneration(
 					// (round-10 #3, mirroring transcription): without this, two
 					// stalls pinned the video at attempts=2 forever and every later
 					// generation went straight to ERROR with zero re-kicks. A cron
-					// RETRY must NOT refund itself.
-					...(opts?.isRetry ? {} : { autoRecoverAttempts: undefined }),
+					// RETRY must NOT refund itself. The transient ladder resets
+					// with it, so a failure after a fresh press starts a fresh
+					// 3-attempt run instead of inheriting a spent one.
+					...(opts?.isRetry
+						? {}
+						: {
+								autoRecoverAttempts: undefined,
+								aiTransientRetryAttempts: undefined,
+								aiTransientRetryAt: undefined,
+							}),
 				} as VideoMetadata,
 			})
 			.where(eq(videos.id, videoId));
@@ -170,6 +179,7 @@ export async function startAiGeneration(
 				// pays inline when its free chain is genuinely exhausted, so an
 				// AiQuotaWaitError can no longer reach this catch. Any failure
 				// here is a real error and gets the visible, retryable ERROR.)
+				const rawMessage = err instanceof Error ? err.message : String(err);
 				await db()
 					.update(videos)
 					.set({
@@ -180,9 +190,20 @@ export async function startAiGeneration(
 							// can carry Google's response body — the full detail is
 							// already in the console.error above; the DB gets the
 							// sanitized reason.
-							aiGenerationError: sanitizeAiErrorMessageForUi(
-								err instanceof Error ? err.message : String(err),
-							),
+							aiGenerationError: sanitizeAiErrorMessageForUi(rawMessage),
+							// Transient verdict (2026-09-25): the sanitizer keeps
+							// "(HTTP 503)" but strips the body, so body-only evidence
+							// ("overloaded") cannot be recovered from the stored text.
+							// Persist the verdict from the RAW message at the same
+							// site — `undefined` also clears a stale true, so a
+							// BUDGET/QUOTA/OTHER failure is never re-kicked as
+							// transient.
+							aiGenerationErrorTransient:
+								// Ordered classifier (BUDGET > QUOTA > TRANSIENT), NOT the bare
+							// transient regex: that regex also matches 429, and a quota
+							// 429 must stay a top-up problem, never a re-kick.
+							classifyAiGenerationError(rawMessage) === "TRANSIENT" ||
+								undefined,
 						} as VideoMetadata,
 					})
 					.where(eq(videos.id, videoId));

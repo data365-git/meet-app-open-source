@@ -109,6 +109,20 @@ export interface VideoMetadata {
 	aiStartPendingUpload?: string;
 	aiGenerationError?: string;
 	/**
+	 * True when the LAST generation failure was a TRANSIENT provider error
+	 * (503/overloaded/timeout shape, see isTransientGeminiMessage). The
+	 * sanitized `aiGenerationError` keeps the "(HTTP 503)" marker but strips
+	 * the body, so body-only evidence ("overloaded") cannot be matched from
+	 * the stored text — this flag is the durable verdict, written at the same
+	 * site as aiGenerationError and cleared on every non-transient failure.
+	 */
+	aiGenerationErrorTransient?: boolean;
+	/** Bounded counter for TRANSIENT generation re-kicks
+	 * (recover-stale-ai-jobs). Reset on a fresh owner start and on success. */
+	aiTransientRetryAttempts?: number;
+	/** ISO time of the last transient re-kick booking (25-min minimum gap). */
+	aiTransientRetryAt?: string;
+	/**
 	 * Why the last transcription attempt died. `QUOTA` = the AI account is out of
 	 * credits / rate-limited — transient, auto-retried by recover-stale-ai-jobs.
 	 * `FAILED` = a genuine transcription failure — terminal, manual retry only.

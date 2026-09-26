@@ -38,6 +38,17 @@ const REFINE_STALE_JOB_THRESHOLD_MS = 30 * 60 * 1000;
 // milliseconds of taking over, so neither phase can be healthy at 30 minutes.
 const STALE_UPLOAD_THRESHOLD_MS = 30 * 60 * 1000;
 
+// Transient generation re-kick ladder (2026-09-25): a generation that died on
+// a TEMPORARY provider error (503 / "overloaded") used to sit at
+// aiGenerationStatus='ERROR' forever with a bare "AI generation error"
+// (measured live: ccgg9nqjwmw8ehy, Gemini 503 at 2026-09-25 13:32, re-queued
+// by hand). The cron now re-kicks such a row at most this many times, with a
+// minimum gap so a provider outage is not hammered every tick. Same shape as
+// the QUOTA ladder (counter in metadata, cap in the WHERE, LIMIT 3, per-row
+// try/catch). BUDGET/QUOTA/OTHER failures are NEVER picked.
+const MAX_TRANSIENT_RETRY_ATTEMPTS = 3;
+const TRANSIENT_RETRY_MIN_GAP_MS = 25 * 60 * 1000;
+
 type StaleTranscriptionCandidate = {
 	id: Video.VideoId;
 	ownerId: string;
@@ -270,6 +281,9 @@ export async function GET(request: Request) {
 	const refineStaleBefore = new Date(now - REFINE_STALE_JOB_THRESHOLD_MS);
 	const refineStaleBeforeIso = refineStaleBefore.toISOString();
 	const staleUploadBefore = new Date(now - STALE_UPLOAD_THRESHOLD_MS);
+	const transientRetryBeforeIso = new Date(
+		now - TRANSIENT_RETRY_MIN_GAP_MS,
+	).toISOString();
 
 	const transcriptionCandidates: StaleTranscriptionCandidate[] = await db()
 		.select({
@@ -427,6 +441,8 @@ export async function GET(request: Request) {
 	// Rowless lost uploads relaunched (see isRowlessRelaunchCandidate). Shares
 	// STALE_UPLOAD_RELAUNCH_LIMIT with staleUploadRelaunched.
 	let staleUploadRowlessRelaunched = 0;
+	// Generation rows re-kicked after a TRANSIENT provider death (503 etc.).
+	let transientRetried = 0;
 
 	for (const candidate of transcriptionCandidates) {
 		const metadata = candidate.metadata ?? {};
@@ -746,6 +762,46 @@ export async function GET(request: Request) {
 		.orderBy(sql`${videoUploads.videoId} IS NULL`)
 		.limit(STALE_UPLOAD_SCAN_LIMIT);
 
+	// TRANSIENT generation deaths (2026-09-25): aiGenerationStatus='ERROR' rows
+	// whose failure was a temporary provider blip. The preferred arm is the
+	// durable `aiGenerationErrorTransient` flag written at the ERROR site —
+	// the sanitized `aiGenerationError` keeps "(HTTP 503)" but strips the
+	// body, so body-only evidence ("overloaded") cannot be matched from the
+	// stored text. The flag is the ONLY arm: it is written from the ordered
+	// classifier (BUDGET > QUOTA > TRANSIENT), so a quota 429 or a budget stop
+	// is never picked, and rows that predate the flag are deliberately left
+	// alone (no silent paid re-kicks of old failures; blind review
+	// 2026-09-26 — a SQL word-match arm also broke on mysql2's `?` binding).
+	// LIMIT 3 for the same reason as the quota query: startAiGeneration
+	// detaches via after().
+	const transientErrorCandidates: StaleAiCandidate[] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			metadata: videos.metadata,
+		})
+		.from(videos)
+		.where(
+			and(
+				isNull(videos.deletedAt),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) = 'ERROR'`,
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationErrorTransient')) = 'true'`,
+				sql`COALESCE(CAST(JSON_EXTRACT(${videos.metadata}, '$.aiTransientRetryAttempts') AS UNSIGNED), 0) < ${MAX_TRANSIENT_RETRY_ATTEMPTS}`,
+				// Last attempt at least 25 minutes ago: our own booking stamp,
+				// falling back to the row's updatedAt (≈ the error write) for
+				// rows that have never been re-kicked. DATE_FORMAT + literal Z is
+				// correct because prod MySQL runs in UTC (verified 2026-09-25).
+				// The '' arm compares as infinitely old.
+				sql`COALESCE(
+					JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiTransientRetryAt')),
+					DATE_FORMAT(${videos.updatedAt}, '%Y-%m-%dT%H:%i:%s.000Z'),
+					''
+				) <= ${transientRetryBeforeIso}`,
+			),
+		)
+		.limit(3);
+
 	for (const candidate of staleUploadCandidates) {
 		const { video, upload } = candidate;
 		// Hard cap mirroring the SQL LIMIT, so a future edit of that query can
@@ -966,6 +1022,58 @@ export async function GET(request: Request) {
 		}
 	}
 
+	// TRANSIENT generation deaths: re-kick each row exactly as the
+	// stale-generation block above does (force + isRetry, so the re-kick does
+	// not refund its own ladder), on a bounded ladder with a booked attempt
+	// BEFORE the launch — the same law as the rowless relaunch and the quota
+	// loop's backoff booking.
+	for (const candidate of transientErrorCandidates) {
+		const metadata = candidate.metadata ?? {};
+		try {
+			// Belt and suspenders on the row we hold: a spent ladder or an
+			// unflagged row is never re-kicked, whatever the SELECT said.
+			const attempts = metadata.aiTransientRetryAttempts ?? 0;
+			if (attempts >= MAX_TRANSIENT_RETRY_ATTEMPTS) continue;
+			if (!metadata.aiGenerationErrorTransient) continue;
+			// Compare-and-set booking: the snapshot was read before the
+			// stale-upload loop, so an owner Retry (ERROR -> QUEUED) or an
+			// overlapping cron run may have moved the row since. Book only if
+			// it is STILL ERROR at the same attempt count, and kick only when
+			// this run won the booking — otherwise a stale write would turn
+			// QUEUED back into ERROR and start a second paid run.
+			const booking = await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiTransientRetryAttempts: attempts + 1,
+						aiTransientRetryAt: new Date().toISOString(),
+					} as VideoMetadata,
+				})
+				.where(
+					and(
+						eq(videos.id, candidate.id),
+						sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) = 'ERROR'`,
+						sql`COALESCE(CAST(JSON_EXTRACT(${videos.metadata}, '$.aiTransientRetryAttempts') AS UNSIGNED), 0) = ${attempts}`,
+					),
+				);
+			if (getAffectedRows(booking) === 0) continue;
+			const result = await startAiGeneration(candidate.id, candidate.ownerId, {
+				force: true,
+				isRetry: true,
+			});
+			// A refused start (budget, no key) launched nothing but keeps its
+			// booked attempt, so it waits for the 25-min gap instead of firing
+			// every tick — same "booked backoff is kept" law as the quota loop.
+			if (result.success) transientRetried++;
+		} catch (error) {
+			console.error(
+				`[recover-stale-ai-jobs] Failed to retry transient-failed AI generation for video ${candidate.id}:`,
+				error,
+			);
+		}
+	}
+
 	for (const candidate of refinementCandidates) {
 		const metadata = candidate.metadata ?? {};
 		const current = metadata.timestampRefinement;
@@ -1019,5 +1127,6 @@ export async function GET(request: Request) {
 		staleUploadRelaunched,
 		staleUploadRetired,
 		staleUploadRowlessRelaunched,
+		transientRetried,
 	});
 }

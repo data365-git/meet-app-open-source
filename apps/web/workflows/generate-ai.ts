@@ -411,6 +411,9 @@ async function markBudgetExceeded(
 				...currentMetadata,
 				aiGenerationStatus: "ERROR",
 				aiGenerationError: "AI budget exceeded",
+				// BUDGET is never transient — clear any stale flag so the cron's
+				// transient pass cannot pick this row up.
+				aiGenerationErrorTransient: undefined,
 			} as VideoMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
@@ -707,13 +710,26 @@ export function buildSaveResultsPatch(
 		// Success clears any stale error; failure records THIS run's outcome
 		// instead of leaving a message from an older run lying around.
 		aiGenerationError: finalUsable ? undefined : AI_EMPTY_RESULT_ERROR,
+		// THIS run's failure is an empty result, never a provider blip — a
+		// stale transient flag from an older death must not survive it, or the
+		// cron would re-kick an OTHER error as transient.
+		aiGenerationErrorTransient: undefined,
 		aiProcessingStep: finalUsable ? "done" : current.aiProcessingStep,
 		aiQuotaWaiting: undefined,
 		// Success refunds the free auto-recover budget (round-10 #3, mirroring
 		// saveTranscription): the counter's only writer is the recovery cron,
 		// and without a refund a video that once used its retries starts every
 		// LATER generation at attempts=2 — zero re-kicks, straight to ERROR.
-		...(finalUsable ? { autoRecoverAttempts: undefined } : {}),
+		// The transient re-kick ladder resets with it (2026-09-25): a COMPLETE
+		// row ignores the fields anyway, but a LATER failure must start a
+		// fresh 3-attempt run instead of inheriting a spent ladder.
+		...(finalUsable
+			? {
+					autoRecoverAttempts: undefined,
+					aiTransientRetryAttempts: undefined,
+					aiTransientRetryAt: undefined,
+				}
+			: {}),
 		// Terminal success drops the job's 4h clock so a later brand-new analysis
 		// starts fresh (spec §5 C6, bug #8); an ERROR keeps it so a retry/flip
 		// still counts from the original start.
