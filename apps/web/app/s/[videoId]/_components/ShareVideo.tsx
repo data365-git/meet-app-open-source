@@ -409,6 +409,24 @@ export const ShareVideo = forwardRef<
 			const id = setInterval(() => router.refresh(), 60_000);
 			return () => clearInterval(id);
 		}, [transientRetryPending, router]);
+		// When that refresh shows the cron's re-kick (server prop ERROR ->
+		// QUEUED/PROCESSING), resume the live poll exactly as a Retry press
+		// does - otherwise the interval stops and the spinner never ends.
+		// Transition-only, so a stale mount-time QUEUED never re-arms a
+		// poll that just went terminal.
+		const prevServerAiStatusRef = useRef(aiGenerationStatus);
+		useEffect(() => {
+			const prev = prevServerAiStatusRef.current;
+			prevServerAiStatusRef.current = aiGenerationStatus;
+			if (
+				prev === "ERROR" &&
+				(aiGenerationStatus === "QUEUED" ||
+					aiGenerationStatus === "PROCESSING") &&
+				!aiPollEnabled
+			) {
+				handleAiStarted();
+			}
+		}, [aiGenerationStatus, aiPollEnabled, handleAiStarted]);
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
