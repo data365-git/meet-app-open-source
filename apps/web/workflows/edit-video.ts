@@ -177,6 +177,13 @@ async function remapTranscriptAndArtifacts(
 	if (!video) return;
 
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+	// The transcription resume seed is on the PRE-edit clock; a later resume
+	// would splice old-timeline text into the new media. Drop it (best-effort).
+	try {
+		await bucket
+			.deleteObject(`${video.ownerId}/${videoId}/transcription-partial.vtt`)
+			.pipe(runPromise);
+	} catch {}
 	const baseTranscriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 	const baseTranscript = await bucket
 		.getObject(baseTranscriptKey)

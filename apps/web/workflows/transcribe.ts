@@ -2075,11 +2075,21 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE", metadata: md })
 		.where(eq(videos.id, videoId as Video.VideoId));
-	// best-effort delete partial file (never throw)
-	await bucket
-		.deleteObject(`${video.ownerId}/${videoId}/transcription-partial.vtt`)
-		.pipe(runPromise)
-		.catch(() => {});
+	// Owner law 2026-09-26 "resume, never a full re-do": a transcript that
+	// still has gaps (or unknown coverage) keeps itself as the resume seed, so
+	// a later repair re-bills only the chunks overlapping the gaps
+	// (isChunkCoveredByPartial) instead of the whole recording. A clean
+	// transcript drops the checkpoint as before. Best-effort, never throws.
+	const partialKey = `${video.ownerId}/${videoId}/transcription-partial.vtt`;
+	try {
+		if (remainingGaps.length > 0 || coverageUnknown) {
+			await bucket
+				.putObject(partialKey, transcription, { contentType: "text/vtt" })
+				.pipe(runPromise);
+		} else {
+			await bucket.deleteObject(partialKey).pipe(runPromise);
+		}
+	} catch {}
 }
 
 async function cleanupTempAudioKeys(
