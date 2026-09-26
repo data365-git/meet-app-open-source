@@ -431,7 +431,7 @@ export const ShareVideo = forwardRef<
 			) {
 				// A re-kick finished between two refreshes: drop the cached
 				// ERROR poll body so the fresh server status is what renders.
-				queryClient.removeQueries({ queryKey: ["ai-status", data.id] });
+				queryClient.resetQueries({ queryKey: ["ai-status", data.id] });
 			}
 		}, [
 			aiGenerationStatus,
