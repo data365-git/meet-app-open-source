@@ -425,8 +425,21 @@ export const ShareVideo = forwardRef<
 				!aiPollEnabled
 			) {
 				handleAiStarted();
+			} else if (
+				prev === "ERROR" &&
+				(aiGenerationStatus === "COMPLETE" || aiGenerationStatus === "SKIPPED")
+			) {
+				// A re-kick finished between two refreshes: drop the cached
+				// ERROR poll body so the fresh server status is what renders.
+				queryClient.removeQueries({ queryKey: ["ai-status", data.id] });
 			}
-		}, [aiGenerationStatus, aiPollEnabled, handleAiStarted]);
+		}, [
+			aiGenerationStatus,
+			aiPollEnabled,
+			handleAiStarted,
+			queryClient,
+			data.id,
+		]);
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
