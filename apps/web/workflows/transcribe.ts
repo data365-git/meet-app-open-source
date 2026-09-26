@@ -2081,17 +2081,15 @@ async function saveTranscription(
 	// (isChunkCoveredByPartial) instead of the whole recording. A clean
 	// transcript drops the checkpoint as before. Best-effort, never throws.
 	const partialKey = `${video.ownerId}/${videoId}/transcription-partial.vtt`;
-	if (remainingGaps.length > 0 || coverageUnknown) {
-		await bucket
-			.putObject(partialKey, transcription, { contentType: "text/vtt" })
-			.pipe(runPromise)
-			.catch(() => {});
-	} else {
-		await bucket
-			.deleteObject(partialKey)
-			.pipe(runPromise)
-			.catch(() => {});
-	}
+	try {
+		if (remainingGaps.length > 0 || coverageUnknown) {
+			await bucket
+				.putObject(partialKey, transcription, { contentType: "text/vtt" })
+				.pipe(runPromise);
+		} else {
+			await bucket.deleteObject(partialKey).pipe(runPromise);
+		}
+	} catch {}
 }
 
 async function cleanupTempAudioKeys(

@@ -83,3 +83,17 @@ describe("gap repair re-bills only the gap, never the whole recording", () => {
 		expect(body).toContain("transcription-partial.vtt");
 	});
 });
+
+describe("a media timeline change drops the resume seed (no old-clock text spliced into new media)", () => {
+	for (const rel of [
+		"../../workflows/edit-video.ts",
+		"../../actions/videos/restore-original.ts",
+	]) {
+		it(`${rel.split("/").pop()} deletes transcription-partial.vtt`, () => {
+			const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+			expect(src).toMatch(
+				/\.deleteObject\(`\$\{video\.ownerId\}\/\$\{videoId\}\/transcription-partial\.vtt`\)/,
+			);
+		});
+	}
+});
