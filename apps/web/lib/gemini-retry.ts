@@ -11,6 +11,20 @@ export function isTransientGeminiError(status: number, body: string): boolean {
 }
 
 /**
+ * The ONE message-level transient pattern (word boundaries on the digits so a
+ * project number like 763029500123 does not look transient — round-16 #3).
+ * Exported so the share-page classifier and the ERROR write-site flag reuse
+ * this copy instead of growing a second one.
+ */
+const TRANSIENT_GEMINI_MESSAGE_RE =
+	/\b(429|500|501|503)\b|overloaded|high demand|unavailable/i;
+
+/** True when a raw or sanitized error MESSAGE carries transient evidence. */
+export function isTransientGeminiMessage(message: string): boolean {
+	return TRANSIENT_GEMINI_MESSAGE_RE.test(message);
+}
+
+/**
  * Per-call opt-in knobs. Default behaviour (no options passed) is byte-for-byte
  * the old 8s-capped exponential backoff, so `gemini-batch-transcribe.ts` and
  * every other existing caller is unaffected.
@@ -53,11 +67,9 @@ export async function withGeminiRetry<T>(
 			// Word boundaries on the digits (round-16 #3): messages now carry the
 			// upstream response body, and a project number like 763029500123
 			// contains "500" — a permanent 403 must not look transient and burn
-			// backoff on the paid leg.
-			const isTransient =
-				/\b(429|500|501|503)\b|overloaded|high demand|unavailable/i.test(
-					message,
-				);
+			// backoff on the paid leg. Same single pattern the share-page
+			// classifier reuses (isTransientGeminiMessage).
+			const isTransient = isTransientGeminiMessage(message);
 			if (
 				permanent ||
 				!isTransient ||

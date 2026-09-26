@@ -66,8 +66,15 @@ interface GenerateAiPanelProps {
 	aiQuotaWaiting?: boolean;
 	/** S5: why the AI GENERATION stage failed, classified from
 	 * metadata.aiGenerationError (see classifyAiGenerationError). The monthly
-	 * cap (BUDGET) and the provider balance (QUOTA) need different truths. */
-	aiGenerationErrorCode?: "BUDGET" | "QUOTA" | "OTHER" | null;
+	 * cap (BUDGET), the provider balance (QUOTA) and a temporary provider
+	 * blip (TRANSIENT) each need a different truth. */
+	aiGenerationErrorCode?: "BUDGET" | "QUOTA" | "TRANSIENT" | "OTHER" | null;
+	/** TRANSIENT only: how many automatic re-kicks the recovery cron has
+	 * already booked (metadata.aiTransientRetryAttempts). While < 3 the page
+	 * honestly says "retrying automatically (n/3)"; at 3 the ladder is spent
+	 * and the owner is pointed at the Retry button instead. Owner-only
+	 * detail — public viewers get the sentence without the counter. */
+	aiTransientRetryAttempts?: number | null;
 	duration?: number | null;
 	/** When true, the completed analysis looks incomplete ("chala") and the
 	 * re-analyze affordance should be shown prominently instead of tucked away. */
@@ -143,6 +150,7 @@ export function GenerateAiPanel({
 	quotaRetriesExhausted = false,
 	aiQuotaWaiting = false,
 	aiGenerationErrorCode = null,
+	aiTransientRetryAttempts = 0,
 	duration,
 	aiIncomplete = false,
 	transcriptionChunksCompleted,
@@ -644,6 +652,28 @@ export function GenerateAiPanel({
 				} else {
 					messageKey = "aiBudgetBlockedPlain";
 				}
+			}
+		} else if (generationKind === "TRANSIENT") {
+			// S5-TRANSIENT (owner order 2026-09-25 "hech qachon quruq xato"): a
+			// 503/overloaded death is TEMPORARY and the cron re-kicks it a
+			// bounded number of times — the page must say exactly that while
+			// attempts remain, and switch to "press Retry" once they are spent.
+			// Never the bare "AI generation error." Public viewers get the same
+			// sentences without the counter or the button instruction.
+			calmLine = true;
+			if ((aiTransientRetryAttempts ?? 0) >= 3) {
+				messageKey = canGenerate
+					? "aiSummaryTransientExhausted"
+					: "aiSummaryTransientExhaustedPublic";
+			} else if (canGenerate) {
+				messageKey = "aiSummaryTransientRetrying";
+				messageValues = {
+					// The NEXT automatic attempt (ERROR with 1 booked = retry 1
+					// failed, retry 2 is coming) - never a "(0/3)".
+					n: String(Math.min(Math.max(aiTransientRetryAttempts ?? 0, 0) + 1, 3)),
+				};
+			} else {
+				messageKey = "aiSummaryTransientRetryingPublic";
 			}
 		} else if (generationKind === "QUOTA") {
 			calmLine = true;

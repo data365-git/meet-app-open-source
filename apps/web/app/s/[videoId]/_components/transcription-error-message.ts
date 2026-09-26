@@ -5,6 +5,7 @@
  * live while the AI account is out of credits.
  */
 import { isQuotaLikeAiError } from "@/lib/ai-quota-wait";
+import { isTransientGeminiMessage } from "@/lib/gemini-retry";
 
 export function transcriptionErrorMessageKey({
 	transcriptionStatus,
@@ -35,7 +36,7 @@ export function transcriptionErrorMessageKey({
 		: "aiTranscriptionQuotaFailedPublic";
 }
 
-export type AiGenerationErrorKind = "BUDGET" | "QUOTA" | "OTHER";
+export type AiGenerationErrorKind = "BUDGET" | "QUOTA" | "TRANSIENT" | "OTHER";
 
 /**
  * Why the AI GENERATION stage failed (metadata.aiGenerationError), for the
@@ -46,6 +47,14 @@ export type AiGenerationErrorKind = "BUDGET" | "QUOTA" | "OTHER";
  * both workflows write (transcribe.ts "AI budget exceeded", generate-ai.ts
  * markBudgetExceeded), everything money/provider-shaped goes through the
  * existing isQuotaLikeAiError, the rest is OTHER.
+ *
+ * TRANSIENT (2026-09-25): a temporary provider blip (503 / overloaded /
+ * timeout) is re-kicked by the recovery cron a bounded number of times, so
+ * the page must say "retrying automatically" instead of a bare failure.
+ * Decided by REUSING the single message pattern in lib/gemini-retry.ts —
+ * no third copy of the regex. Order matters: BUDGET, then QUOTA, then
+ * TRANSIENT — a 429 that isQuotaLikeAiError already calls QUOTA stays QUOTA
+ * (its fix is a top-up, not patience).
  */
 export function classifyAiGenerationError(
 	message: string | null | undefined,
@@ -53,9 +62,27 @@ export function classifyAiGenerationError(
 	if (!message) return "OTHER";
 	if (/budget exceeded/i.test(message)) return "BUDGET";
 	if (isQuotaLikeAiError(new Error(message))) return "QUOTA";
+	if (isTransientGeminiMessage(message)) return "TRANSIENT";
 	return "OTHER";
 }
 
+/**
+ * The generation-error kind the SHARE PAGE shows. "Retrying automatically"
+ * is promised ONLY when the durable aiGenerationErrorTransient flag is set —
+ * that flag is exactly what the recovery cron re-kicks on. An unflagged
+ * transient-looking text (rows from before the flag, or a sanitized message)
+ * is never retried, so it must not claim to be: it shows as OTHER.
+ */
+export function aiGenerationErrorKindForPage(
+	metadata:
+		| { aiGenerationError?: string | null; aiGenerationErrorTransient?: boolean | null }
+		| null
+		| undefined,
+): AiGenerationErrorKind {
+	if (metadata?.aiGenerationErrorTransient) return "TRANSIENT";
+	const kind = classifyAiGenerationError(metadata?.aiGenerationError);
+	return kind === "TRANSIENT" ? "OTHER" : kind;
+}
 /**
  * "Bu joylarda matn yo'q: 1:42:41-1:47:01, …" — the S3 gap line under the
  * transcript. Times are h:mm:ss (owner-approved format), gaps joined with

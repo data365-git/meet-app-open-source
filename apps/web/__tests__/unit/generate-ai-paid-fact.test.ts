@@ -66,16 +66,20 @@ describe("round-10 #2 — nothing parks, no flip anywhere", () => {
 
 describe("round-10 #3 — the generation recovery budget is refundable", () => {
 	it("a fresh owner start refunds autoRecoverAttempts; a cron retry does not", () => {
+		// The transient re-kick ladder (2026-09-25) resets with the same
+		// spread: a failure after a fresh press starts a fresh 3-attempt run.
 		expect(GEN_LIB).toMatch(
-			/opts\?\.isRetry \? \{\} : \{ autoRecoverAttempts: undefined \}/,
+			/opts\?\.isRetry\s*\?\s*\{\}\s*:\s*\{\s*autoRecoverAttempts: undefined,\s*aiTransientRetryAttempts: undefined,\s*aiTransientRetryAt: undefined,\s*\}/,
 		);
 		// The cron's generation re-kick marks itself as a retry.
 		expect(CRON).toMatch(/startAiGeneration\([\s\S]{0,120}isRetry: true/);
 	});
 
 	it("a successful generation clears the budget", () => {
+		// ...and the transient re-kick ladder with it, so a later failure
+		// starts a fresh 3-attempt run instead of inheriting a spent one.
 		expect(GEN_WORKFLOW).toMatch(
-			/finalUsable \? \{ autoRecoverAttempts: undefined \} : \{\}/,
+			/finalUsable\s*\?\s*\{\s*autoRecoverAttempts: undefined,\s*aiTransientRetryAttempts: undefined,\s*aiTransientRetryAt: undefined,\s*\}\s*:\s*\{\}/,
 		);
 	});
 });

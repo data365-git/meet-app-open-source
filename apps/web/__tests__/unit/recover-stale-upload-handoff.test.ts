@@ -27,8 +27,10 @@ const state = vi.hoisted(() => ({
 	editSource: "absent" as "absent" | "present" | "unreachable",
 	/** affectedRows the INSERT IGNORE claim reports (0 = a row already existed). */
 	insertAffected: 1,
-	/** Arguments of the LAST where() on a select — the stale-upload scan's. */
-	lastSelectWhere: [] as unknown[],
+	/** where() arguments PER select, in order (the transient re-kick pass
+	 * added a later query after the stale-upload scan), so a predicate check
+	 * can demand all predicates sit on ONE query. */
+	lastSelectWhere: [] as unknown[][],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -49,7 +51,7 @@ vi.mock("@cap/database", () => ({
 				promise.leftJoin = chain;
 				promise.orderBy = chain;
 				promise.where = (...args: unknown[]) => {
-					state.lastSelectWhere = args;
+					state.lastSelectWhere.push(args);
 					return chain();
 				};
 				promise.limit = chain;
@@ -603,7 +605,12 @@ describe("recover-stale-ai-jobs — rowless pass: review fixes (2026-09-25)", ()
 		await runCron();
 
 		// Dates serialise to their ISO string.
-		const flat = JSON.stringify(state.lastSelectWhere);
+		// All rowless predicates must sit on the SAME select - the stale-upload
+		// scan - not be spread across the cron's other queries.
+		const flat =
+			state.lastSelectWhere
+				.map((args) => JSON.stringify(args))
+				.find((s) => s.includes('{"isNull":"videoUploads.videoId"}')) ?? "";
 		expect(flat).toContain('{"isNull":"videoUploads.videoId"}');
 		expect(flat).toContain('{"isNull":"videos.transcriptionStatus"}');
 		expect(flat).toContain("$.processedAt') IS NULL");

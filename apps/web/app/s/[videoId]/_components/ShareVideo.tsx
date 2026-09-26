@@ -49,7 +49,7 @@ import { SummaryPanel } from "./panels/SummaryPanel";
 import { TasksPanel } from "./panels/TasksPanel";
 import { TranscriptPanel } from "./panels/TranscriptPanel";
 import {
-	classifyAiGenerationError,
+	aiGenerationErrorKindForPage,
 	formatTranscriptGapRanges,
 } from "./transcription-error-message";
 // Pure constants/helpers only (the module imports nothing but a type) — the
@@ -395,8 +395,20 @@ export const ShareVideo = forwardRef<
 				MAX_QUOTA_RETRY_ATTEMPTS;
 		const effectiveAiGenerationErrorCode =
 			effectiveAiStatus === "ERROR"
-				? classifyAiGenerationError(data.metadata?.aiGenerationError)
+				? aiGenerationErrorKindForPage(data.metadata)
 				: null;
+
+		// ERROR stops the poll, so an open page would keep saying "retrying
+		// (n/3)" after the cron's ladder is spent or its retry succeeded.
+		// While the retrying line is on screen, re-read the server every 60 s.
+		const transientRetryPending =
+			effectiveAiGenerationErrorCode === "TRANSIENT" &&
+			(data.metadata?.aiTransientRetryAttempts ?? 0) < 3;
+		useEffect(() => {
+			if (!transientRetryPending) return;
+			const id = setInterval(() => router.refresh(), 60_000);
+			return () => clearInterval(id);
+		}, [transientRetryPending, router]);
 
 		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
 		// the other tabs / AI input while transcription or AI generation is busy.
@@ -1039,6 +1051,14 @@ export const ShareVideo = forwardRef<
 											quotaRetriesExhausted={effectiveQuotaRetriesExhausted}
 											aiQuotaWaiting={!!data.metadata?.aiQuotaWaiting}
 											aiGenerationErrorCode={effectiveAiGenerationErrorCode}
+											// TRANSIENT ladder depth, same server-rendered source
+											// as the error code itself (ERROR is terminal; a
+											// fresh failure between polls shows the previous
+											// count until the next navigation, same documented
+											// caveat as the code above).
+											aiTransientRetryAttempts={
+												data.metadata?.aiTransientRetryAttempts ?? 0
+											}
 											// The durable "this run includes AI" fact, for the stepper after a remount.
 											aiGenerationRequested={
 												aiStatusQuery.data?.aiGenerationRequested ??
