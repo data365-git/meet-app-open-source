@@ -472,10 +472,19 @@ describe("recover-stale-ai-jobs - transient generation re-kick", () => {
 	});
 
 	it("no sql fragment carries a literal '?' (mysql2 would bind a value into it and the whole cron would 500)", async () => {
-		armTransient([]);
+		// A real candidate, so the booking UPDATE runs and its WHERE is scanned too.
+		state.rawStrings.length = 0;
+		armTransient([
+			transientRow({
+				aiGenerationStatus: "ERROR",
+				aiGenerationError: "Gemini generateContent failed (HTTP 503)",
+				aiGenerationErrorTransient: true,
+			}),
+		]);
 
 		await GET(cronRequest());
 
+		expect(updateSetMock).toHaveBeenCalled();
 		const withMark = state.rawStrings.filter((s) => s.includes("?"));
 		expect(withMark).toEqual([]);
 	});
