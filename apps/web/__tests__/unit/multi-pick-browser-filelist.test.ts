@@ -379,3 +379,55 @@ describe("useImportUpload handleFileChange with a browser-like FileList (must-fi
 		container.remove();
 	});
 });
+// Blind re-review finding 1 (2026-09-27): a DROP on the import page calls
+// processFile directly, bypassing openFilePicker. The busy guard must live in
+// processFile itself, while the running batch's own items still pass.
+describe("processFile busy guard (drop path)", () => {
+	it("refuses a direct upload while a batch runs, but lets batch items through", async () => {
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const root: Root = createRoot(container);
+		let api: ReturnType<typeof useImportUpload> | undefined;
+		let store:
+			| {
+					state: Record<string, unknown>;
+					setState: (
+						fn: (s: Record<string, unknown>) => Record<string, unknown>,
+					) => void;
+			  }
+			| undefined;
+		function Probe() {
+			api = useImportUpload();
+			store = useUploadingContext().uploadingStore as unknown as typeof store;
+			return null;
+		}
+		act(() => {
+			root.render(createElement(Probe));
+		});
+		act(() => {
+			store?.setState((s) => ({ ...s, uploadStatus: undefined, batchTotal: 2 }));
+		});
+
+		let refused: string | null | undefined;
+		await act(async () => {
+			refused = await api?.processFile(makeFile("dropped.mp4"));
+		});
+		expect(refused).toBeNull();
+		expect(mocks.createVideo).not.toHaveBeenCalled();
+		expect(mocks.toast.info).toHaveBeenCalledWith("uploadBatchBusy");
+
+		await act(async () => {
+			await api?.processFile(makeFile("batch-item.mp4"), undefined, {
+				skipStartCallback: true,
+				inBatch: true,
+			});
+		});
+		expect(mocks.createVideo).toHaveBeenCalledTimes(1);
+
+		act(() => {
+			store?.setState((s) => ({ ...s, uploadStatus: undefined, batchTotal: undefined }));
+		});
+		act(() => root.unmount());
+		container.remove();
+	});
+});

@@ -472,6 +472,18 @@ export function useImportUpload({
 		): Promise<string | null> => {
 			if (!user || !activeOrganization) return null;
 
+			// Every upload passes through here, so the busy guard lives here too:
+			// a drop (ImportFilePage) bypasses openFilePicker, and a second upload
+			// would steal the running one's cancel handler. Batch items are the
+			// running batch itself, so they pass.
+			if (
+				!opts?.inBatch &&
+				(uploadingStore.state.uploadStatus || uploadingStore.state.batchTotal)
+			) {
+				toast.info(t("uploadBatchBusy"));
+				return null;
+			}
+
 			if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
 				setUpgradeModalOpen(true);
 				return null;
@@ -554,6 +566,7 @@ export function useImportUpload({
 			folderId,
 			onUploadStarted,
 			t,
+			uploadingStore,
 		],
 	);
 
