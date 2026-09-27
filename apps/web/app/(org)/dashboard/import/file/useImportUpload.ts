@@ -114,6 +114,7 @@ async function uploadVideoForServerProcessing(
 		cancelRefused: string;
 		cancelFailed: string;
 	},
+	opts?: { suppressSuccessToast?: boolean },
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
 	let createdVideoId:
@@ -362,9 +363,14 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		// Inside a multi-file batch each file already reports through the batch
+		// progress ("File 2/5") and the one summary toast at the end; a
+		// per-file "Video uploaded!" would fire N times over it.
+		if (!opts?.suppressSuccessToast) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return uploadId;
 	} catch (err) {
 		// Owner order 2026-09-11: a cancelled upload is not a failure — no error
@@ -446,7 +452,13 @@ export function useImportUpload({
 	const t = useTranslations("library");
 	const { uploadingStore, setUploadStatus, setCancelHandler, setQueueState } =
 		useUploadingContext();
-	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
+	// Busy = a single upload is running (uploadStatus) OR a multi-file batch
+	// is running (batchTotal). Checking only batchTotal let a single upload
+	// and a batch run in parallel, sharing one cancel handler between them.
+	const isUploading = useStore(
+		uploadingStore,
+		(s) => !!s.uploadStatus || !!s.batchTotal,
+	);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(
 		buildEnv.NEXT_PUBLIC_IS_CAP ? !user?.isPro : false,
 	);
@@ -456,7 +468,7 @@ export function useImportUpload({
 		async (
 			file: File,
 			serverTrim?: { inSec: number; outSec: number; duration: number },
-			opts?: { skipStartCallback?: boolean },
+			opts?: { skipStartCallback?: boolean; inBatch?: boolean },
 		): Promise<string | null> => {
 			if (!user || !activeOrganization) return null;
 
@@ -485,6 +497,7 @@ export function useImportUpload({
 						cancelRefused: t("cancelUploadRefused"),
 						cancelFailed: t("cancelUploadFailed"),
 					},
+					{ suppressSuccessToast: opts?.inBatch },
 				);
 			} finally {
 				setCancelHandler(undefined);
@@ -563,7 +576,7 @@ export function useImportUpload({
 				return;
 			}
 
-			if (uploadingStore.state.batchTotal) {
+			if (uploadingStore.state.batchTotal || uploadingStore.state.uploadStatus) {
 				toast.info(t("uploadBatchBusy"));
 				return;
 			}
@@ -600,7 +613,12 @@ export function useImportUpload({
 				const summary = await runUploadQueue({
 					items,
 					upload: (file) =>
-						processFile(file, undefined, { skipStartCallback: true }),
+						processFile(file, undefined, {
+							skipStartCallback: true,
+							// The batch shows its own progress and ends with one
+							// summary toast; no per-file "Video uploaded!" on top.
+							inBatch: true,
+						}),
 					isRemoved: (id) =>
 						id !== currentId &&
 						!(uploadingStore.state.queue ?? []).some(
@@ -672,13 +690,16 @@ export function useImportUpload({
 	);
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const files = e.target.files;
-		if (files && files.length > 1) {
+		// Copy the FileList BEFORE clearing the input: in a real browser
+		// input.value = "" empties the LIVE FileList, so reading it after the
+		// clear saw an empty list and nothing ever uploaded.
+		const files = Array.from(e.target.files ?? []);
+		if (files.length > 1) {
 			if (inputRef.current) inputRef.current.value = "";
-			void processFiles(Array.from(files));
+			void processFiles(files);
 			return;
 		}
-		const file = files?.[0];
+		const file = files[0];
 		if (!file) return;
 		setPendingFile(file);
 		if (inputRef.current) inputRef.current.value = "";
@@ -686,6 +707,14 @@ export function useImportUpload({
 
 	const openFilePicker = () => {
 		if (!user) return;
+
+		// Refuse ANY new pick (single or multi) while something is already
+		// uploading: a second pick would run in parallel with the first and
+		// both would fight over the one cancel handler in the store.
+		if (uploadingStore.state.uploadStatus || uploadingStore.state.batchTotal) {
+			toast.info(t("uploadBatchBusy"));
+			return;
+		}
 
 		if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
 			setUpgradeModalOpen(true);

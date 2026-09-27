@@ -62,7 +62,9 @@ function formatRemainingTime(
 	}
 }
 
-export const MAX_VISIBLE_QUEUE_ENTRIES = 5;
+// At most 2 waiting names + "+N": a longer list grew the bottom overlay until
+// it painted over the Cancel control (review 2026-09-27, must-fix #3).
+export const MAX_VISIBLE_QUEUE_ENTRIES = 2;
 
 export const UploadPlaceholderCard = () => {
 	const t = useTranslations("library");
@@ -182,7 +184,7 @@ export const UploadPlaceholderCard = () => {
 							onClick={() => setConfirmingCancel(true)}
 							aria-label={t("cancelUploadButton")}
 							title={t("cancelUploadButton")}
-							className="flex absolute top-0 right-0 justify-center items-center w-11 h-11 text-white group/cancel"
+							className="flex absolute top-0 right-0 z-10 justify-center items-center w-11 h-11 text-white group/cancel"
 						>
 							{/* 44px touch target around the same 28px disc. */}
 							<span className="flex justify-center items-center w-7 h-7 rounded-full transition-colors bg-black/50 group-hover/cancel:bg-black/80">

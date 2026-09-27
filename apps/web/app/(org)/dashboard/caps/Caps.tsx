@@ -128,6 +128,7 @@ export const Caps = ({
 	// below shows progress) instead of the file page's own redirect-after-start.
 	const {
 		inputRef: importInputRef,
+		isUploading: isImportBusy,
 		upgradeModalOpen: importUpgradeModalOpen,
 		setUpgradeModalOpen: setImportUpgradeModalOpen,
 		pendingFile: importPendingFile,
@@ -330,6 +331,7 @@ export const Caps = ({
 						variant="white"
 						className="flex gap-2 items-center rounded-r-none border-r-0 w-fit"
 						onClick={openImportFilePicker}
+						disabled={isImportBusy}
 					>
 						<FontAwesomeIcon className="size-3" icon={faUpload} />
 						Import file
