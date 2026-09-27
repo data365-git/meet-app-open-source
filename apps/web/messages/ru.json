@@ -205,7 +205,13 @@
 		"cancelUploadConfirmCancel": "Нет",
 		"uploadCancelled": "Загрузка отменена.",
 		"cancelUploadRefused": "Загрузку не удалось отменить. Запись сохранена.",
-		"cancelUploadFailed": "Не удалось отменить загрузку."
+		"cancelUploadFailed": "Не удалось отменить загрузку.",
+		"uploadBatchProgress": "Загрузка файла {current}/{total}",
+		"uploadBatchRemove": "Убрать из очереди",
+		"uploadBatchLimited": "Не более {max} файлов за раз — взяты первые {max}",
+		"uploadBatchBusy": "Предыдущие файлы ещё загружаются — дождитесь окончания",
+		"uploadBatchSummary": "Загружено {uploaded} из {total}",
+		"uploadBatchSummaryNotUploaded": "Загружено {uploaded} из {total}, не загружено — {notUploaded}"
 	},
 	"auth": {
 		"signingIn": "Выполняется вход…",

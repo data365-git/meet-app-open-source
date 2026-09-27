@@ -26,6 +26,12 @@ import {
 	uploadBlobMultipart,
 } from "@/utils/multipart-upload";
 import { uploadWithTarget } from "@/utils/upload-target";
+import {
+	capBatch,
+	MAX_BATCH_FILES,
+	queueAfterStart,
+	runUploadQueue,
+} from "./upload-queue";
 
 export const IMPORT_FILE_ACCEPT =
 	"video/*,audio/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.mp3,.MP3,.wav,.WAV,.m4a,.M4A,.aac,.AAC,.ogg,.OGG,.oga,.opus,.flac,.FLAC";
@@ -108,6 +114,7 @@ async function uploadVideoForServerProcessing(
 		cancelRefused: string;
 		cancelFailed: string;
 	},
+	opts?: { suppressSuccessToast?: boolean },
 ) {
 	// Hoisted so the outer catch can reference it for orphan cleanup.
 	let createdVideoId:
@@ -356,9 +363,14 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		// Inside a multi-file batch each file already reports through the batch
+		// progress ("File 2/5") and the one summary toast at the end; a
+		// per-file "Video uploaded!" would fire N times over it.
+		if (!opts?.suppressSuccessToast) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return uploadId;
 	} catch (err) {
 		// Owner order 2026-09-11: a cancelled upload is not a failure — no error
@@ -438,9 +450,15 @@ export function useImportUpload({
 	const router = useRouter();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const t = useTranslations("library");
-	const { uploadingStore, setUploadStatus, setCancelHandler } =
+	const { uploadingStore, setUploadStatus, setCancelHandler, setQueueState } =
 		useUploadingContext();
-	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
+	// Busy = a single upload is running (uploadStatus) OR a multi-file batch
+	// is running (batchTotal). Checking only batchTotal let a single upload
+	// and a batch run in parallel, sharing one cancel handler between them.
+	const isUploading = useStore(
+		uploadingStore,
+		(s) => !!s.uploadStatus || !!s.batchTotal,
+	);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(
 		buildEnv.NEXT_PUBLIC_IS_CAP ? !user?.isPro : false,
 	);
@@ -450,12 +468,25 @@ export function useImportUpload({
 		async (
 			file: File,
 			serverTrim?: { inSec: number; outSec: number; duration: number },
-		) => {
-			if (!user || !activeOrganization) return;
+			opts?: { skipStartCallback?: boolean; inBatch?: boolean },
+		): Promise<string | null> => {
+			if (!user || !activeOrganization) return null;
+
+			// Every upload passes through here, so the busy guard lives here too:
+			// a drop (ImportFilePage) bypasses openFilePicker, and a second upload
+			// would steal the running one's cancel handler. Batch items are the
+			// running batch itself, so they pass.
+			if (
+				!opts?.inBatch &&
+				(uploadingStore.state.uploadStatus || uploadingStore.state.batchTotal)
+			) {
+				toast.info(t("uploadBatchBusy"));
+				return null;
+			}
 
 			if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
 				setUpgradeModalOpen(true);
-				return;
+				return null;
 			}
 
 			// Owned by this call, not by the upload function: `processFile` is the
@@ -478,6 +509,7 @@ export function useImportUpload({
 						cancelRefused: t("cancelUploadRefused"),
 						cancelFailed: t("cancelUploadFailed"),
 					},
+					{ suppressSuccessToast: opts?.inBatch },
 				);
 			} finally {
 				setCancelHandler(undefined);
@@ -509,14 +541,22 @@ export function useImportUpload({
 						);
 					})();
 				}
-				if (onUploadStarted) {
-					onUploadStarted();
-				} else {
-					router.push(
-						folderId ? `/dashboard/folder/${folderId}` : "/dashboard/caps",
-					);
+				// In a multi-file batch (processFiles) the navigation happens once,
+				// right after the FIRST file starts — not once per file.
+				if (!opts?.skipStartCallback) {
+					if (onUploadStarted) {
+						onUploadStarted();
+					} else {
+						router.push(
+							folderId ? `/dashboard/folder/${folderId}` : "/dashboard/caps",
+						);
+					}
 				}
 			}
+			// The uploaded video's id (runUploadQueue counts this as
+			// success), or null when the upload was cancelled or failed (its
+			// own path already toasted the reason).
+			return createdId ?? null;
 		},
 		[
 			user,
@@ -526,11 +566,153 @@ export function useImportUpload({
 			folderId,
 			onUploadStarted,
 			t,
+			uploadingStore,
+		],
+	);
+
+	/**
+	 * Owner order 2026-09-26: "bir vaqtda bir nechta fayl yuklash", limit 20,
+	 * UPLOAD ONLY (AI analysis stays per-recording, one by one). Files upload
+	 * strictly sequentially via runUploadQueue. Exactly 1 file behaves as
+	 * today; 2+ files skip the pre-upload trimmer (trimming N files one by
+	 * one before anything uploads was not what was ordered). The batch state
+	 * lives in the UploadingContext Store so the loop survives the page that
+	 * started it unmounting (the file page navigates away after the first
+	 * file starts).
+	 */
+	const processFiles = useCallback(
+		async (files: File[]) => {
+			if (!user || !activeOrganization) return;
+
+			if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
+				setUpgradeModalOpen(true);
+				return;
+			}
+
+			if (uploadingStore.state.batchTotal || uploadingStore.state.uploadStatus) {
+				toast.info(t("uploadBatchBusy"));
+				return;
+			}
+
+			const { taken, dropped } = capBatch(files);
+			if (dropped > 0) {
+				toast.info(t("uploadBatchLimited", { max: MAX_BATCH_FILES }));
+			}
+
+			// One file: exactly today's single-file path (no batch state at all).
+			if (taken.length === 1 && taken[0]) {
+				void processFile(taken[0]);
+				return;
+			}
+
+			const items = taken.map((file, index) => ({
+				id: `batch-${Date.now()}-${index}`,
+				file,
+			}));
+
+			setQueueState({
+				queue: items.slice(1).map(({ id, file }) => ({ id, name: file.name })),
+				batchTotal: items.length,
+				batchIndex: 1,
+			});
+
+			// The item currently uploading is NOT in `queue`; isRemoved must not
+			// mistake it for a removed one, so it is seeded with the first item
+			// (runUploadQueue checks isRemoved before onStart for each item).
+			let currentId = items[0]?.id;
+			let navigated = false;
+
+			try {
+				const summary = await runUploadQueue({
+					items,
+					upload: (file) =>
+						processFile(file, undefined, {
+							skipStartCallback: true,
+							// The batch shows its own progress and ends with one
+							// summary toast; no per-file "Video uploaded!" on top.
+							inBatch: true,
+						}),
+					isRemoved: (id) =>
+						id !== currentId &&
+						!(uploadingStore.state.queue ?? []).some(
+							(entry) => entry.id === id,
+						),
+					onStart: (index, id) => {
+						currentId = id;
+						// Shrink the LIVE queue (never rebuild it from `items`: that
+						// would put back a file the user already removed with ✕).
+						setQueueState({
+							queue: queueAfterStart(uploadingStore.state.queue, id),
+							batchIndex: index + 1,
+						});
+						// Navigate ONCE, right after the first file starts.
+						if (!navigated) {
+							navigated = true;
+							if (onUploadStarted) {
+								onUploadStarted();
+							} else {
+								router.push(
+									folderId
+										? `/dashboard/folder/${folderId}`
+										: "/dashboard/caps",
+								);
+							}
+						}
+					},
+				});
+
+				// From the user's point of view a file removed from the queue was
+				// never uploaded, so it counts as "not uploaded" in the summary.
+				const notUploaded = summary.notUploaded + summary.removed;
+				if (notUploaded > 0) {
+					toast.info(
+						t("uploadBatchSummaryNotUploaded", {
+							total: items.length,
+							uploaded: summary.uploaded,
+							notUploaded,
+						}),
+					);
+				} else {
+					toast.success(
+						t("uploadBatchSummary", {
+							total: items.length,
+							uploaded: summary.uploaded,
+						}),
+					);
+				}
+			} finally {
+				currentId = undefined;
+				setQueueState({
+					queue: undefined,
+					batchTotal: undefined,
+					batchIndex: undefined,
+				});
+			}
+		},
+		[
+			user,
+			activeOrganization,
+			uploadingStore,
+			setQueueState,
+			processFile,
+			router,
+			folderId,
+			onUploadStarted,
+			t,
 		],
 	);
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const file = e.target.files?.[0];
+		// Copy the FileList BEFORE clearing the input: in a real browser
+		// input.value = "" empties the LIVE FileList, so reading it after the
+		// clear saw an empty list and nothing ever uploaded.
+		const files = Array.from(e.target.files ?? []);
+		if (files.length > 1) {
+			if (inputRef.current) inputRef.current.value = "";
+			void processFiles(files);
+			return;
+		}
+		const file = files[0];
 		if (!file) return;
 		setPendingFile(file);
 		if (inputRef.current) inputRef.current.value = "";
@@ -538,6 +720,14 @@ export function useImportUpload({
 
 	const openFilePicker = () => {
 		if (!user) return;
+
+		// Refuse ANY new pick (single or multi) while something is already
+		// uploading: a second pick would run in parallel with the first and
+		// both would fight over the one cancel handler in the store.
+		if (uploadingStore.state.uploadStatus || uploadingStore.state.batchTotal) {
+			toast.info(t("uploadBatchBusy"));
+			return;
+		}
 
 		if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
 			setUpgradeModalOpen(true);
@@ -572,6 +762,7 @@ export function useImportUpload({
 		pendingFile,
 		setPendingFile,
 		processFile,
+		processFiles,
 		handleFileChange,
 		openFilePicker,
 		progressPercent,

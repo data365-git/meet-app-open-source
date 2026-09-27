@@ -39,12 +39,24 @@ export const UploadCapButton = ({
     upgradeModalOpen,
     setUpgradeModalOpen,
     processFile,
+    processFiles,
     openFilePicker,
   } = useImportUpload({ folderId, onUploadStarted: () => router.refresh() });
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    // Copy the FileList BEFORE clearing the input: in a real browser
+    // input.value = "" empties the LIVE FileList (length 2 -> 0), so reading
+    // it after the clear saw an empty list and nothing ever uploaded.
+    const files = Array.from(e.target.files ?? []);
     if (inputRef.current) inputRef.current.value = "";
+    if (files.length === 0) return;
+    // Multi-pick (owner order 2026-09-26): files upload one after another,
+    // no trimmer. One file stays on today's direct path.
+    if (files.length > 1) {
+      void processFiles(files);
+      return;
+    }
+    const file = files[0];
     if (!file) return;
     void processFile(file);
   };
@@ -65,6 +77,7 @@ export const UploadCapButton = ({
         ref={inputRef}
         type="file"
         accept={IMPORT_FILE_ACCEPT}
+        multiple
         onChange={handleFileChange}
         className="hidden"
       />
