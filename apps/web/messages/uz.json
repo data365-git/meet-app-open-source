@@ -205,7 +205,13 @@
 		"cancelUploadConfirmCancel": "Yo'q",
 		"uploadCancelled": "Yuklash bekor qilindi.",
 		"cancelUploadRefused": "Yuklashni bekor qilib bo'lmadi. Yozuv saqlab qolindi.",
-		"cancelUploadFailed": "Yuklashni bekor qilib bo'lmadi."
+		"cancelUploadFailed": "Yuklashni bekor qilib bo'lmadi.",
+		"uploadBatchProgress": "Fayl {current}/{total} yuklanmoqda",
+		"uploadBatchRemove": "Navbatdan olib tashlash",
+		"uploadBatchLimited": "Bir martada {max} tagacha fayl — birinchi {max} tasi olindi",
+		"uploadBatchBusy": "Avvalgi fayllar hali yuklanmoqda — tugashini kuting",
+		"uploadBatchSummary": "{total} tadan {uploaded} tasi yuklandi",
+		"uploadBatchSummaryNotUploaded": "{total} tadan {uploaded} tasi yuklandi, {notUploaded} tasi yuklanmadi"
 	},
 	"auth": {
 		"signingIn": "Tizimga kiritilmoqda…",

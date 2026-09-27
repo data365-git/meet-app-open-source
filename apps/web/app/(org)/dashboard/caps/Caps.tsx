@@ -356,6 +356,7 @@ export const Caps = ({
 					ref={importInputRef}
 					type="file"
 					accept={IMPORT_FILE_ACCEPT}
+					multiple
 					onChange={handleImportFileChange}
 					className="hidden"
 				/>

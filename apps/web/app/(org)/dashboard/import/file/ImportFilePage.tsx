@@ -124,6 +124,7 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				ref={inputRef}
 				type="file"
 				accept={IMPORT_FILE_ACCEPT}
+				multiple
 				onChange={handleFileChange}
 				className="hidden"
 			/>

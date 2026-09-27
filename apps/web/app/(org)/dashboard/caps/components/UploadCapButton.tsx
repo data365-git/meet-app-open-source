@@ -39,12 +39,21 @@ export const UploadCapButton = ({
     upgradeModalOpen,
     setUpgradeModalOpen,
     processFile,
+    processFiles,
     openFilePicker,
   } = useImportUpload({ folderId, onUploadStarted: () => router.refresh() });
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = e.target.files;
     if (inputRef.current) inputRef.current.value = "";
+    if (!files || files.length === 0) return;
+    // Multi-pick (owner order 2026-09-26): files upload one after another,
+    // no trimmer. One file stays on today's direct path.
+    if (files.length > 1) {
+      void processFiles(Array.from(files));
+      return;
+    }
+    const file = files[0];
     if (!file) return;
     void processFile(file);
   };
@@ -65,6 +74,7 @@ export const UploadCapButton = ({
         ref={inputRef}
         type="file"
         accept={IMPORT_FILE_ACCEPT}
+        multiple
         onChange={handleFileChange}
         className="hidden"
       />

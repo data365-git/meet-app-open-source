@@ -205,7 +205,13 @@
 		"cancelUploadConfirmCancel": "No",
 		"uploadCancelled": "Upload cancelled.",
 		"cancelUploadRefused": "The upload could not be cancelled. The recording was kept.",
-		"cancelUploadFailed": "Could not cancel the upload."
+		"cancelUploadFailed": "Could not cancel the upload.",
+		"uploadBatchProgress": "Uploading file {current}/{total}",
+		"uploadBatchRemove": "Remove from queue",
+		"uploadBatchLimited": "Up to {max} files at a time — the first {max} were taken",
+		"uploadBatchBusy": "Previous files are still uploading — please wait until they finish",
+		"uploadBatchSummary": "{uploaded} of {total} uploaded",
+		"uploadBatchSummaryNotUploaded": "{uploaded} of {total} uploaded, {notUploaded} not uploaded"
 	},
 	"auth": {
 		"signingIn": "Signing you in…",

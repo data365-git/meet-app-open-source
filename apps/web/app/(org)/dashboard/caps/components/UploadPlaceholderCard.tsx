@@ -38,7 +38,8 @@ export function getRemainingTimeParts(seconds: number): RemainingTimeParts {
 			minutes: totalMinutes % 60,
 		};
 	}
-	if (seconds >= 60) return { kind: "minutes", minutes: Math.floor(seconds / 60) };
+	if (seconds >= 60)
+		return { kind: "minutes", minutes: Math.floor(seconds / 60) };
 	return { kind: "lessThanMinute" };
 }
 
@@ -61,10 +62,22 @@ function formatRemainingTime(
 	}
 }
 
+export const MAX_VISIBLE_QUEUE_ENTRIES = 5;
+
 export const UploadPlaceholderCard = () => {
 	const t = useTranslations("library");
-	const { uploadingStore } = useUploadingContext();
+	const { uploadingStore, removeFromQueue } = useUploadingContext();
 	const uploadStatus = useStore(uploadingStore, (s) => s.uploadStatus);
+	// Multi-file batch (owner order 2026-09-26): "Fayl 1/5 yuklanmoqda" plus
+	// the waiting files, each removable with an ✕ before its turn comes.
+	const batchTotal = useStore(uploadingStore, (s) => s.batchTotal);
+	const batchIndex = useStore(uploadingStore, (s) => s.batchIndex);
+	const queue = useStore(uploadingStore, (s) => s.queue);
+	const visibleQueue = (queue ?? []).slice(0, MAX_VISIBLE_QUEUE_ENTRIES);
+	const hiddenQueueCount = Math.max(
+		(queue ?? []).length - visibleQueue.length,
+		0,
+	);
 	// Owner order 2026-09-11: undefined once server processing has genuinely
 	// started (or once nothing is uploading at all) — never a stale handle
 	// pointing at a call that already finished.
@@ -88,7 +101,10 @@ export const UploadPlaceholderCard = () => {
 			uploadStatus.status === "uploadingVideo")
 			? uploadStatus.progress
 			: null;
-	const strokeDashoffset = calculateStrokeDashoffset(percent ?? 0, circumference);
+	const strokeDashoffset = calculateStrokeDashoffset(
+		percent ?? 0,
+		circumference,
+	);
 
 	// Speed/ETA piggyback on the same three progress-carrying statuses. Only
 	// rendered when both byte counts are known — never a placeholder, never a
@@ -108,7 +124,10 @@ export const UploadPlaceholderCard = () => {
 			uploadStatus.status === "uploadingThumbnail" ||
 			uploadStatus.status === "uploadingVideo") &&
 		uploadStatus.secondsRemaining !== undefined
-			? formatRemainingTime(t, getRemainingTimeParts(uploadStatus.secondsRemaining))
+			? formatRemainingTime(
+					t,
+					getRemainingTimeParts(uploadStatus.secondsRemaining),
+				)
 			: null;
 
 	// Once every byte is sent, the rest (/complete, progress POST) is moments
@@ -186,13 +205,65 @@ export const UploadPlaceholderCard = () => {
 
 					<div className="flex absolute right-3 bottom-3 left-3 gap-2 items-end">
 						<div className="flex overflow-hidden flex-col flex-1 min-w-0">
+							{batchTotal !== undefined && (
+								<>
+									<span className="text-xs font-medium text-white/90 truncate">
+										{t("uploadBatchProgress", {
+											current: batchIndex ?? 1,
+											total: batchTotal,
+										})}
+									</span>
+									<ul className="flex flex-col gap-0.5 mb-1">
+										{visibleQueue.map((entry) => (
+											<li
+												key={entry.id}
+												className="flex gap-1 items-center min-w-0"
+											>
+												<span className="flex-1 text-xs text-white/80 truncate">
+													{entry.name}
+												</span>
+												{/* 24px hit area around a 12px glyph; same
+												    white-on-black treatment as the Cancel disc,
+												    no new colours. */}
+												<button
+													type="button"
+													onClick={() => removeFromQueue(entry.id)}
+													aria-label={t("uploadBatchRemove")}
+													title={t("uploadBatchRemove")}
+													className="flex justify-center items-center p-1 rounded-full shrink-0 transition-colors text-white/70 hover:text-white hover:bg-black/50"
+												>
+													<svg
+														className="w-3 h-3"
+														viewBox="0 0 20 20"
+														fill="none"
+														aria-hidden="true"
+													>
+														<path
+															d="M5 5L15 15M15 5L5 15"
+															stroke="currentColor"
+															strokeWidth="2"
+															strokeLinecap="round"
+														/>
+													</svg>
+												</button>
+											</li>
+										))}
+										{hiddenQueueCount > 0 && (
+											<li className="text-xs text-white/60">
+												+{hiddenQueueCount}
+											</li>
+										)}
+									</ul>
+								</>
+							)}
 							<span className="text-sm font-semibold text-white truncate">
 								{getFriendlyStatus(uploadStatus.status)}
 								{percent !== null && ` ${Math.round(percent)}%`}
 							</span>
 							{bytesInfo && (
 								<span className="text-xs text-white/80 truncate">
-									{formatBytes(bytesInfo.loaded)} / {formatBytes(bytesInfo.total)}
+									{formatBytes(bytesInfo.loaded)} /{" "}
+									{formatBytes(bytesInfo.total)}
 									{remainingLabel && ` · ${remainingLabel}`}
 								</span>
 							)}
