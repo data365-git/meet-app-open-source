@@ -309,6 +309,50 @@ describe("transcribeAudioChunks — quota vs genuine failure classification", ()
 		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
 	});
 
+	it("fast + MIXED quota + transient 503 (one ok, one 402, one 503): still QUOTA — waits, never COMPLETE-with-gaps", async () => {
+		// Prod 2026-09-29, `37fm9q81veb28g4` (80-min audio): 10 chunks died on
+		// OpenRouter 402 / free 429 and 2 on Gemini 503 "high demand". The 503s
+		// broke the every-failed-chunk-is-quota test, so the row COMPLETEd with
+		// ~9 min transcribed. A 503 among quota deaths is the same "provider not
+		// serving right now" — the owner wants a wait + auto-finish, not a fake done.
+		const fn = chunkFn(async (startSec) => {
+			if (startSec === 0) return "WEBVTT\n\nOK";
+			if (startSec === 600)
+				throw new Error(
+					'OpenRouter completion failed (HTTP 402): {"error":{"message":"This request requires at least $0.50 in balance for audio"}}',
+				);
+			throw new Error(
+				"Gemini generateContent failed (HTTP 503): This model is currently experiencing high demand.",
+			);
+		});
+
+		const err = await transcribeAudioChunks(
+			{ chunks: [chunk(0), chunk(600), chunk(1200)], totalDurationSec: 1800 },
+			null,
+			CTX,
+			fn,
+		).catch((e) => e);
+
+		expect(isTranscriptionQuotaFailureError(err)).toBe(true);
+	});
+
+	it("fast + MIXED quota + GENUINE failure: not a quota wait (a broken chunk is not fixed by money)", async () => {
+		const fn = chunkFn(async (startSec) => {
+			if (startSec === 0) return "WEBVTT\n\nOK";
+			if (startSec === 600) throw quotaError();
+			throw genuineError();
+		});
+
+		const result = await transcribeAudioChunks(
+			{ chunks: [chunk(0), chunk(600), chunk(1200)], totalDurationSec: 1800 },
+			null,
+			CTX,
+			fn,
+		).catch((e) => e);
+
+		expect(isTranscriptionQuotaFailureError(result)).toBe(false);
+	});
+
 	it("fast + SINGLE chunk 429: still QUOTA-classified (single-chunk path bypasses the chunk loop)", async () => {
 		// Videos under ~8 min take the chunks.length === 1 branch, which never
 		// reaches the per-chunk catch or the all-failed throw.

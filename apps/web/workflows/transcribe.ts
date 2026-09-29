@@ -36,6 +36,8 @@ import {
 } from "@/lib/ai-quota-wait";
 import { AI_CHUNK_CONCURRENCY, mapWithConcurrency } from "@/lib/concurrency";
 import { assertVideoNotDeleted } from "@/lib/video-alive";
+import { isTransientGeminiMessage } from "@/lib/gemini-retry";
+import { isUnusableAiOutputError } from "@/lib/free-tier-health";
 import { sanitizeAiErrorMessageForUi } from "@/lib/ai-error-message";
 import { startAiJobHeartbeat } from "@/lib/ai-job-heartbeat";
 import { isDeadlineError, withDeadline } from "@/lib/deadline";
@@ -1112,9 +1114,12 @@ export async function transcribeAudioChunks(
 	}
 
 	let failedChunkCount = 0;
-	// Subset of failedChunkCount whose cause was quota/credits. When it equals
-	// failedChunkCount on a total failure, the job died for money, not content.
+	// Subset of failedChunkCount whose cause was quota/credits. When quota +
+	// transient deaths (at least one quota) cover every failure, the job died
+	// for money, not content.
 	let quotaFailedChunkCount = 0;
+	// Failed chunks that were a transient provider blip (503 / high demand).
+	let transientFailedChunkCount = 0;
 	let completedCount = 0;
 	let reusedChunkCount = 0;
 	const completedResults = new Array<{ vtt: string; offsetSec: number } | undefined>(
@@ -1250,6 +1255,13 @@ export async function transcribeAudioChunks(
 			// long-video AI failures). Now: log, keep a gap at this offset, and continue.
 			failedChunkCount++;
 			if (isQuotaLikeAiError(error)) quotaFailedChunkCount++;
+			// Unusable model output quotes the model's own text, which can look
+			// like "503"/"unavailable" — same structural exclusion as the quota check.
+			else if (
+				!isUnusableAiOutputError(error) &&
+				isTransientGeminiMessage(error instanceof Error ? error.message : String(error))
+			)
+				transientFailedChunkCount++;
 			console.error(
 				`[transcribe] Chunk at ${chunk.startSec}s FAILED for ${context.videoId} after retries; continuing with a gap:`,
 				error,
@@ -1323,7 +1335,10 @@ export async function transcribeAudioChunks(
 		// Every chunk died for quota/credits => the account is out of money, not
 		// the video broken. Tag it so markError records a QUOTA reason and the
 		// recovery cron can re-run this video once credits return.
-		if (quotaFailedChunkCount === failedChunkCount) {
+		if (
+			quotaFailedChunkCount > 0 &&
+			quotaFailedChunkCount + transientFailedChunkCount === failedChunkCount
+		) {
 			throw new TranscriptionQuotaFailureError(
 				`All ${failedChunkCount} transcription chunks failed for ${context.videoId}: AI quota/credits exhausted`,
 			);
@@ -1342,10 +1357,15 @@ export async function transcribeAudioChunks(
 	// down the same QUOTA path as the all-chunks case: markError records QUOTA,
 	// the partial checkpoint stays in storage for resume, and the cron finishes
 	// the missing chunks once credits return.
+	// A transient 503 among the quota deaths does not change that (2026-09-29,
+	// `37fm9q81veb28g4`: 10 quota + 2 "high demand" 503s COMPLETEd with ~9 of
+	// 80 min transcribed). At least one quota death is required, so a pure-503
+	// run keeps its old path; a GENUINE failure anywhere still COMPLETEs gapped.
 	if (
 		failedChunkCount > 0 &&
 		failedChunkCount < audio.chunks.length &&
-		quotaFailedChunkCount === failedChunkCount
+		quotaFailedChunkCount > 0 &&
+		quotaFailedChunkCount + transientFailedChunkCount === failedChunkCount
 	) {
 		throw new TranscriptionQuotaFailureError(
 			`${failedChunkCount}/${audio.chunks.length} transcription chunks failed for ${context.videoId} on quota/credits: AI quota/credits exhausted`,
