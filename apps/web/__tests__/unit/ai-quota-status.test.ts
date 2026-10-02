@@ -113,3 +113,18 @@ describe("buildAiQuotaStatusText", () => {
     ).toMatchObject({ balance: "—" });
   });
 });
+
+describe("buildAiQuotaStatusText - per-model quotas", () => {
+  it("only some models exhausted -> partial headline, not a whole-tier claim", () => {
+    expect(
+      buildAiQuotaStatusText({
+        requestsToday: 5,
+        exhausted: true,
+        partial: true,
+        resetAt: new Date("2026-10-02T07:00:00Z"),
+        balance: 8.73,
+        now: new Date("2026-10-02T02:00:00Z"),
+      }).status,
+    ).toBe("ayrim modellarda limit tugadi");
+  });
+});

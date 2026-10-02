@@ -7,7 +7,7 @@ import { eq, sql } from "drizzle-orm";
  * The owner's free-quota meter (admin dashboard badge, 2026-10-02).
  *
  * Google exposes NO "remaining quota" API for the Gemini free tier, so this
- * module counts OUR OWN requests: every Gemini HTTP call made with the FREE
+ * module counts OUR OWN requests: every Gemini generate/embed call made with the FREE
  * key (`serverEnv().GEMINI_API_KEY_FREE`) fires one detached, never-awaited
  * record call. The two hard rules:
  *   1. recording must NEVER slow down or break an AI call —

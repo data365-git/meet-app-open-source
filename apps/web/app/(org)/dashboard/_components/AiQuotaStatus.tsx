@@ -39,6 +39,8 @@ export function formatResetAtTashkent(resetAt: Date, now: Date): string {
 export function buildAiQuotaStatusText(input: {
 	requestsToday: number;
 	exhausted: boolean;
+	/** Daily limit hit on SOME models but not all - quotas are per model. */
+	partial?: boolean;
 	resetAt: Date;
 	balance: number | null;
 	now?: Date;
@@ -46,7 +48,11 @@ export function buildAiQuotaStatusText(input: {
 	const now = input.now ?? new Date();
 	const time = formatResetAtTashkent(input.resetAt, now);
 	return {
-		status: input.exhausted ? "kunlik limit tugadi" : "ishlayapti",
+		status: input.exhausted
+			? input.partial
+				? "ayrim modellarda limit tugadi"
+				: "kunlik limit tugadi"
+			: "ishlayapti",
 		detail: input.exhausted
 			? `${time} da tiklanadi`
 			: `bugun ${input.requestsToday} so'rov · yangilanadi ${time}`,
@@ -67,6 +73,7 @@ export default async function AiQuotaStatus() {
 		const text = buildAiQuotaStatusText({
 			requestsToday: quota.requestsToday,
 			exhausted,
+			partial: exhausted && quota.exhaustedModels.length < quota.perModel.length,
 			resetAt: quota.resetAt,
 			balance,
 			now,
