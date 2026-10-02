@@ -1,3 +1,4 @@
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 
 /** Max documents per `batchEmbedContents` request. Was 100 — that burst the
@@ -64,10 +65,25 @@ async function requestBatch(
 
 			if (!res.ok) {
 				const errBody = await res.text();
+				// Owner's free-quota meter (admin badge): fire-and-forget, never
+				// awaited, no-op unless this key is the free one. The 429 body is
+				// already read here, so the daily-exhaustion classifier gets it.
+				recordFreeGeminiCall({
+					apiKey,
+					model: EMBED_MODEL,
+					status: res.status,
+					body: errBody,
+				});
 				throw new Error(
 					`Gemini batchEmbedContents failed: ${res.status} ${errBody}`,
 				);
 			}
+
+			recordFreeGeminiCall({
+				apiKey,
+				model: EMBED_MODEL,
+				status: res.status,
+			});
 
 			return (await res.json()) as BatchEmbedResult;
 		},

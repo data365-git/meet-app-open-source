@@ -1635,6 +1635,26 @@ export const aiChatUsage = mysqlTable(
 	],
 );
 
+/**
+ * Daily count of FREE-tier Gemini requests, per model, per Pacific-time day
+ * (Google's daily quotas reset at midnight America/Los_Angeles). Google
+ * exposes NO "remaining quota" API, so the dashboard badge counts our OWN
+ * requests — never a "remaining" number. `dailyExhaustedAt` is set when a
+ * 429 body names a PerDay quota, which is what lets the badge say
+ * "kunlik limit tugadi" instead of guessing from a count.
+ */
+export const aiFreeQuotaUsage = mysqlTable(
+	"ai_free_quota_usage",
+	{
+		dayPt: varchar("dayPt", { length: 10 }).notNull(),
+		model: varchar("model", { length: 96 }).notNull(),
+		requests: int("requests").notNull().default(0),
+		dailyExhaustedAt: datetime("dailyExhaustedAt"),
+		updatedAt: datetime("updatedAt").notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.dayPt, table.model] })],
+);
+
 export const auditLog = mysqlTable("audit_log", {
 	id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
 	orgId: varchar("org_id", { length: 36 }),

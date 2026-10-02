@@ -11,6 +11,7 @@ import {
 	isServerPaidGeminiKeyFree,
 } from "@/lib/gemini-paid-key";
 import { getOpenRouterKey } from "@/lib/openrouter-key";
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 import {
 	OPENROUTER_USAGE_MODEL,
 	openRouterCompletion,
@@ -247,6 +248,16 @@ async function callGeminiJson(
 					promptFeedback?: { blockReason?: string };
 					error?: { message: string };
 				};
+
+				// Owner's free-quota meter (admin badge): fire-and-forget, never
+				// awaited, no-op unless this key is the free one. The paid key can
+				// BE the free key (isServerPaidGeminiKeyFree) and is then counted.
+				recordFreeGeminiCall({
+					apiKey,
+					model: GEMINI_TRANSLATE_MODEL,
+					status: res.status,
+					body: res.ok ? undefined : JSON.stringify(data),
+				});
 
 				if (!res.ok) {
 					throw new Error(

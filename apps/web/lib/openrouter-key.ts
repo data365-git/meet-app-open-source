@@ -68,3 +68,11 @@ export function getOpenRouterKey(use: OpenRouterUse): string | undefined {
 export function hasOpenRouterKey(): boolean {
 	return Boolean(serverEnv().OPENROUTER_API_KEY);
 }
+
+/** Read-only balance lookup for the admin status badge (openrouter-balance.ts).
+ * Generates nothing and spends nothing — the only thing it unlocks is
+ * GET /api/v1/credits — so there is no `freeAttempted` fact to declare. The
+ * key still never leaves the server module boundary. */
+export function getOpenRouterBalanceKey(): string | undefined {
+	return serverEnv().OPENROUTER_API_KEY;
+}

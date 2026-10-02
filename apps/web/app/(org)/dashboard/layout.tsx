@@ -1,9 +1,11 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
+import AiQuotaStatus from "./_components/AiQuotaStatus";
 import DashboardInner from "./_components/DashboardInner";
 import DashboardLoadError from "./_components/DashboardLoadError";
 import MobileTab from "./_components/MobileTab";
@@ -103,7 +105,17 @@ export default async function DashboardLayout({
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">
 							<MobileNav />
-							<DashboardInner>{children}</DashboardInner>
+							<DashboardInner>
+								{/* Owner-only status line (free Gemini quota + OpenRouter
+								    balance). Suspensed + admin-gated so it can never delay
+								    the dashboard or appear to regular users. */}
+								{user.isAdmin ? (
+									<Suspense fallback={null}>
+										<AiQuotaStatus />
+									</Suspense>
+								) : null}
+								{children}
+							</DashboardInner>
 						</div>
 						<MobileTab />
 					</div>

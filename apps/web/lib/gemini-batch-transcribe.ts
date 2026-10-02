@@ -1,3 +1,4 @@
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 import { withGeminiRetry } from "@/lib/gemini-retry";
 import {
 	buildTranscriptionPrompt,
@@ -376,6 +377,14 @@ async function submitBatch(
 			},
 		);
 		const data = (await res.json()) as unknown;
+		// Owner's free-quota meter: fire-and-forget, never awaited, no-op
+		// unless this key is the free one (admin badge, 2026-10-02).
+		recordFreeGeminiCall({
+			apiKey,
+			model: BATCH_TRANSCRIBE_MODEL,
+			status: res.status,
+			body: res.ok ? undefined : JSON.stringify(data),
+		});
 		if (!res.ok) {
 			const msg =
 				(data as { error?: { message?: string } })?.error?.message ??
