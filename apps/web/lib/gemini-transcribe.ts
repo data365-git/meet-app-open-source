@@ -643,6 +643,7 @@ export function extractSpeakerLabels(vtt: string): string[] {
 }
 
 import { isTransientGeminiError, withGeminiRetry } from "@/lib/gemini-retry";
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 
 // NOTE: gemini-2.0-flash was RETIRED by Google (HTTP 404 "no longer available",
 // verified 2026-07-02) — the overload fallback now uses the Google-managed
@@ -1172,6 +1173,17 @@ export async function transcribeWithGemini(
 					);
 
 					const data = (await res.json()) as GenData;
+
+					// Owner's free-quota meter: fire-and-forget, never awaited,
+					// no-op unless this key is the free one (admin badge, 2026-10-02).
+					recordFreeGeminiCall({
+						apiKey,
+						// transcribeModels[mi] is `string | undefined` under
+						// noUncheckedIndexedAccess; the meter needs a stable label.
+						model: model ?? "unknown",
+						status: res.status,
+						body: res.ok ? undefined : JSON.stringify(data),
+					});
 
 					if (!res.ok) {
 						const errMsg = `Gemini generateContent failed (HTTP ${res.status}): ${data.error?.message ?? "unknown"}`;

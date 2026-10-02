@@ -18,6 +18,7 @@ import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { z } from "zod";
 import { BudgetExceededError, withCostGuard } from "@/lib/ai-cost-guard";
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 import {
 	isAiQuotaWaitError,
 	isQuotaLikeAiError,
@@ -1366,6 +1367,16 @@ async function callAiApiWithModel(
 						promptFeedback?: { blockReason?: string };
 						error?: { message: string };
 					};
+
+					// Owner's free-quota meter (admin badge): fire-and-forget, never
+					// awaited, no-op unless this key is the free one. The paid key can
+					// BE the free key (isServerPaidGeminiKeyFree) and is then counted.
+					recordFreeGeminiCall({
+						apiKey,
+						model,
+						status: res.status,
+						body: res.ok ? undefined : JSON.stringify(data),
+					});
 
 					if (!res.ok) {
 						throw new Error(

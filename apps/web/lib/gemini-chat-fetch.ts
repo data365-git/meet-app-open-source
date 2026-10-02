@@ -25,6 +25,7 @@
  *     reported itself as a bare status code.
  */
 
+import { recordFreeGeminiCall } from "@/lib/free-quota-meter";
 import {
 	OPENROUTER_COMPLETIONS_URL,
 	openRouterHeaders,
@@ -102,6 +103,13 @@ export function createGeminiChatFetcher(opts: {
 						continue;
 					}
 					if (res.ok) {
+						// Owner's free-quota meter (admin badge): fire-and-forget,
+						// never awaited, no-op unless the key is the free one.
+						recordFreeGeminiCall({
+							apiKey: attempt.key,
+							model: attempt.model,
+							status: res.status,
+						});
 						usedFree = true;
 						usedProvider = "gemini-free";
 						usedModel = attempt.model;
@@ -109,7 +117,13 @@ export function createGeminiChatFetcher(opts: {
 					}
 					// Safe to drain: we are definitely moving on from this one, and
 					// releasing the connection matters more than its body.
-					await res.text().catch(() => "");
+					const drainedBody = await res.text().catch(() => "");
+					recordFreeGeminiCall({
+						apiKey: attempt.key,
+						model: attempt.model,
+						status: res.status,
+						body: drainedBody,
+					});
 				}
 				freeChainSpent = true;
 			}
@@ -129,7 +143,16 @@ export function createGeminiChatFetcher(opts: {
 			}
 			usedProvider = "gemini-paid";
 			usedModel = PAID_CHAT_MODEL;
-			return doFetch(endpoint(PAID_CHAT_MODEL, opts.paidKey), init);
+			const paidRes = await doFetch(endpoint(PAID_CHAT_MODEL, opts.paidKey), init);
+			// Free-quota meter: the paid key can BE the free key
+			// (isServerPaidGeminiKeyFree), and the recorder no-ops otherwise.
+			// Body deliberately not read — the caller needs it for the real error.
+			recordFreeGeminiCall({
+				apiKey: opts.paidKey,
+				model: PAID_CHAT_MODEL,
+				status: paidRes.status,
+			});
+			return paidRes;
 		},
 	};
 }
