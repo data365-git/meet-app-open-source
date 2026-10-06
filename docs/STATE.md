@@ -714,4 +714,9 @@ Same class, runtime half: `apps/web/.next/standalone/apps/web/lib/audio-extract.
 - 2026-10-02 [Kim] Buni kim ko'rsin? -> **Faqat siz (admin) (Tavsiya)**
 - 2026-10-02 [Chiqarish] AI limit yozuvi tayyor va tekshirildi. Saytga chiqaraymi? (Chiqarish ~30ΓÇô40 daqiqa oladi, shu vaqtda sayt ishlab turadi. Muammo bo'lsa, eski versiyaga bir nec... -> **Ha, hozir chiqar (Tavsiya)**
 - 2026-10-06 [Google kalit] Hermes Google'ga to'g'ridan-to'g'ri ulanishi uchun ishlaydigan kalit kerak. Qaysi yo'l? -> **openrouter key orqali ishlayaptiku hozir ham**
+- 2026-10-06 [Kim yuboradi] Flex topshirig'ini (STT narxini yarmiga tushirish) Hermes'ga kim yuboradi? -> **Men ssh orqali (Tavsiya)**
+- 2026-10-06 [Flex yoqish] Hermes flex'ni ishga tushirsinmi? (Audio narxi taxminan 2 baravar arzon bo'ladi. Flex band bo'lsa, oddiy usulga o'zi o'tadi) -> **tushuntir soddaroq tushunmadim flex nima o'zi meetapp sttdan nima farq qilyapti**
+- 2026-10-06 [Lid baholash] Lid baholash (lead-scoring) ham "o'ylash minimal"ga sinab ko'rilsinmi? Hozir u kunlik xarajatning taxminan 20% ini oladi. -> **Avval sinov (Tavsiya)**
+- 2026-10-06 [Model sinovi] Yangi ikki modelni (2.5├ù arzon flash-lite va yangiroq 3.8-flash) haqiqiy o'zbek audiolarida sinab ko'raylikmi? Sinovning o'zi bir necha sent turadi. -> **Ha, Hermes'da sinaylik (Tavsiya)**
+- 2026-10-06 [Arzonlash] Pullik AI'ni arzonlashtirish uchun qaysi yo'lni tanlaymiz? -> **flex batch api kabi yani birxil model menimcha sinash shart emas lekin u atkaz qilsa nima bo'ladi bu muhim search it**
 
