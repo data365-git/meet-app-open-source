@@ -1270,6 +1270,10 @@ async function callOpenRouterSummary(
 				// call and then return null — an empty summary the user pays twice
 				// for. Only the JSON legs ask for it; free-text summaries must not.
 				...(json ? { responseFormat: "json_object" as const } : {}),
+				// Background leg nobody waits on: half price on Google's flex
+				// tier, bounded by OPENROUTER_FLEX_TIMEOUT_MS with a single
+				// standard-tier retry when flex stalls.
+				flex: true,
 			});
 			if (res.finishReason === "length") {
 				console.error(
