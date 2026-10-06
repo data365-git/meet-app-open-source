@@ -36,6 +36,24 @@ export const OPENROUTER_MODEL = "google/gemini-3.7-flash";
  * are never confused in the spend breakdown. */
 export const OPENROUTER_USAGE_MODEL = `openrouter/${OPENROUTER_MODEL}`;
 
+/** The endpoint order that selects Google's FLEX tier on OpenRouter (half
+ * price, verified live 2026-10-06: $0.375/M in+audio, $1.875/M out vs the
+ * standard 0.75 / 3.75). `sort: "price"` did NOT pick flex — only this
+ * explicit `provider.order` does. `allow_fallbacks: true` lets OpenRouter
+ * itself move to the standard endpoints of the SAME model when the flex ones
+ * 5xx/429, so a rejected flex request is billed normally instead of failing. */
+export const OPENROUTER_FLEX_PROVIDER_ORDER = [
+	"google-ai-studio/flex",
+	"google-vertex/global/flex",
+] as const;
+
+/** Google's flex tier is best-effort: the request may be queued. Their doc
+ * recommends client timeouts >= 10 minutes, and flex never auto-upgrades to
+ * standard on its own — so this deadline is what bounds a queued-forever
+ * flex call. Background legs only (transcription, summary); a human is never
+ * waiting on it. */
+export const OPENROUTER_FLEX_TIMEOUT_MS = 10 * 60_000;
+
 export type OpenRouterContentPart =
 	| { type: "text"; text: string }
 	| { type: "input_audio"; input_audio: { data: string; format: string } };
@@ -90,12 +108,24 @@ export function buildOpenRouterBody(opts: {
 	 * Verified accepted (HTTP 200, valid JSON) against
 	 * google/gemini-3-flash-preview on 2026-08-13. */
 	responseFormat?: "json_object";
+	/** Select Google's flex tier (see OPENROUTER_FLEX_PROVIDER_ORDER). Opt-in
+	 * and OFF by default: the interactive legs (chat, translate) keep the
+	 * exact body they have always sent — a test pins that. */
+	flex?: boolean;
 }): Record<string, unknown> {
 	return {
 		model: opts.model ?? OPENROUTER_MODEL,
 		messages: opts.messages,
 		max_tokens: opts.maxTokens,
 		temperature: opts.temperature,
+		...(opts.flex
+			? {
+					provider: {
+						order: OPENROUTER_FLEX_PROVIDER_ORDER,
+						allow_fallbacks: true,
+					},
+				}
+			: {}),
 		...(opts.responseFormat
 			? { response_format: { type: opts.responseFormat } }
 			: {}),
@@ -161,63 +191,117 @@ export async function openRouterCompletion(opts: {
 	fetchImpl?: typeof fetch;
 	/** Ask for structured JSON, the twin of the Gemini legs' responseMimeType. */
 	responseFormat?: "json_object";
+	/** Route through Google's flex tier (half price) and bound each attempt
+	 * with OPENROUTER_FLEX_TIMEOUT_MS. Background legs only — chat and
+	 * translate never set this. */
+	flex?: boolean;
+	/** Test seam for flex: the per-attempt flex deadline, replacing the
+	 * 10-minute default so a test can expire an attempt in milliseconds. */
+	flexTimeoutMs?: number;
 }): Promise<OpenRouterUsage & { text: string; finishReason?: string }> {
 	const doFetch = opts.fetchImpl ?? fetch;
-	const body = JSON.stringify(
-		buildOpenRouterBody({
-			model: opts.model,
-			messages: opts.messages,
-			maxTokens: opts.maxTokens,
-			temperature: opts.temperature,
-			responseFormat: opts.responseFormat,
-		}),
-	);
+	const bodyOpts = {
+		model: opts.model,
+		messages: opts.messages,
+		maxTokens: opts.maxTokens,
+		temperature: opts.temperature,
+		responseFormat: opts.responseFormat,
+	};
+	const body = JSON.stringify(buildOpenRouterBody(bodyOpts));
+	const flexBody = opts.flex
+		? JSON.stringify(buildOpenRouterBody({ ...bodyOpts, flex: true }))
+		: body;
 
-	const data = await withGeminiRetry(
-		async () => {
-			const res = await doFetch(OPENROUTER_COMPLETIONS_URL, {
-				method: "POST",
-				headers: openRouterHeaders(opts.apiKey),
-				body,
-				signal: opts.signal,
-			});
-			const raw = await res.text();
-			if (!res.ok) {
-				// Same message SHAPE as the Gemini legs — "... failed (HTTP nnn): ..."
-				// — so withGeminiRetry's transient detection, the free/paid error
-				// classifiers and sanitizeAiErrorMessageForUi all keep working
-				// unchanged. Body redacted first (see redactOpenRouterKey).
-				throw new Error(
-					`OpenRouter completion failed (HTTP ${res.status}): ${redactOpenRouterKey(
-						raw,
-						opts.apiKey,
-					).slice(0, 300)}`,
-				);
-			}
-			let parsed: OpenRouterCompletionResponse;
-			try {
-				parsed = JSON.parse(raw) as OpenRouterCompletionResponse;
-			} catch {
-				throw new Error(
-					`OpenRouter completion returned non-JSON (HTTP ${res.status}): ${redactOpenRouterKey(
-						raw,
-						opts.apiKey,
-					).slice(0, 200)}`,
-				);
-			}
-			if (parsed.error) {
-				throw new Error(
-					`OpenRouter completion failed (HTTP ${res.status}): ${redactOpenRouterKey(
-						parsed.error.message ?? "unknown",
-						opts.apiKey,
-					).slice(0, 300)}`,
-				);
-			}
-			return parsed;
-		},
-		opts.maxAttempts ?? 5,
-		opts.signal,
-	);
+	/** One fetch + parse. `flexDeadlineMs` bounds THIS attempt only; the
+	 * caller's own signal always aborts immediately too (AbortSignal.any). */
+	const attempt = async (
+		requestBody: string,
+		flexDeadlineMs?: number,
+	): Promise<OpenRouterCompletionResponse> => {
+		let signal = opts.signal;
+		if (flexDeadlineMs) {
+			const deadline = AbortSignal.timeout(flexDeadlineMs);
+			signal = opts.signal
+				? AbortSignal.any([opts.signal, deadline])
+				: deadline;
+		}
+		const res = await doFetch(OPENROUTER_COMPLETIONS_URL, {
+			method: "POST",
+			headers: openRouterHeaders(opts.apiKey),
+			body: requestBody,
+			signal,
+		});
+		const raw = await res.text();
+		if (!res.ok) {
+			// Same message SHAPE as the Gemini legs — "... failed (HTTP nnn): ..."
+			// — so withGeminiRetry's transient detection, the free/paid error
+			// classifiers and sanitizeAiErrorMessageForUi all keep working
+			// unchanged. Body redacted first (see redactOpenRouterKey).
+			throw new Error(
+				`OpenRouter completion failed (HTTP ${res.status}): ${redactOpenRouterKey(
+					raw,
+					opts.apiKey,
+				).slice(0, 300)}`,
+			);
+		}
+		let parsed: OpenRouterCompletionResponse;
+		try {
+			parsed = JSON.parse(raw) as OpenRouterCompletionResponse;
+		} catch {
+			throw new Error(
+				`OpenRouter completion returned non-JSON (HTTP ${res.status}): ${redactOpenRouterKey(
+					raw,
+					opts.apiKey,
+				).slice(0, 200)}`,
+			);
+		}
+		if (parsed.error) {
+			throw new Error(
+				`OpenRouter completion failed (HTTP ${res.status}): ${redactOpenRouterKey(
+					parsed.error.message ?? "unknown",
+					opts.apiKey,
+				).slice(0, 300)}`,
+			);
+		}
+		return parsed;
+	};
+
+	/** True when the error is the fetch abort caused by OUR flex deadline —
+	 * i.e. an abort-type rejection while the CALLER's signal is still live.
+	 * AbortSignal.timeout rejects as "TimeoutError" in some runtimes and
+	 * "AbortError" in others, so both names count. */
+	const isFlexDeadlineAbort = (err: unknown): boolean => {
+		if (opts.signal?.aborted) return false;
+		return (
+			err instanceof Error &&
+			(err.name === "AbortError" || err.name === "TimeoutError")
+		);
+	};
+
+	let data: OpenRouterCompletionResponse;
+	if (!opts.flex) {
+		data = await withGeminiRetry(
+			() => attempt(body),
+			opts.maxAttempts ?? 5,
+			opts.signal,
+		);
+	} else {
+		const flexTimeoutMs = opts.flexTimeoutMs ?? OPENROUTER_FLEX_TIMEOUT_MS;
+		try {
+			data = await withGeminiRetry(
+				() => attempt(flexBody, flexTimeoutMs),
+				opts.maxAttempts ?? 5,
+				opts.signal,
+			);
+		} catch (err) {
+			// Flex is best-effort and may sit queued forever; it never
+			// auto-upgrades. When OUR deadline (not the caller) killed the
+			// attempt, retry that call EXACTLY ONCE on the standard body, with
+			// no flex deadline, and return/throw whatever that gives.
+			if (!isFlexDeadlineAbort(err)) throw err;
+			data = await attempt(body);
+		}
+	}
 
 	return {
 		text: data.choices?.[0]?.message?.content ?? "",
@@ -265,6 +349,9 @@ export async function transcribeWithOpenRouter(
 		maxAttempts?: number;
 		model?: string;
 		fetchImpl?: typeof fetch;
+		/** Background-leg opt-in: route through Google's flex tier (see
+		 * OPENROUTER_FLEX_PROVIDER_ORDER / openRouterCompletion). */
+		flex?: boolean;
 	},
 ): Promise<GeminiTranscribeResult & { costUsdMicros?: number }> {
 	const doFetch = options.fetchImpl ?? fetch;
@@ -286,6 +373,7 @@ export async function transcribeWithOpenRouter(
 		signal: options.signal,
 		maxAttempts: options.maxAttempts,
 		fetchImpl: options.fetchImpl,
+		flex: options.flex,
 		messages: [
 			{
 				role: "user",

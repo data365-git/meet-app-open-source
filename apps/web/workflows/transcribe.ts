@@ -897,6 +897,10 @@ export async function transcribeAudio(
 					apiKey: syncKey,
 					audioDurationSec: audioDurationSec ?? undefined,
 					knownSpeakers,
+					// Background leg nobody waits on: half price on Google's
+					// flex tier, bounded by OPENROUTER_FLEX_TIMEOUT_MS with a
+					// single standard-tier retry when flex stalls.
+					flex: true,
 				});
 				return {
 					transcriptVtt: res.transcriptVtt,
