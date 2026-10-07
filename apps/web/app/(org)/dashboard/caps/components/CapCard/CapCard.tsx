@@ -22,6 +22,7 @@ import {
   faGear,
   faLink,
   faLock,
+  faPen,
   faScissors,
   faShare,
   faTrash,
@@ -181,6 +182,7 @@ export const CapCard = ({
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [renameRequest, setRenameRequest] = useState(0);
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false,
   );
@@ -684,9 +686,6 @@ export const CapCard = ({
       />
       <fieldset
         aria-label={cap.name}
-        draggable={isDraggable}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
         className={clsx(
           "flex relative overflow-hidden transition-colors duration-200 flex-col w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-4 group z-10",
           isSelected
@@ -695,7 +694,6 @@ export const CapCard = ({
               ? "border-[var(--brand)] hover:border-[var(--brand)]"
               : "hover:border-gray-6",
           isDragging && "opacity-50",
-          isDraggable && "cursor-grab active:cursor-grabbing",
         )}
       >
         {anyCapSelected && !sharedCapCard && (
@@ -743,6 +741,20 @@ export const CapCard = ({
             >
               {isOwner && (
                 <>
+                  {!sharedCapCard && (
+                    // The title is a link now (whole-card hit area, 2026-10-07),
+                    // so rename moved here from "click the title".
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenameRequest((n) => n + 1);
+                      }}
+                      className="flex gap-2 items-center rounded-lg"
+                    >
+                      <FontAwesomeIcon className="size-3" icon={faPen} />
+                      <p className="text-sm text-gray-12">{t("renameVideo")}</p>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     onClick={(e) => {
                       e.stopPropagation();
@@ -956,10 +968,10 @@ export const CapCard = ({
             type="button"
             aria-label={isSelected ? "Deselect cap" : "Select cap"}
             className={clsx(
-              "absolute top-2 left-2 z-[49] duration-200",
+              "absolute top-2 left-2 z-[49] duration-200 size-11",
               isSelected || anyCapSelected || isDropdownOpen
                 ? "opacity-100"
-                : "group-hover:opacity-100 opacity-0",
+                : "group-hover:opacity-100 opacity-0 [@media(hover:none)]:opacity-100",
             )}
             onClick={(e) => {
               e.stopPropagation();
@@ -983,10 +995,17 @@ export const CapCard = ({
 
         <div className="relative aspect-[16/10] w-full">
           <Link
+            draggable={isDraggable}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
             className={clsx(
               "relative block w-full h-full",
               // "block group",
-              anyCapSelected && "cursor-pointer pointer-events-none",
+              anyCapSelected
+                ? "cursor-pointer pointer-events-none"
+                : isDraggable
+                  ? "cursor-grab active:cursor-grabbing"
+                  : "cursor-pointer",
             )}
             onClick={(e) => {
               if (isDeleting) e.preventDefault();
@@ -1179,6 +1198,7 @@ export const CapCard = ({
             sharedCapCard={sharedCapCard}
             hideSharedStatus={hideSharedStatus}
             isOwner={isOwner}
+            renameRequest={renameRequest}
             views={analytics}
             setIsSharingDialogOpen={setIsSharingDialogOpen}
           />
