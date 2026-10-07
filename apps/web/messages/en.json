@@ -142,6 +142,7 @@
 		"unknownOwner": "Unknown owner",
 		"views": "{count, plural, one {# view} other {# views}}",
 		"moreOptions": "More options",
+		"renameVideo": "Rename",
 		"settings": "Settings",
 		"analytics": "Analytics",
 		"share": "Share",

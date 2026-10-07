@@ -142,6 +142,7 @@
 		"unknownOwner": "Неизвестный владелец",
 		"views": "{count, plural, one {# просмотр} few {# просмотра} many {# просмотров} other {# просмотра}}",
 		"moreOptions": "Дополнительные действия",
+		"renameVideo": "Переименовать",
 		"settings": "Настройки",
 		"analytics": "Аналитика",
 		"share": "Поделиться",

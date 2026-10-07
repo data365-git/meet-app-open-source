@@ -3,6 +3,7 @@ import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
+import Link from "next/link";
 import { useFormatter, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -20,6 +21,8 @@ interface CapContentProps {
   isOwner: boolean;
   views: number;
   setIsSharingDialogOpen: (isSharingDialogOpen: boolean) => void;
+  /** Bumped by the card menu's "Rename" item; each bump opens the title editor. */
+  renameRequest?: number;
 }
 
 export const CapCardContent: React.FC<CapContentProps> = ({
@@ -27,6 +30,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
   userId,
   sharedCapCard = false,
   hideSharedStatus,
+  renameRequest,
   isOwner,
   views,
   setIsSharingDialogOpen,
@@ -50,6 +54,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
   }, []);
   const [title, setTitle] = useState(cap.name);
   const [isEditing, setIsEditing] = useState(false);
+  useEffect(() => {
+    if (renameRequest && !sharedCapCard && userId === cap.ownerId) {
+      setIsEditing(true);
+    }
+  }, [renameRequest, sharedCapCard, userId, cap.ownerId]);
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -195,19 +204,13 @@ export const CapCardContent: React.FC<CapContentProps> = ({
             className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
           />
         ) : (
-          <p
+          <Link
+            href={`/s/${cap.id}`}
             title={title}
-            className="truncate text-[14.5px] leading-[1.25rem] text-gray-12 font-semibold p-0 m-0 h-[1.25rem] tracking-normal"
-            onClick={() => {
-              if (!sharedCapCard) {
-                if (userId === cap.ownerId) {
-                  setIsEditing(true);
-                }
-              }
-            }}
+            className="block truncate text-[14.5px] leading-[1.25rem] text-gray-12 font-semibold p-0 m-0 h-[1.25rem] tracking-normal"
           >
             {title}
-          </p>
+          </Link>
         )}
       </div>
 

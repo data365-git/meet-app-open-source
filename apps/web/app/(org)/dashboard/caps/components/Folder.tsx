@@ -354,18 +354,24 @@ const FolderCard = ({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			className={clsx(
-				"flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+				"relative flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
 				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
 				isMovingVideo && "opacity-70",
 			)}
 		>
+			<Link
+				href={folderHref}
+				prefetch={false}
+				aria-label={`Open folder ${name}`}
+				className="absolute inset-0 z-[1] rounded-lg"
+			/>
 			<div className="flex flex-1 gap-3 items-center">
-				<Link href={folderHref} prefetch={false} className="shrink-0">
+				<div className="shrink-0" aria-hidden="true">
 					<FolderRive
 						key={`${theme}folder${id}`}
 						className="w-[50px] h-[50px]"
 					/>
-				</Link>
+				</div>
 				<div className="flex flex-col justify-center h-10">
 					{isRenaming ? (
 						<textarea
@@ -395,19 +401,15 @@ const FolderCard = ({
 										});
 								}
 							}}
-							className="w-full resize-none bg-transparent border-none focus:outline-none
+							className="relative z-[2] w-full resize-none bg-transparent border-none focus:outline-none
                  focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
 						/>
 					) : (
-						<Link
-							href={folderHref}
-							prefetch={false}
-							className="block text-left"
-						>
+						<span className="block text-left">
 							<span className="block text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
 								{updateName}
 							</span>
-						</Link>
+						</span>
 					)}
 					<div className="flex gap-2 items-center">
 						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
@@ -432,29 +434,31 @@ const FolderCard = ({
 				title="Delete Folder"
 				description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
 			/>
-			<FoldersDropdown
-				id={id}
-				parentId={parentId}
-				public={publicEnabled}
-				setIsRenaming={setIsRenaming}
-				setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
-				nameRef={nameRef}
-				onPublicToggle={() => {
-					const nextPublic = !publicEnabled;
-					if (nextPublic && !ownerIsPro) {
-						setUpgradeModalOpen(true);
-						return;
-					}
-					setPublicEnabled(nextPublic);
-					updateFolder.mutate({
-						id,
-						public: nextPublic,
-					});
-				}}
-				onCopyPublicLink={async () => {
-					await copyPublicLink();
-				}}
-			/>
+			<div className="relative z-[2]">
+				<FoldersDropdown
+					id={id}
+					parentId={parentId}
+					public={publicEnabled}
+					setIsRenaming={setIsRenaming}
+					setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+					nameRef={nameRef}
+					onPublicToggle={() => {
+						const nextPublic = !publicEnabled;
+						if (nextPublic && !ownerIsPro) {
+							setUpgradeModalOpen(true);
+							return;
+						}
+						setPublicEnabled(nextPublic);
+						updateFolder.mutate({
+							id,
+							public: nextPublic,
+						});
+					}}
+					onCopyPublicLink={async () => {
+						await copyPublicLink();
+					}}
+				/>
+			</div>
 		</fieldset>
 	);
 };
