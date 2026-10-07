@@ -119,6 +119,36 @@ describe("POST /api/videos/[videoId]/generate", () => {
 		expect(transcribeVideoMock).not.toHaveBeenCalled();
 	});
 
+	it('"Only transcript" on a COMPLETE transcript is a no-op - never a full AI run', async () => {
+		// 2026-10-07 bulk-AI review: the COMPLETE branch ignored the mode and
+		// started AI generation, so a transcript-only press (bulk bar from stale
+		// grid data, or a stale panel) spent money on an analysis nobody asked for.
+		videoRows.value = [
+			{
+				id: "video-1",
+				ownerId: "user-1",
+				orgId: null,
+				transcriptionStatus: "COMPLETE",
+				metadata: {},
+			},
+		];
+
+		const { POST } = await import("@/app/api/videos/[videoId]/generate/route");
+		const response = await POST(
+			new Request("http://localhost", {
+				method: "POST",
+				body: JSON.stringify({ mode: "transcript" }),
+			}) as unknown as NextRequest,
+			{ params: Promise.resolve({ videoId: "video-1" }) },
+		);
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(body).toEqual({ alreadyRunning: true, transcriptOnly: true });
+		expect(startAiGenerationMock).not.toHaveBeenCalled();
+		expect(transcribeVideoMock).not.toHaveBeenCalled();
+	});
+
 	it("NEVER changes a RUNNING job's mode and never clobbers workflow-written metadata", async () => {
 		// 2026-08-10 review finding #2: this branch used to write
 		// {...metadata, aiMode: speedMode ?? ...} — a plain spread of a row read

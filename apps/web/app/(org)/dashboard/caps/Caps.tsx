@@ -97,6 +97,24 @@ export type VideoData = {
 	inheritedPasswordSources?: SpaceRuleSource[];
 	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 	hasActiveUpload: boolean;
+	/**
+	 * Video length in seconds. The page query already selects `videos.duration`
+	 * (and CapCard reads it); typed here so the selection bar's bulk-AI planner
+	 * can price a selection without another server round-trip.
+	 */
+	duration?: number | null;
+	/**
+	 * The `videos.transcriptionStatus` column (F1): the bulk-AI planner
+	 * pre-skips finished transcripts with it, so "Faqat transkript" on a
+	 * COMPLETE transcript never becomes a full AI run in the generate route.
+	 */
+	transcriptionStatus?:
+		| "PROCESSING"
+		| "COMPLETE"
+		| "ERROR"
+		| "SKIPPED"
+		| "NO_AUDIO"
+		| null;
 	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 }[];
 
@@ -468,7 +486,11 @@ export const Caps = ({
 					id: video.id,
 					name: video.name,
 					isAudio: video.metadata?.isAudio === true,
+					durationSec: video.duration ?? null,
+					transcriptionStatus: video.transcriptionStatus ?? null,
+					metadata: video.metadata ?? null,
 				}))}
+				isAdmin={user.isAdmin}
 			/>
 			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">

@@ -200,6 +200,9 @@ export const getVideosByFolderId = Effect.fn(function* (
 				source: videos.source,
 				isScreenshot: videos.isScreenshot,
 				duration: videos.duration,
+				// F1 (2026-10-07 review): lets the bulk-AI planner pre-skip
+				// finished transcripts (same reason as caps/page.tsx).
+				transcriptionStatus: videos.transcriptionStatus,
 				settings: videos.settings,
 				orgId: videos.orgId,
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
@@ -265,6 +268,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.source,
 				videos.isScreenshot,
 				videos.duration,
+				videos.transcriptionStatus,
 				videos.settings,
 				videos.orgId,
 				videos.password,
@@ -357,6 +361,10 @@ export const getVideosByFolderId = Effect.fn(function* (
 					inheritedSpaceSettings: rules.inheritedSettings,
 					settings: video.settings,
 					hasActiveUpload: video.hasActiveUpload,
+					// Selected above; the bulk-AI dialog needs it for the price estimate.
+					duration: video.duration ?? null,
+					// Selected above (F1): pre-skip finished transcripts.
+					transcriptionStatus: video.transcriptionStatus ?? null,
 					foldersData: [], // Empty array since videos in a folder don't need folder data
 				};
 			}),

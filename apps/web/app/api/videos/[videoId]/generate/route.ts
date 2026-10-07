@@ -221,6 +221,12 @@ export async function POST(
 
     // If transcription is COMPLETE, check whether AI generation still needs to run
     if (video.transcriptionStatus === "COMPLETE") {
+      // "Only transcript" asks for nothing beyond a transcript that already
+      // exists: never fall through into an AI run nobody requested (2026-10-07,
+      // bulk bar on stale grid data / a stale panel).
+      if (startMode === "transcript" && !reprocess) {
+        return Response.json({ alreadyRunning: true, transcriptOnly: true });
+      }
       const metadata = (video.metadata as VideoMetadata) || {};
       const aiStatus = metadata.aiGenerationStatus;
 

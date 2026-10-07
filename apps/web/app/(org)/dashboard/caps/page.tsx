@@ -163,6 +163,10 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
       source: videos.source,
       isScreenshot: videos.isScreenshot,
       duration: videos.duration,
+      // F1 (2026-10-07 review): the bulk-AI planner pre-skips finished
+      // transcripts with this, so "Faqat transkript" never falls through to a
+      // full AI run in the generate route.
+      transcriptionStatus: videos.transcriptionStatus,
       public: videos.public,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
@@ -216,6 +220,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
       videos.source,
       videos.isScreenshot,
       videos.duration,
+      videos.transcriptionStatus,
       videos.public,
       videos.password,
       videos.settings,
