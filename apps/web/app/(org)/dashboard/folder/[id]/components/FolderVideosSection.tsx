@@ -176,6 +176,15 @@ export default function FolderVideosSection({
 				setSelectedCaps={setSelectedCaps}
 				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
 				isDeleting={isDeletingCaps || isDeletingCap}
+				capDetails={initialVideos.map((video) => ({
+					id: video.id,
+					name: video.name,
+					isAudio: video.metadata?.isAudio === true,
+					durationSec: video.duration ?? null,
+					transcriptionStatus: video.transcriptionStatus ?? null,
+					metadata: video.metadata ?? null,
+				}))}
+				isAdmin={user.isAdmin}
 			/>
 		</>
 	);

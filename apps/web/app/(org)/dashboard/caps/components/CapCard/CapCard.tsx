@@ -52,6 +52,7 @@ import {
   pollAuthoritativeValue,
   shouldActivateProcessingPoll,
 } from "@/lib/ai-request-pending";
+import { isAiJobRunning } from "@/lib/ai-job-status";
 import { downloadFilename } from "@/lib/download-filename";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
@@ -116,7 +117,9 @@ export interface CapCardProps extends PropsWithChildren {
       Record<ViewerSettingKey, SpaceRuleSource[]>
     >;
     hasActiveUpload: boolean | undefined;
-    duration?: number;
+    // `videos.duration` is nullable in the DB; the grid's VideoData carries
+    // that truth through, so null (unknown) is a legal value here.
+    duration?: number | null;
     settings?: {
       disableComments?: boolean;
       disableSummary?: boolean;
@@ -311,9 +314,10 @@ export const CapCard = ({
   // more than a handful of pollers at once (one per currently-processing
   // video), and each polls at a gentler 6s (vs the single-video share page's
   // 4s) to keep the fan-out cost sensible.
-  const aiRunning =
-    cap.metadata?.aiGenerationStatus === "PROCESSING" ||
-    cap.metadata?.aiGenerationStatus === "QUEUED";
+  // The expression itself lives in lib/ai-job-status.ts (`isAiJobRunning`) — the
+  // bulk-AI planner from the selection bar must decide "running" the exact
+  // same way the card renders it, so there is one shared definition.
+  const aiRunning = isAiJobRunning(cap.metadata);
   // The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B):
   // `videoUploads` is already deleted by the time this runs, so
   // `metadata.processingStage` is the only signal. Seeded from the
@@ -1128,7 +1132,9 @@ export const CapCard = ({
 
             <VideoThumbnail
               videoDuration={
-                hasVisibleUploadProgress ? undefined : cap.duration
+                hasVisibleUploadProgress
+                  ? undefined
+                  : (cap.duration ?? undefined)
               }
               imageClass={clsx(
                 anyCapSelected

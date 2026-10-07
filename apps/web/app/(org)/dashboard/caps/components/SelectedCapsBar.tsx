@@ -11,12 +11,14 @@ import {
 } from "@cap/ui";
 import {
 	faArrowRightArrowLeft,
+	faFileLines,
 	faFilm,
 	faFolder,
 	faTrash,
 	faUsers,
-	faVolumeHigh,
 	faVideo,
+	faVolumeHigh,
+	faWandMagicSparkles,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
@@ -41,17 +43,50 @@ interface SelectedCapsBarProps {
 	 * control is not offered, because an irreversible action must never be
 	 * confirmed against a bare count.
 	 */
-	capDetails?: { id: string; name: string; isAudio?: boolean }[];
+	capDetails?: {
+		id: string;
+		name: string;
+		isAudio?: boolean;
+		/**
+		 * Video length in seconds + AI metadata for the selected caps. The two
+		 * bulk-AI buttons need both (done/running state + the "taxminan" price
+		 * estimate), so they stay HIDDEN where a caller does not supply them.
+		 */
+		durationSec?: number | null;
+		/**
+		 * The `videos.transcriptionStatus` column. Both dashboard queries now
+		 * select it, letting the planner pre-skip finished transcripts instead
+		 * of letting the generate route turn them into a full AI run (F1).
+		 */
+		transcriptionStatus?: string | null;
+		metadata?: VideoMetadata | null;
+	}[];
+	/**
+	 * The signed-in user's admin flag. The bulk-AI buttons are owner/admin only
+	 * (ADR 2026-10-07 decision 1) — the generate route enforces the same rule
+	 * server-side; this only keeps the buttons off non-admin screens.
+	 */
+	isAdmin?: boolean;
 }
 
+import type { VideoMetadata } from "@cap/database/types";
 import type { Folder, Video } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideosToFolder } from "@/actions/folders/moveVideosToFolder";
 import { replaceVideosWithAudio } from "@/actions/video/replace-videos-with-audio";
 import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
+import {
+	type BulkAiMode,
+	type BulkAiPlan,
+	buildBulkAiResultToast,
+	bulkAiButtonState,
+	planBulkAi,
+	runBulkAiStarts,
+} from "@/lib/bulk-ai";
 import type { LibraryKind } from "@/lib/library-kind";
+import { BulkAiConfirmDialog } from "./BulkAiConfirmDialog";
 import type { FolderDataType } from "./Folder";
 
 const LIBRARY_LABELS: Record<LibraryKind, string> = {
@@ -67,11 +102,20 @@ export const SelectedCapsBar = ({
 	currentLibrary,
 	folders,
 	capDetails,
+	isAdmin,
 }: SelectedCapsBarProps) => {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isMoving, setIsMoving] = useState(false);
 	const [confirmAudioOpen, setConfirmAudioOpen] = useState(false);
 	const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
+	// Which bulk-AI mode's confirm dialog is open (null = closed), and whether
+	// the one-at-a-time start loop is in flight (both buttons lock meanwhile).
+	const [bulkAiMode, setBulkAiMode] = useState<BulkAiMode | null>(null);
+	const [isBulkAiRunning, setIsBulkAiRunning] = useState(false);
+	// Double-click armor beyond the state flag (F2): state updates are async,
+	// so two clicks in one tick can both pass an `isBulkAiRunning` check. The
+	// ref flips synchronously, and the dialog lives only while visible.
+	const bulkAiRunningRef = useRef(false);
 	const router = useRouter();
 
 	const handleConfirmDelete = () => {
@@ -155,6 +199,73 @@ export const SelectedCapsBar = ({
 		(cap) => selectedCaps.includes(cap.id) && !cap.isAudio,
 	);
 
+	// Bulk AI (ADR 2026-10-07): only offered when the caller supplied per-cap
+	// data for EVERY selected cap — a partial view must never price or
+	// half-plan a batch, so the buttons simply stay hidden without it.
+	const bulkCaps = (capDetails ?? []).filter((cap) =>
+		selectedCaps.includes(cap.id),
+	);
+	const bulkButtons = bulkAiButtonState({
+		isAdmin,
+		selectedCount: selectedCaps.length,
+		hasCapData:
+			selectedCaps.length > 0 && bulkCaps.length === selectedCaps.length,
+	});
+	// Planned fresh per render while the dialog is open: `bulkCaps` is a new
+	// array each render, so a useMemo here never actually memoizes (F7).
+	const bulkPlan: BulkAiPlan | null = bulkAiMode
+		? planBulkAi(bulkCaps, bulkAiMode)
+		: null;
+
+	const openBulkAiDialog = (mode: BulkAiMode) => {
+		// Everything already done/running: nothing to start, so no confirm —
+		// tell the owner plainly instead of a "0 ta video · Boshlash" dialog.
+		const plan = planBulkAi(bulkCaps, mode);
+		if (plan.toRun.length === 0) {
+			toast.info(
+				plan.skipped.length > 0
+					? `Hammasi allaqachon tayyor yoki ishlanmoqda - ${plan.skipped.length} tasi o'tkazib yuborildi`
+					: "Tanlov bo'sh",
+			);
+			return;
+		}
+		setBulkAiMode(mode);
+	};
+
+	// One video at a time over the EXISTING generate route; exactly ONE toast
+	// at the end, whatever happened (F3 - `runBulkAiStarts` never throws: it
+	// counts network/500 failures and continues, so no catch is needed).
+	const startBulkAi = async () => {
+		if (
+			!bulkAiMode ||
+			!bulkPlan ||
+			bulkPlan.toRun.length === 0 ||
+			bulkAiRunningRef.current
+		) {
+			// Nothing left to start (the grid refreshed under an open dialog):
+			// close it instead of reporting "0 tadan 0 tasi boshlandi".
+			if (!bulkAiRunningRef.current) setBulkAiMode(null);
+			return;
+		}
+		bulkAiRunningRef.current = true;
+		setIsBulkAiRunning(true);
+		try {
+			const outcome = await runBulkAiStarts(bulkPlan.toRun, bulkAiMode);
+			const result = buildBulkAiResultToast(outcome);
+			if (result.kind === "success") toast.success(result.text);
+			else toast.error(result.text);
+			setBulkAiMode(null);
+			// Clear the selection: the cards' AI state on screen is now stale,
+			// and a second press from it could re-plan just-started videos (F2).
+			setSelectedCaps([]);
+			// Cards pick up their usual AI progress from the refreshed grid.
+			router.refresh();
+		} finally {
+			bulkAiRunningRef.current = false;
+			setIsBulkAiRunning(false);
+		}
+	};
+
 	const replaceSelectedWithAudio = async () => {
 		if (isReplacingWithAudio || replaceableCaps.length === 0) return;
 		setIsReplacingWithAudio(true);
@@ -211,14 +322,26 @@ export const SelectedCapsBar = ({
 						scale: { type: "spring", damping: 15, stiffness: 300 },
 					}}
 				>
-					<div className="flex gap-1 text-sm font-medium text-gray-10">
-						<NumberFlow
-							value={selectedCaps.length}
-							className="tabular-nums text-md text-gray-12"
-						/>
-						cap{selectedCaps.length !== 1 ? "s" : ""} selected
+					<div className="flex flex-col">
+						<div className="flex gap-1 text-sm font-medium text-gray-10">
+							<NumberFlow
+								value={selectedCaps.length}
+								className="tabular-nums text-md text-gray-12"
+							/>
+							cap{selectedCaps.length !== 1 ? "s" : ""} selected
+						</div>
+						{/* F5: the ceiling must be readable text, not a title on a
+						    disabled button (phones are a primary device here). */}
+						{bulkButtons.visible && bulkButtons.hint && (
+							<span className="text-xs leading-tight text-gray-11">
+								{bulkButtons.hint}
+							</span>
+						)}
 					</div>
-					<div className="flex gap-2 ml-4">
+					{/* F5: five buttons do not fit 375 px in one row - the row wraps
+					    instead of overflowing, and the two AI buttons drop their
+					    labels below `sm` (icon + aria-label only). */}
+					<div className="flex flex-wrap justify-end gap-2 ml-4">
 						<Button
 							variant="dark"
 							onClick={() => setSelectedCaps([])}
@@ -299,6 +422,58 @@ export const SelectedCapsBar = ({
 								{isReplacingWithAudio ? "Replacing..." : "Replace with audio"}
 							</Button>
 						)}
+						{/* Bulk AI from selection (ADR 2026-10-07): admin-only, one
+						    price-confirm, then one video at a time. Icon-only below
+						    `sm` (aria-label keeps them usable) so 5 buttons fit 375 px
+						    once the row wraps. */}
+						{bulkButtons.visible && (
+							<Button
+								variant="gray"
+								onClick={() => openBulkAiDialog("transcript")}
+								disabled={
+									bulkButtons.disabled ||
+									isBulkAiRunning ||
+									isDeleting ||
+									isMoving ||
+									isReplacingWithAudio
+								}
+								aria-label="Faqat transkript"
+								className="text-sm"
+								size="sm"
+							>
+								<FontAwesomeIcon
+									className="sm:mr-1.5 size-3"
+									icon={faFileLines}
+								/>
+								<span className="hidden sm:inline">
+									{isBulkAiRunning ? "Boshlanmoqda..." : "Faqat transkript"}
+								</span>
+							</Button>
+						)}
+						{bulkButtons.visible && (
+							<Button
+								variant="gray"
+								onClick={() => openBulkAiDialog("full")}
+								disabled={
+									bulkButtons.disabled ||
+									isBulkAiRunning ||
+									isDeleting ||
+									isMoving ||
+									isReplacingWithAudio
+								}
+								aria-label="To'liq AI tahlil"
+								className="text-sm"
+								size="sm"
+							>
+								<FontAwesomeIcon
+									className="sm:mr-1.5 size-3"
+									icon={faWandMagicSparkles}
+								/>
+								<span className="hidden sm:inline">
+									{isBulkAiRunning ? "Boshlanmoqda..." : "To'liq AI tahlil"}
+								</span>
+							</Button>
+						)}
 						<Button
 							variant="destructive"
 							onClick={() => setConfirmOpen(true)}
@@ -324,6 +499,20 @@ export const SelectedCapsBar = ({
 							onConfirm={handleConfirmDelete}
 							onCancel={() => setConfirmOpen(false)}
 						/>
+						{/* The one price-confirm before a bulk AI start; the loop itself
+						    lives in lib/bulk-ai.ts and never sends reprocess:true.
+						    Rendered only while the bulk buttons are visible (F7). */}
+						{bulkButtons.visible && bulkAiMode && bulkPlan && (
+							<BulkAiConfirmDialog
+								mode={bulkAiMode}
+								plan={bulkPlan}
+								running={isBulkAiRunning}
+								onStart={() => void startBulkAi()}
+								onCancel={() => {
+									if (!isBulkAiRunning) setBulkAiMode(null);
+								}}
+							/>
+						)}
 						{/* The strong confirmation the owner asked for (2026-08-05) when he
 						    chose immediate deletion over a recoverable trash: the exact
 						    count, the titles themselves, and a plain statement that the
