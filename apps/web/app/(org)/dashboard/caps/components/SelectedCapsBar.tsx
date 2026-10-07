@@ -10,7 +10,9 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import {
-	faArrowRightArrowLeft,
+	faChevronDown,
+	faDownload,
+	faEllipsis,
 	faFileLines,
 	faFilm,
 	faFolder,
@@ -19,6 +21,7 @@ import {
 	faVideo,
 	faVolumeHigh,
 	faWandMagicSparkles,
+	faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
@@ -85,6 +88,12 @@ import {
 	planBulkAi,
 	runBulkAiStarts,
 } from "@/lib/bulk-ai";
+import {
+	buildBulkTranscriptZip,
+	bulkTranscriptZipName,
+	downloadBlob,
+	fetchBulkTranscripts,
+} from "@/lib/bulk-transcript-zip";
 import type { LibraryKind } from "@/lib/library-kind";
 import { BulkAiConfirmDialog } from "./BulkAiConfirmDialog";
 import type { FolderDataType } from "./Folder";
@@ -116,6 +125,14 @@ export const SelectedCapsBar = ({
 	// so two clicks in one tick can both pass an `isBulkAiRunning` check. The
 	// ref flips synchronously, and the dialog lives only while visible.
 	const bulkAiRunningRef = useRef(false);
+	// Bulk transcript download (2026-10-07 spec): null = idle, otherwise the
+	// "n/N" progress the AI menu item shows while fetching. Same synchronous
+	// ref guard as bulkAiRunningRef so a second click in one tick is ignored.
+	const [transcriptDownload, setTranscriptDownload] = useState<{
+		done: number;
+		total: number;
+	} | null>(null);
+	const transcriptDownloadRef = useRef(false);
 	const router = useRouter();
 
 	const handleConfirmDelete = () => {
@@ -266,6 +283,47 @@ export const SelectedCapsBar = ({
 		}
 	};
 
+	// One ZIP with one .txt per selected video (admins, 2026-10-07 spec). The
+	// sequential fetch loop + ZIP assembly live in lib/bulk-transcript-zip.ts;
+	// this only guards against a second press (ref, like bulkAiRunningRef) and
+	// reports. One video failing never aborts the batch - it lands in the
+	// `transkript-yoq.txt` note inside the ZIP and in the toast.
+	const downloadTranscriptsZip = async () => {
+		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
+		transcriptDownloadRef.current = true;
+		setTranscriptDownload({ done: 0, total: bulkCaps.length });
+		try {
+			const results = await fetchBulkTranscripts(bulkCaps, (done, total) =>
+				setTranscriptDownload({ done, total }),
+			);
+			const blob = await buildBulkTranscriptZip(results);
+			if (!blob) {
+				// Zero transcripts: no ZIP download, one plain error toast -
+				// never an empty archive that looks like success.
+				toast.error(
+					results.failed.length > 0
+						? "Hech bir transkript yuklab olinmadi (xatolik)"
+						: "Tanlangan videolarning transkripti yo'q",
+				);
+				return;
+			}
+			downloadBlob(blob, bulkTranscriptZipName());
+			const missingCount = results.missing.length + results.failed.length;
+			toast.success(
+				`${results.files.length} ta transkript yuklandi${
+					missingCount > 0
+						? ` · ${missingCount} tasi yo'q (transkript-yoq.txt ichida)`
+						: ""
+				}`,
+			);
+		} catch (_error) {
+			toast.error("Transkriptlarni yuklab olishda xatolik");
+		} finally {
+			transcriptDownloadRef.current = false;
+			setTranscriptDownload(null);
+		}
+	};
+
 	const replaceSelectedWithAudio = async () => {
 		if (isReplacingWithAudio || replaceableCaps.length === 0) return;
 		setIsReplacingWithAudio(true);
@@ -302,12 +360,21 @@ export const SelectedCapsBar = ({
 		(kind) => kind !== currentLibrary,
 	);
 	const folderOptions = folders ?? [];
+	// The two bulk-AI menu items lock together while any bar action is in
+	// flight or the ceiling is hit; `title` keeps the reason readable (F5).
+	const aiItemsDisabled =
+		bulkButtons.disabled ||
+		isBulkAiRunning ||
+		isDeleting ||
+		isMoving ||
+		isReplacingWithAudio ||
+		transcriptDownload !== null;
 
 	return (
 		<AnimatePresence>
 			{selectedCaps.length > 0 && (
 				<motion.div
-					className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom,0px))] left-2 right-2 z-50 mx-auto flex w-auto max-w-xl items-center justify-between rounded-xl border border-gray-2 bg-gray-1 p-3 shadow-lg lg:bottom-12 lg:left-0 lg:right-0 lg:w-full"
+					className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom,0px))] left-2 right-2 z-50 mx-auto flex w-auto max-w-xl items-center justify-between gap-2 rounded-xl border border-gray-2 bg-gray-1 p-2.5 shadow-lg lg:bottom-12 lg:left-0 lg:right-0 lg:w-full"
 					initial={{ opacity: 0, y: 10, scale: 0.9 }}
 					animate={{ opacity: 1, y: 0, scale: 1 }}
 					exit={{
@@ -322,13 +389,24 @@ export const SelectedCapsBar = ({
 						scale: { type: "spring", damping: 15, stiffness: 300 },
 					}}
 				>
-					<div className="flex flex-col">
-						<div className="flex gap-1 text-sm font-medium text-gray-10">
+					<div className="flex min-w-0 flex-col">
+						<div className="flex items-center gap-1 text-sm font-medium text-gray-10">
 							<NumberFlow
 								value={selectedCaps.length}
 								className="tabular-nums text-md text-gray-12"
 							/>
-							cap{selectedCaps.length !== 1 ? "s" : ""} selected
+							<span className="whitespace-nowrap">ta tanlandi</span>
+							{/* ✕ clears the selection - the old wide "Cancel" button,
+							    now an icon so the three action controls fit 375 px. */}
+							<button
+								type="button"
+								onClick={() => setSelectedCaps([])}
+								aria-label="Tanlovni bekor qilish"
+								title="Bekor qilish"
+								className="ml-0.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
+							>
+								<FontAwesomeIcon className="size-3" icon={faXmark} />
+							</button>
 						</div>
 						{/* F5: the ceiling must be readable text, not a title on a
 						    disabled button (phones are a primary device here). */}
@@ -338,32 +416,109 @@ export const SelectedCapsBar = ({
 							</span>
 						)}
 					</div>
-					{/* F5: five buttons do not fit 375 px in one row - the row wraps
-					    instead of overflowing, and the two AI buttons drop their
-					    labels below `sm` (icon + aria-label only). */}
-					<div className="flex flex-wrap justify-end gap-2 ml-4">
-						<Button
-							variant="dark"
-							onClick={() => setSelectedCaps([])}
-							className="text-sm"
-							size="sm"
-						>
-							Cancel
-						</Button>
+					{/* Owner layout 2026-10-07: ONE row, three controls -
+					    [AI ▾] [Ko'chirish ▾] [⋯]. Everything else lives inside the
+					    dropdowns; the row itself never wraps or scrolls at 375 px. */}
+					<div className="flex flex-nowrap items-center gap-1">
+						{/* AI dropdown (admins only): the two bulk-AI actions (ADR
+						    2026-10-07, unchanged behaviour + confirm dialog) plus the
+						    bulk transcript ZIP download. */}
+						{bulkButtons.visible && (
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<Button
+										variant="gray"
+										// Not gated by the AI selection ceiling: the ZIP download
+										// inside has no ceiling, so the menu must stay openable.
+										disabled={
+											isBulkAiRunning ||
+											isDeleting ||
+											isMoving ||
+											isReplacingWithAudio
+										}
+										aria-label="AI amallari"
+										title={bulkButtons.hint ?? undefined}
+										className="shrink-0 whitespace-nowrap px-2 text-sm"
+										size="sm"
+									>
+										<FontAwesomeIcon
+											className="size-3"
+											icon={faWandMagicSparkles}
+										/>
+										AI
+										<FontAwesomeIcon
+											className="size-2.5 text-gray-11"
+											icon={faChevronDown}
+										/>
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="min-w-[240px]">
+									<DropdownMenuItem
+										className="gap-2 rounded-lg"
+										disabled={aiItemsDisabled}
+										title={bulkButtons.hint ?? undefined}
+										onSelect={() => openBulkAiDialog("transcript")}
+									>
+										<FontAwesomeIcon
+											className="size-3 text-gray-11"
+											icon={faFileLines}
+										/>
+										<span>Faqat transkript</span>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										className="gap-2 rounded-lg"
+										disabled={aiItemsDisabled}
+										title={bulkButtons.hint ?? undefined}
+										onSelect={() => openBulkAiDialog("full")}
+									>
+										<FontAwesomeIcon
+											className="size-3 text-gray-11"
+											icon={faWandMagicSparkles}
+										/>
+										<span>To&apos;liq AI tahlil</span>
+									</DropdownMenuItem>
+									<DropdownMenuSeparator />
+									<DropdownMenuItem
+										className="gap-2 rounded-lg"
+										disabled={
+											transcriptDownload !== null ||
+											isBulkAiRunning ||
+											isDeleting ||
+											isMoving ||
+											isReplacingWithAudio
+										}
+										onSelect={() => void downloadTranscriptsZip()}
+									>
+										<FontAwesomeIcon
+											className="size-3 text-gray-11"
+											icon={faDownload}
+										/>
+										<span>
+											{transcriptDownload
+												? `Yuklanmoqda ${transcriptDownload.done}/${transcriptDownload.total}`
+												: "Transkriptlarni yuklab olish"}
+										</span>
+									</DropdownMenuItem>
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
+						{/* Ko'chirish ▾ - the existing Move menu, unchanged inside. */}
 						{(libraryOptions.length > 0 || folderOptions.length > 0) && (
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<Button
 										variant="gray"
 										disabled={isMoving || isDeleting}
-										className="text-sm"
+										aria-label="Ko'chirish"
+										className="shrink-0 whitespace-nowrap px-2 text-sm"
 										size="sm"
 									>
+										<FontAwesomeIcon className="size-3" icon={faFolder} />
+										{isMoving ? "Ko'chirilmoqda" : "Ko'chirish"}
 										<FontAwesomeIcon
-											className="mr-1.5 size-3"
-											icon={faArrowRightArrowLeft}
+											className="size-2.5 text-gray-11"
+											icon={faChevronDown}
 										/>
-										{isMoving ? "Moving..." : "Move"}
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end" className="min-w-[190px]">
@@ -407,82 +562,48 @@ export const SelectedCapsBar = ({
 								</DropdownMenuContent>
 							</DropdownMenu>
 						)}
-						{replaceableCaps.length > 0 && (
-							<Button
-								variant="gray"
-								onClick={() => setConfirmAudioOpen(true)}
-								disabled={isDeleting || isMoving || isReplacingWithAudio}
-								className="text-sm"
-								size="sm"
-							>
-								<FontAwesomeIcon
-									className="mr-1.5 size-3"
-									icon={faVolumeHigh}
-								/>
-								{isReplacingWithAudio ? "Replacing..." : "Replace with audio"}
-							</Button>
-						)}
-						{/* Bulk AI from selection (ADR 2026-10-07): admin-only, one
-						    price-confirm, then one video at a time. Icon-only below
-						    `sm` (aria-label keeps them usable) so 5 buttons fit 375 px
-						    once the row wraps. */}
-						{bulkButtons.visible && (
-							<Button
-								variant="gray"
-								onClick={() => openBulkAiDialog("transcript")}
-								disabled={
-									bulkButtons.disabled ||
-									isBulkAiRunning ||
-									isDeleting ||
-									isMoving ||
-									isReplacingWithAudio
-								}
-								aria-label="Faqat transkript"
-								className="text-sm"
-								size="sm"
-							>
-								<FontAwesomeIcon
-									className="sm:mr-1.5 size-3"
-									icon={faFileLines}
-								/>
-								<span className="hidden sm:inline">
-									{isBulkAiRunning ? "Boshlanmoqda..." : "Faqat transkript"}
-								</span>
-							</Button>
-						)}
-						{bulkButtons.visible && (
-							<Button
-								variant="gray"
-								onClick={() => openBulkAiDialog("full")}
-								disabled={
-									bulkButtons.disabled ||
-									isBulkAiRunning ||
-									isDeleting ||
-									isMoving ||
-									isReplacingWithAudio
-								}
-								aria-label="To'liq AI tahlil"
-								className="text-sm"
-								size="sm"
-							>
-								<FontAwesomeIcon
-									className="sm:mr-1.5 size-3"
-									icon={faWandMagicSparkles}
-								/>
-								<span className="hidden sm:inline">
-									{isBulkAiRunning ? "Boshlanmoqda..." : "To'liq AI tahlil"}
-								</span>
-							</Button>
-						)}
-						<Button
-							variant="destructive"
-							onClick={() => setConfirmOpen(true)}
-							disabled={isDeleting || isMoving}
-							className="size-[40px] min-w-[unset] p-0"
-							size="sm"
-						>
-							<FontAwesomeIcon className="w-3.5 text-white" icon={faTrash} />
-						</Button>
+						{/* ⋯ overflow menu: replace-with-audio + delete (red) - the
+						    destructive pair no longer sits beside the ordinary
+						    buttons on the bar itself; both keep their confirm
+						    dialogs. */}
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									variant="gray"
+									aria-label="Yana amallar"
+									className="size-[40px] min-w-[unset] shrink-0 p-0"
+									size="sm"
+								>
+									<FontAwesomeIcon className="w-3.5" icon={faEllipsis} />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" className="min-w-[220px]">
+								{replaceableCaps.length > 0 && (
+									<DropdownMenuItem
+										className="gap-2 rounded-lg"
+										disabled={isDeleting || isMoving || isReplacingWithAudio}
+										onSelect={() => setConfirmAudioOpen(true)}
+									>
+										<FontAwesomeIcon
+											className="size-3 text-gray-11"
+											icon={faVolumeHigh}
+										/>
+										<span>Audio bilan almashtirish</span>
+									</DropdownMenuItem>
+								)}
+								<DropdownMenuItem
+									className="gap-2 rounded-lg text-red-500 focus:text-red-500 hover:text-red-500"
+									disabled={isDeleting || isMoving}
+									onSelect={() => setConfirmOpen(true)}
+								>
+									<FontAwesomeIcon
+										className="size-3 text-red-500"
+										icon={faTrash}
+									/>
+									<span>O&apos;chirish</span>
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
 						<ConfirmationDialog
 							open={confirmOpen}
 							icon={<FontAwesomeIcon icon={faFilm} />}
