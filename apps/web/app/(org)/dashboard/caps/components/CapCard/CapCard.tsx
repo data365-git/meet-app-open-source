@@ -690,6 +690,14 @@ export const CapCard = ({
       />
       <fieldset
         aria-label={cap.name}
+        // In selection mode the thumbnail link is pointer-events-none and a
+        // full-card select overlay sits on top, so the CARD must be the drag
+        // source there (multi-select drag to a folder). Outside selection mode
+        // only the thumbnail drags, so a click on the title/body is never
+        // swallowed by a drag start.
+        draggable={isDraggable && anyCapSelected}
+        onDragStart={anyCapSelected ? handleDragStart : undefined}
+        onDragEnd={anyCapSelected ? handleDragEnd : undefined}
         className={clsx(
           "flex relative overflow-hidden transition-colors duration-200 flex-col w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-4 group z-10",
           isSelected
@@ -972,7 +980,8 @@ export const CapCard = ({
             type="button"
             aria-label={isSelected ? "Deselect cap" : "Select cap"}
             className={clsx(
-              "absolute top-2 left-2 z-[49] duration-200 size-11",
+              // 44x44 tap target; the visible 24 px box stays pinned top-left inside it.
+              "absolute top-2 left-2 z-[49] duration-200 size-11 flex items-start justify-start",
               isSelected || anyCapSelected || isDropdownOpen
                 ? "opacity-100"
                 : "group-hover:opacity-100 opacity-0 [@media(hover:none)]:opacity-100",
@@ -999,9 +1008,9 @@ export const CapCard = ({
 
         <div className="relative aspect-[16/10] w-full">
           <Link
-            draggable={isDraggable}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
+            draggable={isDraggable && !anyCapSelected}
+            onDragStart={anyCapSelected ? undefined : handleDragStart}
+            onDragEnd={anyCapSelected ? undefined : handleDragEnd}
             className={clsx(
               "relative block w-full h-full",
               // "block group",
