@@ -724,7 +724,8 @@ export const CapCard = ({
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                onSelectToggle?.();
+                e.stopPropagation();
+                if (!e.repeat) onSelectToggle?.();
               }
             }}
           />
@@ -736,7 +737,14 @@ export const CapCard = ({
             anyCapSelected ? "opacity-0 pointer-events-none" : "opacity-100",
           )}
         >
-          <DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
+          <DropdownMenu
+            modal={false}
+            onOpenChange={(open) => {
+              // Reopened before the close animation ended: clear a stale flag.
+              if (open) renamePendingRef.current = false;
+              setIsDropdownOpen(open);
+            }}
+          >
             <DropdownMenuTrigger asChild suppressHydrationWarning>
               <button
                 type="button"
