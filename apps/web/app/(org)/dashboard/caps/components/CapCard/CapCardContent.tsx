@@ -6,7 +6,7 @@ import moment from "moment";
 import Link from "next/link";
 import { useFormatter, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -54,9 +54,17 @@ export const CapCardContent: React.FC<CapContentProps> = ({
   }, []);
   const [title, setTitle] = useState(cap.name);
   const [isEditing, setIsEditing] = useState(false);
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (renameRequest && !sharedCapCard && userId === cap.ownerId) {
       setIsEditing(true);
+      // The menu returns focus to its trigger as it closes; take it back after
+      // that so typing (and the phone keyboard) goes into the title editor.
+      const timer = setTimeout(() => {
+        titleInputRef.current?.focus();
+        titleInputRef.current?.select();
+      }, 50);
+      return () => clearTimeout(timer);
     }
   }, [renameRequest, sharedCapCard, userId, cap.ownerId]);
 
@@ -196,6 +204,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
         {/* Fixed height container */}
         {isEditing && !sharedCapCard ? (
           <textarea
+            ref={titleInputRef}
             rows={1}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -207,6 +216,9 @@ export const CapCardContent: React.FC<CapContentProps> = ({
           <Link
             href={`/s/${cap.id}`}
             title={title}
+            // Not a drag source: the browser would drag a bare URL that no
+            // folder understands. The thumbnail is the drag handle.
+            draggable={false}
             className="block truncate text-[14.5px] leading-[1.25rem] text-gray-12 font-semibold p-0 m-0 h-[1.25rem] tracking-normal"
           >
             {title}
