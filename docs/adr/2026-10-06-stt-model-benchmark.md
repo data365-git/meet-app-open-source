@@ -16,3 +16,6 @@ Paid STT runs on `google/gemini-3.7-flash` only because the owner's OpenRouter k
 ## Consequences
 - The OpenRouter key guardrail must allow the winner before the paid leg can use it (owner action).
 - Flex tier (−50%, live since `6d13305`) stacks on whichever model wins.
+
+## Result 2026-10-07
+Run `/opt/data365/stt-bench/run-2026-10-07a/` (19/21 pairs). CER vs gemini-3.5-flash: 3-flash-preview .079 (digits .28), 3.8-flash .097 (1 clip), **3.1-flash-lite .098, $0.046/audio-h flex**, 3.7-flash .120, $0.117/h flex. Owner blind test on the mixed clip (A = 3.7, B = 3.1-flash-lite): "almost the same, B slightly better". **Winner: gemini-3.1-flash-lite for the paid leg.** Free leg keeps gemini-3.5-flash first (free → quality first).
