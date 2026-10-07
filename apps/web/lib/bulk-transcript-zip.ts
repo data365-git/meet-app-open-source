@@ -115,17 +115,17 @@ export type BulkTranscriptResults = {
 	missing: string[];
 	/** Videos whose fetch failed (other status / network error). */
 	failed: string[];
-	/** Every selected video (the "N" in "n/N"). */
-	total: number;
 };
 
 /**
  * Fetch every selected video's transcript SEQUENTIALLY via the existing
  * per-video download route (one at a time, on purpose — same rule as
- * `runBulkAiStarts`). 200 -> text body; 404 -> missing; anything else
- * (incl. a thrown network error) -> failed. One bad video never aborts the
- * batch, and the loop itself never throws. `onProgress(done, total)` fires
- * after each video for the "Yuklanmoqda n/N" menu label.
+ * `runBulkAiStarts`). 200 with a text/plain body -> text; 404 -> missing;
+ * anything else -> failed, including a 200 that was redirected (a login
+ * page) or answers with a non-text/plain content type, a fetch that throws
+ * (network error) and a per-request 60s timeout (AbortSignal). One bad
+ * video never aborts the batch, and the loop itself never throws.
+ * `onProgress(done, total)` fires after each video for the progress toast.
  */
 export async function fetchBulkTranscripts(
 	caps: BulkTranscriptCap[],
@@ -136,19 +136,28 @@ export async function fetchBulkTranscripts(
 		files: [],
 		missing: [],
 		failed: [],
-		total: caps.length,
 	};
 
-	for (let i = 0; i < caps.length; i++) {
-		const cap = caps[i] as BulkTranscriptCap;
+	for (const [i, cap] of caps.entries()) {
 		try {
-			const res = await fetchImpl(`/api/videos/${cap.id}/transcript`);
-			if (res.ok) {
-				results.files.push({ name: cap.name, text: await res.text() });
-			} else if (res.status === 404) {
-				results.missing.push(cap.name);
+			const res = await fetchImpl(`/api/videos/${cap.id}/transcript`, {
+				// Per-request timeout: a hung connection must fail THAT video,
+				// never hang the whole batch (a timeout abort throws and is
+				// caught below as a normal failure).
+				signal: AbortSignal.timeout(60_000),
+			});
+			if (!res.ok) {
+				if (res.status === 404) results.missing.push(cap.name);
+				else results.failed.push(cap.name);
 			} else {
-				results.failed.push(cap.name);
+				// A wrong 200 — a redirect to a login page or an HTML error body —
+				// must never be saved as a .txt transcript.
+				const contentType = res.headers.get("content-type") ?? "";
+				if (res.redirected || !contentType.toLowerCase().startsWith("text/plain")) {
+					results.failed.push(cap.name);
+				} else {
+					results.files.push({ name: cap.name, text: await res.text() });
+				}
 			}
 		} catch {
 			results.failed.push(cap.name);
@@ -171,17 +180,22 @@ export async function buildBulkTranscriptZip(
 	if (results.files.length === 0) return null;
 
 	const zip = new JSZip();
-	const fileNames = dedupeFileNames(
-		results.files.map((f) => `${sanitizeTranscriptFileName(f.name)}.txt`),
-	);
-	results.files.forEach((file, i) => {
-		zip.file(fileNames[i] as string, file.text);
-	});
-
 	const note = buildMissingNote({
 		missing: results.missing,
 		failed: results.failed,
 	});
+	// Reserve the note's name FIRST when a note will be written, so a video
+	// literally called "transkript-yoq" is renamed to "transkript-yoq (2).txt"
+	// instead of silently overwriting the note (or being overwritten by it).
+	const deduped = dedupeFileNames([
+		...(note ? [MISSING_NOTE_FILE_NAME] : []),
+		...results.files.map((f) => `${sanitizeTranscriptFileName(f.name)}.txt`),
+	]);
+	const fileNames = note ? deduped.slice(1) : deduped;
+	results.files.forEach((file, i) => {
+		zip.file(fileNames[i] as string, file.text);
+	});
+
 	if (note) zip.file(MISSING_NOTE_FILE_NAME, note);
 
 	return zip.generateAsync({ type: "blob" });
