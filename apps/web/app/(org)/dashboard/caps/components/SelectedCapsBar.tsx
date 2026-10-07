@@ -288,14 +288,22 @@ export const SelectedCapsBar = ({
 	// this only guards against a second press (ref, like bulkAiRunningRef) and
 	// reports. One video failing never aborts the batch - it lands in the
 	// `transkript-yoq.txt` note inside the ZIP and in the toast.
+	// The dropdown item closes the menu on click, so the "n/N" progress is
+	// shown in a LOADING TOAST under this fixed id, updated per video and
+	// REPLACED by the final success/error toast (same id - sonner swaps it).
+	const transcriptToastId = "bulk-transcript-zip";
 	const downloadTranscriptsZip = async () => {
 		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
 		transcriptDownloadRef.current = true;
 		setTranscriptDownload({ done: 0, total: bulkCaps.length });
+		toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, { id: transcriptToastId });
 		try {
-			const results = await fetchBulkTranscripts(bulkCaps, (done, total) =>
-				setTranscriptDownload({ done, total }),
-			);
+			const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
+				setTranscriptDownload({ done, total });
+				toast.loading(`Yuklanmoqda ${done}/${total}`, {
+					id: transcriptToastId,
+				});
+			});
 			const blob = await buildBulkTranscriptZip(results);
 			if (!blob) {
 				// Zero transcripts: no ZIP download, one plain error toast -
@@ -304,6 +312,7 @@ export const SelectedCapsBar = ({
 					results.failed.length > 0
 						? "Hech bir transkript yuklab olinmadi (xatolik)"
 						: "Tanlangan videolarning transkripti yo'q",
+					{ id: transcriptToastId },
 				);
 				return;
 			}
@@ -315,9 +324,12 @@ export const SelectedCapsBar = ({
 						? ` · ${missingCount} tasi yo'q (transkript-yoq.txt ichida)`
 						: ""
 				}`,
+				{ id: transcriptToastId },
 			);
 		} catch (_error) {
-			toast.error("Transkriptlarni yuklab olishda xatolik");
+			toast.error("Transkriptlarni yuklab olishda xatolik", {
+				id: transcriptToastId,
+			});
 		} finally {
 			transcriptDownloadRef.current = false;
 			setTranscriptDownload(null);
@@ -424,7 +436,7 @@ export const SelectedCapsBar = ({
 						    2026-10-07, unchanged behaviour + confirm dialog) plus the
 						    bulk transcript ZIP download. */}
 						{bulkButtons.visible && (
-							<DropdownMenu>
+							<DropdownMenu modal={false}>
 								<DropdownMenuTrigger asChild>
 									<Button
 										variant="gray"
@@ -566,7 +578,7 @@ export const SelectedCapsBar = ({
 						    destructive pair no longer sits beside the ordinary
 						    buttons on the bar itself; both keep their confirm
 						    dialogs. */}
-						<DropdownMenu>
+						<DropdownMenu modal={false}>
 							<DropdownMenuTrigger asChild>
 								<Button
 									variant="gray"
