@@ -58,8 +58,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
   useEffect(() => {
     if (renameRequest && !sharedCapCard && userId === cap.ownerId) {
       setIsEditing(true);
-      // The menu returns focus to its trigger as it closes; take it back after
-      // that so typing (and the phone keyboard) goes into the title editor.
+      // Focus once the textarea has mounted. CapCard's menu skips its
+      // close-time focus return for Rename, so nothing steals it back.
       const timer = setTimeout(() => {
         titleInputRef.current?.focus();
         titleInputRef.current?.select();

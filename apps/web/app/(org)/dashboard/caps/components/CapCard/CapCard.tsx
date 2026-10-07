@@ -186,6 +186,9 @@ export const CapCard = ({
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [renameRequest, setRenameRequest] = useState(0);
+  // Set by the Rename item so the menu does not hand focus back to its trigger
+  // as it closes (that would blur the title editor and end the rename).
+  const renamePendingRef = useRef(false);
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false,
   );
@@ -709,11 +712,21 @@ export const CapCard = ({
         )}
       >
         {anyCapSelected && !sharedCapCard && (
-          <button
-            type="button"
+          // A div, not a <button>: Firefox never starts a drag from a button,
+          // and this overlay covers the whole (draggable) card in selection mode.
+          <div
+            role="checkbox"
+            aria-checked={isSelected}
             aria-label={`Select ${cap.name}`}
+            tabIndex={0}
             className="absolute inset-0 z-10"
             onClick={handleSelectClick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelectToggle?.();
+              }
+            }}
           />
         )}
 
@@ -750,6 +763,12 @@ export const CapCard = ({
               align="end"
               sideOffset={5}
               suppressHydrationWarning
+              onCloseAutoFocus={(e) => {
+                if (renamePendingRef.current) {
+                  renamePendingRef.current = false;
+                  e.preventDefault();
+                }
+              }}
             >
               {isOwner && (
                 <>
@@ -759,6 +778,7 @@ export const CapCard = ({
                     <DropdownMenuItem
                       onClick={(e) => {
                         e.stopPropagation();
+                        renamePendingRef.current = true;
                         setRenameRequest((n) => n + 1);
                       }}
                       className="flex gap-2 items-center rounded-lg"
