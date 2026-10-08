@@ -153,7 +153,10 @@ export async function fetchBulkTranscripts(
 				// A wrong 200 — a redirect to a login page or an HTML error body —
 				// must never be saved as a .txt transcript.
 				const contentType = res.headers.get("content-type") ?? "";
-				if (res.redirected || !contentType.toLowerCase().startsWith("text/plain")) {
+				if (
+					res.redirected ||
+					!contentType.toLowerCase().startsWith("text/plain")
+				) {
 					results.failed.push(cap.name);
 				} else {
 					results.files.push({ name: cap.name, text: await res.text() });
@@ -207,6 +210,126 @@ export function bulkTranscriptZipName(now: Date = new Date()): string {
 	const m = `${now.getMonth() + 1}`.padStart(2, "0");
 	const d = `${now.getDate()}`.padStart(2, "0");
 	return `transkriptlar-${y}-${m}-${d}.zip`;
+}
+
+/**
+ * What `waitForTranscripts` accepts as a status answer. Structurally satisfied
+ * by the `getVideoStatus` server action's `VideoStatusResult` (which always
+ * carries `transcriptionStatus`) and its `{ success: false }` refusal — kept
+ * loose here so the wait loop stays pure and unit-testable without importing
+ * server code.
+ */
+export type TranscriptWaitStatus =
+	| {
+			transcriptionStatus: string | null;
+			transcriptionErrorCode?: string | null;
+	  }
+	| { success: false };
+
+export type GetTranscriptStatusFn = (
+	videoId: string,
+) => Promise<TranscriptWaitStatus>;
+
+export type TranscriptWaitOptions = {
+	/** Pause between polls (spec: 15 s). */
+	intervalMs: number;
+	/** Overall give-up ceiling (spec: 45 min) — after it, resolve with partial. */
+	capMs: number;
+	/** Progress for the loading toast: fires after each tick with (done, total). */
+	onTick?: (doneCount: number, total: number) => void;
+	/** Injectable clock (tests). Defaults to Date.now. */
+	now?: () => number;
+	/** Injectable sleep (tests). Defaults to real setTimeout. */
+	sleep?: (ms: number) => Promise<void>;
+};
+
+export type TranscriptWaitResult = {
+	/** Ids whose transcription reached COMPLETE, in selection order. */
+	done: string[];
+	/**
+	 * Ids given up on — a terminal transcription error (ERROR incl. the
+	 * hours-long QUOTA retry, SKIPPED, NO_AUDIO) or the cap running out while
+	 * still pending (never started / still processing). The ZIP note names them.
+	 */
+	givenUp: string[];
+};
+
+/**
+ * Terminal transcription states from actions/videos/get-status.ts: once one of
+ * these is set, the transcript will not appear by waiting longer. COMPLETE and
+ * PROCESSING are not in the list; a NULL status means "not started yet" and
+ * also keeps waiting (up to the cap).
+ */
+const TRANSCRIPT_TERMINAL_ERROR_STATUSES = ["ERROR", "SKIPPED", "NO_AUDIO"];
+
+/**
+ * Wait (spec 2026-10-08) until every given video's transcription is COMPLETE,
+ * polling the status action one video at a time per tick. Never throws:
+ * - COMPLETE -> done
+ * - ERROR (incl. transcriptionErrorCode QUOTA — the retry can take hours, so
+ *   this flow gives up on it), SKIPPED, NO_AUDIO -> given up, others continue
+ * - a status call that throws or answers { success: false } -> retried next
+ *   tick, never fatal
+ * - after `capMs` overall -> resolve with whatever is ready; still-pending ids
+ *   count as given up so the caller's ZIP note names them.
+ */
+export async function waitForTranscripts(
+	ids: string[],
+	getStatus: GetTranscriptStatusFn,
+	options: TranscriptWaitOptions,
+): Promise<TranscriptWaitResult> {
+	const {
+		intervalMs,
+		capMs,
+		onTick,
+		now = () => Date.now(),
+		sleep = (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+	} = options;
+
+	const done: string[] = [];
+	const givenUp: string[] = [];
+	let pending = [...ids];
+	const total = ids.length;
+	const start = now();
+
+	while (pending.length > 0) {
+		if (now() - start >= capMs) break;
+
+		const stillPending: string[] = [];
+		for (const id of pending) {
+			let status: TranscriptWaitStatus | undefined;
+			try {
+				status = await getStatus(id);
+			} catch {
+				// One bad call is a blip, not a verdict — retried next tick.
+				stillPending.push(id);
+				continue;
+			}
+			if (status != null && "transcriptionStatus" in status) {
+				const s = status.transcriptionStatus;
+				if (s === "COMPLETE") {
+					done.push(id);
+					continue;
+				}
+				if (s != null && TRANSCRIPT_TERMINAL_ERROR_STATUSES.includes(s)) {
+					givenUp.push(id);
+					continue;
+				}
+			}
+			// PROCESSING, null (not started yet) or { success: false }: wait on.
+			stillPending.push(id);
+		}
+		pending = stillPending;
+
+		onTick?.(done.length, total);
+		if (pending.length === 0) break;
+		await sleep(intervalMs);
+	}
+
+	// The cap ran out (or the poll window was already closed): still-pending
+	// ids are reported as given up, never silently dropped.
+	givenUp.push(...pending);
+	return { done, givenUp };
 }
 
 /**

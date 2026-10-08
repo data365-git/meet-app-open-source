@@ -79,20 +79,24 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideosToFolder } from "@/actions/folders/moveVideosToFolder";
 import { replaceVideosWithAudio } from "@/actions/video/replace-videos-with-audio";
+import { getVideoStatus } from "@/actions/videos/get-status";
 import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
 import {
+	BULK_AI_MAX_SELECTION,
 	type BulkAiMode,
 	type BulkAiPlan,
 	buildBulkAiResultToast,
 	bulkAiButtonState,
 	planBulkAi,
 	runBulkAiStarts,
+	SKIP_REASON_RUNNING,
 } from "@/lib/bulk-ai";
 import {
 	buildBulkTranscriptZip,
 	bulkTranscriptZipName,
 	downloadBlob,
 	fetchBulkTranscripts,
+	waitForTranscripts,
 } from "@/lib/bulk-transcript-zip";
 import type { LibraryKind } from "@/lib/library-kind";
 import { BulkAiConfirmDialog } from "./BulkAiConfirmDialog";
@@ -128,11 +132,19 @@ export const SelectedCapsBar = ({
 	// Bulk transcript download (2026-10-07 spec): null = idle, otherwise the
 	// "n/N" progress the AI menu item shows while fetching. Same synchronous
 	// ref guard as bulkAiRunningRef so a second click in one tick is ignored.
+	// `phase` (2026-10-08 spec) splits the auto-transcribe flow's two stages so
+	// the menu item can say "Transkript qilinmoqda" while waiting and
+	// "Yuklanmoqda" once the ZIP fetch loop starts.
 	const [transcriptDownload, setTranscriptDownload] = useState<{
+		phase: "transcribing" | "downloading";
 		done: number;
 		total: number;
 	} | null>(null);
 	const transcriptDownloadRef = useRef(false);
+	// The transcript-mode plan awaiting the owner's choice in the auto-
+	// transcribe-then-download confirm dialog (2026-10-08 spec). Non-null only
+	// while that dialog is open; closing it on ANY button clears the state.
+	const [transcribePlan, setTranscribePlan] = useState<BulkAiPlan | null>(null);
 	const router = useRouter();
 
 	const handleConfirmDelete = () => {
@@ -295,11 +307,17 @@ export const SelectedCapsBar = ({
 	const downloadTranscriptsZip = async () => {
 		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
 		transcriptDownloadRef.current = true;
-		setTranscriptDownload({ done: 0, total: bulkCaps.length });
-		toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, { id: transcriptToastId });
+		setTranscriptDownload({
+			phase: "downloading",
+			done: 0,
+			total: bulkCaps.length,
+		});
+		toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, {
+			id: transcriptToastId,
+		});
 		try {
 			const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
-				setTranscriptDownload({ done, total });
+				setTranscriptDownload({ phase: "downloading", done, total });
 				toast.loading(`Yuklanmoqda ${done}/${total}`, {
 					id: transcriptToastId,
 				});
@@ -331,6 +349,160 @@ export const SelectedCapsBar = ({
 				id: transcriptToastId,
 			});
 		} finally {
+			transcriptDownloadRef.current = false;
+			setTranscriptDownload(null);
+		}
+	};
+
+	// The menu entry point (2026-10-08 spec, owner option A): plan the same
+	// transcript-mode run the "Faqat transkript" button plans. Nothing to
+	// transcribe -> exactly the old download-right-away behaviour. Something to
+	// transcribe -> the confirm dialog (money is spent only after it).
+	const openTranscriptsDownload = () => {
+		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
+		const plan = planBulkAi(bulkCaps, "transcript");
+		if (plan.toRun.length === 0) {
+			void downloadTranscriptsZip();
+			return;
+		}
+		setTranscribePlan(plan);
+	};
+
+	// "Transkript qilib yuklab olish" (2026-10-08 spec): start the planned
+	// videos with the EXISTING sequential start loop (budget-stop / 403 /
+	// failure rules unchanged - `runBulkAiStarts` itself is not touched), wait
+	// for the ACCEPTED ones to reach COMPLETE, then run the very same fetch +
+	// ZIP path as a plain download. Videos that gave up (terminal error, cap
+	// reached) or never started simply answer 404 in that loop and land in the
+	// transkript-yoq.txt note, like today.
+	const transcribeAndDownload = async () => {
+		const plan = transcribePlan;
+		if (!plan || plan.toRun.length === 0 || transcriptDownloadRef.current) {
+			setTranscribePlan(null);
+			return;
+		}
+		transcriptDownloadRef.current = true;
+		setTranscribePlan(null);
+		// Leaving the page mid-wait would silently drop the download (the
+		// transcription itself keeps running server-side either way), so warn
+		// for exactly as long as this flow is in flight.
+		const warnOnUnload = (e: BeforeUnloadEvent) => {
+			e.preventDefault();
+			// Legacy engines only show the dialog when returnValue is set.
+			e.returnValue = "";
+		};
+		window.addEventListener("beforeunload", warnOnUnload);
+		let transcribedNow = 0;
+		let budgetStopNote: string | null = null;
+		try {
+			setTranscriptDownload({
+				phase: "transcribing",
+				done: 0,
+				total: plan.toRun.length,
+			});
+			toast.loading(`Transkript qilinmoqda: 0/${plan.toRun.length}`, {
+				id: transcriptToastId,
+			});
+			// `runBulkAiStarts` only COUNTS its answers, but this flow must wait
+			// for exactly the videos the generate route accepted (200, incl.
+			// alreadyRunning) - not the 403/500/budget-stopped ones, which would
+			// never finish and burn the whole 45-minute cap. The injected fetch
+			// wrapper notes each accepted id; the loop's rules are untouched.
+			const startedIds: string[] = [];
+			const trackingFetch: typeof fetch = async (input, init) => {
+				const res = await fetch(input, init);
+				if (res.ok && typeof input === "string") {
+					const parts = input.split("/");
+					if (parts[2] === "videos" && parts[4] === "generate" && parts[3]) {
+						startedIds.push(parts[3]);
+					}
+				}
+				return res;
+			};
+			const outcome = await runBulkAiStarts(
+				plan.toRun,
+				"transcript",
+				trackingFetch,
+			);
+			if (outcome.budgetStopped) {
+				budgetStopNote = `Oylik AI limiti tugadi - ${outcome.notStartedCount} ta video boshlanmadi`;
+			}
+			// Also wait for videos already being transcribed (skipped as
+			// "ishlanmoqda"): their transcript is minutes away, not missing.
+			const waitIds = [
+				...startedIds,
+				...plan.skipped
+					.filter((sk) => sk.reason === SKIP_REASON_RUNNING)
+					.map((sk) => sk.id),
+			];
+			if (waitIds.length > 0) {
+				const wait = await waitForTranscripts(
+					waitIds,
+					// Plain string -> branded Video.VideoId at the boundary; the
+					// plan's ids came from the same videos the grid selected.
+					(id) => getVideoStatus(id as Video.VideoId),
+					{
+						intervalMs: 15_000,
+						capMs: 45 * 60_000,
+						onTick: (done, total) => {
+							setTranscriptDownload({
+								phase: "transcribing",
+								done,
+								total,
+							});
+							toast.loading(`Transkript qilinmoqda: ${done}/${total}`, {
+								id: transcriptToastId,
+							});
+						},
+					},
+				);
+				transcribedNow = wait.done.length;
+			}
+			// Download phase: the exact fetch + ZIP path of a plain download,
+			// for the WHOLE selection (the freshly transcribed included).
+			setTranscriptDownload({
+				phase: "downloading",
+				done: 0,
+				total: bulkCaps.length,
+			});
+			toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, {
+				id: transcriptToastId,
+			});
+			const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
+				setTranscriptDownload({ phase: "downloading", done, total });
+				toast.loading(`Yuklanmoqda ${done}/${total}`, {
+					id: transcriptToastId,
+				});
+			});
+			const blob = await buildBulkTranscriptZip(results);
+			if (!blob) {
+				toast.error(
+					results.failed.length > 0
+						? "Hech bir transkript yuklab olinmadi (xatolik)"
+						: "Tanlangan videolarning transkripti yo'q",
+					{ id: transcriptToastId },
+				);
+				return;
+			}
+			downloadBlob(blob, bulkTranscriptZipName());
+			const missingCount = results.missing.length + results.failed.length;
+			const summaryParts = [`${results.files.length} ta transkript yuklandi`];
+			if (transcribedNow > 0) {
+				summaryParts.push(`${transcribedNow} tasi hozir transkript qilindi`);
+			}
+			if (missingCount > 0) {
+				summaryParts.push(
+					`${missingCount} tasi yo'q (transkript-yoq.txt ichida)`,
+				);
+			}
+			if (budgetStopNote) summaryParts.push(budgetStopNote);
+			toast.success(summaryParts.join(" · "), { id: transcriptToastId });
+		} catch (_error) {
+			toast.error("Transkriptlarni yuklab olishda xatolik", {
+				id: transcriptToastId,
+			});
+		} finally {
+			window.removeEventListener("beforeunload", warnOnUnload);
 			transcriptDownloadRef.current = false;
 			setTranscriptDownload(null);
 		}
@@ -499,7 +671,7 @@ export const SelectedCapsBar = ({
 											isMoving ||
 											isReplacingWithAudio
 										}
-										onSelect={() => void downloadTranscriptsZip()}
+										onSelect={() => openTranscriptsDownload()}
 									>
 										<FontAwesomeIcon
 											className="size-3 text-gray-11"
@@ -507,7 +679,9 @@ export const SelectedCapsBar = ({
 										/>
 										<span>
 											{transcriptDownload
-												? `Yuklanmoqda ${transcriptDownload.done}/${transcriptDownload.total}`
+												? transcriptDownload.phase === "transcribing"
+													? `Transkript qilinmoqda: ${transcriptDownload.done}/${transcriptDownload.total}`
+													: `Yuklanmoqda ${transcriptDownload.done}/${transcriptDownload.total}`
 												: "Transkriptlarni yuklab olish"}
 										</span>
 									</DropdownMenuItem>
@@ -644,6 +818,37 @@ export const SelectedCapsBar = ({
 								onCancel={() => {
 									if (!isBulkAiRunning) setBulkAiMode(null);
 								}}
+							/>
+						)}
+						{/* The transcribe-then-download confirm (2026-10-08 spec): the
+						    same price/skip facts, three choices. Over the
+						    BULK_AI_MAX_SELECTION ceiling the paid action disappears
+						    and only "Faqat tayyorlarini" + "Bekor qilish" remain. */}
+						{bulkButtons.visible && transcribePlan && (
+							<BulkAiConfirmDialog
+								mode="transcript"
+								plan={transcribePlan}
+								running={false}
+								title={`${transcribePlan.toRun.length} ta videoda transkript yo'q. Avval transkript qilib, keyin yuklab olaymi?`}
+								confirmLabel="Transkript qilib yuklab olish"
+								cancelLabel="Bekor qilish"
+								secondary={{
+									label: "Faqat tayyorlarini yuklab olish",
+									onClick: () => {
+										setTranscribePlan(null);
+										void downloadTranscriptsZip();
+									},
+								}}
+								hideConfirm={
+									transcribePlan.toRun.length > BULK_AI_MAX_SELECTION
+								}
+								notice={
+									transcribePlan.toRun.length > BULK_AI_MAX_SELECTION
+										? `Bir martada ${BULK_AI_MAX_SELECTION} tagacha video transkript qilinishi mumkin`
+										: undefined
+								}
+								onStart={() => void transcribeAndDownload()}
+								onCancel={() => setTranscribePlan(null)}
 							/>
 						)}
 						{/* The strong confirmation the owner asked for (2026-08-05) when he

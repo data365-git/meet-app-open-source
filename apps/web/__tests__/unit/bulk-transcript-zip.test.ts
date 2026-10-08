@@ -15,6 +15,7 @@ import {
 	dedupeFileNames,
 	fetchBulkTranscripts,
 	sanitizeTranscriptFileName,
+	waitForTranscripts,
 } from "@/lib/bulk-transcript-zip";
 
 describe("sanitizeTranscriptFileName", () => {
@@ -113,13 +114,15 @@ describe("buildMissingNote", () => {
 });
 
 /** A fetch Response stand-in with just the fields fetchBulkTranscripts reads. */
-const makeResponse = (overrides: {
-	status?: number;
-	ok?: boolean;
-	redirected?: boolean;
-	contentType?: string | null;
-	text?: string;
-} = {}) => {
+const makeResponse = (
+	overrides: {
+		status?: number;
+		ok?: boolean;
+		redirected?: boolean;
+		contentType?: string | null;
+		text?: string;
+	} = {},
+) => {
 	const status = overrides.status ?? 200;
 	return {
 		status,
@@ -127,7 +130,10 @@ const makeResponse = (overrides: {
 		redirected: overrides.redirected ?? false,
 		headers: new Headers({
 			...(overrides.contentType !== null
-				? { "content-type": overrides.contentType ?? "text/plain; charset=utf-8" }
+				? {
+						"content-type":
+							overrides.contentType ?? "text/plain; charset=utf-8",
+					}
 				: {}),
 		}),
 		text: async () => overrides.text ?? "TRANSCRIPT",
@@ -168,8 +174,7 @@ describe("fetchBulkTranscripts", () => {
 		const results = await fetchBulkTranscripts(
 			[{ id: "v1", name: "Yo'naltirilgan" }],
 			undefined,
-			async () =>
-				makeResponse({ redirected: true, contentType: "text/plain" }),
+			async () => makeResponse({ redirected: true, contentType: "text/plain" }),
 		);
 		expect(results.failed).toEqual(["Yo'naltirilgan"]);
 		expect(results.files).toEqual([]);
@@ -180,7 +185,10 @@ describe("fetchBulkTranscripts", () => {
 			[{ id: "v1", name: "HTML qaytargan" }],
 			undefined,
 			async () =>
-				makeResponse({ contentType: "text/html; charset=utf-8", text: "<html>" }),
+				makeResponse({
+					contentType: "text/html; charset=utf-8",
+					text: "<html>",
+				}),
 		);
 		expect(results.failed).toEqual(["HTML qaytargan"]);
 		expect(results.files).toEqual([]);
@@ -200,6 +208,154 @@ describe("fetchBulkTranscripts", () => {
 			async () => makeResponse({ status: 500 }),
 		);
 		expect(failed.failed).toEqual(["Xato"]);
+	});
+});
+
+describe("waitForTranscripts", () => {
+	/** A fake clock the injected `sleep` advances, so cap/interval logic is
+	 * tested in milliseconds without real timers. */
+	const makeClock = () => {
+		let t = 0;
+		return {
+			now: () => t,
+			sleep: async (ms: number) => {
+				t += ms;
+			},
+		};
+	};
+
+	const status = (transcriptionStatus: string | null) => ({
+		transcriptionStatus,
+	});
+
+	it("resolves with all done when every video reaches COMPLETE (no waiting past the last one)", async () => {
+		const clock = makeClock();
+		const polled: string[] = [];
+		const result = await waitForTranscripts(
+			["v1", "v2"],
+			async (id) => {
+				polled.push(id);
+				return status("COMPLETE");
+			},
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result).toEqual({ done: ["v1", "v2"], givenUp: [] });
+		// Both resolved on the FIRST tick - sequential per tick.
+		expect(polled).toEqual(["v1", "v2"]);
+	});
+
+	it("gives up on a terminal error (ERROR, incl. QUOTA; SKIPPED; NO_AUDIO) and lets the others finish", async () => {
+		const clock = makeClock();
+		const v2Statuses = ["PROCESSING", "COMPLETE"];
+		const result = await waitForTranscripts(
+			["v1", "v2", "v3"],
+			async (id) => {
+				if (id === "v1")
+					return {
+						transcriptionStatus: "ERROR",
+						transcriptionErrorCode: "QUOTA" as const,
+					};
+				if (id === "v2") return status(v2Statuses.shift() ?? "COMPLETE");
+				return status("SKIPPED");
+			},
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result.done).toEqual(["v2"]);
+		expect(result.givenUp.sort()).toEqual(["v1", "v3"]);
+	});
+
+	it("reports partial results when the overall cap is reached", async () => {
+		const clock = makeClock();
+		// v1 completes on tick 1; v2 never leaves PROCESSING, and after one
+		// interval the fake clock has reached the cap (capMs = intervalMs).
+		const result = await waitForTranscripts(
+			["v1", "v2"],
+			async (id) => status(id === "v1" ? "COMPLETE" : "PROCESSING"),
+			{
+				intervalMs: 5000,
+				capMs: 5000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result.done).toEqual(["v1"]);
+		expect(result.givenUp).toEqual(["v2"]);
+	});
+
+	it("retries a status call that throws on the next tick instead of failing the batch", async () => {
+		const clock = makeClock();
+		let threwOnce = false;
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => {
+				if (!threwOnce) {
+					threwOnce = true;
+					throw new Error("network blip");
+				}
+				return status("COMPLETE");
+			},
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result).toEqual({ done: ["v1"], givenUp: [] });
+	});
+
+	it("keeps waiting through a null status (not started yet) and a { success: false } answer", async () => {
+		const clock = makeClock();
+		const answers = [
+			{ transcriptionStatus: null },
+			{ success: false as const },
+		];
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => answers.shift() ?? status("COMPLETE"),
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result).toEqual({ done: ["v1"], givenUp: [] });
+	});
+
+	it("reports progress per tick via onTick(doneCount, total)", async () => {
+		const clock = makeClock();
+		const ticks: [number, number][] = [];
+		// v1 done on tick 1, v2 done on tick 2.
+		const v2Statuses = ["PROCESSING", "COMPLETE"];
+		await waitForTranscripts(
+			["v1", "v2"],
+			async (id) =>
+				id === "v1"
+					? status("COMPLETE")
+					: status(v2Statuses.shift() ?? "COMPLETE"),
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+				onTick: (done, total) => ticks.push([done, total]),
+			},
+		);
+		expect(ticks).toEqual([
+			[1, 2],
+			[2, 2],
+		]);
 	});
 });
 
