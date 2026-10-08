@@ -242,6 +242,26 @@ export interface VideoMetadata {
 	 * guessed number. */
 	processingPercent?: number | null;
 	processingUpdatedAt?: string;
+	/**
+	 * Hermes CRM delivery state (ADR 2026-10-08): an admin on a Meetings-library
+	 * video answers "Bu meetingmi? Hermesga joylaymi?" — decline records the
+	 * answer, queue hands the transcript to the Mac-side puller
+	 * (GET /api/hermes/meetings/queue), and the puller's ack flips it to
+	 * delivered. Absent = never asked (the dialog may auto-open for admins).
+	 */
+	hermes?: {
+		status: "declined" | "queued" | "delivered" | "failed";
+		/** Typed by the admin in the dialog (only while queued/delivered). */
+		clientName?: string;
+		company?: string;
+		queuedAt?: string;
+		deliveredAt?: string;
+		/** The file name the Mac actually wrote (ack body), for the ✓ mark. */
+		fileName?: string;
+		/** Why a queued delivery failed — set by the queue route, so the row
+		 * leaves the oldest-20 pull window instead of blocking it forever. */
+		failedReason?: string;
+	};
 }
 
 export type VideoEditRange = {
