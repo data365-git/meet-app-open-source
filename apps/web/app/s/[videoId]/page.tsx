@@ -61,6 +61,7 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
+import { isInMeetingsLibrary } from "@/lib/hermes-meeting";
 import {
 	isEditSourceKey,
 	reconcileStaleEditUpload,
@@ -70,6 +71,7 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
+import { HermesMeeting } from "./_components/HermesMeeting";
 import { Share } from "./Share";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
@@ -834,6 +836,53 @@ async function AuthorizedContent({
 		return role === "owner" || role === "admin";
 	})();
 
+	// Hermes CRM delivery (ADR 2026-10-08): the "Bu meetingmi? Hermesga
+	// joylaymi?" dialog is for ADMINS viewing a MEETINGS-library video only —
+	// the same admin shape as canGenerate above (without the AI-permission
+	// gate: declining costs nothing). The server actions re-check both rules;
+	// this gate only keeps the UI off everyone else's page.
+	const canManageHermes = await (async () => {
+		if (!userId) return false;
+		if (userId === video.owner.id) return true;
+		if (!video.orgId) return false;
+
+		const [orgAccess] = await db()
+			.select({
+				ownerId: organizations.ownerId,
+				memberRole: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, userId),
+				),
+			)
+			.where(
+				and(
+					eq(organizations.id, video.orgId),
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.limit(1);
+
+		if (!orgAccess) return false;
+		const role = getEffectiveOrganizationRole({
+			userId,
+			ownerId: orgAccess.ownerId,
+			memberRole: orgAccess.memberRole,
+		});
+		return role === "owner" || role === "admin";
+	})();
+
+	const hermesEligible =
+		canManageHermes &&
+		isInMeetingsLibrary({
+			libraryKind: video.libraryKind,
+			source: video.source,
+		});
+
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
 
@@ -900,6 +949,10 @@ async function AuthorizedContent({
 				branding={getSharePageBranding(videoWithOrganizationInfo)}
 				canManageSharePageBranding={canManageSharePageBranding}
 			/>
+
+			{hermesEligible ? (
+				<HermesMeeting videoId={videoId} initialHermes={metadata.hermes ?? null} />
+			) : null}
 
 			<Share
 				data={videoWithOrganizationInfo}

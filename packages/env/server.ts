@@ -168,6 +168,14 @@ function createServerEnv() {
 				.optional()
 				.describe("DEPRECATED: Media server has been removed"),
 
+			/// Hermes meeting queue (ADR 2026-10-08)
+			HERMES_QUEUE_TOKEN: z
+				.string()
+				.optional()
+				.describe(
+					"Shared secret for the Mac-side Hermes puller. Required for GET /api/hermes/meetings/queue and POST /api/hermes/meetings/ack; when unset both routes answer 503 (feature off).",
+				),
+
 			/// Ignore
 			NODE_ENV: z.string(),
 			WORKFLOWS_RPC_URL: z.string().optional(),
