@@ -99,6 +99,11 @@ interface UploadingState {
 	parts: CompletedPart[];
 	totalBytes: number;
 	uploadedBytes: number;
+	// True when this upload was a MEETING (see meeting.ts isMeetingFiling) —
+	// drives the auto-open of the video page on completion. Optional so a
+	// persisted 0.5.9 state (which has no such field) still parses and simply
+	// treats missing as false.
+	isMeeting?: boolean;
 }
 
 interface FinishingState {
@@ -115,6 +120,11 @@ interface FinishingState {
 	// state nor "uploading" carries it). Persisted here so a crash/restart that
 	// resumes the finalize via resumeInterruptedFinishing can still send it.
 	durationInSecs?: number;
+	// Same flag as UploadingState.isMeeting — carried through the finalize so a
+	// crash/resume (resumeInterruptedFinishing → drained "complete") still knows
+	// to auto-open the video page. Optional: a persisted 0.5.9 "finishing" state
+	// has no such field and is treated as false.
+	isMeeting?: boolean;
 }
 
 interface CompleteState {

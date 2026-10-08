@@ -2717,6 +2717,94 @@ describe('HIGH #2 — "permanently discard" actually discards', () => {
 		expect(final.kind === "error" && final.reason).toMatch(/discard/i);
 	});
 
+	// Round-2 MUST-FIX (meeting auto-open): DISCARD_UPLOAD is answered while a
+	// serialized drain is still running for the SAME video. That drain can set
+	// "complete" — and (for a meeting) auto-open the video page — BEFORE the
+	// discard's own turn arrives, showing the user a tab for a recording they
+	// just chose to destroy. The handler must veto the open up front
+	// (suppressAutoOpen, written outside the queue) so the drain's completion
+	// tail no-ops. Without that veto call this test is RED: the drain's
+	// completion opens the tab.
+	it("a discard landing mid-drain suppresses the auto-open for the very video being discarded", async () => {
+		const { chrome, captured, storage, setState } = await freshSw();
+		const { getState } = await import("./state");
+
+		// freshSw's generic tabs.create isn't observable — swap in a recording
+		// one on the SAME chrome object (sw.ts reads chrome.tabs.create at
+		// call time, not at listener-registration time).
+		const opened: Array<{ url?: string; active?: boolean }> = [];
+		(chrome.tabs as { create: (opts: unknown) => Promise<unknown> }).create =
+			async (opts) => {
+				opened.push(opts as { url?: string; active?: boolean });
+				return { id: 1 };
+			};
+
+		// MEETING upload A parked in "uploading" with a due durable "complete"
+		// whose payload carries isMeeting (the only source the drain reads).
+		await setState(uploadingState("vid-A", "upload-A"));
+		await storage.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-A",
+						videoId: "vid-A",
+						parts: [{ partNumber: 1, etag: "etag-1", size: 0 }],
+						isMeeting: true,
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		// Gate the drain's completeMultipart so the discard lands mid-drain.
+		let releaseComplete!: () => void;
+		const completeGate = new Promise<void>((r) => {
+			releaseComplete = r;
+		});
+
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes("/multipart/complete")) {
+				await completeGate;
+				return jsonResponse({ success: true });
+			}
+			if (url.includes("/multipart/abort")) return jsonResponse({ success: true });
+			if (url.includes("/api/video/delete-permanent"))
+				return jsonResponse({ ok: true });
+			if (url.includes("/recording-complete")) return jsonResponse({ ok: true });
+			throw new Error(`Unhandled fetch in test: ${url}`);
+		});
+
+		// (1) drain enters the queue and parks on completeMultipart.
+		captured.alarm?.({ name: RETRY_ALARM_NAME });
+		await flushAsync();
+
+		// (2) user clicks "Permanently discard"; the guard reads "uploading" ->
+		// passes, and the auto-open veto is written BEFORE the discard is
+		// enqueued behind the still-running drain.
+		const discardResp = sendMessage(captured, { type: "DISCARD_UPLOAD" });
+		await flushAsync();
+
+		// (3) drain finishes: A completes server-side, state -> "complete", and
+		// the meeting auto-open is attempted — and must be VETOED.
+		releaseComplete();
+		await flushAsync();
+
+		// (4) the discard's own turn runs (abort + delete already resolve) and
+		// the handler's tail resolves.
+		await discardResp;
+		await flushAsync();
+
+		// The ONE assertion this fix exists for: no tab for a destroyed video.
+		expect(opened).toHaveLength(0);
+		// The discard still did its real job: a terminal discarded state, not a
+		// share link, for the video it deleted (same as the residual tests).
+		const final = await getState();
+		expect(final.kind).not.toBe("complete");
+	});
+
 	// Same residual bug, other terminal branch: the drain can also dead-letter a
 	// permanently-failed part for the SAME video mid-discard, which sets a
 	// generic "please re-record" error (moveToDeadLetter in upload.ts). That

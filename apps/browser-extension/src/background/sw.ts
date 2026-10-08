@@ -1,4 +1,5 @@
 import { isKeepAliveAlarm, startKeepAlive, stopKeepAlive } from "./keepalive";
+import { isMeetingFiling, suppressAutoOpen } from "./meeting";
 import type { ExtensionSettings, ExtensionState } from "./state";
 import { getSettings, getState, setSettings, setState } from "./state";
 import { DEFAULT_API_BASE_URL } from "../shared/config";
@@ -874,6 +875,9 @@ async function finalizeRecording(
 		parts,
 		totalBytes,
 		uploadedBytes,
+		// Carried forward so the completion paths in upload.ts know to auto-open
+		// the video page for a meeting. Same rule the upload was filed under.
+		isMeeting: isMeetingFiling(state.mode, state.meetingRequired),
 	};
 	await setState(nextState);
 	stopKeepAlive();
@@ -1269,6 +1273,17 @@ async function handleMessage(
 				// popup does not falsely promise a retry (W3c).
 				return { ok: false, reason: "not-uploading", outcome: "noop" };
 			}
+			// (Round-2 MUST-FIX) The serialized discard below waits behind a
+			// running finalize/drain that can set "complete" — and auto-open the
+			// video page — for THIS video before the discard's turn arrives. Veto
+			// that open up front: the auto-open marker is written BEFORE
+			// enqueueing (outside the queue, so it lands no matter how long the
+			// queued work takes), and the completion tail's
+			// maybeAutoOpenMeetingVideo then no-ops. The user must never see a
+			// tab for a recording they chose to destroy. Best-effort by design
+			// (suppressAutoOpen swallows errors): this must never block or fail
+			// the discard itself.
+			await suppressAutoOpen(discardState.videoId);
 			// The recording is going away on purpose — suppress the watchdog
 			// notifications that would otherwise announce it as a loss.
 			intentionalStop = true;
@@ -1754,9 +1769,11 @@ async function handleMessage(
 				// tabs.onRemoved control-flow discriminator) is deliberately left
 				// untouched below; this only decides how the upload is TITLED/FILED.
 				// The guaranteed full-screen meeting flow keeps mode "instruction"
-				// throughout but must still file as a meeting.
+				// throughout but must still file as a meeting — the shared
+				// isMeetingFiling helper is the ONE definition of that rule
+				// (also used for the auto-open flag), so the two cannot drift.
 				const result = await initializeUpload(
-					meetingRequired ? "meeting" : mode,
+					isMeetingFiling(mode, meetingRequired) ? "meeting" : mode,
 					meetingId,
 				);
 				videoId = result.videoId;
@@ -2275,6 +2292,9 @@ chrome.runtime.onStartup.addListener(async () => {
 			parts: state.parts,
 			totalBytes: state.totalBytes,
 			uploadedBytes: state.uploadedBytes,
+			// Same meeting flag as finalizeRecording's transition — kept through
+			// the restart so the eventual completion still auto-opens.
+			isMeeting: isMeetingFiling(state.mode, state.meetingRequired),
 		};
 		await setState(nextState);
 		updateBadge(nextState);
@@ -2348,6 +2368,7 @@ chrome.runtime.onStartup.addListener(async () => {
 				state.uploadId,
 				state.parts,
 				state.durationInSecs,
+				state.isMeeting,
 			),
 		).catch(() => {});
 		const nextState: ExtensionState = {
