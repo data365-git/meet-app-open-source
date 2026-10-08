@@ -105,7 +105,7 @@ export function HermesMeeting({
 		) {
 			return (
 				<div className="text-xs text-red-500 my-2">
-					Transkript qilib bo&apos;lmadi - Hermesga yuborilmadi
+					Transkript qilib bo&apos;lmadi - Hermesga hali yuborilmadi. AI panelidan transkriptni qayta ishga tushiring: tayyor bo&apos;lsa o&apos;zi yuboriladi
 				</div>
 			);
 		}

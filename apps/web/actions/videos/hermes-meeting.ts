@@ -253,7 +253,7 @@ export async function queueHermesMeeting(
 					.where(
 						and(
 							eq(videos.id, video.id),
-							sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiStartPendingUpload') IS NULL`,
+							sql`JSON_CONTAINS_PATH(COALESCE(${videos.metadata}, JSON_OBJECT()), 'one', '$.aiStartPendingUpload') = 0`,
 						),
 					);
 			}
