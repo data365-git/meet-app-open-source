@@ -93,6 +93,7 @@ import {
 } from "@/lib/bulk-ai";
 import {
 	buildBulkTranscriptZip,
+	type BulkTranscriptResults,
 	bulkTranscriptZipName,
 	downloadBlob,
 	fetchBulkTranscripts,
@@ -304,9 +305,16 @@ export const SelectedCapsBar = ({
 	// shown in a LOADING TOAST under this fixed id, updated per video and
 	// REPLACED by the final success/error toast (same id - sonner swaps it).
 	const transcriptToastId = "bulk-transcript-zip";
-	const downloadTranscriptsZip = async () => {
-		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
-		transcriptDownloadRef.current = true;
+	// The SHARED download tail of both transcript flows (2026-10-08 review
+	// fix 5): progress toast, the sequential transcript fetch, the ZIP and the
+	// ONE summary toast. `extraParts` lets the transcribe-then-download flow
+	// add its own facts computed from the REAL fetch results (fix 4 — the
+	// count of waited ids that actually landed in the ZIP), `finalNote` its
+	// budget-stop line; a plain download passes neither.
+	const fetchTranscriptZipAndReport = async (
+		extraParts: (results: BulkTranscriptResults) => string[] = () => [],
+		finalNote: string | null = null,
+	): Promise<void> => {
 		setTranscriptDownload({
 			phase: "downloading",
 			done: 0,
@@ -315,35 +323,44 @@ export const SelectedCapsBar = ({
 		toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, {
 			id: transcriptToastId,
 		});
-		try {
-			const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
-				setTranscriptDownload({ phase: "downloading", done, total });
-				toast.loading(`Yuklanmoqda ${done}/${total}`, {
-					id: transcriptToastId,
-				});
+		const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
+			setTranscriptDownload({ phase: "downloading", done, total });
+			toast.loading(`Yuklanmoqda ${done}/${total}`, {
+				id: transcriptToastId,
 			});
-			const blob = await buildBulkTranscriptZip(results);
-			if (!blob) {
-				// Zero transcripts: no ZIP download, one plain error toast -
-				// never an empty archive that looks like success.
-				toast.error(
-					results.failed.length > 0
-						? "Hech bir transkript yuklab olinmadi (xatolik)"
-						: "Tanlangan videolarning transkripti yo'q",
-					{ id: transcriptToastId },
-				);
-				return;
-			}
-			downloadBlob(blob, bulkTranscriptZipName());
-			const missingCount = results.missing.length + results.failed.length;
-			toast.success(
-				`${results.files.length} ta transkript yuklandi${
-					missingCount > 0
-						? ` · ${missingCount} tasi yo'q (transkript-yoq.txt ichida)`
-						: ""
-				}`,
+		});
+		const blob = await buildBulkTranscriptZip(results);
+		if (!blob) {
+			// Zero transcripts: no ZIP download, one plain error toast -
+			// never an empty archive that looks like success.
+			toast.error(
+				results.failed.length > 0
+					? "Hech bir transkript yuklab olinmadi (xatolik)"
+					: "Tanlangan videolarning transkripti yo'q",
 				{ id: transcriptToastId },
 			);
+			return;
+		}
+		downloadBlob(blob, bulkTranscriptZipName());
+		const missingCount = results.missing.length + results.failed.length;
+		const summaryParts = [
+			`${results.files.length} ta transkript yuklandi`,
+			...extraParts(results),
+		];
+		if (missingCount > 0) {
+			summaryParts.push(
+				`${missingCount} tasi yo'q (transkript-yoq.txt ichida)`,
+			);
+		}
+		if (finalNote) summaryParts.push(finalNote);
+		toast.success(summaryParts.join(" · "), { id: transcriptToastId });
+	};
+
+	const downloadTranscriptsZip = async () => {
+		if (transcriptDownloadRef.current || bulkCaps.length === 0) return;
+		transcriptDownloadRef.current = true;
+		try {
+			await fetchTranscriptZipAndReport();
 		} catch (_error) {
 			toast.error("Transkriptlarni yuklab olishda xatolik", {
 				id: transcriptToastId,
@@ -377,7 +394,10 @@ export const SelectedCapsBar = ({
 	// transkript-yoq.txt note, like today.
 	const transcribeAndDownload = async () => {
 		const plan = transcribePlan;
-		if (!plan || plan.toRun.length === 0 || transcriptDownloadRef.current) {
+		// The dialog only ever opens with something to run
+		// (`openTranscriptsDownload` guards that), so there is no empty-plan
+		// case to handle here (2026-10-08 review fix 5).
+		if (!plan || transcriptDownloadRef.current) {
 			setTranscribePlan(null);
 			return;
 		}
@@ -392,7 +412,6 @@ export const SelectedCapsBar = ({
 			e.returnValue = "";
 		};
 		window.addEventListener("beforeunload", warnOnUnload);
-		let transcribedNow = 0;
 		let budgetStopNote: string | null = null;
 		try {
 			setTranscriptDownload({
@@ -403,40 +422,25 @@ export const SelectedCapsBar = ({
 			toast.loading(`Transkript qilinmoqda: 0/${plan.toRun.length}`, {
 				id: transcriptToastId,
 			});
-			// `runBulkAiStarts` only COUNTS its answers, but this flow must wait
-			// for exactly the videos the generate route accepted (200, incl.
-			// alreadyRunning) - not the 403/500/budget-stopped ones, which would
-			// never finish and burn the whole 45-minute cap. The injected fetch
-			// wrapper notes each accepted id; the loop's rules are untouched.
-			const startedIds: string[] = [];
-			const trackingFetch: typeof fetch = async (input, init) => {
-				const res = await fetch(input, init);
-				if (res.ok && typeof input === "string") {
-					const parts = input.split("/");
-					if (parts[2] === "videos" && parts[4] === "generate" && parts[3]) {
-						startedIds.push(parts[3]);
-					}
-				}
-				return res;
-			};
-			const outcome = await runBulkAiStarts(
-				plan.toRun,
-				"transcript",
-				trackingFetch,
-			);
+			// `runBulkAiStarts` reports the accepted ids itself
+			// (`outcome.startedIds`, fix 1), so this flow waits for exactly the
+			// videos the generate route accepted (200, incl. alreadyRunning) -
+			// not the 403/500/budget-stopped ones, which would never finish and
+			// burn the whole 45-minute cap. No fetch wrapper, no URL sniffing.
+			const outcome = await runBulkAiStarts(plan.toRun, "transcript");
 			if (outcome.budgetStopped) {
 				budgetStopNote = `Oylik AI limiti tugadi - ${outcome.notStartedCount} ta video boshlanmadi`;
 			}
 			// Also wait for videos already being transcribed (skipped as
 			// "ishlanmoqda"): their transcript is minutes away, not missing.
 			const waitIds = [
-				...startedIds,
+				...outcome.startedIds,
 				...plan.skipped
 					.filter((sk) => sk.reason === SKIP_REASON_RUNNING)
 					.map((sk) => sk.id),
 			];
 			if (waitIds.length > 0) {
-				const wait = await waitForTranscripts(
+				await waitForTranscripts(
 					waitIds,
 					// Plain string -> branded Video.VideoId at the boundary; the
 					// plan's ids came from the same videos the grid selected.
@@ -456,47 +460,18 @@ export const SelectedCapsBar = ({
 						},
 					},
 				);
-				transcribedNow = wait.done.length;
 			}
-			// Download phase: the exact fetch + ZIP path of a plain download,
-			// for the WHOLE selection (the freshly transcribed included).
-			setTranscriptDownload({
-				phase: "downloading",
-				done: 0,
-				total: bulkCaps.length,
-			});
-			toast.loading(`Yuklanmoqda 0/${bulkCaps.length}`, {
-				id: transcriptToastId,
-			});
-			const results = await fetchBulkTranscripts(bulkCaps, (done, total) => {
-				setTranscriptDownload({ phase: "downloading", done, total });
-				toast.loading(`Yuklanmoqda ${done}/${total}`, {
-					id: transcriptToastId,
-				});
-			});
-			const blob = await buildBulkTranscriptZip(results);
-			if (!blob) {
-				toast.error(
-					results.failed.length > 0
-						? "Hech bir transkript yuklab olinmadi (xatolik)"
-						: "Tanlangan videolarning transkripti yo'q",
-					{ id: transcriptToastId },
-				);
-				return;
-			}
-			downloadBlob(blob, bulkTranscriptZipName());
-			const missingCount = results.missing.length + results.failed.length;
-			const summaryParts = [`${results.files.length} ta transkript yuklandi`];
-			if (transcribedNow > 0) {
-				summaryParts.push(`${transcribedNow} tasi hozir transkript qilindi`);
-			}
-			if (missingCount > 0) {
-				summaryParts.push(
-					`${missingCount} tasi yo'q (transkript-yoq.txt ichida)`,
-				);
-			}
-			if (budgetStopNote) summaryParts.push(budgetStopNote);
-			toast.success(summaryParts.join(" · "), { id: transcriptToastId });
+			// Download phase: the SHARED fetch + ZIP + toast path, for the WHOLE
+			// selection (the freshly transcribed included).
+			await fetchTranscriptZipAndReport((results) => {
+				// Fix 4: "N tasi hozir transkript qilindi" counts the waited
+				// ids that ACTUALLY landed in the ZIP (by id), not what the
+				// wait loop believed done — a transcript that completed but
+				// failed to fetch is not a success to brag about.
+				const downloadedIds = new Set(results.files.map((f) => f.id));
+				const landed = waitIds.filter((id) => downloadedIds.has(id)).length;
+				return landed > 0 ? [`${landed} tasi hozir transkript qilindi`] : [];
+			}, budgetStopNote);
 		} catch (_error) {
 			toast.error("Transkriptlarni yuklab olishda xatolik", {
 				id: transcriptToastId,

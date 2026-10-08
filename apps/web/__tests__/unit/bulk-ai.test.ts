@@ -332,12 +332,31 @@ describe("runBulkAiStarts - the sequential start loop", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(outcome).toEqual({
 			started: 1,
+			startedIds: ["a"],
 			skipped: 0,
 			failed: 0,
 			budgetStopped: true,
 			notStartedCount: 3,
 			total: 4,
 		});
+	});
+
+	it("startedIds carries EXACTLY the accepted ids (200 incl. alreadyRunning), never 403/500", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(200, { started: true }))
+			.mockResolvedValueOnce(jsonResponse(403, { error: "Forbidden" }))
+			.mockResolvedValueOnce(jsonResponse(200, { alreadyRunning: true }))
+			.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
+
+		const outcome = await runBulkAiStarts(
+			["a", "b", "c", "d"],
+			"transcript",
+			fetchMock as unknown as typeof fetch,
+		);
+
+		expect(outcome.started).toBe(2);
+		expect(outcome.startedIds).toEqual(["a", "c"]);
 	});
 
 	it("403 counts as skipped and the loop CONTINUES", async () => {
@@ -395,6 +414,7 @@ describe("buildBulkAiResultToast - exactly ONE toast per run (F3)", () => {
 		expect(
 			buildBulkAiResultToast({
 				started: 2,
+				startedIds: ["a", "b"],
 				skipped: 0,
 				failed: 0,
 				budgetStopped: false,
@@ -408,6 +428,7 @@ describe("buildBulkAiResultToast - exactly ONE toast per run (F3)", () => {
 		expect(
 			buildBulkAiResultToast({
 				started: 3,
+				startedIds: ["a", "b", "c"],
 				skipped: 1,
 				failed: 0,
 				budgetStopped: false,
@@ -424,6 +445,7 @@ describe("buildBulkAiResultToast - exactly ONE toast per run (F3)", () => {
 		expect(
 			buildBulkAiResultToast({
 				started: 0,
+				startedIds: [],
 				skipped: 0,
 				failed: 2,
 				budgetStopped: false,
@@ -440,6 +462,7 @@ describe("buildBulkAiResultToast - exactly ONE toast per run (F3)", () => {
 		expect(
 			buildBulkAiResultToast({
 				started: 1,
+				startedIds: ["a"],
 				skipped: 0,
 				failed: 0,
 				budgetStopped: true,
@@ -456,6 +479,7 @@ describe("buildBulkAiResultToast - exactly ONE toast per run (F3)", () => {
 		expect(
 			buildBulkAiResultToast({
 				started: 3,
+				startedIds: ["a", "b", "c"],
 				skipped: 1,
 				failed: 1,
 				budgetStopped: false,

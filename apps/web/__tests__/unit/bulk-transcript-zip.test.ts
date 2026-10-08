@@ -151,7 +151,9 @@ describe("fetchBulkTranscripts", () => {
 				return makeResponse({ text: "SALOM" });
 			},
 		);
-		expect(results.files).toEqual([{ name: "Dars 1", text: "SALOM" }]);
+		expect(results.files).toEqual([
+			{ id: "v1", name: "Dars 1", text: "SALOM" },
+		]);
 		expect(results.missing).toEqual([]);
 		expect(results.failed).toEqual([]);
 		// Per-request timeout signal is wired through (fix 2).
@@ -255,11 +257,7 @@ describe("waitForTranscripts", () => {
 		const result = await waitForTranscripts(
 			["v1", "v2", "v3"],
 			async (id) => {
-				if (id === "v1")
-					return {
-						transcriptionStatus: "ERROR",
-						transcriptionErrorCode: "QUOTA" as const,
-					};
+				if (id === "v1") return status("ERROR");
 				if (id === "v2") return status(v2Statuses.shift() ?? "COMPLETE");
 				return status("SKIPPED");
 			},
@@ -357,6 +355,116 @@ describe("waitForTranscripts", () => {
 			[2, 2],
 		]);
 	});
+
+	it("treats a HUNG status call as a blip: the per-call timeout retries it next tick (fix 2)", async () => {
+		const clock = makeClock();
+		let hungOnce = false;
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => {
+				if (!hungOnce) {
+					hungOnce = true;
+					// Never resolves — only the per-call timeout can end this poll.
+					return new Promise<never>(() => {});
+				}
+				return status("COMPLETE");
+			},
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+				statusTimeoutMs: 20,
+			},
+		);
+		expect(result).toEqual({ done: ["v1"], givenUp: [] });
+	});
+
+	it("re-checks the overall cap BETWEEN per-id calls: a slow tick cannot overrun it (fix 2)", async () => {
+		let t = 0;
+		const polled: string[] = [];
+		const result = await waitForTranscripts(
+			["v1", "v2", "v3"],
+			async (id) => {
+				polled.push(id);
+				// v1's status call is slow: it burns past the cap while in flight.
+				if (id === "v1") {
+					t += 10_000;
+				}
+				return status("PROCESSING");
+			},
+			{
+				intervalMs: 1000,
+				capMs: 5000,
+				now: () => t,
+				sleep: async (ms) => {
+					t += ms;
+				},
+			},
+		);
+		// After v1's slow call the cap is spent: v2 and v3 must NOT be polled.
+		expect(polled).toEqual(["v1"]);
+		expect(result.done).toEqual([]);
+		expect(result.givenUp.sort()).toEqual(["v1", "v2", "v3"]);
+	});
+
+	it("a STALE terminal answer on the very first poll is not final: the id just started and the row was not reset yet (fix 3)", async () => {
+		const clock = makeClock();
+		// The generate route answered 200 (banked for a running upload) but the
+		// row still says ERROR from the previous attempt; the workflow later
+		// flips it PROCESSING and then COMPLETE.
+		const v1Statuses = ["ERROR", "PROCESSING", "COMPLETE"];
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => status(v1Statuses.shift() ?? "COMPLETE"),
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result).toEqual({ done: ["v1"], givenUp: [] });
+	});
+
+	it("a terminal answer IS final once the id was seen non-terminal (fix 3)", async () => {
+		const clock = makeClock();
+		const v1Statuses = ["PROCESSING", "ERROR"];
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => status(v1Statuses.shift() ?? "ERROR"),
+			{
+				intervalMs: 1000,
+				capMs: 60_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		expect(result).toEqual({ done: [], givenUp: ["v1"] });
+	});
+
+	it("a terminal answer with no non-terminal evidence becomes final after the grace window (fix 3)", async () => {
+		const clock = makeClock();
+		let polls = 0;
+		const result = await waitForTranscripts(
+			["v1"],
+			async () => {
+				polls++;
+				return status("ERROR");
+			},
+			{
+				intervalMs: 1000,
+				// The cap must sit ABOVE the grace window so the grace, not the
+				// cap, is what ends the wait.
+				capMs: 300_000,
+				now: clock.now,
+				sleep: clock.sleep,
+			},
+		);
+		// Polls at t=0, 1000, … — the first poll at t >= 120_000 gives up.
+		expect(result).toEqual({ done: [], givenUp: ["v1"] });
+		expect(polls).toBe(121);
+	});
 });
 
 describe("buildBulkTranscriptZip", () => {
@@ -366,8 +474,8 @@ describe("buildBulkTranscriptZip", () => {
 	it("renames a video literally called transkript-yoq when the note is written (fix 4)", async () => {
 		const blob = await buildBulkTranscriptZip({
 			files: [
-				{ name: "transkript-yoq", text: "VIDEO TEXT" },
-				{ name: "Ikkinchi", text: "B" },
+				{ id: "v1", name: "transkript-yoq", text: "VIDEO TEXT" },
+				{ id: "v2", name: "Ikkinchi", text: "B" },
 			],
 			missing: ["Yo'q video"],
 			failed: [],
@@ -386,7 +494,7 @@ describe("buildBulkTranscriptZip", () => {
 
 	it("keeps the plain transkript-yoq.txt name when no note is written", async () => {
 		const blob = await buildBulkTranscriptZip({
-			files: [{ name: "transkript-yoq", text: "VIDEO TEXT" }],
+			files: [{ id: "v1", name: "transkript-yoq", text: "VIDEO TEXT" }],
 			missing: [],
 			failed: [],
 		});
