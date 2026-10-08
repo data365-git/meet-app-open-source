@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
 	applyHermesAck,
 	buildHermesMeetingFileName,
-	checkHermesQueueToken,
 	isInMeetingsLibrary,
 	validateHermesClientFields,
 } from "@/lib/hermes-meeting";
+import { checkHermesQueueToken } from "@/lib/hermes-queue-token";
 
 // ADR 2026-10-08: meeting recordings go to the Hermes CRM folder on the Mac.
 // The Mac PULLS them: data365 keeps a token-protected queue, the Mac polls it

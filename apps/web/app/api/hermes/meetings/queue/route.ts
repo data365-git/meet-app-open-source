@@ -6,8 +6,8 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import {
 	buildHermesMeetingFileName,
-	checkHermesQueueToken,
 } from "@/lib/hermes-meeting";
+import { checkHermesQueueToken } from "@/lib/hermes-queue-token";
 import { fetchVideoTranscriptText } from "@/lib/transcript-text";
 import { patchVideoMetadata } from "@/lib/video-metadata";
 

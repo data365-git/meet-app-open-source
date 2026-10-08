@@ -4,7 +4,8 @@ import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { applyHermesAck, checkHermesQueueToken } from "@/lib/hermes-meeting";
+import { applyHermesAck } from "@/lib/hermes-meeting";
+import { checkHermesQueueToken } from "@/lib/hermes-queue-token";
 import { patchVideoMetadata } from "@/lib/video-metadata";
 
 export const dynamic = "force-dynamic";
