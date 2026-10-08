@@ -250,7 +250,7 @@ export interface VideoMetadata {
 	 * delivered. Absent = never asked (the dialog may auto-open for admins).
 	 */
 	hermes?: {
-		status: "declined" | "queued" | "delivered";
+		status: "declined" | "queued" | "delivered" | "failed";
 		/** Typed by the admin in the dialog (only while queued/delivered). */
 		clientName?: string;
 		company?: string;
@@ -258,6 +258,9 @@ export interface VideoMetadata {
 		deliveredAt?: string;
 		/** The file name the Mac actually wrote (ack body), for the ✓ mark. */
 		fileName?: string;
+		/** Why a queued delivery failed — set by the queue route, so the row
+		 * leaves the oldest-20 pull window instead of blocking it forever. */
+		failedReason?: string;
 	};
 }
 

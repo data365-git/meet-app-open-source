@@ -7,9 +7,9 @@ import type { NextRequest } from "next/server";
 import {
 	buildHermesMeetingFileName,
 	checkHermesQueueToken,
-	selectHermesQueueItems,
 } from "@/lib/hermes-meeting";
 import { fetchVideoTranscriptText } from "@/lib/transcript-text";
+import { patchVideoMetadata } from "@/lib/video-metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -58,23 +58,49 @@ export async function GET(request: NextRequest) {
 			.limit(20);
 
 		const items: Array<{ id: string; fileName: string; text: string }> = [];
-		for (const row of selectHermesQueueItems(rows, 20)) {
-			const metadata = (row.metadata as VideoMetadata) || {};
-			const hermes = metadata.hermes;
-			if (!hermes || hermes.status !== "queued") continue;
+		for (const row of rows) {
+			// One bad row never fails the whole response — the puller gets the
+			// rest and retries this one on the next poll.
+			try {
+				const metadata = (row.metadata as VideoMetadata) || {};
+				const hermes = metadata.hermes;
+				// Type narrowing only: the SQL WHERE already guarantees
+				// queued + COMPLETE for every row here, so no status re-check.
+				if (!hermes) continue;
 
-			const text = await fetchVideoTranscriptText(row);
-			if (text === null) continue;
+				const text = await fetchVideoTranscriptText(row);
+				if (text === null) {
+					// COMPLETE but the stored transcript is gone (storage
+					// missing). Mark it failed so it leaves the oldest-20
+					// window instead of blocking it forever — an admin sees
+					// the honest error and can re-queue with a retry.
+					await patchVideoMetadata(row.id, (cur) =>
+						cur.hermes?.status === "queued"
+							? {
+									...cur,
+									hermes: {
+										...cur.hermes,
+										status: "failed",
+										failedReason: "transcript_missing",
+									},
+								}
+							: cur,
+					);
+					continue;
+				}
 
-			items.push({
-				id: row.id,
-				fileName: buildHermesMeetingFileName({
-					clientName: hermes.clientName ?? "",
-					company: hermes.company ?? "",
-					recordedAt: metadata.customCreatedAt ?? row.createdAt,
-				}),
-				text,
-			});
+				items.push({
+					id: row.id,
+					fileName: buildHermesMeetingFileName({
+						clientName: hermes.clientName ?? "",
+						company: hermes.company ?? "",
+						recordedAt: metadata.customCreatedAt ?? row.createdAt,
+					}),
+					text,
+				});
+			} catch (rowError) {
+				console.error("[hermes-queue] row failed:", row.id, rowError);
+			}
 		}
 
 		return Response.json(items, {

@@ -55,16 +55,15 @@ async function loadVideoForHermes(videoId: string) {
 }
 
 /**
- * Admin rule (ADR: "admins only"): the video owner, or an owner/admin of the
- * organization that owns the video — the same shape the generate route
- * enforces. Returns an error string instead of throwing so the dialog can
- * show it.
+ * Admin rule (ADR: "admins only"): ONLY an owner/admin of the organization
+ * that owns the video may answer the dialog or call these actions — the video
+ * owner who is not an org admin gets the same refusal as anyone else.
+ * Returns an error string instead of throwing so the dialog can show it.
  */
 async function hermesPermissionError(
 	userId: string,
 	video: { ownerId: string; orgId: string | null },
 ): Promise<string | null> {
-	if (userId === video.ownerId) return null;
 	if (!video.orgId) return "Faqat adminlar uchun";
 
 	const [orgAccess] = await db()
@@ -135,10 +134,24 @@ export async function declineHermesMeeting(
 			};
 		}
 
-		const next = await patchVideoMetadata(videoId, (cur) => ({
-			...cur,
-			hermes: { status: "declined" },
-		}));
+		// Race guard: the status can change between the read above and the
+		// locked write below (another admin queues it). Re-check INSIDE the
+		// updater; on a race the row is left unchanged and we answer the
+		// "allaqachon" error instead of clobbering the queue entry.
+		let racedWithQueue = false;
+		const next = await patchVideoMetadata(videoId, (cur) => {
+			if (cur.hermes?.status === "queued" || cur.hermes?.status === "delivered") {
+				racedWithQueue = true;
+				return cur;
+			}
+			return { ...cur, hermes: { status: "declined" } };
+		});
+		if (racedWithQueue) {
+			return {
+				success: false,
+				error: "Bu video allaqachon Hermesga yuborilgan",
+			};
+		}
 
 		revalidatePath(`/s/${videoId}`);
 		return { success: true, hermes: next.hermes };
@@ -219,7 +232,10 @@ export async function queueHermesMeeting(
 				// Same one-shot banked order the generate route writes in
 				// transcript mode: server-side JSON_SET/JSON_REMOVE so nothing
 				// read before the lock is written back stale. Hermes wants the
-				// transcript ONLY — never bank an AI-generation request.
+				// transcript ONLY — never bank an AI-generation request. The
+				// WHERE keeps it one-shot and polite: if someone else's banked
+				// order is already waiting on the upload (a pending FULL-AI
+				// run), it is NOT downgraded to transcript-only.
 				const now = new Date().toISOString();
 				await db()
 					.update(videos)
@@ -234,20 +250,49 @@ export async function queueHermesMeeting(
 							'$.aiGenerationRequestedAt'
 						)`,
 					})
-					.where(eq(videos.id, video.id));
+					.where(
+						and(
+							eq(videos.id, video.id),
+							sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiStartPendingUpload') IS NULL`,
+						),
+					);
 			}
 		}
 
 		const queuedAt = new Date().toISOString();
-		const next = await patchVideoMetadata(videoId, (cur) => ({
-			...cur,
-			hermes: {
-				status: "queued",
-				clientName: fields.clientName,
-				company: fields.company,
-				queuedAt,
-			},
-		}));
+		// Race guard, same shape as decline: re-check the status INSIDE the
+		// locked updater. delivered -> unchanged + error; queued -> unchanged
+		// + idempotent success (the FIRST queuer's queuedAt and fields stay).
+		let raced: "delivered" | "queued" | null = null;
+		const next = await patchVideoMetadata(videoId, (cur) => {
+			if (cur.hermes?.status === "delivered") {
+				raced = "delivered";
+				return cur;
+			}
+			if (cur.hermes?.status === "queued") {
+				raced = "queued";
+				return cur;
+			}
+			return {
+				...cur,
+				hermes: {
+					status: "queued",
+					clientName: fields.clientName,
+					company: fields.company,
+					queuedAt,
+				},
+			};
+		});
+		if (raced === "delivered") {
+			return {
+				success: false,
+				error: "Bu video Hermesga allaqachon joylangan",
+			};
+		}
+		if (raced === "queued") {
+			revalidatePath(`/s/${videoId}`);
+			return { success: true, hermes: next.hermes };
+		}
 
 		revalidatePath(`/s/${videoId}`);
 		return { success: true, hermes: next.hermes };

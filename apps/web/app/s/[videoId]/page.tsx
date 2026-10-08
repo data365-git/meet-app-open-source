@@ -459,6 +459,48 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	);
 }
 
+/**
+ * THE role query shared by every admin-shaped gate on this page (canGenerate,
+ * the Hermes dialog) — one copy, not one per gate. True only for an
+ * owner/admin of the organization that owns the video.
+ */
+async function isOrgOwnerOrAdmin(
+	userId: string,
+	orgId: string,
+): Promise<boolean> {
+	const [orgAccess] = await db()
+		.select({
+			ownerId: organizations.ownerId,
+			memberRole: organizationMembers.role,
+		})
+		.from(organizations)
+		.leftJoin(
+			organizationMembers,
+			and(
+				eq(organizationMembers.organizationId, organizations.id),
+				eq(
+					organizationMembers.userId,
+					userId as typeof organizationMembers.$inferSelect.userId,
+				),
+			),
+		)
+		.where(
+			and(
+				eq(organizations.id, orgId as typeof organizations.$inferSelect.id),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(1);
+
+	if (!orgAccess) return false;
+	const role = getEffectiveOrganizationRole({
+		userId,
+		ownerId: orgAccess.ownerId,
+		memberRole: orgAccess.memberRole,
+	});
+	return role === "owner" || role === "admin";
+}
+
 async function AuthorizedContent({
 	video,
 	searchParams,
@@ -805,75 +847,17 @@ async function AuthorizedContent({
 		if (!userId) return false;
 		if (userId === video.owner.id) return true;
 		if (!video.orgId) return false;
-
-		const [orgAccess] = await db()
-			.select({
-				ownerId: organizations.ownerId,
-				memberRole: organizationMembers.role,
-			})
-			.from(organizations)
-			.leftJoin(
-				organizationMembers,
-				and(
-					eq(organizationMembers.organizationId, organizations.id),
-					eq(organizationMembers.userId, userId),
-				),
-			)
-			.where(
-				and(
-					eq(organizations.id, video.orgId),
-					isNull(organizations.tombstoneAt),
-				),
-			)
-			.limit(1);
-
-		if (!orgAccess) return false;
-		const role = getEffectiveOrganizationRole({
-			userId,
-			ownerId: orgAccess.ownerId,
-			memberRole: orgAccess.memberRole,
-		});
-		return role === "owner" || role === "admin";
+		return isOrgOwnerOrAdmin(userId, video.orgId);
 	})();
 
 	// Hermes CRM delivery (ADR 2026-10-08): the "Bu meetingmi? Hermesga
-	// joylaymi?" dialog is for ADMINS viewing a MEETINGS-library video only —
-	// the same admin shape as canGenerate above (without the AI-permission
-	// gate: declining costs nothing). The server actions re-check both rules;
-	// this gate only keeps the UI off everyone else's page.
+	// joylaymi?" dialog is for ADMINS of the owning org viewing a
+	// MEETINGS-library video ONLY — no video-owner exception (the ADR says
+	// admins only; the server actions re-check the same rule). This gate only
+	// keeps the UI off everyone else's page.
 	const canManageHermes = await (async () => {
-		if (!userId) return false;
-		if (userId === video.owner.id) return true;
-		if (!video.orgId) return false;
-
-		const [orgAccess] = await db()
-			.select({
-				ownerId: organizations.ownerId,
-				memberRole: organizationMembers.role,
-			})
-			.from(organizations)
-			.leftJoin(
-				organizationMembers,
-				and(
-					eq(organizationMembers.organizationId, organizations.id),
-					eq(organizationMembers.userId, userId),
-				),
-			)
-			.where(
-				and(
-					eq(organizations.id, video.orgId),
-					isNull(organizations.tombstoneAt),
-				),
-			)
-			.limit(1);
-
-		if (!orgAccess) return false;
-		const role = getEffectiveOrganizationRole({
-			userId,
-			ownerId: orgAccess.ownerId,
-			memberRole: orgAccess.memberRole,
-		});
-		return role === "owner" || role === "admin";
+		if (!userId || !video.orgId) return false;
+		return isOrgOwnerOrAdmin(userId, video.orgId);
 	})();
 
 	const hermesEligible =
@@ -951,7 +935,11 @@ async function AuthorizedContent({
 			/>
 
 			{hermesEligible ? (
-				<HermesMeeting videoId={videoId} initialHermes={metadata.hermes ?? null} />
+				<HermesMeeting
+					videoId={videoId}
+					initialHermes={metadata.hermes ?? null}
+					transcriptionStatus={video.transcriptionStatus}
+				/>
 			) : null}
 
 			<Share

@@ -5,26 +5,32 @@ import {
 	declineHermesMeeting,
 	queueHermesMeeting,
 } from "@/actions/videos/hermes-meeting";
-import type { HermesMeetingState } from "@/lib/hermes-meeting";
+import {
+	HERMES_CLIENT_FIELD_MAX_LENGTH,
+	type HermesMeetingState,
+} from "@/lib/hermes-meeting";
 
 /**
  * "Bu meetingmi? Hermesga joylaymi?" (ADR 2026-10-08, part A).
  *
- * Rendered ONLY for admins viewing a Meetings-library video (the server page
- * gates that); the actions re-check both rules server-side. The dialog
- * auto-opens exactly once — the very first answer (Ha or Yo'q) persists in
- * metadata.hermes, and after that the small "Hermesga joylash" button is the
- * only way back in.
+ * Rendered ONLY for org admins viewing a Meetings-library video (the server
+ * page gates that); the actions re-check both rules server-side. The dialog
+ * auto-opens until the first recorded answer: "Ha" queues, "Yo'q" records the
+ * decline (it never auto-opens again), and "Keyinroq" just closes — nothing
+ * is recorded, so the dialog may show again on the next visit.
  */
 
-const MAX_FIELD_LENGTH = 60;
+/** Terminal transcription states: the transcript will never land. */
+const TRANSCRIPT_FAILED = new Set(["ERROR", "NO_AUDIO", "SKIPPED"]);
 
 export function HermesMeeting({
 	videoId,
 	initialHermes,
+	transcriptionStatus,
 }: {
 	videoId: string;
 	initialHermes: HermesMeetingState | null;
+	transcriptionStatus: string | null;
 }) {
 	const [hermes, setHermes] = useState<HermesMeetingState | null>(
 		initialHermes,
@@ -38,8 +44,8 @@ export function HermesMeeting({
 	const fieldsValid =
 		clientName.trim().length > 0 &&
 		company.trim().length > 0 &&
-		clientName.trim().length <= MAX_FIELD_LENGTH &&
-		company.trim().length <= MAX_FIELD_LENGTH;
+		clientName.trim().length <= HERMES_CLIENT_FIELD_MAX_LENGTH &&
+		company.trim().length <= HERMES_CLIENT_FIELD_MAX_LENGTH;
 
 	async function onDecline() {
 		setBusy(true);
@@ -67,7 +73,42 @@ export function HermesMeeting({
 		}
 	}
 
+	/** Re-queue a failed delivery with the fields the first attempt stored. */
+	async function onRetry() {
+		if (!hermes?.clientName || !hermes?.company) {
+			// Nothing usable stored — fall back to the dialog for new input.
+			setClientName(hermes?.clientName ?? "");
+			setCompany(hermes?.company ?? "");
+			setError(null);
+			setDialogOpen(true);
+			return;
+		}
+		setBusy(true);
+		setError(null);
+		const result = await queueHermesMeeting(
+			videoId,
+			hermes.clientName,
+			hermes.company,
+		);
+		setBusy(false);
+		if (result.success) {
+			setHermes(result.hermes ?? null);
+		} else {
+			setError(result.error);
+		}
+	}
+
 	if (hermes?.status === "queued") {
+		if (
+			transcriptionStatus &&
+			TRANSCRIPT_FAILED.has(transcriptionStatus)
+		) {
+			return (
+				<div className="text-xs text-red-500 my-2">
+					Transkript qilib bo&apos;lmadi - Hermesga yuborilmadi
+				</div>
+			);
+		}
 		return (
 			<div className="text-xs text-gray-10 dark:text-dark-gray-10 my-2">
 				Hermesga navbatda (transkript tayyorlanmoqda)
@@ -79,6 +120,27 @@ export function HermesMeeting({
 		return (
 			<div className="text-xs text-green-600 my-2">
 				Hermesga joylandi ✓ {hermes.fileName ?? ""}
+			</div>
+		);
+	}
+
+	if (hermes?.status === "failed") {
+		return (
+			<div className="my-2 flex items-center gap-2">
+				<span className="text-xs text-red-500">
+					Hermesga yuborib bo&apos;lmadi
+				</span>
+				{error ? (
+					<span className="text-xs text-red-500">{error}</span>
+				) : null}
+				<button
+					type="button"
+					className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-10 hover:bg-gray-100 dark:border-dark-gray-200 dark:text-dark-gray-10 dark:hover:bg-gray-300/20"
+					onClick={onRetry}
+					disabled={busy}
+				>
+					Qayta urinish
+				</button>
 			</div>
 		);
 	}
@@ -102,7 +164,7 @@ export function HermesMeeting({
 								className="mt-1 mb-3 w-full rounded-md border border-gray-200 bg-transparent px-2 py-1 text-sm dark:border-dark-gray-200"
 								value={clientName}
 								onChange={(e) => setClientName(e.target.value)}
-								maxLength={MAX_FIELD_LENGTH}
+								maxLength={HERMES_CLIENT_FIELD_MAX_LENGTH}
 								disabled={busy}
 							/>
 						</label>
@@ -112,7 +174,7 @@ export function HermesMeeting({
 								className="mt-1 mb-3 w-full rounded-md border border-gray-200 bg-transparent px-2 py-1 text-sm dark:border-dark-gray-200"
 								value={company}
 								onChange={(e) => setCompany(e.target.value)}
-								maxLength={MAX_FIELD_LENGTH}
+								maxLength={HERMES_CLIENT_FIELD_MAX_LENGTH}
 								disabled={busy}
 							/>
 						</label>
@@ -120,6 +182,14 @@ export function HermesMeeting({
 							<p className="mb-2 text-xs text-red-500">{error}</p>
 						) : null}
 						<div className="flex justify-end gap-2">
+							<button
+								type="button"
+								className="rounded-md px-3 py-1.5 text-sm text-gray-10 hover:bg-gray-100 dark:text-dark-gray-10 dark:hover:bg-gray-300/20"
+								onClick={() => setDialogOpen(false)}
+								disabled={busy}
+							>
+								Keyinroq
+							</button>
 							<button
 								type="button"
 								className="rounded-md px-3 py-1.5 text-sm text-gray-10 hover:bg-gray-100 dark:text-dark-gray-10 dark:hover:bg-gray-300/20"

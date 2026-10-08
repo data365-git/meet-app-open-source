@@ -5,7 +5,6 @@ import {
 	buildHermesMeetingFileName,
 	checkHermesQueueToken,
 	isInMeetingsLibrary,
-	selectHermesQueueItems,
 	validateHermesClientFields,
 } from "@/lib/hermes-meeting";
 
@@ -86,6 +85,28 @@ describe("buildHermesMeetingFileName", () => {
 		).toBe("2026-10-08_ABCDEFGHIJ_Kompaniya_meet.txt");
 	});
 
+	it("strips backslashes too (Windows path separator)", () => {
+		expect(
+			buildHermesMeetingFileName({
+				clientName: "A\\BC",
+				company: "Kompaniya",
+				recordedAt: "2026-10-08T05:00:00.000Z",
+			}),
+		).toBe("2026-10-08_ABC_Kompaniya_meet.txt");
+	});
+
+	it("strips trailing dots AFTER the trailing underscore/space removal", () => {
+		// "A. " -> "A._" after the space swap -> the trailing dot must not
+		// survive behind the stripped underscore (Windows dislikes it).
+		expect(
+			buildHermesMeetingFileName({
+				clientName: "A. ",
+				company: "Kompaniya",
+				recordedAt: "2026-10-08T05:00:00.000Z",
+			}),
+		).toBe("2026-10-08_A_Kompaniya_meet.txt");
+	});
+
 	it("keeps Uzbek/Cyrillic letters readable", () => {
 		expect(
 			buildHermesMeetingFileName({
@@ -149,33 +170,6 @@ describe("checkHermesQueueToken", () => {
 	});
 });
 
-describe("selectHermesQueueItems", () => {
-	it("keeps only queued items whose transcription is COMPLETE", () => {
-		const rows = [
-			{ id: "1", transcriptionStatus: "COMPLETE", metadata: QUEUED_META() },
-			{ id: "2", transcriptionStatus: "PROCESSING", metadata: QUEUED_META() },
-			{
-				id: "3",
-				transcriptionStatus: "COMPLETE",
-				metadata: { hermes: { status: "delivered" as const } },
-			},
-			{ id: "4", transcriptionStatus: "COMPLETE", metadata: null },
-			{ id: "5", transcriptionStatus: null, metadata: QUEUED_META() },
-			{ id: "6", transcriptionStatus: "ERROR", metadata: QUEUED_META() },
-		];
-		expect(selectHermesQueueItems(rows).map((r) => r.id)).toEqual(["1"]);
-	});
-
-	it("caps the result at 20 items", () => {
-		const rows = Array.from({ length: 25 }, (_, i) => ({
-			id: String(i),
-			transcriptionStatus: "COMPLETE" as const,
-			metadata: QUEUED_META(),
-		}));
-		expect(selectHermesQueueItems(rows)).toHaveLength(20);
-	});
-});
-
 describe("applyHermesAck", () => {
 	it("marks the video delivered with the Mac-side fileName", () => {
 		const next = applyHermesAck(
@@ -199,6 +193,13 @@ describe("applyHermesAck", () => {
 		);
 		const again = applyHermesAck(first, "a.txt", "2026-10-10T09:00:00.000Z");
 		expect(again).toEqual(first);
+	});
+
+	it("leaves anything but queued unchanged (a declined video is never delivered)", () => {
+		const declined: VideoMetadata = { hermes: { status: "declined" } };
+		expect(
+			applyHermesAck(declined, "a.txt", "2026-10-09T06:00:00.000Z"),
+		).toEqual(declined);
 	});
 });
 

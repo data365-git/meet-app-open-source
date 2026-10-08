@@ -7,9 +7,10 @@ import type { VideoMetadata } from "@cap/database/types";
  * The Mac-side puller polls GET /api/hermes/meetings/queue with a shared
  * secret, writes `YYYY-MM-DD_<clientName>_<company>_meet.txt` into
  * ~/.hermes/crm-agent/data/meetings/ and POSTs an ack. Everything here is
- * pure: no DB, no env, no clock reads — the routes and server actions pass
- * everything in, so the contract (file name, token gate, selection, ack) is
- * unit-testable without a database.
+ * pure: no DB, no env — the routes and server actions pass everything in, so
+ * the contract (file name, token gate, selection, ack) is unit-testable
+ * without a database. The one clock read is buildHermesMeetingFileName's
+ * invalid-date fallback to "now".
  */
 
 export type HermesMeetingState = NonNullable<VideoMetadata["hermes"]>;
@@ -38,12 +39,13 @@ export function validateHermesClientFields(
 /**
  * Characters a file name must not contain on macOS (/:) or Windows
  * (\ / : * ? " < > | plus C0 control chars). Windows also dislikes leading
- * dots and trailing dots/spaces — both are stripped after the swap.
+ * dots and trailing dots/spaces — leading dots are stripped in the swap,
+ * trailing dot/underscore runs after it.
  */
 // \p{Cc} = Unicode control characters (the C0 range + DEL) — exactly what a
 // Windows file name must not contain, written as a property escape so no
 // literal control character appears in the source.
-const ILLEGAL_FILENAME_CHARS = /[\p{Cc}/:"*?<>|]/gu;
+const ILLEGAL_FILENAME_CHARS = /[\p{Cc}\\/:*?"<>|]/gu;
 
 function sanitizeNamePart(raw: string): string {
 	return raw
@@ -53,7 +55,10 @@ function sanitizeNamePart(raw: string): string {
 			// Strip leading/trailing dot runs; keep interior dots ("A. Co").
 			i === 0 || i + dots.length === whole.length ? "" : dots,
 		)
-		.replace(/_+$/, "");
+		// Strip the trailing run AFTER the space->underscore swap, so a
+		// trailing dot hiding behind a stripped trailing space/underscore
+		// ("A. " -> "A._") cannot survive ("A").
+		.replace(/[._]+$/, "");
 }
 
 /** Asia/Tashkent calendar date as YYYY-MM-DD (Tashkent is UTC+5, no DST). */
@@ -112,38 +117,18 @@ export function checkHermesQueueToken(
 	return timingSafeEqual(a, b) ? { ok: true } : { ok: false, status: 401 };
 }
 
-/** Queue selection predicate: queued for Hermes AND transcript COMPLETE. */
-export function isHermesQueueEligible(row: {
-	transcriptionStatus: string | null;
-	metadata: VideoMetadata | null;
-}): boolean {
-	return (
-		row.transcriptionStatus === "COMPLETE" &&
-		row.metadata?.hermes?.status === "queued"
-	);
-}
-
-/** Pure slice of GET /queue: only queued+COMPLETE rows, at most `max`. */
-export function selectHermesQueueItems<
-	T extends {
-		transcriptionStatus: string | null;
-		metadata: VideoMetadata | null;
-	},
->(rows: T[], max = 20): T[] {
-	return rows.filter(isHermesQueueEligible).slice(0, max);
-}
-
 /**
- * Pure slice of POST /ack: queued -> delivered with the file name the Mac
- * actually used. Idempotent — an already-delivered row comes back unchanged
- * (the route answers success without rewriting deliveredAt).
+ * Pure slice of POST /ack: ONLY queued -> delivered with the file name the Mac
+ * actually used. Anything else (a re-acked delivered row, a declined or failed
+ * one) comes back unchanged — the route answers 404 for the non-delivered
+ * cases instead of resurrecting them.
  */
 export function applyHermesAck(
 	current: VideoMetadata,
 	fileName: string,
 	now: string,
 ): VideoMetadata {
-	if (current.hermes?.status === "delivered") return current;
+	if (current.hermes?.status !== "queued") return current;
 	return {
 		...current,
 		hermes: {
@@ -155,15 +140,13 @@ export function applyHermesAck(
 	};
 }
 
-type LibraryKindLike = string | null;
-
 /**
  * Same rule as `libraryKindMeetingFilter` in lib/dashboard-data.ts, evaluated
  * in JS on a row already fetched: trust `libraryKind` when set; when NULL fall
  * back to the captured-as-meeting predicate on the immutable `source` JSON.
  */
 export function isInMeetingsLibrary(video: {
-	libraryKind: LibraryKindLike;
+	libraryKind: string | null;
 	source: unknown;
 }): boolean {
 	if (video.libraryKind === "meeting") return true;

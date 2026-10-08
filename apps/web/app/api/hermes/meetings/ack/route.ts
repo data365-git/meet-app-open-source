@@ -70,11 +70,19 @@ export async function POST(request: NextRequest) {
 		}
 
 		// Idempotent path: already delivered, and applyHermesAck is a no-op on
-		// delivered rows, so deliveredAt/fileName stay as the first ack wrote
-		// them.
-		await patchVideoMetadata(video.id, (current) =>
-			applyHermesAck(current, fileName, new Date().toISOString()),
-		);
+		// anything but queued, so deliveredAt/fileName stay as the first ack
+		// wrote them. The status is re-checked INSIDE the locked updater: if
+		// the row was anything else by then (declined, failed, un-queued), the
+		// write leaves it unchanged and we answer 404.
+		let sawQueued = false;
+		const next = await patchVideoMetadata(video.id, (current) => {
+			if (current.hermes?.status !== "queued") return current;
+			sawQueued = true;
+			return applyHermesAck(current, fileName, new Date().toISOString());
+		});
+		if (!sawQueued && next.hermes?.status !== "delivered") {
+			return new Response("Not found", { status: 404 });
+		}
 
 		return Response.json(
 			{ ok: true },
