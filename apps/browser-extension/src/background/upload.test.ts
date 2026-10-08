@@ -1761,6 +1761,237 @@ describe("moveToDeadLetter drain guard (fix #2b: dead-lettering an old item must
 	});
 });
 
+// ── Meeting auto-open: a MEETING upload that lands "complete" opens the
+// video page (<apiBaseUrl>/s/<videoId>) in a new ACTIVE tab by itself, exactly
+// once per videoId. Instruction recordings never open anything. A failure to
+// open a tab must never change the upload outcome.
+
+describe("meeting auto-open on upload completion", () => {
+	function createTabsSpy(throws = false) {
+		const created: Array<{ url?: string; active?: boolean }> = [];
+		return {
+			created,
+			tabs: {
+				query: async () => [],
+				sendMessage: async () => undefined,
+				create: async (opts: { url?: string; active?: boolean }) => {
+					if (throws) throw new Error("tabs.create denied");
+					created.push(opts);
+					return { id: 1 };
+				},
+			},
+		};
+	}
+
+	async function runMeetingFinalize(opts: {
+		mode: "instruction" | "meeting";
+		meetingRequired?: boolean;
+		videoId: string;
+		tabsThrows?: boolean;
+	}) {
+		const tabsSpy = createTabsSpy(opts.tabsThrows ?? false);
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: tabsSpy.tabs,
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+
+		const { handleChunk, finalizeUpload } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+		await setState({
+			kind: "recording",
+			mode: opts.mode,
+			videoId: opts.videoId,
+			uploadId: `upload-${opts.videoId}`,
+			startedAt: Date.now(),
+			parts: [],
+			nextPartNumber: 1,
+			totalBytes: 0,
+			uploadedBytes: 0,
+			mime: "video/webm",
+			paused: false,
+			...(opts.meetingRequired !== undefined
+				? { meetingRequired: opts.meetingRequired }
+				: {}),
+		});
+
+		const chunk = new Uint8Array(20_000);
+		await handleChunk(chunk.buffer as ArrayBuffer, 0, "video/webm");
+
+		vi.stubGlobal("fetch", createFakeFetch(() => undefined));
+		await finalizeUpload();
+
+		return { tabsSpy, getState };
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("a meeting (mode 'meeting') upload completing opens the share page in a new ACTIVE tab, once", async () => {
+		const { tabsSpy, getState } = await runMeetingFinalize({
+			mode: "meeting",
+			videoId: "vid-open-meeting",
+		});
+
+		expect(tabsSpy.created).toHaveLength(1);
+		expect(tabsSpy.created[0].url).toContain("/s/vid-open-meeting");
+		expect(tabsSpy.created[0].active).toBe(true);
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+	});
+
+	it("a guaranteed full-screen meeting (mode 'instruction' + meetingRequired) opens too", async () => {
+		const { tabsSpy } = await runMeetingFinalize({
+			mode: "instruction",
+			meetingRequired: true,
+			videoId: "vid-open-guaranteed",
+		});
+
+		expect(tabsSpy.created).toHaveLength(1);
+		expect(tabsSpy.created[0].url).toContain("/s/vid-open-guaranteed");
+		expect(tabsSpy.created[0].active).toBe(true);
+	});
+
+	it("a plain instruction recording does NOT open anything", async () => {
+		const { tabsSpy, getState } = await runMeetingFinalize({
+			mode: "instruction",
+			videoId: "vid-open-instruction",
+		});
+
+		expect(tabsSpy.created).toHaveLength(0);
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+	});
+
+	it("the same videoId completing twice (resume/retry) opens only ONCE", async () => {
+		const tabsSpy = createTabsSpy();
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: tabsSpy.tabs,
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+
+		const { finalizeUpload } = await import("./upload");
+		const { setState, setSettings } = await import("./state");
+		const { DEFAULT_API_BASE_URL } = await import("../shared/config");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// Simulate the second completion of the SAME video: a persisted
+		// "uploading" state whose isMeeting flag was carried over (this is the
+		// shape a resumed finalize / drained retry sees).
+		await setState({
+			kind: "uploading",
+			videoId: "vid-open-once",
+			uploadId: "upload-open-once",
+			parts: [{ PartNumber: 1, ETag: "etag-1" }],
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			isMeeting: true,
+		});
+
+		// First completion: open + persist the marker.
+		vi.stubGlobal("fetch", createFakeFetch(() => undefined));
+		await finalizeUpload();
+		expect(tabsSpy.created).toHaveLength(1);
+
+		// Second completion of the SAME videoId (e.g. a second drain/resume):
+		// the persisted marker must suppress a second tab.
+		await setState({
+			kind: "uploading",
+			videoId: "vid-open-once",
+			uploadId: "upload-open-once",
+			parts: [{ PartNumber: 1, ETag: "etag-1" }],
+			totalBytes: MIN_PART_SIZE,
+			uploadedBytes: MIN_PART_SIZE,
+			isMeeting: true,
+		});
+		await finalizeUpload();
+
+		expect(tabsSpy.created).toHaveLength(1);
+		expect(tabsSpy.created[0].url).toBe(
+			`${DEFAULT_API_BASE_URL}/s/vid-open-once`,
+		);
+	});
+
+	it("a drained completion of a meeting whose live state is 'error' (payload isMeeting true) opens once", async () => {
+		const tabsSpy = createTabsSpy();
+		vi.stubGlobal("chrome", {
+			storage: { local: createFakeChromeStorage() },
+			runtime: { sendMessage: async () => undefined },
+			tabs: tabsSpy.tabs,
+			notifications: { create: () => undefined },
+			alarms: { create: () => undefined, clear: () => undefined },
+		});
+
+		const { retryPendingUploads } = await import("./upload");
+		const { setState, setSettings, getState } = await import("./state");
+
+		await setSettings({ apiKey: "test-key" });
+
+		// The live state is the "error" that the enqueueing path (the legacy
+		// completeMultipart-failure branch) leaves behind right after queueing
+		// the durable "complete". previousVideoId points at our video, so the
+		// drain's stillOurs guard admits it — but "error" carries NO isMeeting;
+		// the payload copy is the only possible source of the flag.
+		await setState({
+			kind: "error",
+			reason: "Upload finalization failed: gated for test",
+			recoverable: true,
+			previousVideoId: "vid-open-error",
+		});
+
+		await chrome.storage.local.set({
+			[RETRY_QUEUE_KEY]: [
+				{
+					kind: "complete",
+					payload: {
+						uploadId: "upload-open-error",
+						videoId: "vid-open-error",
+						parts: [{ partNumber: 1, etag: "etag-1", size: 0 }],
+						isMeeting: true,
+					},
+					attempts: 0,
+					nextRetryAt: Date.now() - 1000,
+				},
+			],
+		});
+
+		vi.stubGlobal("fetch", createFakeFetch(() => undefined));
+		await retryPendingUploads();
+
+		expect(tabsSpy.created).toHaveLength(1);
+		expect(tabsSpy.created[0].url).toContain("/s/vid-open-error");
+		expect(tabsSpy.created[0].active).toBe(true);
+
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+	});
+
+	it("a throwing chrome.tabs.create never changes the upload outcome (state still 'complete')", async () => {
+		const { tabsSpy, getState } = await runMeetingFinalize({
+			mode: "meeting",
+			videoId: "vid-open-throws",
+			tabsThrows: true,
+		});
+
+		expect(tabsSpy.created).toHaveLength(0);
+		const finalState = await getState();
+		expect(finalState.kind).toBe("complete");
+		if (finalState.kind === "complete") {
+			expect(finalState.shareUrl).toContain("/s/vid-open-throws");
+		}
+	});
+});
+
 // ── H1: durable bytes sitting in the retry queue must count as "viable" ─────
 // Stopping a recording while offline leaves every full part in the retry queue
 // (durable in chrome.storage.local) with uploadedBytes still 0. If finalize

@@ -1,4 +1,5 @@
 import { createCapApi } from "./api";
+import { isMeetingFiling, maybeAutoOpenMeetingVideo } from "./meeting";
 import type { CompletedPart, ExtensionSettings } from "./state";
 import { getSettings, getState, setState } from "./state";
 
@@ -1073,6 +1074,17 @@ export async function finalizeUpload(
 				)
 			: undefined);
 
+	// Was this upload a MEETING? Computed once here (from the recording state's
+	// mode/meetingRequired via the shared filing rule, or from the isMeeting
+	// flag a recording→uploading transition already persisted) and carried into
+	// every state/retry payload below, so each completion path can decide
+	// whether to auto-open the video page. A persisted pre-0.5.10 "uploading"
+	// state has no flag → false → no auto-open (documented in the spec).
+	const isMeeting =
+		state.kind === "recording"
+			? isMeetingFiling(state.mode, state.meetingRequired)
+			: state.isMeeting === true;
+
 	let parts = [...state.parts];
 	let nextPartNumber =
 		state.kind === "recording"
@@ -1135,6 +1147,7 @@ export async function finalizeUpload(
 			parts,
 			totalBytes,
 			uploadedBytes,
+			isMeeting,
 		});
 	}
 
@@ -1208,6 +1221,8 @@ export async function finalizeUpload(
 					uploadId,
 					videoId,
 					...(durationInSecs !== undefined ? { durationInSecs } : {}),
+					// The drained completion must still know to auto-open.
+					...(isMeeting ? { isMeeting: true } : {}),
 				},
 			});
 			return;
@@ -1252,6 +1267,7 @@ export async function finalizeUpload(
 		uploadId,
 		parts,
 		...(durationInSecs !== undefined ? { durationInSecs } : {}),
+		isMeeting,
 	});
 
 	try {
@@ -1280,6 +1296,9 @@ export async function finalizeUpload(
 					size: 0,
 				})),
 				...(durationInSecs !== undefined ? { durationInSecs } : {}),
+				// The drained completion (which clears this error state via the
+				// stillOurs guard) must still know to auto-open.
+				...(isMeeting ? { isMeeting: true } : {}),
 			},
 		});
 		await setState({
@@ -1303,6 +1322,10 @@ export async function finalizeUpload(
 
 	const shareUrl = `${settings.apiBaseUrl}/s/${videoId}`;
 	await setState({ kind: "complete", videoId, shareUrl });
+	// A finished MEETING opens its video page by itself (at most once per
+	// videoId; never for instructions; a failure here cannot affect the
+	// already-persisted "complete" state).
+	await maybeAutoOpenMeetingVideo(videoId, shareUrl, isMeeting);
 }
 
 /**
@@ -1317,6 +1340,7 @@ export async function resumeInterruptedFinishing(
 	uploadId: string | undefined,
 	parts: CompletedPart[] | undefined,
 	durationInSecs?: number,
+	isMeeting?: boolean,
 ): Promise<boolean> {
 	if (!uploadId || !parts || parts.length === 0) return false;
 
@@ -1331,6 +1355,9 @@ export async function resumeInterruptedFinishing(
 				size: 0,
 			})),
 			...(durationInSecs !== undefined ? { durationInSecs } : {}),
+			// The drained completion must still know to auto-open (undefined for
+			// a pre-0.5.10 persisted "finishing" state → treated as false).
+			...(isMeeting ? { isMeeting: true } : {}),
 		},
 	});
 	return true;
@@ -1432,11 +1459,13 @@ export async function retryPendingUploads(): Promise<void> {
 					videoId,
 					parts: snapshotParts,
 					durationInSecs,
+					isMeeting: payloadIsMeeting,
 				} = item.payload as {
 					uploadId: string;
 					videoId: string;
 					parts?: Array<{ partNumber: number; etag: string; size: number }>;
 					durationInSecs?: number;
+					isMeeting?: boolean;
 				};
 
 				// The P1.6 durable-completion record carries no parts snapshot (it
@@ -1513,11 +1542,19 @@ export async function retryPendingUploads(): Promise<void> {
 						liveState.kind === "error");
 
 				if (stillOurs) {
-					await setState({
-						kind: "complete",
+					const shareUrl = `${settings.apiBaseUrl}/s/${videoId}`;
+					await setState({ kind: "complete", videoId, shareUrl });
+					// Meeting completions auto-open their video page here too
+					// (retry/resume path). The flag comes ONLY from the retry
+					// payload (written at enqueue time): the live state here may
+					// be "error" — the enqueueing path set it right after
+					// queueing — and "error" carries no isMeeting, so the payload
+					// copy is the one load-bearing source.
+					await maybeAutoOpenMeetingVideo(
 						videoId,
-						shareUrl: `${settings.apiBaseUrl}/s/${videoId}`,
-					});
+						shareUrl,
+						payloadIsMeeting === true,
+					);
 				}
 			} else if (item.kind === "recording-complete") {
 				const { videoId } = item.payload as { videoId: string };
