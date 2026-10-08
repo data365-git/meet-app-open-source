@@ -109,8 +109,13 @@ export type BulkTranscriptCap = {
 };
 
 export type BulkTranscriptResults = {
-	/** Successful transcripts in selection order, with raw video names. */
-	files: { name: string; text: string }[];
+	/**
+	 * Successful transcripts in selection order, with raw video names. The
+	 * video id rides along (2026-10-08 review fix 4) so the caller can count
+	 * which WAITED-FOR ids actually landed in the ZIP — names can collide,
+	 * ids cannot.
+	 */
+	files: { id: string; name: string; text: string }[];
 	/** Videos that answered 404 — no transcript (yet). */
 	missing: string[];
 	/** Videos whose fetch failed (other status / network error). */
@@ -153,10 +158,17 @@ export async function fetchBulkTranscripts(
 				// A wrong 200 — a redirect to a login page or an HTML error body —
 				// must never be saved as a .txt transcript.
 				const contentType = res.headers.get("content-type") ?? "";
-				if (res.redirected || !contentType.toLowerCase().startsWith("text/plain")) {
+				if (
+					res.redirected ||
+					!contentType.toLowerCase().startsWith("text/plain")
+				) {
 					results.failed.push(cap.name);
 				} else {
-					results.files.push({ name: cap.name, text: await res.text() });
+					results.files.push({
+						id: cap.id,
+						name: cap.name,
+						text: await res.text(),
+					});
 				}
 			}
 		} catch {
@@ -207,6 +219,196 @@ export function bulkTranscriptZipName(now: Date = new Date()): string {
 	const m = `${now.getMonth() + 1}`.padStart(2, "0");
 	const d = `${now.getDate()}`.padStart(2, "0");
 	return `transkriptlar-${y}-${m}-${d}.zip`;
+}
+
+/**
+ * What `waitForTranscripts` accepts as a status answer. Structurally satisfied
+ * by the `getVideoStatus` server action's `VideoStatusResult` (which always
+ * carries `transcriptionStatus`) and its `{ success: false }` refusal — kept
+ * loose here so the wait loop stays pure and unit-testable without importing
+ * server code.
+ */
+export type TranscriptWaitStatus =
+	| {
+			transcriptionStatus: string | null;
+	  }
+	| { success: false };
+
+export type GetTranscriptStatusFn = (
+	videoId: string,
+) => Promise<TranscriptWaitStatus>;
+
+export type TranscriptWaitOptions = {
+	/** Pause between polls (spec: 15 s). */
+	intervalMs: number;
+	/** Overall give-up ceiling (spec: 45 min) — after it, resolve with partial. */
+	capMs: number;
+	/** Progress for the loading toast: fires after each tick with (done, total). */
+	onTick?: (doneCount: number, total: number) => void;
+	/** Injectable clock (tests). Defaults to Date.now. */
+	now?: () => number;
+	/** Injectable sleep (tests). Defaults to real setTimeout. */
+	sleep?: (ms: number) => Promise<void>;
+	/**
+	 * Per-call ceiling for ONE status poll (2026-10-08 review fix 2, default
+	 * 30 s): a hung `getStatus` is a blip — it counts as "retry next tick",
+	 * never as a hang of the whole wait loop.
+	 */
+	statusTimeoutMs?: number;
+	/**
+	 * How long a terminal answer (ERROR/SKIPPED/NO_AUDIO) is NOT trusted as
+	 * final while the id has never been seen in a non-terminal state
+	 * (2026-10-08 review fix 3, default 120 s): the generate route answers 200
+	 * before every path resets the row (the UPLOAD_IN_PROGRESS bank leaves a
+	 * stale ERROR standing), so the first poll after a start can read a dead
+	 * status that the workflow is about to overwrite.
+	 */
+	staleTerminalGraceMs?: number;
+};
+
+export type TranscriptWaitResult = {
+	/** Ids whose transcription reached COMPLETE, in selection order. */
+	done: string[];
+	/**
+	 * Ids given up on — a terminal transcription error (ERROR incl. the
+	 * hours-long QUOTA retry, SKIPPED, NO_AUDIO) or the cap running out while
+	 * still pending (never started / still processing). The ZIP note names them.
+	 */
+	givenUp: string[];
+};
+
+/**
+ * Terminal transcription states from actions/videos/get-status.ts: once one of
+ * these is set, the transcript will not appear by waiting longer. COMPLETE and
+ * PROCESSING are not in the list; a NULL status means "not started yet" and
+ * also keeps waiting (up to the cap).
+ */
+const TRANSCRIPT_TERMINAL_ERROR_STATUSES = ["ERROR", "SKIPPED", "NO_AUDIO"];
+
+/**
+ * Race ONE status call against a timeout (fix 2). The timer is a REAL
+ * setTimeout (not the injectable `sleep`, which tests use as a fake clock) and
+ * is always cleared when the call wins, so a fast poll leaves no dangling
+ * timer. A timeout rejects — the caller treats it like any other blip.
+ */
+async function raceStatusTimeout(
+	promise: Promise<TranscriptWaitStatus>,
+	timeoutMs: number,
+): Promise<TranscriptWaitStatus> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(
+			() => reject(new Error("transcript status call timed out")),
+			timeoutMs,
+		);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+/**
+ * Wait (spec 2026-10-08) until every given video's transcription is COMPLETE,
+ * polling the status action one video at a time per tick. Never throws:
+ * - COMPLETE -> done
+ * - ERROR (incl. a QUOTA retry, which can take hours, so this flow gives up
+ *   on it), SKIPPED, NO_AUDIO -> given up — but only once the id was SEEN in a
+ *   non-terminal state, or `staleTerminalGraceMs` has passed since the wait
+ *   began (fix 3: the start route can answer 200 before resetting a stale
+ *   terminal row) — others continue
+ * - a status call that throws, times out (`statusTimeoutMs`, fix 2) or
+ *   answers { success: false } -> retried next tick, never fatal
+ * - after `capMs` overall (re-checked BETWEEN per-id calls too, so one slow
+ *   tick cannot overrun the ceiling by more than that call) -> resolve with
+ *   whatever is ready; still-pending ids count as given up so the caller's
+ *   ZIP note names them.
+ */
+export async function waitForTranscripts(
+	ids: string[],
+	getStatus: GetTranscriptStatusFn,
+	options: TranscriptWaitOptions,
+): Promise<TranscriptWaitResult> {
+	const {
+		intervalMs,
+		capMs,
+		onTick,
+		now = () => Date.now(),
+		sleep = (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+		statusTimeoutMs = 30_000,
+		staleTerminalGraceMs = 120_000,
+	} = options;
+
+	const done: string[] = [];
+	const givenUp: string[] = [];
+	// Ids a poll has actually OBSERVED in a non-terminal state (PROCESSING or
+	// null) — the evidence that a later terminal answer is fresh, not stale.
+	const seenNonTerminal = new Set<string>();
+	let pending = [...ids];
+	const total = ids.length;
+	const start = now();
+
+	while (pending.length > 0) {
+		if (now() - start >= capMs) break;
+
+		const stillPending: string[] = [];
+		for (let i = 0; i < pending.length; i++) {
+			// The overall cap is re-checked BETWEEN per-id calls (fix 2): one
+			// slow tick (a call that burned its 30 s timeout) must not overrun
+			// the ceiling by more than the call already in flight. The rest of
+			// this tick's ids stay pending, so the tail below still names them.
+			if (now() - start >= capMs) {
+				stillPending.push(...pending.slice(i));
+				break;
+			}
+			const id = pending[i] as string;
+			let status: TranscriptWaitStatus | undefined;
+			try {
+				status = await raceStatusTimeout(getStatus(id), statusTimeoutMs);
+			} catch {
+				// One bad or hung call is a blip, not a verdict — retried next
+				// tick.
+				stillPending.push(id);
+				continue;
+			}
+			if (status != null && "transcriptionStatus" in status) {
+				const s = status.transcriptionStatus;
+				if (s === "COMPLETE") {
+					done.push(id);
+					continue;
+				}
+				if (s != null && TRANSCRIPT_TERMINAL_ERROR_STATUSES.includes(s)) {
+					if (
+						seenNonTerminal.has(id) ||
+						now() - start >= staleTerminalGraceMs
+					) {
+						givenUp.push(id);
+					} else {
+						// Possibly stale (fix 3): keep waiting; either a later
+						// poll shows the real state or the grace window passes.
+						stillPending.push(id);
+					}
+					continue;
+				}
+				// PROCESSING or null (not started yet): real non-terminal
+				// evidence — from now on a terminal answer for this id is fresh.
+				seenNonTerminal.add(id);
+			}
+			// PROCESSING, null (not started yet) or { success: false }: wait on.
+			stillPending.push(id);
+		}
+		pending = stillPending;
+
+		onTick?.(done.length, total);
+		if (pending.length === 0) break;
+		await sleep(intervalMs);
+	}
+
+	// The cap ran out (or the poll window was already closed): still-pending
+	// ids are reported as given up, never silently dropped.
+	givenUp.push(...pending);
+	return { done, givenUp };
 }
 
 /**

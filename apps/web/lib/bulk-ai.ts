@@ -202,6 +202,12 @@ export function bulkAiButtonState(input: {
 export type BulkAiRunOutcome = {
 	/** Videos the generate route accepted (incl. `alreadyRunning` answers). */
 	started: number;
+	/**
+	 * The IDS of the accepted videos, in start order (2026-10-08 review fix 1).
+	 * The transcribe-then-download flow waits for exactly these instead of
+	 * sniffing URLs; the two menu buttons ignore the field and read `started`.
+	 */
+	startedIds: string[];
 	/** 403 answers - skipped, the loop continues. */
 	skipped: number;
 	/** Other errors / network failures - failed, the loop continues. */
@@ -235,6 +241,7 @@ export async function runBulkAiStarts(
 ): Promise<BulkAiRunOutcome> {
 	const outcome: BulkAiRunOutcome = {
 		started: 0,
+		startedIds: [],
 		skipped: 0,
 		failed: 0,
 		budgetStopped: false,
@@ -279,6 +286,7 @@ export async function runBulkAiStarts(
 
 		if (res.ok) {
 			outcome.started++;
+			outcome.startedIds.push(id);
 			continue;
 		}
 
