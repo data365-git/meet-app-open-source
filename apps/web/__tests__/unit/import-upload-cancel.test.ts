@@ -95,6 +95,7 @@ vi.mock("@/actions/video/mark-upload-failed", () => ({
 }));
 vi.mock("@/actions/video/trigger-processing", () => ({
 	triggerVideoProcessing: vi.fn(async () => {}),
+	isVideoDeleted: vi.fn(async () => false),
 }));
 vi.mock("@/actions/videos/save-edits", () => ({
 	saveVideoEdits: vi.fn(async () => ({ ok: true })),
