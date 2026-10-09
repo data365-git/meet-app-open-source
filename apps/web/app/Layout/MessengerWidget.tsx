@@ -161,7 +161,7 @@ function PanelHeader({
 				className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
 				style={{ backgroundColor: "var(--msngr-accent-subtle)" }}
 			>
-				<Image src="/favicon.ico" alt="Cap Logo" width={32} height={32} />
+				<Image src="/favicon.ico" alt="data365 Logo" width={32} height={32} />
 			</div>
 			<span
 				className="flex-1 text-[14px] font-semibold"
@@ -424,7 +424,7 @@ function ChatView({
 
 			if (hasNewReply) {
 				if (document.hidden) {
-					document.title = "New Reply — Cap";
+					document.title = "New Reply — data365";
 				}
 				const inputFocused = document.activeElement === inputRef.current;
 				if (document.hidden || (!inputFocused && !isHoveringRef.current)) {
@@ -757,7 +757,7 @@ export function MessengerWidget() {
 					--msngr-human-text: #047857;
 					--msngr-human-dot: #10b981;
 					--msngr-human-ping: rgba(52,211,153,0.75);
-					--msngr-link: #2563eb;
+					--msngr-link: var(--brand);
 					--msngr-link-hover: #3b82f6;
 				}
 				.dark .cap-messenger-panel {

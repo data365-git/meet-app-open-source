@@ -1,0 +1,145 @@
+{
+  "base": "https://capweb-production-dd85.up.railway.app",
+  "video": "2t4a58an7acz3bb",
+  "longVideo": "xqmcnsvq66m5yt6",
+  "generatedAt": "2026-07-01T00:19:20.823Z",
+  "results": [
+    {
+      "feature": "Auth: invalid credentials",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/01-auth-invalid-credentials.png",
+      "note": "No visible invalid-credentials error after bad login."
+    },
+    {
+      "feature": "Auth: valid owner login + session",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/02-auth-valid-owner-login-session.png",
+      "note": "Logged in and /api/video/ai?videoId=2t4a58an7acz3bb returned 200."
+    },
+    {
+      "feature": "Auth: session persists across navigation",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/03-auth-session-persists-across-navigation.png",
+      "note": "Owner session survived dashboard and share-page navigation."
+    },
+    {
+      "feature": "Auth: signup form renders + role assignment path",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/04-auth-signup-form-renders-role-assignment-path.png",
+      "note": "Signup page renders input fields; role assignment is server-side on signup and invite flows."
+    },
+    {
+      "feature": "Auth: forgot/password flows render",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/05-auth-forgot-password-flows-render.png",
+      "note": "No password/forgot/OTP affordance visible on login page."
+    },
+    {
+      "feature": "Share playback/layout: guest desktop",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/06-share-playback-layout-guest-desktop.png",
+      "note": "Share page loads with video and visible controls for anonymous viewer."
+    },
+    {
+      "feature": "Share playback: play/seek/speed/volume/fullscreen controls",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/07-share-playback-play-seek-speed-volume-fullscreen-controls.png",
+      "note": "HTML5 video readyState=4, duration=64s; seek/speed/volume applied. Fullscreen API is browser-gated in headless."
+    },
+    {
+      "feature": "Share layout: mobile viewport",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/08-share-layout-mobile-viewport.png",
+      "note": "Mobile share page renders video and tabbed content without a server error."
+    },
+    {
+      "feature": "Share layout: dark theme",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/09-share-layout-dark-theme.png",
+      "note": "Dark color-scheme render captured; body background rgb(242, 242, 242)."
+    },
+    {
+      "feature": "Share owner controls visible; guest controls hidden",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/10-share-owner-controls-visible-guest-controls-hidden.png",
+      "note": "Guest page exposes destructive owner wording."
+    },
+    {
+      "feature": "Transcript tab: renders/search/copy/download affordances",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/11-transcript-tab-renders-search-copy-download-affordances.png",
+      "note": "Transcript panel visible with cue/search/copy/download affordances; visible WEBVTT/markdown leakage=false."
+    },
+    {
+      "feature": "Transcript accordion: chapter title expands without seek; cue time seeks",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/12-transcript-accordion-chapter-title-expands-without-seek-cue-time-seeks.png",
+      "note": "No visible clickable selector among: text=/Matn|Transcript|Текст/i"
+    },
+    {
+      "feature": "Summary/chapters/tasks/refined panels render",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/13-summary-chapters-tasks-refined-panels-render.png",
+      "note": "Expected AI panels missing; clicked 0."
+    },
+    {
+      "feature": "Tasks: owner toggle persists; guest read-only",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/14-tasks-owner-toggle-persists-guest-read-only.png",
+      "note": "No visible clickable selector among: text=/Vazifalar|Tasks|Задачи/i"
+    },
+    {
+      "feature": "Language picker: owner/guest behavior + guest translate 403",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/15-language-picker-owner-guest-behavior-guest-translate-403.png",
+      "note": "Picker text present for owner=true; guest translate POST returned 403; guest generate affordance absent."
+    },
+    {
+      "feature": "AI chat: anonymous sign-in prompt",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/16-ai-chat-anonymous-sign-in-prompt.png",
+      "note": "Anonymous AI chat did not show sign-in prompt."
+    },
+    {
+      "feature": "AI chat: logged-in grounded answer/citations on long video",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/17-ai-chat-logged-in-grounded-answer-citations-on-long-video.png",
+      "note": "Logged-in AI chat streamed a response with timestamp-like citation text; screenshot checks bubble layout."
+    },
+    {
+      "feature": "Comments/activity/sharing/embed render",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/18-comments-activity-sharing-embed-render.png",
+      "note": "Activity/comment affordances visible on share page; embed page renders media."
+    },
+    {
+      "feature": "Recording and ingest entry points",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/19-recording-and-ingest-entry-points.png",
+      "note": "Recorder page and file/Loom import entry points render; media capture itself is browser-permission/display-picker limited in headless."
+    },
+    {
+      "feature": "Dashboard: owner pages and links resolve",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/20-dashboard-owner-pages-and-links-resolve.png",
+      "note": "Checked route statuses: /dashboard/caps:200, /dashboard/spaces/browse:200, /dashboard/settings/organization:200, /dashboard/settings/organization/members:200, /dashboard/settings/organization/activity:200, /dashboard/analytics:200, /dashboard/settings/organization/billing:200, /terms:200, /privacy:200."
+    },
+    {
+      "feature": "Cross-cutting: console errors on key pages",
+      "pass": false,
+      "screenshot": "docs/qa-screenshots/21-cross-cutting-console-errors-on-key-pages.png",
+      "note": "Console/page errors observed: https://capweb-production-dd85.up.railway.app/login :: Failed to load resource: the server responded with a status of 401 () | https://capweb-production-dd85.up.railway.app/s/2t4a58an7acz3bb :: Failed to execute 'writeText' on 'Clipboard': Write permission denied. | https://capweb-production-dd85.up.railway.app/s/xqmcnsvq66m5yt6 :: Failed to execute 'writeText' on 'Clipboard': Write permission denied."
+    },
+    {
+      "feature": "Auth: logout",
+      "pass": true,
+      "screenshot": "docs/qa-screenshots/22-auth-logout.png",
+      "note": "Logout/signout path reachable."
+    }
+  ],
+  "consoleErrors": [
+    "https://capweb-production-dd85.up.railway.app/login :: Failed to load resource: the server responded with a status of 401 ()",
+    "https://capweb-production-dd85.up.railway.app/s/2t4a58an7acz3bb :: Failed to execute 'writeText' on 'Clipboard': Write permission denied.",
+    "https://capweb-production-dd85.up.railway.app/s/xqmcnsvq66m5yt6 :: Failed to execute 'writeText' on 'Clipboard': Write permission denied."
+  ]
+}

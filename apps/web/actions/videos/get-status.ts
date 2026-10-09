@@ -2,11 +2,10 @@
 
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
-import type { PipelineProgress, VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
+import type { AiSummary, VideoMetadata } from "@cap/database/types";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import {
 	isRetryableDesktopSegmentsFinalizationError,
@@ -19,8 +18,7 @@ type TranscriptionStatus =
 	| "COMPLETE"
 	| "ERROR"
 	| "SKIPPED"
-	| "NO_AUDIO"
-	| "CANCELLED";
+	| "NO_AUDIO";
 
 type AiGenerationStatus =
 	| "QUEUED"
@@ -32,15 +30,36 @@ type AiGenerationStatus =
 export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;
 	aiGenerationStatus: AiGenerationStatus | null;
+	aiProcessingStep: VideoMetadata["aiProcessingStep"] | null;
 	name: string | null;
 	aiTitle: string | null;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
-	transcriptionProgress: number | null;
-	pipelineProgress?: PipelineProgress;
-	transcriptionError?: string;
+	aiSummary: AiSummary | null;
 	error?: string;
+	/** Why transcription failed, so the UI can tell "the account is out of
+	 * credits" apart from "this recording could not be transcribed". */
+	transcriptionErrorCode?: "QUOTA" | "FAILED";
 }
+
+const getAiStatusData = (metadata: VideoMetadata) => {
+	const aiSummary = metadata.aiSummary ?? null;
+	const legacyChapters =
+		aiSummary?.chapters && aiSummary.chapters.length > 0
+			? aiSummary.chapters.map((chapter) => ({
+					title: chapter.title,
+					start: chapter.startSec,
+				}))
+			: metadata.chapters || null;
+
+	return {
+		aiTitle: metadata.aiTitle || null,
+		summary: aiSummary?.overview || metadata.summary || null,
+		chapters: legacyChapters,
+		aiSummary,
+		aiProcessingStep: metadata.aiProcessingStep || null,
+	};
+};
 
 export async function getVideoStatus(
 	videoId: Video.VideoId,
@@ -51,7 +70,7 @@ export async function getVideoStatus(
 		const videosPolicy = yield* VideosPolicy;
 
 		return yield* Effect.promise(() =>
-			db().select().from(videos).where(eq(videos.id, videoId)),
+			db().select().from(videos).where(and(eq(videos.id, videoId), isNull(videos.deletedAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
@@ -61,8 +80,9 @@ export async function getVideoStatus(
 	if (!video) throw new Error("Video not found");
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
+	const aiStatusData = getAiStatusData(metadata);
 
-	if (!video.transcriptionStatus && serverEnv().GEMINI_API_KEY) {
+	if (!video.transcriptionStatus) {
 		const activeUpload = await db()
 			.select({
 				videoId: videoUploads.videoId,
@@ -90,24 +110,17 @@ export async function getVideoStatus(
 					);
 				});
 			}
-
-			return {
-				transcriptionStatus: null,
-				aiGenerationStatus:
-					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
-				name: video.name,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-				transcriptionProgress: metadata.transcriptionProgress ?? null,
-				pipelineProgress: metadata.pipelineProgress,
-				transcriptionError: metadata.transcriptionError,
-			};
 		}
 
-		// Manual mode: transcription/AI are only started when the owner clicks
-		// "Generate" (POST /api/videos/[id]/generate). Do not auto-start here —
-		// just report the current (not-started) status via the return below.
+		// Transcription has not started yet — return null status, no auto-trigger.
+		// An admin must click the manual "AI tahlilni boshlash" button to start the pipeline.
+		return {
+			transcriptionStatus: null,
+			aiGenerationStatus:
+				(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+			name: video.name,
+			...aiStatusData,
+		};
 	}
 
 	if (video.transcriptionStatus === "ERROR") {
@@ -116,31 +129,20 @@ export async function getVideoStatus(
 			aiGenerationStatus:
 				(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 			name: video.name,
-			aiTitle: metadata.aiTitle || null,
-			summary: metadata.summary || null,
-			chapters: metadata.chapters || null,
-			transcriptionProgress: metadata.transcriptionProgress ?? null,
-			pipelineProgress: metadata.pipelineProgress,
-			transcriptionError: metadata.transcriptionError,
+			...aiStatusData,
 			error: "Transcription failed",
+			transcriptionErrorCode: metadata.transcriptionError?.code,
 		};
 	}
 
-	// Manual mode: AI generation is only started via the manual "Generate" flow
-	// (which passes aiGenerationEnabled=true to transcribeVideo, chaining into AI).
-	// Do not auto-start it here — just report status.
-
+	// AI generation is manual — no auto-trigger here.
+	// The admin-gated POST /api/videos/[videoId]/generate endpoint starts the pipeline.
 	return {
 		transcriptionStatus:
 			(video.transcriptionStatus as TranscriptionStatus) || null,
 		aiGenerationStatus:
 			(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 		name: video.name,
-		aiTitle: metadata.aiTitle || null,
-		summary: metadata.summary || null,
-		chapters: metadata.chapters || null,
-		transcriptionProgress: metadata.transcriptionProgress ?? null,
-		pipelineProgress: metadata.pipelineProgress,
-		transcriptionError: metadata.transcriptionError,
+		...aiStatusData,
 	};
 }

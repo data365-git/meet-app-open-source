@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import "./ai-chat.css";
 
 interface AIFabProps {
@@ -8,12 +9,14 @@ interface AIFabProps {
 }
 
 export function AIFab({ onClick, isOpen }: AIFabProps) {
+	const t = useTranslations("share");
+
 	return (
 		<button
 			type="button"
 			className={`ai-fab${isOpen ? " is-open" : ""}`}
 			onClick={onClick}
-			aria-label={isOpen ? "Close AI assistant" : "Ask AI about this meeting"}
+			aria-label={isOpen ? t("aiFabCloseLabel") : t("aiFabOpenLabel")}
 		>
 			{isOpen ? (
 				<svg

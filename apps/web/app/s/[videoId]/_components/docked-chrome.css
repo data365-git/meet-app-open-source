@@ -1,0 +1,40 @@
+/* ======== Docked mini-player chrome diet ========
+   DockableVideo.tsx sets `data-docked="true"` on its fixed wrapper once the
+   real player has floated into the mini. These rules trim the in-player
+   chrome that only makes sense at full size (language picker, status pill,
+   volume/speed controls, the big center play button, the mobile swipe-seek
+   gesture layer) WITHOUT remounting the video — CapVideoPlayer.tsx keeps
+   rendering exactly the same tree, only these descendants are hidden/resized
+   by CSS while an ancestor carries `data-docked="true"`. Kept as a plain CSS
+   import (same pattern as ai-chat.css) since DockableVideo wraps ShareVideo's
+   already-built player tree and can't pass a `docked` prop into it. */
+
+/* The playback-status pill (CapVideoPlayer.tsx) collides with the mini's own
+   expand/× chips in the cramped mobile width.
+   (The old in-player LanguagePicker overlay used to be hidden here too via its
+   ".right-3.top-3.z-10" class combo. That overlay is gone — the transcript
+   language picker now lives inside the player's settings menu, which is
+   already hidden while docked by the control-bar rule further down.) */
+[data-docked="true"] [data-slot="playback-status-badge"] {
+	display: none !important;
+}
+
+/* Center play button: cap to size-12 (3rem) instead of xs:size-20 md:size-32. */
+[data-docked="true"] [data-slot="center-play-button"] {
+	width: 3rem !important;
+	height: 3rem !important;
+}
+
+/* The whole media-chrome bottom control bar is suppressed while docked: it
+   auto-hides after inactivity (so the timeline vanishes) and its 86px cluster
+   eats ~40% of the small mini. DockableVideo renders its own persistent slim
+   transport strip (play + seek + time) instead — always visible, owner ask
+   2026-07-14. */
+[data-docked="true"] [data-slot="media-player-controls"] {
+	display: none !important;
+}
+
+/* Mobile swipe-seek gesture layer eats scroll/drag in a ~127px-tall mini. */
+[data-docked="true"] [data-slot="mobile-seek-gesture-layer"] {
+	pointer-events: none !important;
+}

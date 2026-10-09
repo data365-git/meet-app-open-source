@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Split into independent jobs on purpose. This used to be ONE job, so the first
+# failing step skipped every step after it — and `Lint (Biome)` has been failing
+# on a large pre-existing backlog (~1200 findings, mostly CRLF line endings in
+# ~676 files) since long before these checks were added. That meant the BOM check
+# never ran at all, and any new guard placed after Biome would have been dead on
+# arrival. Separate jobs keep a red Biome from hiding a red guard.
+
+jobs:
+  test:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests (web)
+        run: pnpm --filter @cap/web run test
+
+      - name: Unit tests (browser extension)
+        run: pnpm --filter @cap/browser-extension run test
+
+  lint:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # KNOWN RED: fails on a large pre-existing backlog, not on new work.
+      # Isolated in its own job so it cannot mask the other checks. Clearing the
+      # backlog is a separate, deliberate piece of work.
+      - name: Lint (Biome)
+        run: pnpm exec biome check
+
+  guards:
+    name: Guards (wiring + BOM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scheduled workflows must live on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # GitHub only fires `schedule:` triggers from the DEFAULT branch. A cron
+          # workflow that exists only on a feature branch never runs — silently, with
+          # no error anywhere. That is exactly how the nightly DB backup, the storage
+          # reconcile and the uptime alert sat dead for 10 days while their secrets
+          # were configured and everyone assumed they were working.
+          git fetch --no-tags --depth=1 origin "$DEFAULT_BRANCH"
+
+          missing=""
+          for f in .github/workflows/*.yml; do
+            grep -qE '^[[:space:]]*schedule:' "$f" || continue
+            name=$(basename "$f")
+            git cat-file -e "origin/${DEFAULT_BRANCH}:.github/workflows/${name}" 2>/dev/null \
+              || missing="${missing}  - ${name}"$'\n'
+          done
+
+          if [ -n "$missing" ]; then
+            echo "ERROR: these workflows declare a 'schedule:' cron but do NOT exist on origin/${DEFAULT_BRANCH}."
+            echo "GitHub will never run them. Merge them to ${DEFAULT_BRANCH} or drop the schedule trigger."
+            echo ""
+            printf '%s' "$missing"
+            exit 1
+          fi
+          echo "Scheduled-workflow check passed — every cron workflow exists on ${DEFAULT_BRANCH}."
+
+      - name: BOM check (UTF-8 BOM in .ts/.tsx files)
+        run: |
+          # `grep -q` exits 1 when a file has no BOM, which made the whole command
+          # substitution exit 1; GitHub runs steps under `bash -e`, so the step died
+          # right here — reporting failure with no output even when nothing was wrong.
+          # It went unnoticed because this step sat behind the perpetually-red Biome
+          # step in a single job and was always skipped. Use an explicit `if` so the
+          # loop exits 0 when it finds nothing.
+          bom_files=$(git ls-files '*.ts' '*.tsx' | while read -r f; do
+            if head -c 3 "$f" | od -An -tx1 | grep -q 'ef bb bf'; then
+              echo "$f"
+            fi
+          done)
+          if [ -n "$bom_files" ]; then
+            echo "ERROR: These files start with a UTF-8 BOM:"
+            echo "$bom_files"
+            exit 1
+          fi
+          echo "BOM check passed — no BOM-prefixed files found."

@@ -33,9 +33,9 @@ export const NotificationHeader = () => {
 			>
 				<FontAwesomeIcon
 					icon={faCheckDouble}
-					className="text-blue-9 size-2.5"
+					className="text-[var(--brand)] size-2.5"
 				/>
-				<p className="text-[13px] text-blue-9">Mark all as read</p>
+				<p className="text-[13px] text-[var(--brand)]">Mark all as read</p>
 			</div>
 		</div>
 	);

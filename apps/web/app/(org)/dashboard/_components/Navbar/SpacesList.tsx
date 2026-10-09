@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import type { Space } from "@cap/web-domain";
+import type { Space, Video } from "@cap/web-domain";
 import {
 	faLayerGroup,
 	faLock,
@@ -86,7 +86,13 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	if (!spacesData) return null;
 
 	const handleDragOver = (e: React.DragEvent, spaceId: string) => {
+		// A space only accepts caps. Without this guard the row lit up for ANY
+		// drag (a file, selected text), promising a drop that then did nothing.
+		if (!e.dataTransfer.types.includes("application/cap")) return;
+
 		e.preventDefault();
+		// Re-asserted every dragover — the browser resets dropEffect per event.
+		e.dataTransfer.dropEffect = "move";
 		setActiveDropTarget(spaceId);
 	};
 
@@ -105,20 +111,39 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			const capData = e.dataTransfer.getData("application/cap");
 			if (!capData) return;
 
-			const cap = JSON.parse(capData);
+			const cap: {
+				id?: Video.VideoId;
+				name?: string;
+				ids?: Video.VideoId[];
+			} = JSON.parse(capData);
+			if (!cap.id) return;
 
-			const result = await shareCap({
-				capId: cap.id,
-				spaceIds: [spaceId],
-			});
+			// A card dragged out of a multi-selection carries every selected id on
+			// the payload. Share all of them — otherwise the space would silently
+			// take one video and leave the rest behind while reporting success.
+			// A single card has `ids` of length 1 (or none), so this is unchanged.
+			const ids = cap.ids && cap.ids.length > 0 ? cap.ids : [cap.id];
 
-			if (result.success) {
-				const space = spacesData.find((s) => s.id === spaceId);
-				toast.success(`Shared "${cap.name}" to ${space?.name || "space"}`);
-				router.refresh();
-			} else {
-				toast.error(result.error || "Failed to share cap");
+			const space = spacesData.find((s) => s.id === spaceId);
+
+			for (const capId of ids) {
+				const result = await shareCap({
+					capId,
+					spaceIds: [spaceId],
+				});
+
+				if (!result.success) {
+					toast.error(result.error || "Failed to share cap");
+					return;
+				}
 			}
+
+			toast.success(
+				ids.length > 1
+					? `Shared ${ids.length} caps to ${space?.name || "space"}`
+					: `Shared "${cap.name}" to ${space?.name || "space"}`,
+			);
+			router.refresh();
 		} catch (error) {
 			console.error("Error sharing cap:", error);
 			toast.error("Failed to share cap");

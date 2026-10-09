@@ -1,0 +1,52 @@
+FLOW G - G5 EVIDENCE (light/dark theme) - 2026-07-22
+Video: https://data365.duckdns.org/s/t91bnh582gnhgy8 (real playable video, tab-8).
+
+STEP 0 -- resize_window's colorScheme param does NOT flip THIS app's theme:
+  resize_window({width:1280,height:800,colorScheme:"dark"}) -> OS-level
+  prefers-color-scheme became dark (matchMedia confirmed true), but the app kept
+  rendering light (bodyBg rgb(255,255,255), bodyColor rgb(3,7,18)) because it reads
+  an explicit `theme` cookie (found `theme=light` already set) that overrides the OS
+  preference rather than following prefers-color-scheme automatically. This is worth
+  a "nit" flag: the plan's suggested mechanism for toggling theme in this test
+  ("resize_window colorScheme") does not actually exercise this app's dark mode --
+  a real device/user would need the app's own theme toggle (not tested here; out of
+  this browser-visual pass's scope, share pages carry no visible theme switch UI in
+  the DOM). Worked around it by setting the `theme` cookie directly (document.cookie)
+  and reloading, which IS how the app's own toggle would behave client-side.
+
+STEP 1 -- DARK (`theme=dark` cookie + reload):
+  bodyBg: rgb(3,7,18) (near-black), bodyColor: rgb(249,250,251) (near-white) -- correct.
+  .ai-aura / [class*="ai-aura"] element count: 0 (the old glow bug is absent).
+  Full-page WCAG contrast-ratio sweep (every element with a *direct* text node,
+  proper sRGB relative-luminance formula, walked-up effective background):
+    0 elements at ratio < 1.5 (i.e. nothing genuinely invisible/unreadable).
+    A handful of SECONDARY elements sit below the strict 4.5:1 AA threshold but are
+    still clearly legible (not "invisible-on-invisible"):
+      - "Ulashish" (Share) button: white text on brand-blue bg, ratio 2.84
+      - Active tab "Xulosa" label: dark-blue text on near-black bg, ratio 2.85
+      - Disabled "Izoh" (comment submit) button: gray-on-light-gray, ratio 2.35
+        (this one is `disabled` by design -- empty comment form -- muted styling
+        is intentional, not a theme bug)
+      - AI-chat font-size ("A"/"A") buttons: slate-gray icon labels, ratio 2.46
+    (First-pass scan also flagged the "Bo'limlar" chapter-list buttons at ratio
+    ~1.04 and the AI citation "[00:00]" pills at ratio 1.00 -- both were FALSE
+    POSITIVES from measuring the wrong element / ignoring alpha compositing.
+    Re-measured on the actual rendered <span> text nodes: chapter title span
+    color rgb(238,238,238) on card bg rgb(17,17,17) = high contrast, clearly
+    legible; citation pill re-measured against its true composited backdrop =
+    contrast ratio 6.06, passes AA. Recorded here so the same false-positive
+    isn't re-run next time.)
+
+STEP 2 -- LIGHT (`theme=light` cookie + reload):
+  bodyBg: rgb(255,255,255), bodyColor: rgb(3,7,18) -- correct, matches dark-mode's
+  mirror. Same contrast sweep: only the disabled "Izoh" button (ratio 2.35, same
+  intentional muted-disabled styling) and the two sr-only accessibility-hidden
+  spans (visually clipped off-screen, ratio 1.00 vs their own irrelevant computed
+  bg -- not visible on screen, standard a11y pattern, not a bug) and the two
+  ai-citation pills (alpha-blind false positive, real ratio is fine, see above).
+  .ai-aura count: 0.
+
+VERDICT: PASS. Both themes are readable; no invisible-on-invisible text found in
+either theme; the legacy `.ai-aura` glow is absent in both. Minor sub-AA contrast
+on a few secondary/disabled controls noted as a "nit" for the IT team's backlog,
+not a G5 failure (nothing is actually illegible).

@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { transcribeVideo } from "@/lib/transcribe";
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-transcription">,
 ) {
 	try {
@@ -37,18 +37,49 @@ export async function POST(
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
 
+		// Re-running transcription re-spends paid AI budget. If a transcript
+		// already completed, require an explicit confirm/force flag before
+		// deleting it and paying to redo the work.
+		let confirmed = false;
+		try {
+			const body = (await request.json()) as
+				| { confirm?: unknown; force?: unknown }
+				| null;
+			confirmed = body?.confirm === true || body?.force === true;
+		} catch {
+			// No/invalid JSON body — treat as not confirmed (fail closed).
+		}
+
+		if (video.transcriptionStatus === "COMPLETE" && !confirmed) {
+			return Response.json(
+				{
+					error:
+						"This video already has a transcript. Pass confirm to re-run (this costs money).",
+				},
+				{ status: 409 },
+			);
+		}
+
 		await db()
 			.delete(transcriptChunks)
 			.where(eq(transcriptChunks.videoId, videoId));
 
-		// Reset status, then start transcription directly. (Auto-trigger was
-		// removed when transcription became manual, so we must kick it off here.)
+		// Reset the status, then START the pipeline ourselves. Nothing auto-
+		// triggers on a NULL status anymore (get-status.ts stopped doing that —
+		// its comment says "no auto-trigger"), so leaving the row NULL here left
+		// the video permanently not-started. The reset is still required first:
+		// transcribeVideo refuses COMPLETE rows outright, and this is the one
+		// path where re-running a COMPLETE transcript is an explicit, confirmed
+		// owner decision.
 		await db()
 			.update(videos)
 			.set({ transcriptionStatus: null })
 			.where(eq(videos.id, videoId));
 
-		await transcribeVideo(videoId, video.ownerId, /* aiGenerationEnabled */ true);
+		const result = await transcribeVideo(videoId, user.id, true);
+		if (!result.success) {
+			return Response.json({ error: result.message }, { status: 500 });
+		}
 
 		// Revalidate the video page to ensure UI updates with fresh data
 		revalidatePath(`/s/${videoId}`);

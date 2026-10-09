@@ -32,7 +32,15 @@ export async function triggerInstantRecordingProcessing({
 		bucketId: video.bucket ?? null,
 		processingMessage: "Starting video processing...",
 		startFailureMessage: "Video uploaded, but processing could not start.",
-		mode: "singlepart",
+		// The instant-recording single PUT already finished (uploaded >= total)
+		// by the time this runs, so "multipart" here isn't about transport — it
+		// tells lib/transcribe.ts's isUploadInProgress to trust the "processing"
+		// phase over the byte count while processVideoWorkflow remuxes the file,
+		// so a manual "AI tahlil" click can't race in mid-overwrite. The share
+		// page briefly shows "processing" (CapVideoPlayer) during the — normally
+		// fast, copy-path — remux, then plays. See the matching comment in
+		// app/api/upload/[...route]/multipart.ts's finalize branch.
+		mode: "multipart",
 	});
 
 	return { success: true };

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fake Meet — tone source</title>
+<style>
+body{font-family:system-ui;background:#202124;color:#e8eaed;display:grid;place-items:center;height:100vh;margin:0}
+/* The video-load surface (?load=N). Fixed and behind everything, never
+   interactive — the extension's nudge/pill must stay clickable. */
+#load-canvas{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;pointer-events:none;display:none}
+body>div{position:relative;z-index:1}
+</style>
+</head>
+<body>
+<canvas id="load-canvas"></canvas>
+<div>
+  <h1>FAKE MEET (e2e audio proof)</h1>
+  <p id="status">tone: starting…</p>
+  <!-- The content script only shows its nudge when it believes we are IN a call
+       (isInMeeting() looks for Meet's Leave-call control). Harmless for the
+       shortcut-path proof, required for the in-page one. -->
+  <button aria-label="Leave call">Leave call</button>
+</div>
+<script>
+// Plays a steady 440 Hz tone — stands in for the remote participant's voice.
+// The real extension's content script matches https://meet.google.com/* by URL,
+// so serving this page under a host-resolver-mapped meet.google.com is enough.
+// Autoplay: launch Chromium with --autoplay-policy=no-user-gesture-required.
+const status = document.getElementById("status");
+function startTone() {
+	try {
+		const ctx = new AudioContext();
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.type = "sine";
+		osc.frequency.value = 440;
+		// Quiet on speakers, still ~-30dB in the capture — far above the -50dB
+		// pass threshold. (0.5 blasted the owner's laptop once. Never again.)
+		gain.gain.value = 0.05;
+		osc.connect(gain).connect(ctx.destination);
+		osc.start();
+		// Some builds start AudioContext suspended even with autoplay allowed.
+		if (ctx.state === "suspended") ctx.resume();
+		status.textContent = `tone: playing (ctx=${ctx.state})`;
+		setInterval(() => { status.textContent = `tone: ${ctx.state} @ ${new Date().toISOString()}`; }, 1000);
+	} catch (e) {
+		status.textContent = "tone: FAILED " + e;
+	}
+}
+// ?tone=media — the tone comes out of a real <audio> ELEMENT instead of a bare
+// oscillator. The in-page (two-step) recording path taps
+// HTMLMediaElement.captureStream(), so an oscillator would give it nothing to
+// capture: this is what stands in for a remote participant there.
+function startToneElement() {
+	const el = document.createElement("audio");
+	el.src = "/tone.webm";
+	el.loop = true;
+	el.autoplay = true;
+	el.id = "remote-participant";
+	document.body.appendChild(el);
+	el.play()
+		.then(() => {
+			status.textContent = "tone: playing (media element)";
+			setInterval(() => {
+				status.textContent = `tone: media t=${el.currentTime.toFixed(1)} paused=${el.paused}`;
+			}, 1000);
+		})
+		.catch((e) => {
+			status.textContent = "tone: MEDIA FAILED " + e;
+		});
+	return el;
+}
+
+// ?tone=stream — the tone comes out of a real <audio> element that is
+// srcObject-BACKED (an AudioContext oscillator routed through a
+// MediaStreamDestination), exactly like real Meet's remote-participant
+// elements (WebRTC MediaStreams assigned via el.srcObject, never el.src).
+// This is the ONLY mode that can reproduce the 2026-07-22 "2nd recording lost
+// remote voice" bug: Blink's HTMLMediaElement.captureStream() takes a special
+// path for srcObject-backed elements that hands back wrappers around the
+// element's OWN underlying MediaStreamTrack components (no cloning) — so
+// calling stop() on a captured track terminally kills a track the extension
+// never owned. The file-backed ?tone=media mode goes through a DIFFERENT
+// Blink capturer (a fresh per-call CreateHTMLAudioElementCapturer) and cannot
+// exhibit this at all. See docs/plans/2026-07-22-remote-voice-2nd-recording-bug.md §6.2.
+function startToneStreamElement() {
+	const ctx = new AudioContext();
+	const osc = ctx.createOscillator();
+	osc.type = "sine";
+	osc.frequency.value = 440;
+	const gain = ctx.createGain();
+	gain.gain.value = 0.05; // same quiet level as the other modes
+	const dest = ctx.createMediaStreamDestination();
+	osc.connect(gain).connect(dest);
+	osc.start();
+	if (ctx.state === "suspended") ctx.resume();
+
+	const el = document.createElement("audio");
+	el.srcObject = dest.stream;
+	el.autoplay = true;
+	el.id = "remote-participant";
+	document.body.appendChild(el);
+	el.play()
+		.then(() => {
+			status.textContent = `tone: playing (srcObject, ctx=${ctx.state})`;
+			setInterval(() => {
+				status.textContent = `tone: srcObject t=${el.currentTime.toFixed(1)} paused=${el.paused} ctx=${ctx.state}`;
+			}, 1000);
+		})
+		.catch((e) => {
+			status.textContent = "tone: SRCOBJECT FAILED " + e;
+		});
+	return el;
+}
+
+// &swap=<ms> — REUSE the same element with a new source part-way through, which
+// is what Google Meet actually does when the active speaker changes: the element
+// stays in the DOM, its stream is replaced. An audio tap bound to the old track
+// goes permanently silent, so this is the scenario that proves the recorder
+// prunes dead taps and re-taps instead of recording silence for the rest of the
+// call. (Reviewed 2026-07-20; the original harness only ever had one static
+// element and could not see this.)
+function scheduleSourceSwap(el) {
+	const swapAt = Number(new URLSearchParams(location.search).get("swap"));
+	if (!Number.isFinite(swapAt) || swapAt <= 0) return;
+	setTimeout(() => {
+		el.pause();
+		el.removeAttribute("src");
+		el.load(); // kills the current track — the tap dies here
+		el.src = `/tone.webm?again=${Date.now()}`;
+		el.loop = true;
+		el.play().catch(() => {});
+		const note = document.createElement("p");
+		note.id = "swapped";
+		note.textContent = "source swapped";
+		document.body.appendChild(note);
+	}, swapAt);
+}
+
+// ?load=<cells> — A CONTROLLED, REPRODUCIBLE VIDEO LOAD.
+//
+// WHY. The adaptive-capture proof needs the capture to genuinely offer more than
+// a slow link can carry. The harness records the ENTIRE SCREEN, so without this
+// the recorded bitrate was whatever happened to be on the dev machine's display
+// — a near-static desktop, which encoded to ~145 kbit/s and could not overload
+// even an 800 kbit/s link. A screen recording of a real meeting (shared slides,
+// scrolling code, a moving speaker) is nothing like a still desktop.
+//
+// WHAT IT IS. `cells` flat-coloured 10x10 blocks are repainted at random
+// positions on every animation frame. Flat blocks rather than per-pixel noise on
+// purpose: the load must be a straight function of AREA CHANGED PER SECOND, so
+// halving the capture's frame rate or resolution (which is exactly what the
+// adaptive tiers do) reduces the bytes proportionally instead of being absorbed
+// by an encoder that was quality-limited anyway.
+//
+// REPRODUCIBLE. The block positions and colours come from a fixed-seed PRNG, not
+// Math.random, so two runs on the same machine paint the same sequence. Only the
+// moving region is animated; everything else on screen is static and costs a
+// delta-coded video stream essentially nothing, so the recorded bitrate is set by
+// this canvas rather than by the desktop behind it.
+function startVideoLoad(cellsPerFrame, hz) {
+	const canvas = document.getElementById("load-canvas");
+	canvas.style.display = "block";
+	// 1:1 WITH THE DEVICE PIXELS ON PURPOSE. MEASURED (2026-08-05): with a fixed
+	// 1280x800 backing store stretched to the viewport, EVERY repaint re-encoded
+	// as if the whole canvas had changed (~40 MB/min no matter how few blocks were
+	// painted or how slowly) — the rescale perturbs every pixel, so the encoder
+	// has no unchanged macroblocks left to skip. At 1:1 the untouched pixels stay
+	// byte-identical and the recorded bitrate becomes a function of what actually
+	// moved, which is the whole point of a CONTROLLED load.
+	const dpr = window.devicePixelRatio || 1;
+	const W = Math.max(320, Math.round(canvas.clientWidth * dpr));
+	const H = Math.max(240, Math.round(canvas.clientHeight * dpr));
+	const CELL = 10;
+	canvas.width = W;
+	canvas.height = H;
+	const ctx = canvas.getContext("2d", { alpha: false });
+	const cols = Math.floor(W / CELL);
+	const rows = Math.floor(H / CELL);
+	// mulberry32, fixed seed — deterministic across runs.
+	let seed = 0x9e3779b9;
+	const rnd = () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+	ctx.fillStyle = "#101014";
+	ctx.fillRect(0, 0, W, H);
+	let frames = 0;
+	// Repaints per second. MEASURED (2026-08-05, 1-minute calibration runs on the
+	// real harness): the recorded bitrate tracks the number of DISTINCT frames the
+	// screen capturer sees far more strongly than the area changed inside one —
+	// 20 cells/frame at 60 Hz and 1400 cells/frame at 60 Hz both encoded to ~40
+	// MB/min, i.e. the encoder spends its budget on any frame that differs at all.
+	// So the repaint RATE is the real knob, and it is also the honest one: it is
+	// what the adaptive tiers reduce (24 → 15 → 10 fps).
+	const minFrameGapMs = hz > 0 ? 1000 / hz : 0;
+	let lastPaintAt = 0;
+	const paint = () => {
+		const now = performance.now();
+		if (now - lastPaintAt < minFrameGapMs) {
+			requestAnimationFrame(paint);
+			return;
+		}
+		lastPaintAt = now;
+		for (let i = 0; i < cellsPerFrame; i++) {
+			const x = Math.floor(rnd() * cols) * CELL;
+			const y = Math.floor(rnd() * rows) * CELL;
+			const r = Math.floor(rnd() * 256);
+			const g = Math.floor(rnd() * 256);
+			const b = Math.floor(rnd() * 256);
+			ctx.fillStyle = `rgb(${r},${g},${b})`;
+			ctx.fillRect(x, y, CELL, CELL);
+		}
+		frames++;
+		requestAnimationFrame(paint);
+	};
+	requestAnimationFrame(paint);
+	// Visible proof the load is actually animating, for the harness log.
+	setInterval(() => {
+		const note = document.getElementById("load-note");
+		if (note) note.textContent = `video load: ${cellsPerFrame} cells/frame at ${hz} Hz, ${frames} frames`;
+	}, 1000);
+	const note = document.createElement("p");
+	note.id = "load-note";
+	document.querySelector("div").appendChild(note);
+}
+const loadParams = new URLSearchParams(location.search);
+const loadCells = Number(loadParams.get("load"));
+const loadHz = Number(loadParams.get("loadhz")) || 60;
+if (Number.isFinite(loadCells) && loadCells > 0) startVideoLoad(loadCells, loadHz);
+
+// Auto-play ONLY when the harness asks (?tone=1 | ?tone=media). A human opening
+// this file (e.g. an accidental Browser-pane preview) gets silence + a button.
+const toneMode = new URLSearchParams(location.search).get("tone");
+if (toneMode === "stream") {
+	startToneStreamElement();
+} else if (toneMode === "media") {
+	scheduleSourceSwap(startToneElement());
+} else if (toneMode === "1") {
+	startTone();
+} else {
+	status.textContent = "tone: idle (harness passes ?tone=1)";
+	const btn = document.createElement("button");
+	btn.textContent = "Start tone (quiet)";
+	btn.onclick = startTone;
+	document.querySelector("div").appendChild(btn);
+}
+</script>
+</body>
+</html>

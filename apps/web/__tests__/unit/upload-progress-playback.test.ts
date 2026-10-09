@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	canRetryFailedProcessing,
@@ -80,6 +82,10 @@ describe("shouldDeferPlaybackSource", () => {
 	});
 
 	it("uses upload-specific failure messaging", () => {
+		const t = (key: string) => key;
+		// Round-20: stored error text is an ops TOKEN, never viewer copy — a
+		// legacy raw sentence (pre-allowlist rows) renders as the LOCALIZED
+		// fallback, not verbatim untranslated English.
 		expect(
 			getUploadFailureMessage(
 				{
@@ -89,8 +95,22 @@ describe("shouldDeferPlaybackSource", () => {
 					hasRawFallback: false,
 				},
 				true,
+				t,
 			),
-		).toBe("Video uploaded, but processing could not start.");
+		).toBe("progressProcessingFailed");
+		// Known allowlist tokens get their own localized sentence.
+		expect(
+			getUploadFailureMessage(
+				{
+					status: "error",
+					lastUpdated: new Date(),
+					errorMessage: "Upload interrupted",
+					hasRawFallback: false,
+				},
+				false,
+				t,
+			),
+		).toBe("progressUploadInterrupted");
 		expect(
 			getUploadFailureMessage(
 				{
@@ -100,10 +120,9 @@ describe("shouldDeferPlaybackSource", () => {
 					hasRawFallback: false,
 				},
 				false,
+				t,
 			),
-		).toBe(
-			"Processing failed. Ask the owner to retry processing or re-upload the recording.",
-		);
+		).toBe("progressProcessingFailedOwner");
 		expect(
 			getUploadFailureMessage(
 				{
@@ -111,10 +130,9 @@ describe("shouldDeferPlaybackSource", () => {
 					lastUpdated: new Date(),
 				} as never,
 				false,
+				t,
 			),
-		).toBe(
-			"Upload stalled before processing finished. Re-upload the recording to continue.",
-		);
+		).toBe("progressUploadStalled");
 	});
 
 	it("reloads playback when upload progress clears", () => {
@@ -165,14 +183,17 @@ describe("shouldDeferPlaybackSource", () => {
 		expect(shouldReloadPlaybackAfterUploadCompletes(null, null)).toBe(false);
 	});
 
-	it("detects processing that never actually started", () => {
+	it("detects processing that never actually started — and returns a KEY, not a translated sentence (round-21)", () => {
+		// Threshold was deliberately raised 90s -> 5min (commit 3621e0f: 90s
+		// flashed a false "processing failed" on merely-queued videos), so the
+		// fixture must exceed 5 minutes.
 		expect(
 			getStalledProcessingMessage({
 				phase: "processing",
-				updatedAt: new Date(Date.now() - 91_000),
+				updatedAt: new Date(Date.now() - 301_000),
 				processingProgress: 0,
 			}),
-		).toBe("Video processing did not start. Retry processing.");
+		).toBe("progressDidNotStart");
 
 		expect(
 			getStalledProcessingMessage({
@@ -190,6 +211,42 @@ describe("shouldDeferPlaybackSource", () => {
 				updatedAt: new Date(Date.now() - 11 * 60 * 1000),
 				processingProgress: 25,
 			}),
-		).toBe("Video processing stalled. Retry processing.");
+		).toBe("progressStalled");
+	});
+
+	it("RENDER-PATH pin (round-21): the stalled instruction survives to what the page shows, for the owner AND the anonymous viewer", () => {
+		// This pin sits at the boundary the previous three misses sat below:
+		// the stalled branch's value flowing THROUGH getUploadFailureMessage
+		// with the REAL uz locale — not the helper asserted in isolation.
+		const uzShare = (
+			JSON.parse(
+				readFileSync(
+					fileURLToPath(new URL("../../messages/uz.json", import.meta.url)),
+					"utf8",
+				),
+			) as { share: Record<string, string> }
+		).share;
+		const tUz = (key: string) => uzShare[key] ?? key;
+
+		const stalledKey = getStalledProcessingMessage({
+			phase: "processing",
+			updatedAt: new Date(Date.now() - 301_000),
+			processingProgress: 0,
+		});
+		expect(stalledKey).toBe("progressDidNotStart");
+
+		const uploadProgress = {
+			status: "error" as const,
+			lastUpdated: new Date(),
+			errorMessage: stalledKey,
+			hasRawFallback: false,
+		};
+		// Owner (retry available) and anonymous viewer both get the localized
+		// sentence WITH its instruction — never a bare "Processing failed."
+		for (const canRetry of [true, false]) {
+			const rendered = getUploadFailureMessage(uploadProgress, canRetry, tUz);
+			expect(rendered).toBe(uzShare.progressDidNotStart);
+			expect(rendered).toContain("Qayta ishlovni");
+		}
 	});
 });

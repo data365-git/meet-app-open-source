@@ -2,22 +2,40 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
+import {
+	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
-import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
+import {
+	faChevronDown,
+	faFolderPlus,
+	faInfoCircle,
+	faUpload,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect, Exit } from "effect";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	IMPORT_FILE_ACCEPT,
+	useImportUpload,
+} from "@/app/(org)/dashboard/import/file/useImportUpload";
+import { PreUploadTrimmer } from "@/components/PreUploadTrimmer";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
 	SelectedCapsBar,
-	UploadCapButton,
 	UploadPlaceholderCard,
 	WebRecorderDialog,
 } from "./components";
@@ -27,6 +45,25 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
+
+type DateGroupKey = "groupToday" | "groupThisWeek" | "groupEarlier";
+
+function getDateGroup(date: Date): DateGroupKey {
+	const now = new Date();
+	const startOfToday = new Date(
+		now.getFullYear(),
+		now.getMonth(),
+		now.getDate(),
+	);
+	const startOfWeek = new Date(startOfToday);
+	startOfWeek.setDate(
+		startOfToday.getDate() - ((startOfToday.getDay() + 6) % 7),
+	);
+
+	if (date >= startOfToday) return "groupToday";
+	if (date >= startOfWeek) return "groupThisWeek";
+	return "groupEarlier";
+}
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -60,6 +97,24 @@ export type VideoData = {
 	inheritedPasswordSources?: SpaceRuleSource[];
 	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 	hasActiveUpload: boolean;
+	/**
+	 * Video length in seconds. The page query already selects `videos.duration`
+	 * (and CapCard reads it); typed here so the selection bar's bulk-AI planner
+	 * can price a selection without another server round-trip.
+	 */
+	duration?: number | null;
+	/**
+	 * The `videos.transcriptionStatus` column (F1): the bulk-AI planner
+	 * pre-skips finished transcripts with it, so "Faqat transkript" on a
+	 * COMPLETE transcript never becomes a full AI run in the generate route.
+	 */
+	transcriptionStatus?:
+		| "PROCESSING"
+		| "COMPLETE"
+		| "ERROR"
+		| "SKIPPED"
+		| "NO_AUDIO"
+		| null;
 	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 }[];
 
@@ -74,17 +129,32 @@ export const Caps = ({
 	folders: FolderDataType[];
 	analyticsEnabled: boolean;
 }) => {
+	const t = useTranslations("library");
 	const router = useRouter();
 	const params = useSearchParams();
 	const page = Number(params.get("page")) || 1;
 	const { user } = useDashboardContext();
-	const limit = 15;
+	const limit = 30;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / limit);
 	const previousCountRef = useRef<number>(0);
 	const bulkDeleteToastRef = useRef<string | number | undefined>(undefined);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
+
+	// Stay on /dashboard/caps after starting an upload here (UploadPlaceholderCard
+	// below shows progress) instead of the file page's own redirect-after-start.
+	const {
+		inputRef: importInputRef,
+		isUploading: isImportBusy,
+		upgradeModalOpen: importUpgradeModalOpen,
+		setUpgradeModalOpen: setImportUpgradeModalOpen,
+		pendingFile: importPendingFile,
+		setPendingFile: setImportPendingFile,
+		processFile: processImportFile,
+		handleFileChange: handleImportFileChange,
+		openFilePicker: openImportFilePicker,
+	} = useImportUpload({ onUploadStarted: () => {} });
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -132,14 +202,14 @@ export const Caps = ({
 			} else {
 				return yield* Effect.fail(
 					new Error(
-						`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
+						`Failed to delete ${errorCount} recording${errorCount === 1 ? "" : "s"}`,
 					),
 				);
 			}
 		}),
 		onMutate: (ids: Video.VideoId[]) => {
 			bulkDeleteToastRef.current = toast.loading(
-				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+				`Deleting ${ids.length} recording${ids.length === 1 ? "" : "s"}...`,
 			);
 		},
 		onSuccess: (data: { success: number; error?: number }) => {
@@ -149,15 +219,15 @@ export const Caps = ({
 			router.refresh();
 			if (data.error) {
 				toast.success(
-					`Successfully deleted ${data.success} cap${
+					`Successfully deleted ${data.success} recording${
 						data.success === 1 ? "" : "s"
-					}, but failed to delete ${data.error} cap${
+					}, but failed to delete ${data.error} recording${
 						data.error === 1 ? "" : "s"
 					}`,
 				);
 			} else {
 				toast.success(
-					`Successfully deleted ${data.success} cap${
+					`Successfully deleted ${data.success} recording${
 						data.success === 1 ? "" : "s"
 					}`,
 				);
@@ -169,7 +239,7 @@ export const Caps = ({
 			const message =
 				error instanceof Error
 					? error.message
-					: "An error occurred while deleting caps";
+					: "An error occurred while deleting recordings";
 			toast.error(message);
 		},
 	});
@@ -179,10 +249,10 @@ export const Caps = ({
 			yield* rpc.VideoDelete(id);
 		}),
 		onSuccess: () => {
-			toast.success("Cap deleted successfully");
+			toast.success(t("recordingDeleted"));
 			router.refresh();
 		},
-		onError: (_error: unknown) => toast.error("Failed to delete cap"),
+		onError: (_error: unknown) => toast.error(t("deleteRecordingFailed")),
 	});
 
 	useEffect(() => {
@@ -248,6 +318,20 @@ export const Caps = ({
 				: data,
 		[data, isUploading, uploadingCapId],
 	);
+	const groupedVideos = useMemo(() => {
+		return visibleVideos.reduce(
+			(groups, video) => {
+				const group = getDateGroup(new Date(video.createdAt));
+				groups[group].push(video);
+				return groups;
+			},
+			{
+				groupToday: [] as VideoData,
+				groupThisWeek: [] as VideoData,
+				groupEarlier: [] as VideoData,
+			},
+		);
+	}, [visibleVideos]);
 
 	const isEmpty = count === 0 && folders.length === 0;
 
@@ -258,17 +342,67 @@ export const Caps = ({
 				onOpenChange={setOpenNewFolderDialog}
 			/>
 			<div className="flex flex-wrap gap-3 items-center mb-10 w-full">
-				<Button
-					onClick={() => setOpenNewFolderDialog(true)}
-					size="sm"
-					variant="dark"
-					className="flex gap-2 items-center w-fit"
-				>
-					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
-				</Button>
-				<UploadCapButton size="sm" />
 				<WebRecorderDialog />
+				<div className="flex items-stretch w-fit rounded-full">
+					<Button
+						size="sm"
+						variant="white"
+						className="flex gap-2 items-center rounded-r-none border-r-0 w-fit"
+						onClick={openImportFilePicker}
+						disabled={isImportBusy}
+					>
+						<FontAwesomeIcon className="size-3" icon={faUpload} />
+						Import file
+					</Button>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button
+								size="sm"
+								variant="white"
+								className="flex items-center px-2 rounded-l-none w-fit"
+								aria-label="More import options"
+							>
+								<FontAwesomeIcon className="size-3" icon={faChevronDown} />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="start">
+							<DropdownMenuItem asChild className="rounded-lg">
+								<Link href="/dashboard/import/loom">{t("importFromLoom")}</Link>
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</div>
+				<input
+					ref={importInputRef}
+					type="file"
+					accept={IMPORT_FILE_ACCEPT}
+					multiple
+					onChange={handleImportFileChange}
+					className="hidden"
+				/>
+				<UpgradeModal
+					open={importUpgradeModalOpen}
+					onOpenChange={setImportUpgradeModalOpen}
+				/>
+				{importPendingFile && (
+					<PreUploadTrimmer
+						file={importPendingFile}
+						onConfirm={(trimmed, serverTrim) => {
+							setImportPendingFile(null);
+							void processImportFile(trimmed, serverTrim);
+						}}
+						onCancel={() => setImportPendingFile(null)}
+					/>
+				)}
+				<Button
+					size="sm"
+					variant="white"
+					className="flex gap-2 items-center w-fit"
+					onClick={() => setOpenNewFolderDialog(true)}
+				>
+					<FontAwesomeIcon className="size-3" icon={faFolderPlus} />
+					{t("newFolder")}
+				</Button>
 			</div>
 			{isEmpty && <EmptyCapState />}
 			{folders.length > 0 && (
@@ -276,7 +410,7 @@ export const Caps = ({
 					<div className="flex gap-3 items-center mb-6 w-full">
 						<h1 className="text-2xl font-medium text-gray-12">Folders</h1>
 					</div>
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
+					<div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 mb-10">
 						{folders.map((folder) => (
 							<Folder key={folder.id} {...folder} />
 						))}
@@ -285,36 +419,54 @@ export const Caps = ({
 			)}
 			{visibleVideos.length > 0 && (
 				<>
-					<div className="flex justify-between items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
-					</div>
+					<div className="flex flex-col gap-8">
+						{(["groupToday", "groupThisWeek", "groupEarlier"] as const).map(
+							(groupKey) => {
+								const videos = groupedVideos[groupKey];
+								if (
+									videos.length === 0 &&
+									!(groupKey === "groupToday" && isUploading)
+								)
+									return null;
 
-					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-						{isUploading && (
-							<UploadPlaceholderCard key={"upload-placeholder"} />
+								return (
+									<section key={groupKey} className="flex flex-col gap-3">
+										<h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-gray-9">
+											{t(groupKey)}
+										</h2>
+										<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+											{groupKey === "groupToday" && isUploading && (
+												<UploadPlaceholderCard key={"upload-placeholder"} />
+											)}
+											{videos.map((video) => {
+												const videoAnalytics = analytics[video.id];
+												return (
+													<CapCard
+														key={video.id}
+														cap={video}
+														analytics={videoAnalytics ?? 0}
+														onDelete={() => {
+															if (selectedCaps.length > 0) {
+																deleteCaps(selectedCaps);
+															} else {
+																deleteCap(video.id);
+															}
+														}}
+														userId={user?.id}
+														isLoadingAnalytics={isLoadingAnalytics}
+														isSelected={selectedCaps.includes(video.id)}
+														anyCapSelected={anyCapSelected}
+														draggableSelection={selectedCaps}
+														libraryKind="recording"
+														onSelectToggle={() => handleCapSelection(video.id)}
+													/>
+												);
+											})}
+										</div>
+									</section>
+								);
+							},
 						)}
-						{visibleVideos.map((video) => {
-							const videoAnalytics = analytics[video.id];
-							return (
-								<CapCard
-									key={video.id}
-									cap={video}
-									analytics={videoAnalytics ?? 0}
-									onDelete={() => {
-										if (selectedCaps.length > 0) {
-											deleteCaps(selectedCaps);
-										} else {
-											deleteCap(video.id);
-										}
-									}}
-									userId={user?.id}
-									isLoadingAnalytics={isLoadingAnalytics}
-									isSelected={selectedCaps.includes(video.id)}
-									anyCapSelected={anyCapSelected}
-									onSelectToggle={() => handleCapSelection(video.id)}
-								/>
-							);
-						})}
 					</div>
 				</>
 			)}
@@ -328,6 +480,17 @@ export const Caps = ({
 				setSelectedCaps={setSelectedCaps}
 				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
 				isDeleting={isDeletingCaps || isDeletingCap}
+				currentLibrary="recording"
+				folders={folders}
+				capDetails={data.map((video) => ({
+					id: video.id,
+					name: video.name,
+					isAudio: video.metadata?.isAudio === true,
+					durationSec: video.duration ?? null,
+					transcriptionStatus: video.transcriptionStatus ?? null,
+					metadata: video.metadata ?? null,
+				}))}
+				isAdmin={user.isAdmin}
 			/>
 			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">

@@ -1,0 +1,23 @@
+FLOW A - G6 EVIDENCE - 2026-07-22 (ONE bounded guest-chat call, not looped)
+Video used: t91bnh582gnhgy8
+
+Action: typed "VLOOKUP funksiyasi haqida qisqacha ayting" into the AI-chat
+textarea (aria-label of submit button = "Yuborish"), clicked submit ONCE.
+
+Network: POST https://data365.duckdns.org/api/video/ai/chat -> 200
+
+Response body (SSE stream):
+  data: {"token":"VLOOKUP fun"}
+  data: {"token":"ksiyasi Microsoft Excel dasturida katta hajmdagi ma'lumotlar bazasidan"}
+  data: {"token":" kerakli datalarni tezkorlik bilan qidirib topish uchun juda qulay hisoblanadi [00:00]. Uning argumentlari qidirilayotgan qiymat (`lookup_value`), ma'lumot"}
+  data: {"token":"lar qidiriladigan hudud (`table_array`), natija joylashgan ustun raqami (`col_index_num`) va aniq moslikni topish uchun `false` yoki nol qiymatidir [00:"}
+  data: {"token":"00]."}
+  data: [DONE]
+
+Observations: popup opened (already visible in this build's layout), streamed
+answer arrives token-by-token, cites a `[00:00]` timestamp matching the actual
+transcript content at that point (VLOOKUP explanation is literally the 00:00
+chapter), answered in Uzbek (the question's language), terminates cleanly with
+[DONE]. No error toast, no wrong-language answer, no ignoring-the-transcript.
+Exactly ONE chat call made for this test (not looped), per hard rules.
+PASS.

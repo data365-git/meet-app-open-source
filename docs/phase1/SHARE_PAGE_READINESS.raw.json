@@ -1,0 +1,453 @@
+{
+  "summary": "Read-only: extract every feature from the teacher's Share Page mockup, then map each to backend readiness (wire-existing / build-new / static) to produce a Phase 1 spec.",
+  "agentCount": 11,
+  "logs": [],
+  "result": {
+    "spec": "# Phase 1 Scoping Report — Share Page `/s/[videoId]` Rebuild\n\n**Bottom line up front:** The backend is far more complete than a typical mockup-to-production gap. The AI pipeline (chapters, summary, topics, next-steps, tasks, refined transcript, diarized transcript, RAG chat) is **live**. Most work is **UI assembly**, not backend building. Only **4 features need genuinely new backend** — and 3 of those are small.\n\n---\n\n## ✅ Wire existing — backend already real, just connect the new UI\n\n| Feature | Backend evidence |\n|---|---|\n| **Full playback control bar** | `media-player.tsx` (media-chrome) — play/pause/seek/volume/time all driven by real `<video>`; source via `/api/playlist` → signed S3. |\n| **Chapter-segmented progress bar (hover tooltips)** | `generate-ai.ts` → `videos.metadata.chapters`; `GET /api/video/ai`; rendered + click-to-seek in `SegmentedProgressBar.tsx`. End-to-end live. |\n| **Click-to-seek chapter timeline (Summary > Timeline)** | `aiSummary.chapters[{startSec,title,body}]`; `SummaryPanel.tsx` calls `onVideoJump`; wired in `ShareVideo.tsx:506`. |\n| **Below-video tab bar (Summary/Tasks/Transcript/Refined)** | `BelowVideoTabs.tsx` + all 4 panels wired (`ShareVideo.tsx:503-536`). Pure client switch. |\n| **Overview lead card** | `aiSummary.overview` (Gemini) rendered in `SummaryPanel.tsx:44`. Only restyle needed. |\n| **Agreed next-steps checklist** | `aiSummary.nextSteps[]` rendered as numbered list `SummaryPanel.tsx:108`. Only restyle. |\n| **Transcript entries (speaker/timestamp/text)** | Gemini diarization → VTT → `getTranscript` → `TranscriptPanel.tsx`. Full pipeline live. |\n| **Click-to-seek transcript playback (karaoke sync)** | `TranscriptPanel.tsx:152` active-cue highlight + auto-scroll + `onVideoJump`. Fully wired. |\n| **Refined-section jump-to-video buttons** | `RefinedTranscriptPanel.tsx:39` play button → `onVideoJump(chapter.startSec)`. Live. |\n| **Floating AI orb (FAB)** | `AIFab.tsx` fully built + wired (`ShareVideo.tsx:539`). |\n| **AI chat popup (context-aware)** | `POST /api/video/ai/chat` — real Gemini + transcript RAG (`transcript-retrieve.ts`), SSE streaming. **No canned replies in code** (inventory's fear is outdated). |\n| **AI suggested-prompt chips** | `AIChatPopup.tsx:28` QUICK_ACTIONS → same real chat endpoint. |\n| **AI panel resize handle** | `AIChatPopup.tsx:383` pointer-event resize. Client-only, done. |\n| **Comments panel + empty state** | `page.tsx:679` server query joins `comments`+`users`; `EmptyState.tsx`/`Comments.tsx`. |\n| **Comment composer** | `actions/videos/new-comment.ts` server action (insert + auth + disableComments check). Fully wired. |\n| **Share header with copy-link** | `ShareHeader.tsx:207-273` builds URL + `navigator.clipboard`. (Inventory's \"no JS yet\" is wrong.) |\n| **Author / sharing meta row** | `ShareHeader.tsx:566` owner avatar/name/relative-time + Shared badge → `SharingDialog`. |\n| **Owner action buttons** | `ShareHeader.tsx:598` Edit/Analytics/Dashboard, owner-gated, all routes exist. |\n\n---\n\n## 🔨 Build new backend — no backend exists yet\n\n| Feature | What to build (concise) |\n|---|---|\n| **Task completion persistence** (checkboxes + progress ring) | Create `apps/web/app/api/video/tasks/toggle/route.ts`: accept `{videoId, taskIndex, done}`, authenticate, load `videos.metadata`, set `aiSummary.tasks[i].done`, save. Frontend debounce/optimistic UI **already calls** this dead route (`TasksPanel.tsx:112`). **Small.** |\n| **Live customization Tweaks panel** | The referenced `tweaks-panel.jsx` does not exist. Build a client `TweaksPanel` that writes `data-accent/data-motion/data-sticky/data-summary/data-tasks` to `documentElement` + persists to localStorage. (Production: optional `PUT /api/video/preferences`.) Mostly client; \"backend\" only if persisting server-side. |\n| **Summary view switcher (Cards/Timeline/Document)** | **No backend change** — all 3 views consume existing `aiSummary`. Build view-mode state + 3 render branches in `SummaryPanel`. (Listed here only because zero switcher code exists today.) |\n| **Document view (bulleted lists + copy/export)** | **No data API needed** — uses existing `topics[]`/`nextSteps[]`. Build the Document render branch + client `navigator.clipboard` copy. Server PDF export only if explicitly required. |\n\n> Note: the last two are \"build-new UI on existing data\" — no real backend work. Only the **tasks/toggle route** is a true new backend endpoint, and it's tiny.\n\n---\n\n## 🟡 Partial — exists but incomplete\n\n| Feature | What's missing |\n|---|---|\n| **Sticky video player + thumbnail overlay** | Video URL + S3 poster (`/api/video/og`) + preview GIF (`/api/video/preview`) all exist, but `VideoPreviewGif.tsx` is a **stub returning null** (poster never renders), and **no sticky/scroll-pinning** anywhere. Wire the GIF/poster fetch + add `position:sticky`/IntersectionObserver + localStorage flag. No new API. |\n| **Secondary controls (captions/settings/PiP/fullscreen)** | Captions, PiP, Fullscreen, **playback-speed** all fully wired. Missing: **quality selection** needs an HLS manifest (multi-bitrate transcode → `.m3u8`) — current MP4 never populates `mediaRenditionList`. **Caption translation** needs a translation job storing translated VTTs in S3. Core controls ship today; quality + translation are separate backend jobs. |\n| **Summary stat strip** | Duration / topic-count / task-count derivable from existing metadata. **Participant count has NO backend** — `speakerCount` hardcoded `undefined`. Build: extract distinct speakers from `transcriptions.speaker` column (or preserve VTT speaker tags) → expose via page data. |\n| **Key-topics grid (Cards)** | `topics[{title,body}]` exist + grid renders, but **no icon/category field**. Extend Gemini prompt + `AiSummarySchema` + type with an icon/category key; add icon slot to card. |\n| **Tasks progress header** | Renders from in-memory state correctly; counts **don't survive reload** — blocked on the same `tasks/toggle` route above. |\n| **Tasks Board/Checklist switch** | `TasksPanel` reads `data-tasks` + MutationObserver, but **nothing writes it** and no localStorage. Build the segmented toggle (client-only). |\n| **Grouped task cards (assignee/priority/deadline)** | AI extracts `{title,assignee,priority,deadline,done}` + cards render, but **no `category`/group field** (checklist groups by priority only) and **no participant directory** for real avatars. Add `category` to schema+prompt; optional `participants[]` for avatars. |\n| **Refined transcript report** | `refinedTranscript.chapters[{startSec,title,paragraphs}]` fully generated + rendered, but the **report header (participants, duration, purpose) does not exist**. Add `reportHeader` to schema + prompt + `/api/video/ai` response; render header block. |\n| **Engagement analytics row** | Views (Tinybird), comment/reaction counts all available, but **gated to owners/members only** — public viewers never see it. Relax `isOwnerOrMember` guard; no new endpoint. |\n| **Quick emoji reactions** | Clicking inserts a `comments` row (`type='emoji'`), but **no toggle/dedup, no per-user tracking, no delete** — same user can spam unlimited reactions. Build dedup: check existing reaction, DELETE on un-react, expose `userReacted` flag. |\n| **Reduced-motion / animations toggle** | OS `prefers-reduced-motion` respected in 2 spots, but **no user-toggled `data-motion` override**. Add toggle + global `[data-motion='reduced'] *{animation:none}` CSS + localStorage. |\n\n---\n\n## ⚠️ Risk: pretty-but-dead UI\n\nThese ship convincingly as fake if not deliberately wired. **Watch list:**\n\n1. **Task checkboxes / progress ring** — HIGHEST RISK. UI is fully animated and *calls a route that doesn't exist*. Toggling looks perfect, then resets on reload. **Must wire to `POST /api/video/tasks/toggle` (build it).**\n2. **Emoji reactions** — counts \"always increment to 1 locally.\" Will look interactive but is non-persistent/spammable. **Must wire to dedup + persisted reaction state.**\n3. **Summary stat strip → participant count** — three of four cards are real; \"participants: 2\" will be **hardcoded fake** unless wired to `transcriptions.speaker`.\n4. **Key-topic icons** — easy to drop in static/random icons. **Must come from an AI category field**, else decorative noise.\n5. **Quality selector (settings gear)** — renders an empty/inert menu on MP4. **Either wire to real HLS renditions or hide it** — don't show a dead dropdown.\n6. **Caption language switcher** — same trap: a language list with no translated VTTs behind it. **Hide until translation backend exists.**\n7. **Refined report header** — participants/duration/purpose will be **placeholder text** unless `reportHeader` is generated.\n8. **Sticky-video + thumbnail overlay** — `VideoPreviewGif` returns null today; the poster/play-overlay is the *first thing users see* and currently renders nothing real.\n9. **Tweaks panel** — references a missing file + external CDN React. If shipped as-is it's a demo artifact, not product. **Decide: ship as real localStorage tool, or cut from Phase 1.**\n\n---\n\n## Honest verdict\n\n**Yes — the teacher's design can be made fully FUNCTIONAL, not faked.** The hard part (the entire AI analysis + transcription + RAG-chat pipeline) is already real and serving data. There is **no feature that is impossible** within Phase 1; the only items requiring meaningful *infrastructure* (HLS transcode for quality, VTT translation jobs) are isolated and can be **deferred or hidden** without breaking the page.\n\n**Effort split (32 features):**\n\n- **~17 wire-existing (~55%)** — pure UI assembly against live data/components. Low risk, fast.\n- **~11 partial (~34%)** — UI mostly exists; each needs a small, well-scoped backend or wiring fix (schema field + prompt line, a guard removal, a dedup branch, a stub fill).\n- **~4 build-new (~12%)** — and of these, only **one is a true new endpoint** (`tasks/toggle`, tiny); the other three are new UI on *existing* data.\n\n**Real backend work is small and concentrated:**\n1. `POST /api/video/tasks/toggle` (new route) — **the single most important build; unblocks 2 features.**\n2. Schema+prompt additions (additive, one Gemini pass): topic `icon/category`, task `category`, refined `reportHeader`, `participants[]`.\n3. `speakerCount` extraction from `transcriptions.speaker`.\n4. Emoji reaction dedup/delete.\n5. Relax analytics-row visibility guard.\n\n**Defer/hide cleanly (avoid dead UI):** HLS quality renditions, caption translation. **Decide scope:** Tweaks panel (real tool vs cut).\n\n**Recommendation:** Phase 1 is dominated by front-end assembly. Delegate the wire-existing batch in parallel by panel ownership (Summary / Tasks / Transcript / Refined / Comments / Header / Player). The backend track is one engineer doing the `tasks/toggle` route + the additive AI-schema fields. Build the `tasks/toggle` route **first** so the tasks panel is never a fake.\n\n---\n\nKey files: `apps/web/app/s/[videoId]/_components/ShareVideo.tsx` (wiring hub), `apps/web/workflows/generate-ai.ts` (AI schema/prompt — additive edits land here), `apps/web/app/s/[videoId]/_components/panels/*` (panel UIs), `apps/web/app/api/video/tasks/toggle/route.ts` (**to create**), `packages/database/types/metadata.ts` (AiSummary type — additive fields).",
+    "inventory": [
+      {
+        "name": "Sticky video player with thumbnail + play overlay",
+        "area": "player",
+        "description": "16:9 video player that pins to the top of the viewport on scroll (sticky, toggleable); shows a thumbnail with a large center play button overlay until played.",
+        "needs": "Hosted video file/stream URL + thumbnail/poster image for the recording; a 'sticky' user-preference flag (currently from Tweaks panel)."
+      },
+      {
+        "name": "Full playback control bar",
+        "area": "player",
+        "description": "Bottom gradient control bar with play/pause, rewind and forward (skip) buttons, volume control, and a live current-time / total-duration readout (0:00 / 45:46).",
+        "needs": "A real video element with playback API (currentTime, duration, play/pause, seek, volume); the JS currently only fakes the time display and has no real audio/seek backend."
+      },
+      {
+        "name": "Secondary player controls (captions, settings, PiP, fullscreen)",
+        "area": "player",
+        "description": "Right-side control buttons for captions/subtitles toggle, a settings gear (intended for quality/speed), picture-in-picture, and fullscreen.",
+        "needs": "Caption/subtitle track (VTT) tied to the transcript; player settings backend for quality + playback-speed options; browser PiP & Fullscreen APIs (no wiring exists yet)."
+      },
+      {
+        "name": "Chapter-segmented progress bar with hover tooltips",
+        "area": "chapters",
+        "description": "YouTube-style progress bar split into one segment per chapter (width proportional to chapter length), each filling with playback and showing a dark tooltip (timestamp + chapter title) on hover; clicking a segment seeks to that chapter start. A white scrubber dot tracks position.",
+        "needs": "Chapter list with start times + titles (currently hardcoded CHAPTERS array, 14 entries) generated from the transcript/segmentation backend; bound to real video seek."
+      },
+      {
+        "name": "Click-to-seek chapter timeline (Summary > Timeline view)",
+        "area": "chapters",
+        "description": "Vertical chapter list with timestamp pills and title+description; each pill is clickable to jump the video to that chapter's second (data-seconds).",
+        "needs": "Per-chapter {seconds, title, description} data from an AI chapter-segmentation endpoint; bound to videoJump/seek."
+      },
+      {
+        "name": "Below-video tab bar (Summary / Tasks / Transcript / Refined)",
+        "area": "other",
+        "description": "Four-tab switcher under the video that swaps the active content panel; only one panel visible at a time.",
+        "needs": "Purely client-side UI; depends on each panel's content being populated (summary, tasks, transcript, refined endpoints)."
+      },
+      {
+        "name": "Summary stat strip",
+        "area": "summary",
+        "description": "Four stat cards at top of Summary: duration (45:46), participant count (2), key-topic count (9), task count (9), each with icon and label.",
+        "needs": "Computed metadata: video duration, distinct speaker/participant count, number of extracted topics, number of extracted tasks — from analysis backend."
+      },
+      {
+        "name": "Overview lead card",
+        "area": "summary",
+        "description": "Highlighted gradient card with a 1-paragraph AI-generated meeting overview/abstract.",
+        "needs": "AI-generated meeting summary text endpoint."
+      },
+      {
+        "name": "Summary view switcher (Cards / Timeline / Document)",
+        "area": "summary",
+        "description": "The Summary panel can render in three layouts of the same data: Cards (topic grid + numbered next-steps), Timeline (clickable chapter list), and Document (plain bulleted lists). Switched via data-summary attribute / Tweaks panel.",
+        "needs": "A single structured summary dataset (topics[], next_steps[], chapters[]) that all three views render; a stored layout preference."
+      },
+      {
+        "name": "Key-topics grid (Cards view)",
+        "area": "summary",
+        "description": "Grid of topic cards, each with an icon and a 1-2 line description of a discussed theme (8-9 topics).",
+        "needs": "AI-extracted topics array, each {icon/category, text}, from the transcript-analysis endpoint."
+      },
+      {
+        "name": "Agreed next-steps checklist",
+        "area": "summary",
+        "description": "Numbered list (01-05) of agreed action items / next steps in prose form.",
+        "needs": "AI-extracted 'next steps / agreements' array from the meeting analysis."
+      },
+      {
+        "name": "Document view bulleted summary",
+        "area": "summary",
+        "description": "Plain document-style rendering of the summary as 'Asosiy mavzular' and 'Kelishilgan keyingi qadamlar' bullet lists (good for copy/export).",
+        "needs": "Same structured topics + next-steps data; optionally an export/copy/print backend."
+      },
+      {
+        "name": "Tasks progress header with completion ring/bar",
+        "area": "tasks",
+        "description": "Header showing 'X / N vazifa bajarildi', a percentage, and an animated progress bar that updates live as tasks are checked off.",
+        "needs": "Task list with done/total counts; persisted completion state per task (currently in-memory only)."
+      },
+      {
+        "name": "Task completion checkboxes",
+        "area": "tasks",
+        "description": "Each task card has a custom checkbox; clicking toggles done state, strikes through the title, recolors the card to green, and recomputes the progress bar.",
+        "needs": "Per-task completion persistence endpoint (PATCH task done state) tied to the user/share; currently no save."
+      },
+      {
+        "name": "Tasks Board / Checklist view switch",
+        "area": "tasks",
+        "description": "Segmented toggle to switch the tasks layout between a two-column Board of cards and a single-column Checklist; choice persisted in localStorage.",
+        "needs": "Client-side layout toggle; persisted view preference (localStorage now, could be account-level)."
+      },
+      {
+        "name": "Grouped task cards with assignee, priority, deadline",
+        "area": "tasks",
+        "description": "Tasks grouped by category (e.g. 'Tanishuv', 'Audit', 'Huquqiy') with a per-group count; each card shows title, assignee avatar(s)+name, a colored priority stripe (high/med/low/done), and a deadline tag or done chip.",
+        "needs": "AI-extracted tasks: {title, group/category, assignees[], priority, deadline/tag, done} — task-extraction endpoint plus a participant directory for avatars."
+      },
+      {
+        "name": "Transcript entries with speaker, timestamp, text",
+        "area": "transcript",
+        "description": "Chronological list of speaker turns, each tile showing a speaker avatar (color-coded per speaker), speaker name, a timestamp pill, and the spoken text.",
+        "needs": "Full diarized transcript: array of {speaker, startSeconds, text}; speaker diarization + naming from the transcription pipeline."
+      },
+      {
+        "name": "Click-to-seek transcript playback",
+        "area": "transcript",
+        "description": "Each transcript entry has a play button (revealed on hover/active) that jumps the video to that line's timestamp and highlights the active entry.",
+        "needs": "Per-line timestamps (data-seconds) bound to real video seek; ideally auto-highlight of the current line during playback (karaoke sync)."
+      },
+      {
+        "name": "Refined transcript report (sectioned, edited prose)",
+        "area": "refined",
+        "description": "AI-cleaned, narrative version of the meeting: a report header (participants, duration, purpose) followed by numbered sections, each with a title, a time-range badge, and polished multi-paragraph prose.",
+        "needs": "AI 'refined transcript / report' generation endpoint producing sections {title, timeRange, paragraphs[]}."
+      },
+      {
+        "name": "Refined-section jump-to-video play buttons",
+        "area": "refined",
+        "description": "Each refined section gets a play button (built by JS from the time-range badge) that seeks the video to that section's start time.",
+        "needs": "Parsed start time per section bound to real video seek."
+      },
+      {
+        "name": "Floating AI assistant orb (FAB)",
+        "area": "aichat",
+        "description": "Animated pulsing gradient orb fixed bottom-right; clicking opens the AI chat popup, hides the orb, and shows an ambient color aura behind the glass panel. Escape closes.",
+        "needs": "Client-side toggle only; gateway to the AI chat backend below."
+      },
+      {
+        "name": "AI chat popup (frosted-glass, context-aware)",
+        "area": "aichat",
+        "description": "Draggable-resizable frosted glass chat panel with header ('Meeting AI', live indicator 'context loaded'), scrollable message body, welcome message, and an auto-growing input with send button; shows a typing indicator then a reply.",
+        "needs": "A real LLM chat endpoint with this meeting's transcript/summary/tasks loaded as context; conversation state. Currently replies are hardcoded keyword-matched canned strings (reply()), not a real model."
+      },
+      {
+        "name": "AI suggested-prompt chips",
+        "area": "aichat",
+        "description": "Quick-action chips in the welcome state: 'Qisqacha xulosa', 'Vazifalar ro'yxati', 'Follow-up xat', 'Asosiy qarorlar' — each sends a preset question to the assistant.",
+        "needs": "Same AI chat endpoint; the chip prompts can be static but their answers require the model + meeting context."
+      },
+      {
+        "name": "AI panel resize handle",
+        "area": "aichat",
+        "description": "Drag handle on the popup's top-left corner to resize the chat window (clamped to min/max of viewport).",
+        "needs": "Client-side only (pointer events)."
+      },
+      {
+        "name": "Comments panel with empty state",
+        "area": "comments",
+        "description": "Sidebar 'Comments' section showing an empty state ('No comments yet') and a list area for threaded viewer comments.",
+        "needs": "Comments endpoint (list comments for this share) with author, text, timestamp; real-time/poll updates."
+      },
+      {
+        "name": "Comment composer",
+        "area": "comments",
+        "description": "Textarea ('Leave a comment') plus a Comment submit button to post a new comment.",
+        "needs": "POST comment endpoint tied to the share + commenter identity/auth; the submit button has no handler yet."
+      },
+      {
+        "name": "Engagement analytics row",
+        "area": "comments",
+        "description": "Row above comments showing view count, comment count, and reaction count (all 0 in mockup) plus a 'View analytics' link.",
+        "needs": "Analytics backend: views, comment count, reaction totals per share; analytics detail page behind the link."
+      },
+      {
+        "name": "Quick emoji reactions",
+        "area": "comments",
+        "description": "Reaction pill of six emoji (laugh, love, wow, celebrate, thumbs up/down); clicking toggles a 'reacted' state and shows a count badge.",
+        "needs": "Reactions endpoint storing per-emoji counts and the current viewer's reaction; counts currently fake (always increments to 1 locally)."
+      },
+      {
+        "name": "Share header with copy-link",
+        "area": "other",
+        "description": "Top header with brand badge (data365), the video title, and a share-URL box with a copy-to-clipboard button.",
+        "needs": "The share URL/slug for this recording; a working clipboard-copy handler (button has no JS yet)."
+      },
+      {
+        "name": "Author / sharing meta row",
+        "area": "other",
+        "description": "Row showing author avatar + name (Bunyod), relative time shared ('18 minutes ago'), and a 'Shared' status badge (likely a sharing-settings dropdown).",
+        "needs": "Recording owner profile (name/avatar), created/shared timestamp, and share-visibility settings endpoint behind the 'Shared' badge."
+      },
+      {
+        "name": "Owner action buttons",
+        "area": "other",
+        "description": "Owner-only actions: 'Edit video', 'View analytics', and a primary 'Go to dashboard' button.",
+        "needs": "Owner auth/permission check; video editor route, analytics route, and dashboard route — plus gating so non-owners don't see these."
+      },
+      {
+        "name": "Live customization Tweaks panel",
+        "area": "other",
+        "description": "React-rendered settings panel to change accent color (4 options), toggle animations, toggle sticky video, and pick Summary layout (Cards/Timeline/Document) and Tasks layout (Board/Checklist) live.",
+        "needs": "Likely a design/demo tool (depends on external tweaks-panel.jsx + React via CDN); for production it would need persisted per-user/share theme + layout preferences. Note: external CDN scripts and a missing tweaks-panel.jsx file."
+      },
+      {
+        "name": "Reduced-motion / animations toggle",
+        "area": "other",
+        "description": "Global animations on/off (data-motion) disabling all transitions/animations for accessibility or performance.",
+        "needs": "A persisted user preference; could also respect prefers-reduced-motion media query."
+      }
+    ],
+    "readiness": [
+      {
+        "area": "player",
+        "items": [
+          {
+            "feature": "Sticky video player with thumbnail + play overlay",
+            "backendStatus": "partial",
+            "evidence": "Real video URL exists via /api/playlist (apps/web/app/s/[videoId]/_components/ShareVideo.tsx:344). Poster/thumbnail image exists in S3 at screenshot/screen-capture.jpg served by /api/video/og (apps/web/actions/videos/get-og-image.tsx:64) and animated preview GIF via /api/video/preview (apps/web/app/api/video/preview/route.ts). Play button overlay is real and wired to videoRef.current.play() (CapVideoPlayer.tsx:794). However: (1) VideoPreviewGif component is a stub returning null (apps/web/app/s/[videoId]/_components/VideoPreviewGif.tsx:11) so the thumbnail overlay is never rendered from S3; (2) no sticky/scroll-pinning behavior exists anywhere in the player wrapper — no scroll listener, no position:sticky on the video container, no user preference flag for it.",
+            "whatToBuild": "Wire VideoPreviewGif to actually fetch /api/video/preview (falling back to /api/video/og) and render the poster image with a play button overlay until first play. Add a scroll IntersectionObserver (or position:sticky CSS) on the player container div in ShareVideo.tsx to pin it to the top of the viewport on scroll, toggled by a user preference stored in localStorage (matching the Tweaks panel pattern). No new API routes needed — both the screenshot and preview-gif endpoints already exist."
+          },
+          {
+            "feature": "Full playback control bar",
+            "backendStatus": "wire-existing",
+            "evidence": "The entire control bar is wired to a real HTMLVideoElement via the media-chrome library (apps/web/app/s/[videoId]/_components/video/media-player.tsx imports from 'media-chrome/react/media-store'). MediaPlayerPlay dispatches MEDIA_PLAY_REQUEST / MEDIA_PAUSE_REQUEST; MediaPlayerSeekBackward and MediaPlayerSeekForward dispatch MEDIA_SEEK_REQUEST with real currentTime math; MediaPlayerVolume binds to MEDIA_VOLUME_REQUEST; MediaPlayerTime reads mediaCurrentTime and mediaDuration from the media store — all driven by the real video element, not fake. Video source resolves to /api/playlist which redirects to a signed S3 URL (apps/web/app/s/[videoId]/_components/playback-source.ts:181).",
+            "whatToBuild": "No backend work needed. The control bar just needs to be assembled in the new teacher mockup layout (bottom gradient bar) by composing the existing MediaPlayerPlay, MediaPlayerSeekBackward, MediaPlayerSeekForward, MediaPlayerVolume, and MediaPlayerTime components inside MediaPlayerControls — all already exported from media-player.tsx."
+          },
+          {
+            "feature": "Secondary player controls (captions, settings, PiP, fullscreen)",
+            "backendStatus": "partial",
+            "evidence": "Captions toggle (MediaPlayerCaptions) and subtitle VTT are real: ShareVideo.tsx:188-196 builds a blob URL from transcription data when transcriptionStatus === 'COMPLETE' and passes it as captionsSrc to a <track> element on the video. PiP (MediaPlayerPiP) calls document.exitPictureInPicture() / videoElement.requestPictureInPicture() directly — fully wired browser API, media-player.tsx:3068-3095. Fullscreen (MediaPlayerFullscreen) dispatches MEDIA_ENTER/EXIT_FULLSCREEN_REQUEST via media-chrome — fully wired, media-player.tsx:3018-3050. Settings gear (MediaPlayerSettings) covers Speed (fully wired) and Quality (media-player.tsx:3603-3647) but the quality sub-menu only renders when mediaRenditionList.length > 0, which requires an HLS stream — the current MP4 source never populates this list. Caption language switching in settings is wired to onCaptionLanguageChange which calls CaptionContext.setSelectedLanguage, but the available translated captions list depends on a separate translation pipeline.",
+            "whatToBuild": "Quality selection requires serving the video as an HLS manifest with multiple bitrate renditions (e.g., via MediaConvert or a transcoding step that produces a .m3u8 with 360p/720p/1080p variants) and switching the player src to the HLS URL so media-chrome can populate mediaRenditionList automatically. Caption language translation requires a backend translation job that stores translated VTT files in S3 and returns them via the availableCaptions prop. PiP and Fullscreen need no backend work. The captions toggle itself works today when a transcript exists."
+          }
+        ]
+      },
+      {
+        "area": "chapters",
+        "items": [
+          {
+            "feature": "Chapter-segmented progress bar with hover tooltips",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/workflows/generate-ai.ts produces chapters:{title,start}[] stored in videos.metadata.chapters; served by GET /api/video/ai (apps/web/app/api/video/ai/route.ts); polled in Share.tsx; mapped start→startSec in ShareVideo.tsx line 424-427; consumed by SegmentedProgressBar (apps/web/app/s/[videoId]/_components/video/SegmentedProgressBar.tsx) which already implements proportional segments, hover tooltip with timestamp+title, white scrubber dot, and click-to-seek via MediaActionTypes.MEDIA_SEEK_REQUEST. Full end-to-end pipeline is live.",
+            "whatToBuild": "Nothing — the complete feature already exists and is wired."
+          },
+          {
+            "feature": "Click-to-seek chapter timeline (Summary > Timeline view)",
+            "backendStatus": "wire-existing",
+            "evidence": "AI workflow (apps/web/workflows/generate-ai.ts) generates aiSummary.chapters:[{startSec,title,body}] stored in videos.metadata.aiSummary; SummaryPanel (apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx) renders a vertical list of clickable timestamp pills calling onVideoJump(chapter.startSec); ShareVideo.tsx line 506-513 mounts SummaryPanel with data.metadata?.aiSummary and onVideoJump={handleSeek}, which dispatches a real video seek. Full pipeline is live.",
+            "whatToBuild": "Nothing — the complete feature already exists and is wired. The richer per-chapter description field (chapter.body) is also already populated by the AI and rendered in SummaryPanel."
+          }
+        ]
+      },
+      {
+        "area": "summary",
+        "items": [
+          {
+            "feature": "Summary stat strip: duration, participant count, key-topic count, task count",
+            "backendStatus": "partial",
+            "evidence": "packages/database/schema.ts:359 — videos.duration (float, seconds) exists and is passed to SummaryPanel via data.duration. aiSummary.topics[] and aiSummary.tasks[] exist in metadata (packages/database/types/metadata.ts), so topic and task counts are derivable client-side. However, speaker/participant count has NO backend: apps/web/app/s/[videoId]/_components/ShareVideo.tsx:510 hardcodes speakerCount: undefined, and no speaker extraction exists anywhere in the codebase.",
+            "whatToBuild": "No new API needed for duration, topic count, or task count — all are already in metadata. For participant count: either (a) count distinct speaker tags from the transcription VTT (the VTT parser in generate-ai.ts strips speaker labels, so they would need to be preserved), or (b) parse the transcriptions table (schema.ts:1505 has a speaker column). Then expose speakerCount via the video share page data fetch and pass it through VideoData. Finally build the four-card stat strip UI component."
+          },
+          {
+            "feature": "Overview lead card: AI-generated meeting overview/abstract",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/workflows/generate-ai.ts:53-55 — AiSummarySchema includes overview: z.string(). packages/database/types/metadata.ts:6 — AiSummary.overview: string. The field is generated by Gemini, saved to videos.metadata.aiSummary.overview, and already rendered in apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx:44-50 as a purple card. The data is passed through ShareVideo.tsx:509.",
+            "whatToBuild": "Data already exists. Only need to build the new gradient card design variant for the mockup (the existing purple card at SummaryPanel.tsx:45-49 can be restyled or replaced)."
+          },
+          {
+            "feature": "Summary view switcher (Cards / Timeline / Document)",
+            "backendStatus": "build-new",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx — only one flat layout exists, no view mode prop, no switcher UI. No data-summary attribute, no Tweaks panel, no layout preference stored anywhere in the codebase.",
+            "whatToBuild": "No backend changes are needed — all three views (Cards, Timeline, Document) consume the same aiSummary dataset already in metadata. Must build: (1) a view-mode state (Cards|Timeline|Document) in SummaryPanel or a parent; (2) three render branches inside SummaryPanel; (3) optionally persist the chosen layout to users.preferences via an existing server action pattern (see apps/web/actions/toggle-dev-mode.ts for the preferences update pattern)."
+          },
+          {
+            "feature": "Key-topics grid (Cards view): icon + description per topic",
+            "backendStatus": "partial",
+            "evidence": "apps/web/workflows/generate-ai.ts:55-57 — topics[] is generated as {title, body}. packages/database/types/metadata.ts:7 — type is { title: string; body: string }[]. SummaryPanel.tsx:86-105 already renders a two-column grid of topic cards. However there is NO icon or category field in the schema or the Gemini prompt — the mockup requires an icon per topic.",
+            "whatToBuild": "Extend the Gemini prompt in generate-ai.ts to also return a category or emoji/icon key per topic item, and add an icon field to AiSummarySchema and the AiSummary type. Then update the SummaryPanel grid card to display the icon. The grid layout itself already exists and just needs the icon slot added."
+          },
+          {
+            "feature": "Agreed next-steps checklist (numbered prose list)",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/workflows/generate-ai.ts:57-58 — nextSteps: z.array(z.string()) is generated and saved. packages/database/types/metadata.ts:9 — AiSummary.nextSteps: string[]. apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx:108-124 renders a numbered ordered list of next steps with purple numbered badges. Data flows through ShareVideo.tsx:509.",
+            "whatToBuild": "Data and basic UI already exist. Only restyling to match the mockup's numbered prose format (01-05 style labels) is needed — no backend work required."
+          },
+          {
+            "feature": "Document view: plain bulleted 'Asosiy mavzular' + 'Kelishilgan keyingi qadamlar' lists with export/copy",
+            "backendStatus": "build-new",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/SummaryPanel.tsx — no document view layout exists. No export, copy-to-clipboard, or print route exists anywhere under apps/web/app/api/video/. The structured data (topics[], nextSteps[]) is already in metadata.",
+            "whatToBuild": "No new data API needed. Must build: (1) the Document render branch inside SummaryPanel (plain ul lists for topics and nextSteps with Uzbek section headings); (2) copy-to-clipboard button (client-side navigator.clipboard, no server route needed); (3) optionally a print stylesheet or a /api/video/export-summary route if server-side PDF/doc export is required."
+          }
+        ]
+      },
+      {
+        "area": "tasks",
+        "items": [
+          {
+            "feature": "Tasks progress header with completion ring/bar",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/TasksPanel.tsx (ProgressBar component, lines 65-80); tasks sourced from metadata.aiSummary.tasks stored in videos.metadata JSON column (packages/database/types/metadata.ts line 9); AI workflow saves tasks via saveResults() in apps/web/workflows/generate-ai.ts line 353",
+            "whatToBuild": "The progress bar renders correctly from in-memory state. Missing: the PATCH/POST endpoint /api/video/tasks/toggle (called at TasksPanel.tsx line 112 but the directory apps/web/app/api/video/tasks/ does not exist) must be created to persist done-state changes back into videos.metadata.aiSummary.tasks[index].done so the count survives a page reload."
+          },
+          {
+            "feature": "Task completion checkboxes",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/TasksPanel.tsx lines 104-125: checkbox toggle, line-through, debounced fetch to POST /api/video/tasks/toggle — but that route does not exist (ls apps/web/app/api/video shows no tasks/ subdirectory; AppRouteHandlerRoutes in .next/dev/types/routes.d.ts confirms absence)",
+            "whatToBuild": "Create apps/web/app/api/video/tasks/toggle/route.ts: accept {videoId, taskIndex, done}, authenticate the caller, load videos.metadata, update aiSummary.tasks[taskIndex].done, and save back with db().update(). The frontend debounce + optimistic UI in TasksPanel.tsx is already correct."
+          },
+          {
+            "feature": "Tasks Board / Checklist view switch",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/TasksPanel.tsx lines 20-24 and 91-99: reads document.documentElement.dataset.tasks and watches via MutationObserver. Grep across all s/[videoId] files finds nothing that writes data-tasks — no segmented toggle UI component exists and no localStorage read/write is wired.",
+            "whatToBuild": "Build a segmented toggle UI (Board / Checklist buttons) that sets document.documentElement.dataset.tasks to 'board' or 'checklist' and persists the choice to localStorage on click. This is purely client-side; no new API route needed."
+          },
+          {
+            "feature": "Grouped task cards with assignee, priority, deadline",
+            "backendStatus": "partial",
+            "evidence": "AI extracts {title, assignee, priority, deadline, done} — schema at packages/database/types/metadata.ts lines 9-15, prompt in apps/web/workflows/generate-ai.ts lines 554 and 683. Card rendering (priority badge, initials avatar, deadline pill) is done in TasksPanel.tsx. No group/category field exists anywhere in the schema or prompt; checklist view groups by priority enum only (TasksPanel.tsx lines 247-269). No participant directory for real avatars.",
+            "whatToBuild": "Add a 'category' (string) field to AiSummary.tasks in packages/database/types/metadata.ts and to the Zod schema in generate-ai.ts; extend the AI prompt to extract a semantic group label per task. Optionally add a participants[] array at the aiSummary level for avatar lookup. The card rendering in TasksPanel.tsx then needs to use category for grouping instead of priority-only bucketing."
+          }
+        ]
+      },
+      {
+        "area": "transcript",
+        "items": [
+          {
+            "feature": "Transcript entries with speaker, timestamp, text",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/actions/videos/get-transcript.ts fetches `{ownerId}/{videoId}/transcription.vtt` from storage when transcriptionStatus=COMPLETE. apps/web/workflows/transcribe.ts runs Gemini with a prompt that requests multi-speaker diarization (Speaker 1/2/N or real names). apps/web/app/s/[videoId]/_components/panels/TranscriptPanel.tsx parses VTT cues into {speaker, startSeconds, endSeconds, text}, color-codes speaker avatars by name hash, and renders timestamp pills. apps/web/hooks/use-transcript.ts wires the server action to React Query. apps/web/app/s/[videoId]/_components/ShareVideo.tsx:523-525 passes transcriptContent, currentTime, and onVideoJump to TranscriptPanel.",
+            "whatToBuild": "Nothing new required. The data pipeline (Gemini diarization -> VTT -> storage -> getTranscript server action -> useTranscript hook -> TranscriptPanel) is fully in place. Connect the new mockup UI to the same TranscriptPanel component or reuse its props directly."
+          },
+          {
+            "feature": "Click-to-seek transcript playback (karaoke sync)",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/TranscriptPanel.tsx lines 152-176: isActive() checks currentTime >= cue.startSeconds && currentTime < cue.endSeconds; active cue gets purple highlight + auto-scrollIntoView. Line 229: play button onClick calls onVideoJump(cue.startSeconds). apps/web/app/s/[videoId]/_components/ShareVideo.tsx lines 145-158: handleSeek sets videoRef.current.currentTime and tracks currentTime via timeupdate event. Both are already wired at ShareVideo.tsx:523-525.",
+            "whatToBuild": "Nothing new required. Per-cue hover-reveal play button, video.currentTime seek, active-cue highlight, and smooth auto-scroll are all implemented. The new mockup just needs to render TranscriptPanel with the already-provided transcriptContent, currentTime, and onVideoJump props."
+          }
+        ]
+      },
+      {
+        "area": "refined",
+        "items": [
+          {
+            "feature": "Refined transcript report (sectioned, edited prose with report header)",
+            "backendStatus": "partial",
+            "evidence": "apps/web/workflows/generate-ai.ts (AiSummarySchema lines 79-91) already generates refinedTranscript.chapters[]{startSec, title, paragraphs[]} via Gemini and saves it in video.metadata.aiSummary.refinedTranscript. The UI panel exists at apps/web/app/s/[videoId]/_components/panels/RefinedTranscriptPanel.tsx and is wired in ShareVideo.tsx line 529-534. However, the required report header (participants, duration, purpose) does not exist anywhere: not in AiSummary type (packages/database/types/metadata.ts), not in the AI prompt schema in generate-ai.ts, and not in GET /api/video/ai/route.ts response.",
+            "whatToBuild": "Extend AiSummarySchema in generate-ai.ts and AiSummary type in packages/database/types/metadata.ts with a reportHeader field: { participants: string[], durationSec: number, purpose: string }. Add it to the Gemini prompt (generateSingleChunk / generateMultipleChunks) and to the GET /api/video/ai route response. Then render the header block at the top of RefinedTranscriptPanel above the chapters."
+          },
+          {
+            "feature": "Refined-section jump-to-video play buttons",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/panels/RefinedTranscriptPanel.tsx lines 39-54: each chapter already renders a Play button that calls onVideoJump(chapter.startSec). ShareVideo.tsx line 533 passes handleSeek as onVideoJump; handleSeek (line 145-150) sets videoRef.current.currentTime = time directly. The startSec per chapter comes from generate-ai.ts which derives it from VTT timestamps. The full chain is already functional.",
+            "whatToBuild": "Nothing — fully implemented. startSec is parsed from VTT and stored in aiSummary.refinedTranscript.chapters[].startSec; the play button and seek are already wired."
+          }
+        ]
+      },
+      {
+        "area": "aichat",
+        "items": [
+          {
+            "feature": "Floating AI assistant orb (FAB)",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/AIFab.tsx — fully implemented animated gradient orb with pulsing CSS animation (ai-chat.css: `.ai-fab::before/after { animation: aiPulse 2.6s ... infinite }`), fixed bottom-right positioning, open/close toggle. Integrated in ShareVideo.tsx lines 539–546 with `ai-aura` ambient overlay on open.",
+            "whatToBuild": "Nothing — client-side only as required; already fully built and wired."
+          },
+          {
+            "feature": "AI chat popup (frosted-glass, context-aware)",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/api/video/ai/chat/route.ts — real POST endpoint that embeds the user query via Gemini, retrieves top-K transcript chunks from `transcriptChunks` table (apps/web/lib/transcript-retrieve.ts), builds context, and streams a Gemini `gemini-3-flash-preview` response as SSE. Frontend AIChatPopup.tsx calls `/api/video/ai/chat` (line 297) and renders streaming tokens. No hardcoded replies exist in the codebase.",
+            "whatToBuild": "Nothing — the real LLM endpoint with transcript RAG and conversation state (messages array) is fully implemented and connected."
+          },
+          {
+            "feature": "AI suggested-prompt chips",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/AIChatPopup.tsx lines 28–45 — `QUICK_ACTIONS` array defines the four Uzbek chip labels ('Qisqacha xulosa', 'Vazifalar ro'yxati', 'Follow-up xat', 'Asosiy qarorlar') with preset query strings; clicking calls `sendMessage(action.query)` (line 481) which hits the same real `/api/video/ai/chat` endpoint with transcript context.",
+            "whatToBuild": "Nothing — chips are implemented with static prompts; answers come from the real Gemini endpoint already wired."
+          },
+          {
+            "feature": "AI panel resize handle",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/AIChatPopup.tsx lines 383–413 — `onResizeMouseDown` handler clamps width (min 300px) and height (min 360px) via pointer events on the `ai-resize` div. CSS in ai-chat.css lines 336–358 defines the top-left corner resize handle with hover highlight.",
+            "whatToBuild": "Nothing — client-side resize is fully implemented."
+          }
+        ]
+      },
+      {
+        "area": "comments",
+        "items": [
+          {
+            "feature": "Comments panel with empty state",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/page.tsx lines 679-744: server-side Drizzle query joins `comments` + `users` tables and fetches all comments for the video; apps/web/app/s/[videoId]/_components/tabs/Activity/EmptyState.tsx renders 'No comments yet' when rootComments.length === 0; apps/web/app/s/[videoId]/_components/tabs/Activity/Comments.tsx renders the threaded list. New comments are added optimistically and persisted via revalidatePath.",
+            "whatToBuild": "No new backend needed. The new UI panel just needs to consume the existing `optimisticComments` prop (already passed to Sidebar and Comments). Real-time polling is not implemented — if the mockup requires it, add a client-side interval that re-fetches via a new GET endpoint or use Next.js router.refresh(); but for a basic panel the existing server-load + optimistic updates is already functional."
+          },
+          {
+            "feature": "Comment composer",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/actions/videos/new-comment.ts: 'use server' action that inserts into the `comments` table, validates auth, checks disableComments setting, and returns the new comment with author data. apps/web/app/s/[videoId]/_components/tabs/Activity/CommentInput.tsx: textarea + submit button fully wired to onSubmit. apps/web/app/s/[videoId]/_components/tabs/Activity/Comments.tsx handleNewComment calls newComment() then handleCommentSuccess().",
+            "whatToBuild": "Nothing new. The POST path (CommentInput → newComment server action → DB insert) is complete. The new UI composer just needs to call the same onSubmit prop already wired in Comments.Shell."
+          },
+          {
+            "feature": "Engagement analytics row",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/Sidebar.tsx lines 64-120 (SidebarAnalytics): view count comes from getVideoAnalytics() (Tinybird query in apps/web/actions/videos/get-analytics.ts), comment count and reaction count are derived from the live comments array. 'View analytics' link points to /dashboard/analytics?capId= which exists at apps/web/app/(org)/dashboard/analytics/page.tsx. However the analytics row is conditionally rendered only for isOwnerOrMember (line 260-269), so public viewers never see it.",
+            "whatToBuild": "The analytics row data is all available (views via Tinybird, comment/reaction counts from comments table). The gap is visibility: the row must be shown to all viewers in the new teacher mockup, not just owners/members. No new backend endpoint needed — just remove or relax the isOwnerOrMember guard and wire the existing SidebarAnalytics component into the new panel layout."
+          },
+          {
+            "feature": "Quick emoji reactions",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/Sidebar.tsx lines 55-62 (REACTIONS array), 122-149 (ReactionsBlock), 181-233 (handleEmojiReact): clicking an emoji calls newComment() with type='emoji', which inserts a row in the comments table. Counts are derived from optimisticComments filtered by type==='emoji'. There is no toggle/dedup logic, no per-user reaction tracking, and no delete-reaction endpoint. The same user can insert unlimited duplicate emoji rows.",
+            "whatToBuild": "Build toggle/dedup support: (1) add a GET check (or query the already-loaded comments) to see if the current viewer already reacted with that emoji; (2) add a DELETE reaction endpoint (or reuse apps/web/app/api/video/comment/delete/route.ts) keyed by authorId+videoId+emoji content; (3) in handleEmojiReact, if the user already reacted delete the existing row instead of inserting a new one; (4) expose a 'userReacted' flag per emoji in the UI for the active/inactive pill state."
+          }
+        ]
+      },
+      {
+        "area": "other",
+        "items": [
+          {
+            "feature": "Below-video tab bar (Summary / Tasks / Transcript / Refined)",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/BelowVideoTabs.tsx (full tab switcher component exists); apps/web/app/s/[videoId]/_components/ShareVideo.tsx lines 503-536 wire all four panels into BelowVideoTabs; data comes from: aiSummary stored in videos.metadata (packages/database/types/metadata.ts), transcript fetched via getTranscript server action (apps/web/actions/videos/get-transcript.ts), AI pipeline writes aiSummary.tasks and aiSummary.refinedTranscript (apps/web/workflows/generate-ai.ts lines 353, 727)",
+            "whatToBuild": "Nothing — the tab bar component and all four panel components are already built and wired. Each panel shows an empty state when its data is missing. The only gap is /api/video/tasks/toggle (called by TasksPanel line 112) which has no route file yet, so task checkbox persistence is a dead call."
+          },
+          {
+            "feature": "Share header with copy-link",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/ShareHeader.tsx: getVideoLink() and getDisplayLink() build the share URL from data.id (lines 207-241); handleCopyClick/handleCopyLink call navigator.clipboard.writeText (lines 252-273); linkCopied state drives the Check/Copy icon swap (lines 531-540). ShareHeader is rendered from page.tsx with the full video data record.",
+            "whatToBuild": "Nothing — the copy-link button is fully wired. It also supports a 'copy at timestamp' variant via a dropdown."
+          },
+          {
+            "feature": "Author / sharing meta row",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/ShareHeader.tsx lines 566-595: renders owner avatar (SignedImageUrl component), owner name (data.owner.name), relative timestamp (formatPlatformDateRelative(data.createdAt)), and a 'Shared'/'Shared with you'/'Make shareable' badge that opens SharingDialog. All data comes from the page.tsx server component which queries users and organizations tables.",
+            "whatToBuild": "Nothing — owner name, avatar, createdAt, and sharing-status badge are all live. The 'Shared' badge opens the existing SharingDialog (apps/web/app/(org)/dashboard/caps/components/SharingDialog.tsx) for visibility settings."
+          },
+          {
+            "feature": "Owner action buttons",
+            "backendStatus": "wire-existing",
+            "evidence": "apps/web/app/s/[videoId]/_components/ShareHeader.tsx lines 598-635: 'Edit video' button (renders only if isOwner && canEditVideo) navigates to /s/{id}/edit; 'View analytics' button navigates to /dashboard/analytics?capId={id}; 'Go to dashboard' button navigates to /dashboard/caps. Owner check: isOwner = user?.id === data.owner.id (line 126). All three destination routes exist: apps/web/app/s/[videoId]/edit/page.tsx, apps/web/app/(org)/dashboard/analytics/page.tsx, apps/web/app/(org)/dashboard/caps/page.tsx.",
+            "whatToBuild": "Nothing — owner auth check and all three buttons are implemented and gated correctly."
+          },
+          {
+            "feature": "Live customization Tweaks panel",
+            "backendStatus": "build-new",
+            "evidence": "No tweaks-panel.jsx file exists anywhere in the repo (grep found only unrelated matches in public/llms.txt and a minified lib). TasksPanel reads data-tasks attribute on documentElement (TasksPanel.tsx lines 21-23) and observes it via MutationObserver — this is the hook point for a tweaks panel to write to. No accent-color toggle, animations toggle, sticky-video toggle, or summary-layout selector exists in any source file.",
+            "whatToBuild": "Build a client-side TweaksPanel component that: (1) writes data-accent / data-motion / data-sticky / data-summary / data-tasks attributes onto document.documentElement; (2) persists choices to localStorage; (3) is loaded and shown on the share page (e.g., as a floating gear button). For production, also add a per-user/share preference endpoint (e.g., PUT /api/video/preferences) to persist layout choices server-side."
+          },
+          {
+            "feature": "Reduced-motion / animations toggle",
+            "backendStatus": "partial",
+            "evidence": "apps/web/app/s/[videoId]/_components/ShareHeader.tsx line 144 reads window.matchMedia('(prefers-reduced-motion: reduce)').matches and skips the title-reveal animation when true. apps/web/app/globals.css line 871 has @media (prefers-reduced-motion: reduce) that hides .ai-title-skeleton. So the OS-level media query is respected in two places. However there is no user-toggled data-motion attribute, no persistent toggle UI, and no global animation suppression tied to a runtime switch.",
+            "whatToBuild": "Add a toggle button (part of the Tweaks panel or standalone) that writes data-motion='reduced' on document.documentElement. Add a global CSS rule [data-motion='reduced'] * { animation: none !important; transition: none !important; } in globals.css. Persist the choice in localStorage and re-apply on page load. The OS media-query path already works; this adds the explicit user-controlled override."
+          }
+        ]
+      }
+    ]
+  }
+}

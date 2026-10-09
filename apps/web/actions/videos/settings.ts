@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 
 export async function updateVideoSettings(
@@ -52,6 +53,10 @@ export async function updateVideoSettings(
 		.update(videos)
 		.set({ settings: settingsToSave })
 		.where(eq(videos.id, videoId));
+
+	revalidatePath("/dashboard/caps");
+	revalidatePath("/dashboard/shared-caps");
+	revalidatePath(`/s/${videoId}`);
 
 	return { success: true };
 }

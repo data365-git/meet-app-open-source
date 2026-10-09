@@ -1,0 +1,3 @@
+orgId	billingMonth	usd
+fjgf6h4p46ym40s	2026-07	5.699123
+fjgf6h4p46ym40s	2026-06	0.431267

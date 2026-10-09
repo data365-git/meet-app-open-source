@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
@@ -8,6 +9,7 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
 export function WelcomePage() {
+	const t = useTranslations("onboarding");
 	const [firstName, setFirstName] = useState("");
 	const [lastName, setLastName] = useState("");
 	const router = useRouter();
@@ -26,7 +28,7 @@ export function WelcomePage() {
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error(t("errorGeneric"));
 		},
 	});
 
@@ -37,8 +39,8 @@ export function WelcomePage() {
 
 	return (
 		<Base
-			title="Welcome to data365"
-			description="Let's get you started"
+			title={t("welcomeTitle")}
+			description={t("welcomeDescription")}
 			hideBackButton
 		>
 			<form className="space-y-7" onSubmit={handleSubmit}>
@@ -48,7 +50,7 @@ export function WelcomePage() {
 						disabled={welcomeMutation.isPending}
 						onChange={(e) => setFirstName(e.target.value)}
 						type="text"
-						placeholder="First name"
+						placeholder={t("firstName")}
 						name="firstName"
 						required
 					/>
@@ -57,7 +59,7 @@ export function WelcomePage() {
 						disabled={welcomeMutation.isPending}
 						onChange={(e) => setLastName(e.target.value)}
 						type="text"
-						placeholder="Last name (optional)"
+						placeholder={t("lastNameOptional")}
 						name="lastName"
 					/>
 				</div>
@@ -69,7 +71,7 @@ export function WelcomePage() {
 					variant="dark"
 					className="mx-auto w-full"
 				>
-					Continue
+					{t("continue")}
 				</Button>
 			</form>
 		</Base>

@@ -1,8 +1,11 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Timeline } from "./Timeline";
+import { isAudioSource, shouldUploadOriginal } from "./trim-utils";
 import { type TrimMode, useFFmpeg } from "./useFFmpeg";
 
 function fmtBytes(bytes: number): string {
@@ -17,13 +20,20 @@ function fmtBytes(bytes: number): string {
 	return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+// Above this size, ffmpeg-wasm OOMs on mobile → trim on server instead.
+const MAX_CLIENT_TRIM_BYTES = 100 * 1024 * 1024; // ~100MB
+
 type Props = {
 	file: File;
-	onConfirm: (trimmedFile: File) => void;
+	onConfirm: (
+		file: File,
+		serverTrim?: { inSec: number; outSec: number; duration: number },
+	) => void;
 	onCancel: () => void;
 };
 
 export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
+	const t = useTranslations("import.trim");
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const [duration, setDuration] = useState(0);
 	const [currentSec, setCurrentSec] = useState(0);
@@ -71,8 +81,62 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 		else v.pause();
 	}, []);
 
+	const uploadingOriginal = shouldUploadOriginal({
+		inSec,
+		outSec,
+		duration,
+		fileType: file.type,
+		fileName: file.name,
+	});
+	const isAudio = isAudioSource(file.type, file.name);
+	// Above MAX_CLIENT_TRIM_BYTES, handleConfirm below skips the local ffmpeg
+	// pass and uploads the file as-is, queuing the cut to run on the server
+	// after upload instead. The button/label must say that plainly — otherwise
+	// "cut and upload" reads as an immediate, finished cut.
+	const serverTrimPending =
+		!isAudio && !uploadingOriginal && file.size > MAX_CLIENT_TRIM_BYTES;
+
 	const handleConfirm = useCallback(async () => {
 		setError(null);
+		// No real trim on an already-MP4 source → upload the file as-is and skip
+		// the heavy in-browser ffmpeg pass (fast, and never OOMs a big/mobile tab).
+		if (
+			shouldUploadOriginal({
+				inSec,
+				outSec,
+				duration,
+				fileType: file.type,
+				fileName: file.name,
+			})
+		) {
+			onConfirm(file);
+			return;
+		}
+		if (isAudio) {
+			if (file.size > MAX_CLIENT_TRIM_BYTES) {
+				setError(t("tooBigAudio"));
+				onConfirm(file);
+				return;
+			}
+			setTrimming(true);
+			try {
+				const trimmedFile = await trim(file, inSec, outSec, mode, "audio");
+				onConfirm(trimmedFile);
+			} catch (e) {
+				console.error("Audio trim failed:", e);
+				setError(e instanceof Error ? e.message : "Trim failed");
+				setTrimming(false);
+			}
+			return;
+		}
+		if (file.size > MAX_CLIENT_TRIM_BYTES) {
+			// The file is uploaded as-is now; the trim itself runs on the server
+			// afterward (ffmpeg-wasm would OOM this file locally). Say so up front
+			// so "cut and upload" doesn't read as an immediate, finished cut.
+			toast.info(t("serverTrimNotice"));
+			onConfirm(file, { inSec, outSec, duration });
+			return;
+		}
 		setTrimming(true);
 		try {
 			const trimmedFile = await trim(file, inSec, outSec, mode);
@@ -82,7 +146,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			setError(e instanceof Error ? e.message : "Trim failed");
 			setTrimming(false);
 		}
-	}, [trim, file, inSec, outSec, mode, onConfirm]);
+	}, [trim, file, inSec, outSec, mode, duration, onConfirm, isAudio, t]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -108,11 +172,11 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 			: originalBytes;
 
 	return (
-		<div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-			<div className="bg-gray-1 rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
-				<div className="p-4 border-b border-gray-4 flex justify-between items-center">
+		<div className="fixed inset-0 z-[100] flex items-stretch justify-center bg-black/70 p-0 sm:items-center sm:p-4">
+			<div className="flex h-[100dvh] w-full max-w-3xl flex-col overflow-hidden bg-gray-1 sm:h-auto sm:max-h-[90vh] sm:rounded-xl">
+				<div className="shrink-0 p-4 border-b border-gray-4 flex justify-between items-center">
 					<h2 className="text-lg font-semibold text-gray-12">
-						Trim before upload
+						{t(isAudio ? "titleAudio" : "title")}
 					</h2>
 					<button
 						type="button"
@@ -123,11 +187,11 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 						✕
 					</button>
 				</div>
-				<div className="p-4 space-y-4 overflow-auto">
+				<div className="flex-1 min-h-0 space-y-4 overflow-auto p-4 pb-28 sm:pb-4">
 					<video
 						ref={videoRef}
 						src={videoUrl}
-						className="w-full max-h-[50vh] bg-black rounded"
+						className="w-full max-h-[38dvh] bg-black rounded sm:max-h-[50vh]"
 						onLoadedMetadata={onLoadedMetadata}
 						onTimeUpdate={onTimeUpdate}
 						onClick={togglePlay}
@@ -151,7 +215,7 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 								checked={mode === "lossless"}
 								onChange={() => setMode("lossless")}
 							/>
-							<span>Lossless (instant)</span>
+							<span>{t("quick")}</span>
 						</label>
 						<label className="flex items-center gap-2 cursor-pointer">
 							<input
@@ -159,54 +223,62 @@ export function PreUploadTrimmer({ file, onConfirm, onCancel }: Props) {
 								checked={mode === "precise"}
 								onChange={() => setMode("precise")}
 							/>
-							<span>Precise (frame-accurate)</span>
+							<span>{t("exact")}</span>
 						</label>
 					</div>
 					<div className="text-xs text-gray-10">
-						Original: {Math.floor(duration / 60)}:
+						{t("original")} {Math.floor(duration / 60)}:
 						{String(Math.floor(duration % 60)).padStart(2, "0")} (
 						{fmtBytes(originalBytes)})
 						{trimmedDuration > 0 && trimmedDuration < duration && (
 							<>
 								{" → "}
-								After trim: {Math.floor(trimmedDuration / 60)}:
+								{t("afterCut")} {Math.floor(trimmedDuration / 60)}:
 								{String(Math.floor(trimmedDuration % 60)).padStart(2, "0")} (~
 								{fmtBytes(estTrimmedBytes)})
 								{originalBytes > estTrimmedBytes && (
-									<> — save ~{fmtBytes(originalBytes - estTrimmedBytes)}</>
+									<>
+										{" "}
+										— {t("save")} ~
+										{fmtBytes(originalBytes - estTrimmedBytes)}
+									</>
 								)}
 							</>
 						)}
 					</div>
-					<p className="text-[11px] text-gray-9">
-						Shortcuts: <kbd>I</kbd> set in, <kbd>O</kbd> set out,{" "}
-						<kbd>Space</kbd> play, <kbd>Esc</kbd> cancel
-					</p>
 					{trimming && (
 						<div className="text-xs text-gray-10">
 							{ffmpegLoading
-								? "Loading trimmer…"
-								: `Trimming… ${Math.round(progress * 100)}%`}
+								? t("loading")
+								: `${t("cutting")} ${Math.round(progress * 100)}%`}
 						</div>
 					)}
 					{error && <div className="text-xs text-red-600">{error}</div>}
 				</div>
-				<div className="p-4 border-t border-gray-4 flex justify-end gap-2">
+				<div className="sticky bottom-0 z-10 flex shrink-0 flex-col gap-2 border-t border-gray-4 bg-gray-1 p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:flex-row sm:justify-end">
 					<Button
 						type="button"
 						variant="gray"
 						onClick={onCancel}
 						disabled={trimming}
+						className="w-full sm:w-auto"
 					>
-						Cancel
+						{t("cancel")}
 					</Button>
 					<Button
 						type="button"
 						variant="dark"
 						onClick={handleConfirm}
 						disabled={trimming || trimmedDuration < 0.5}
+						className="w-full sm:w-auto"
 					>
-						{trimming ? "Working…" : "Upload trimmed video"}
+						{trimming
+							? t("working")
+							: uploadingOriginal
+								? t("upload")
+								: serverTrimPending
+									? t("cutUploadServer")
+									: t("cutUpload")}
 					</Button>
 				</div>
 			</div>

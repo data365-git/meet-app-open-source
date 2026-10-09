@@ -1,8 +1,17 @@
 "use client";
 
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Button, LogoBadge } from "@cap/ui";
+import {
+	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+	LogoBadge,
+} from "@cap/ui";
 import { formatPlatformDateRelative } from "@cap/utils";
+import Cookies from "js-cookie";
 import type { ViewerSettingKey } from "@cap/web-backend";
 import {
 	faChartSimple,
@@ -13,12 +22,24 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
+	AudioLines,
 	Check,
 	Clock,
 	Copy,
+	Download,
+	Ellipsis,
+	FileText,
 	Globe2,
+	Loader2,
+	MessageCircle,
+	Moon,
+	Music,
 	Pencil,
 	Scissors,
+	Send,
+	Share2,
+	Sun,
+	Video,
 	X,
 } from "lucide-react";
 import Image from "next/image";
@@ -32,14 +53,18 @@ import {
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
 import type { VideoStatusResult } from "@/actions/videos/get-status";
+import { replaceVideoWithAudio } from "@/actions/video/replace-with-audio";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { downloadFilename } from "@/lib/download-filename";
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
+import { useTranslations } from "next-intl";
 import type { SharePageBranding, VideoData } from "../types";
 
 export const ShareHeader = ({
@@ -76,6 +101,8 @@ export const ShareHeader = ({
 	branding?: SharePageBranding | null;
 	canManageSharePageBranding?: boolean;
 }) => {
+	const t = useTranslations("share");
+	const tNav = useTranslations("nav");
 	const user = useCurrentUser();
 	const router = useRouter();
 	const { push, refresh } = router;
@@ -91,12 +118,28 @@ export const ShareHeader = ({
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [linkCopied, setLinkCopied] = useState(false);
+	const [isDownloading, setIsDownloading] = useState(false);
+	const [isDownloadingAudio, setIsDownloadingAudio] = useState(false);
+	const [isDownloadingTranscript, setIsDownloadingTranscript] = useState(false);
+	const [confirmReplaceWithAudioOpen, setConfirmReplaceWithAudioOpen] =
+		useState(false);
+	const [isReplacingWithAudio, setIsReplacingWithAudio] = useState(false);
+	// The Download trigger is now a menu, so its spinner/disabled state must
+	// cover EVERY item behind it. Audio extraction in particular runs ffmpeg
+	// over the whole recording on first request (seconds to minutes), and
+	// without this the button looked idle the entire time and silently ate
+	// re-clicks.
+	const isPreparingDownload =
+		isDownloading || isDownloadingAudio || isDownloadingTranscript;
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
+	const [showShareOptions, setShowShareOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
+	const [shareTheme, setShareTheme] = useState<"light" | "dark">("light");
 	const [isHidingBranding, setIsHidingBranding] = useState(false);
 	const [isOpeningBrandingSettings, setIsOpeningBrandingSettings] =
 		useState(false);
 	const copyOptionsRef = useRef<HTMLDivElement>(null);
+	const shareOptionsRef = useRef<HTMLDivElement>(null);
 	const suppressTitleRevealRef = useRef(false);
 	const titleSwapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
@@ -118,6 +161,36 @@ export const ShareHeader = ({
 		document.addEventListener("mousedown", handler);
 		return () => document.removeEventListener("mousedown", handler);
 	}, [showCopyOptions]);
+
+	useEffect(() => {
+		if (!showShareOptions) return;
+		const handler = (e: MouseEvent) => {
+			if (
+				shareOptionsRef.current &&
+				!shareOptionsRef.current.contains(e.target as Node)
+			) {
+				setShowShareOptions(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [showShareOptions]);
+
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		setShareTheme(
+			document.body.classList.contains("dark") ? "dark" : "light",
+		);
+	}, []);
+
+	const handleToggleShareTheme = () => {
+		const nextTheme: "light" | "dark" =
+			shareTheme === "light" ? "dark" : "light";
+		document.body.classList.remove(shareTheme);
+		document.body.classList.add(nextTheme);
+		Cookies.set("theme", nextTheme, { expires: 365 });
+		setShareTheme(nextTheme);
+	};
 
 	const contextData = useDashboardContext();
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
@@ -182,7 +255,7 @@ export const ShareHeader = ({
 		if (next === "" || next === displayTitle) return;
 		try {
 			await editTitle(data.id, next);
-			toast.success("Video title updated");
+			toast.success(t("videoTitleUpdated"));
 			suppressTitleRevealRef.current = true;
 			queryClient.setQueryData<VideoStatusResult>(
 				["videoStatus", data.id],
@@ -193,7 +266,7 @@ export const ShareHeader = ({
 			if (error instanceof Error) {
 				toast.error(error.message);
 			} else {
-				toast.error("Failed to update title - please try again.");
+				toast.error(t("videoTitleUpdateFailed"));
 			}
 		}
 	};
@@ -273,6 +346,122 @@ export const ShareHeader = ({
 		setTimeout(() => setLinkCopied(false), 1200);
 	};
 
+	const handleDownload = async () => {
+		if (isDownloading) return;
+		setIsDownloading(true);
+		try {
+			const res = await fetch(
+				`/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`,
+			);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			const safeName =
+				(displayTitle || "video")
+					.trim()
+					.replace(/[^\w.-]+/g, "_")
+					.slice(0, 80) || "video";
+			anchor.download = `${safeName}.mp4`;
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			toast.error(t("downloadFailed"));
+		} finally {
+			setIsDownloading(false);
+		}
+	};
+
+	// Audio-only download. Signed-in team members only, by the owner's decision
+	// (2026-08-05): a meeting's audio travels further than a share link, so it is
+	// deliberately NOT offered to anonymous link viewers even though the video
+	// download is. The route enforces the same rule server-side — this only hides
+	// a button that would otherwise 401.
+	const handleDownloadAudio = async () => {
+		if (isDownloadingAudio) return;
+		setIsDownloadingAudio(true);
+		try {
+			const res = await fetch(`/api/videos/${data.id}/audio`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = downloadFilename(displayTitle, "mp3");
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			toast.error(t("downloadFailed"));
+		} finally {
+			setIsDownloadingAudio(false);
+		}
+	};
+
+	// Transcript-only download, same signed-in-only rule as the audio download
+	// above (the /api/videos/:id/transcript route requires auth too). No
+	// pre-check of transcript readiness — just attempt the fetch and toast on
+	// 404, which keeps this simple and matches the audio download's pattern.
+	const handleDownloadTranscript = async () => {
+		if (isDownloadingTranscript) return;
+		setIsDownloadingTranscript(true);
+		try {
+			const res = await fetch(`/api/videos/${data.id}/transcript`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = downloadFilename(displayTitle, "txt");
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			toast.error(t("downloadFailed"));
+		} finally {
+			setIsDownloadingTranscript(false);
+		}
+	};
+
+	// Replace the video with its own audio — the SAME server action the
+	// dashboard card has offered since T4b, surfaced here because the owner
+	// wants it where he watches, not only in the list. IRREVERSIBLE: the video
+	// file is overwritten by the extracted audio and the raw upload is
+	// reclaimed, which is why it goes through the same destructive-styled
+	// confirmation the dashboard uses. Transcript and AI analysis survive.
+	const handleReplaceWithAudio = async () => {
+		if (isReplacingWithAudio) return;
+		setIsReplacingWithAudio(true);
+		try {
+			const result = await replaceVideoWithAudio(data.id);
+			if (result.ok) {
+				toast.success(t("replaceWithAudioSuccess"));
+				setConfirmReplaceWithAudioOpen(false);
+				refresh();
+				return;
+			}
+			if (result.reason === "already_audio") {
+				setConfirmReplaceWithAudioOpen(false);
+				refresh();
+				return;
+			}
+			toast.error(
+				result.reason === "unsupported_source"
+					? t("replaceWithAudioErrorUnsupported")
+					: t("replaceWithAudioError"),
+			);
+		} catch {
+			toast.error(t("replaceWithAudioError"));
+		} finally {
+			setIsReplacingWithAudio(false);
+		}
+	};
+
 	const handleSharingUpdated = () => {
 		refresh();
 	};
@@ -293,11 +482,11 @@ export const ShareHeader = ({
 
 		try {
 			await hideShareableLinkCapLogo(data.orgId);
-			toast.success("Cap logo hidden");
+			toast.success(t("logoHidden"));
 			refresh();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to hide Cap logo",
+				error instanceof Error ? error.message : t("logoHideFailed"),
 			);
 		} finally {
 			setIsHidingBranding(false);
@@ -319,7 +508,7 @@ export const ShareHeader = ({
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to open organization settings",
+					: t("orgSettingsOpenFailed"),
 			);
 			setIsOpeningBrandingSettings(false);
 		}
@@ -335,9 +524,9 @@ export const ShareHeader = ({
 					<button
 						type="button"
 						onClick={() => setIsSharingDialogOpen(true)}
-						className="inline-flex items-center rounded-full border border-gray-6 bg-gray-3 px-2.5 py-0.5 text-xs text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
+						className="inline-flex min-h-9 items-center rounded-full border border-gray-6 bg-gray-3 px-3 py-1 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:min-h-0 sm:px-2.5 sm:py-0.5 sm:text-xs"
 					>
-						Make shareable
+						{t("makeSharableLabel")}
 						<FontAwesomeIcon className="ml-1.5 size-2.5" icon={faChevronDown} />
 					</button>
 				);
@@ -346,16 +535,16 @@ export const ShareHeader = ({
 				<button
 					type="button"
 					onClick={() => setIsSharingDialogOpen(true)}
-					className="inline-flex items-center rounded-full border border-gray-6 bg-gray-3 px-2.5 py-0.5 text-xs text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
+					className="inline-flex min-h-9 items-center rounded-full border border-gray-6 bg-gray-3 px-3 py-1 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:min-h-0 sm:px-2.5 sm:py-0.5 sm:text-xs"
 				>
-					Shared
+					{t("sharedLabel")}
 					<FontAwesomeIcon className="ml-1.5 size-2.5" icon={faChevronDown} />
 				</button>
 			);
 		}
 		return (
 			<span className="inline-flex items-center rounded-full border border-gray-6 bg-gray-3 px-2.5 py-0.5 text-xs text-gray-11">
-				Shared with you
+				{t("sharedWithYou")}
 			</span>
 		);
 	};
@@ -374,29 +563,29 @@ export const ShareHeader = ({
 		return (
 			<div className="group relative inline-flex shrink-0 items-center">
 				{canManageSharePageBranding && (
-					<div className="pointer-events-none absolute left-0 top-full z-10 mt-1 flex items-center gap-1 rounded-full border border-gray-5 bg-white p-1 opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+					<div className="pointer-events-none absolute left-0 top-full z-10 mt-1 flex items-center gap-1 rounded-full border border-gray-5 bg-gray-1 p-1 opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
 						<Button
 							variant="gray"
 							size="xs"
-							aria-label="Edit shareable link branding"
+							aria-label={t("editBrandingAriaLabel")}
 							className="h-7 gap-1 whitespace-nowrap rounded-full px-2 text-[11px]"
 							disabled={isOpeningBrandingSettings}
 							onClick={handleEditBranding}
 						>
 							<Pencil className="size-3.5 text-gray-12" />
-							Change logo
+							{t("changeLogo")}
 						</Button>
 						{branding.type === "cap" && (
 							<Button
 								variant="gray"
 								size="xs"
-								aria-label="Hide Cap logo"
+								aria-label={t("hideBrandingAriaLabel")}
 								className="h-7 gap-1 whitespace-nowrap rounded-full px-2 text-[11px]"
 								disabled={isHidingBranding}
 								onClick={handleHideBranding}
 							>
 								<X className="size-3.5 text-gray-12" />
-								Remove
+								{t("remove")}
 							</Button>
 						)}
 					</div>
@@ -430,9 +619,12 @@ export const ShareHeader = ({
 	return (
 		<>
 			{userIsOwnerAndNotPro && (
-				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
+				<div
+					id="share-sticky-notice"
+					className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6"
+				>
 					<p className="text-center text-gray-12">
-						Shareable links are limited to 5 mins on the free plan.
+						{t("freePlanLimitNotice")}
 					</p>
 					<Button
 						type="button"
@@ -440,7 +632,7 @@ export const ShareHeader = ({
 						size="sm"
 						variant="blue"
 					>
-						Upgrade To Cap Pro
+						{t("upgradeToPro")}
 					</Button>
 				</div>
 			)}
@@ -459,19 +651,35 @@ export const ShareHeader = ({
 				user={user}
 				onUpgradeRequest={setUpgradeModalOpen}
 			/>
-			<div className="mt-8">
+			<ConfirmationDialog
+				open={confirmReplaceWithAudioOpen}
+				icon={<AudioLines className="size-4" />}
+				title={t("replaceWithAudioTitle")}
+				description={t("replaceWithAudioBody")}
+				confirmLabel={
+					isReplacingWithAudio
+						? t("replacingWithAudio")
+						: t("replaceWithAudioConfirm")
+				}
+				cancelLabel={t("replaceWithAudioCancel")}
+				confirmVariant="destructive"
+				loading={isReplacingWithAudio}
+				onConfirm={handleReplaceWithAudio}
+				onCancel={() => setConfirmReplaceWithAudioOpen(false)}
+			/>
+			<div className="mt-5 sm:mt-8">
 				<div className="flex flex-col gap-5">
-					<div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-						<div className="flex min-w-0 items-center gap-3">
+					<div className="flex items-start justify-between gap-3 sm:flex-col lg:flex-row">
+						<div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
 							{user && (
 								<button
 									type="button"
 									onClick={handleBackClick}
-									className="inline-flex items-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 px-2.5 py-0.5 text-xs text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
-									aria-label="Go back"
+									className="inline-flex size-11 items-center justify-center rounded-full border border-gray-6 bg-gray-3 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:min-h-0 sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-0.5 sm:text-xs"
+									aria-label={t("goBackAriaLabel")}
 								>
 									<ArrowLeft className="size-3" />
-									Back
+									<span className="hidden sm:inline">{t("back")}</span>
 								</button>
 							)}
 							{renderBranding()}
@@ -483,14 +691,15 @@ export const ShareHeader = ({
 										onChange={(e) => setEditValue(e.target.value)}
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
-										className="w-full min-w-0 text-2xl sm:text-3xl font-semibold text-gray-12"
+										className="w-full min-w-0 text-xl font-semibold text-gray-12 sm:text-3xl"
 									/>
 								) : (
 									<div className="relative inline-flex min-w-0 max-w-full align-middle">
 										<h1
 											role={isOwner ? "button" : undefined}
 											tabIndex={isOwner ? 0 : undefined}
-											className="truncate text-2xl sm:text-3xl font-semibold text-gray-12"
+											className="truncate text-xl font-semibold text-gray-12 sm:text-3xl"
+											title={displayTitle}
 											onClick={() => {
 												if (isOwner) {
 													startEditing();
@@ -516,7 +725,7 @@ export const ShareHeader = ({
 							</div>
 						</div>
 
-						<div className="flex items-center gap-2 shrink-0">
+						<div className="flex w-auto shrink-0 items-center justify-end gap-2 sm:w-full lg:w-auto">
 							{(data.hasPassword || data.hasInheritedPassword) && (
 								<FontAwesomeIcon
 									className="text-amber-600 size-4"
@@ -524,10 +733,11 @@ export const ShareHeader = ({
 								/>
 							)}
 							<div className="relative" ref={copyOptionsRef}>
+								{/* Full pill: visible on sm+ */}
 								<button
 									type="button"
 									onClick={handleCopyClick}
-									className="inline-flex items-center gap-2 rounded-full border border-gray-6 bg-gray-3 px-3 py-1.5 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
+									className="hidden sm:inline-flex items-center gap-2 rounded-full border border-gray-6 bg-gray-3 px-3 py-1.5 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
 								>
 									<span className="max-w-[50vw] truncate sm:max-w-72">
 										{getDisplayLink()}
@@ -539,14 +749,14 @@ export const ShareHeader = ({
 									)}
 								</button>
 								{showCopyOptions && (
-									<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg">
+									<div className="absolute right-0 top-full z-50 mt-1 w-max max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-gray-6 bg-gray-1 shadow-lg">
 										<button
 											type="button"
 											className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
 											onClick={() => handleCopyLink(false)}
 										>
 											<Copy className="w-3.5 h-3.5 shrink-0" />
-											Copy link
+											{t("copyLink")}
 										</button>
 										<button
 											type="button"
@@ -554,11 +764,258 @@ export const ShareHeader = ({
 											onClick={() => handleCopyLink(true)}
 										>
 											<Clock className="w-3.5 h-3.5 shrink-0" />
-											Copy link at {formatTimestamp(capturedTime)}
+											{t("copyLinkAtTime", { time: formatTimestamp(capturedTime) })}
 										</button>
 									</div>
 								)}
 							</div>
+
+							<div className="relative" ref={shareOptionsRef}>
+								{/* Share trigger — pill on sm+, icon-only on mobile */}
+								<button
+									type="button"
+									onClick={() => setShowShareOptions((v) => !v)}
+									aria-label={t("share")} title={t("share")}
+									className="hidden sm:inline-flex items-center gap-2 rounded-full border border-gray-6 bg-gray-3 px-3 py-1.5 text-sm text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12"
+								>
+									<Share2 className="w-3.5 h-3.5 shrink-0" />
+									{t("share")}
+								</button>
+								<button
+									type="button"
+									onClick={() => setShowShareOptions((v) => !v)}
+									aria-label={t("share")} title={t("share")}
+									className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[var(--brand)] px-4 text-sm font-medium text-[var(--brand-fg)] shadow-sm transition-colors hover:brightness-95 sm:hidden"
+								>
+									<Share2 className="size-4 shrink-0" />
+									<span>{t("share")}</span>
+								</button>
+								{showShareOptions && (
+									<div className="absolute right-0 top-full z-50 mt-1 w-max max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-gray-6 bg-gray-1 shadow-lg">
+										<button
+											type="button"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3 sm:hidden"
+											onClick={() => {
+												handleCopyLink(false);
+												setShowShareOptions(false);
+											}}
+										>
+											<Copy className="w-3.5 h-3.5 shrink-0" />
+											{t("copyLink")}
+										</button>
+										<button
+											type="button"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											onClick={() => {
+												const link = getVideoLink();
+												const title = displayTitle || data.name;
+												window.open(
+													`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(title)}`,
+													"_blank",
+													"noopener,noreferrer",
+												);
+												setShowShareOptions(false);
+											}}
+										>
+											<Send className="w-3.5 h-3.5 shrink-0" />
+											{t("shareOnTelegram")}
+										</button>
+										<button
+											type="button"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											onClick={() => {
+												const link = getVideoLink();
+												const title = displayTitle || data.name;
+												window.open(
+													`https://wa.me/?text=${encodeURIComponent(`${title} ${link}`)}`,
+													"_blank",
+													"noopener,noreferrer",
+												);
+												setShowShareOptions(false);
+											}}
+										>
+											<MessageCircle className="w-3.5 h-3.5 shrink-0" />
+											{t("shareOnWhatsApp")}
+										</button>
+										<button
+											type="button"
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+											onClick={() => {
+												const link = getVideoLink();
+												const title = displayTitle || data.name;
+												window.open(
+													`https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(title)}&body=${encodeURIComponent(link)}`,
+													"_blank",
+													"noopener,noreferrer",
+												);
+												setShowShareOptions(false);
+											}}
+										>
+											<Share2 className="w-3.5 h-3.5 shrink-0" />
+											{t("email")}
+										</button>
+										<button
+											type="button"
+											disabled={isDownloading}
+											className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3 disabled:opacity-60 sm:hidden"
+											onClick={() => {
+												setShowShareOptions(false);
+												void handleDownload();
+											}}
+										>
+											<Download className="w-3.5 h-3.5 shrink-0" />
+											{isDownloading
+												? t("downloadPreparing")
+												: t("download")}
+										</button>
+									</div>
+								)}
+							</div>
+
+							{/* Download trigger — now a dropdown with Video / Audio /
+							    Transcript, instead of two separate pill buttons. Audio
+							    and Transcript stay signed-in-only (same rule their
+							    routes enforce server-side); Video stays open to
+							    anonymous share-link viewers, matching today's behavior. */}
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<button
+										type="button"
+										disabled={isPreparingDownload}
+										aria-label={t("downloadAriaLabel")}
+										title={t("downloadAriaLabel")}
+										className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
+									>
+										{isPreparingDownload ? (
+											<Loader2 className="size-3.5 shrink-0 animate-spin" />
+										) : (
+											<Download className="size-3.5 shrink-0" />
+										)}
+										<span className="hidden sm:inline">
+											{isPreparingDownload
+												? t("downloadPreparing")
+												: t("download")}
+										</span>
+									</button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end">
+									<DropdownMenuItem onClick={handleDownload}>
+										<Video className="size-3.5 shrink-0" />
+										{t("downloadVideo")}
+									</DropdownMenuItem>
+									{user && (
+										<DropdownMenuItem onClick={handleDownloadAudio}>
+											<Music className="size-3.5 shrink-0" />
+											{t("downloadAudio")}
+										</DropdownMenuItem>
+									)}
+									{user && (
+										<DropdownMenuItem onClick={handleDownloadTranscript}>
+											<FileText className="size-3.5 shrink-0" />
+											{t("downloadTranscript")}
+										</DropdownMenuItem>
+									)}
+								</DropdownMenuContent>
+							</DropdownMenu>
+
+							{/* Replace-with-audio, in the slot the separate Audio
+							    download button used to occupy. The same action the
+							    dashboard card offers, with the same destructive
+							    confirmation — OWNER only (the server action refuses
+							    anyone else) and hidden once the recording is already
+							    audio-only, matching how Share.tsx computes
+							    `canReplaceWithAudio`. */}
+							{isOwner && !data.metadata?.isAudio && (
+								<button
+									type="button"
+									onClick={() => setConfirmReplaceWithAudioOpen(true)}
+									disabled={isReplacingWithAudio}
+									aria-label={t("replaceWithAudioButton")}
+									title={t("replaceWithAudioButton")}
+									className="hidden items-center justify-center gap-1.5 rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 disabled:opacity-60 sm:inline-flex sm:h-auto sm:w-auto sm:px-3 sm:py-1.5 sm:text-sm"
+								>
+									{isReplacingWithAudio ? (
+										<Loader2 className="size-3.5 shrink-0 animate-spin" />
+									) : (
+										<AudioLines className="size-3.5 shrink-0" />
+									)}
+									<span className="hidden sm:inline">
+										{isReplacingWithAudio
+											? t("replacingWithAudio")
+											: t("replaceWithAudioButton")}
+									</span>
+								</button>
+							)}
+
+							{/* Overflow menu (owner only) */}
+							{isOwner && (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<button
+											type="button"
+											aria-label={t("moreActionsAriaLabel")}
+											className="inline-flex size-11 items-center justify-center rounded-full border border-gray-6 bg-gray-3 text-gray-11 transition-colors hover:bg-gray-4 hover:text-gray-12 sm:h-auto sm:w-auto sm:p-1.5"
+										>
+											<Ellipsis className="w-3.5 h-3.5 shrink-0" />
+										</button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="end">
+										<DropdownMenuItem onClick={handleToggleShareTheme}>
+											{shareTheme === "light" ? (
+												<Moon className="mr-2 size-3.5 text-gray-12" />
+											) : (
+												<Sun className="mr-2 size-3.5 text-gray-12" />
+											)}
+											{shareTheme === "light"
+												? tNav("toggleDark")
+												: tNav("toggleLight")}
+										</DropdownMenuItem>
+										{canEditVideo && (
+											<DropdownMenuItem onClick={handleEditVideo}>
+												<Scissors className="mr-2 size-3.5 text-gray-12" />
+												{t("editVideo")}
+											</DropdownMenuItem>
+										)}
+										<DropdownMenuItem
+											onClick={() =>
+												push(`/dashboard/analytics?capId=${data.id}`)
+											}
+										>
+											<FontAwesomeIcon
+												className="mr-2 size-3.5 text-gray-12"
+												icon={faChartSimple}
+											/>
+											{t("viewAnalytics")}
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											onClick={() => push("/dashboard/caps?page=1")}
+										>
+											{t("goToDashboard")}
+										</DropdownMenuItem>
+										{canManageSharePageBranding && branding && (
+											<>
+												<DropdownMenuSeparator />
+												<DropdownMenuItem
+													disabled={isOpeningBrandingSettings}
+													onClick={handleEditBranding}
+												>
+													<Pencil className="mr-2 size-3.5 text-gray-12" />
+													{t("changeLogo")}
+												</DropdownMenuItem>
+												{branding.type === "cap" && (
+													<DropdownMenuItem
+														disabled={isHidingBranding}
+														onClick={handleHideBranding}
+													>
+														<X className="mr-2 size-3.5 text-gray-12" />
+														{t("removeLogo")}
+													</DropdownMenuItem>
+												)}
+											</>
+										)}
+									</DropdownMenuContent>
+								</DropdownMenu>
+							)}
 						</div>
 					</div>
 
@@ -586,53 +1043,15 @@ export const ShareHeader = ({
 							{userIsOwnerAndNotPro && (
 								<button
 									type="button"
-									className="flex items-center text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
+									className="flex items-center text-sm text-gray-400 duration-200 cursor-pointer hover:text-[var(--brand)]"
 									onClick={() => setUpgradeModalOpen(true)}
 								>
 									<Globe2 className="mr-1 w-4 h-4" />
-									Connect a custom domain
+									{t("connectCustomDomain")}
 								</button>
 							)}
 						</div>
 
-						{isOwner && (
-							<div className="flex flex-wrap items-center gap-2 sm:justify-end">
-								{canEditVideo && (
-									<Button
-										variant="gray"
-										size="xs"
-										className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
-										onClick={handleEditVideo}
-									>
-										<Scissors className="size-3.5 text-gray-12" />
-										Edit video
-									</Button>
-								)}
-								<Button
-									variant="gray"
-									size="xs"
-									className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
-									onClick={() => {
-										push(`/dashboard/analytics?capId=${data.id}`);
-									}}
-								>
-									<FontAwesomeIcon
-										className="size-3.5 text-gray-12"
-										icon={faChartSimple}
-									/>
-									View analytics
-								</Button>
-								<Button
-									size="xs"
-									className="h-8 rounded-full px-2.5 text-xs"
-									onClick={() => {
-										push("/dashboard/caps?page=1");
-									}}
-								>
-									Go to dashboard
-								</Button>
-							</div>
-						)}
 					</div>
 				</div>
 			</div>

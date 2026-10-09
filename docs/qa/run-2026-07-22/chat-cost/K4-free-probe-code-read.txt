@@ -1,0 +1,56 @@
+K4 — Quota-exhausted free-probe skip: CODE-READ evidence (no live paid re-transcribe run per budget rule)
+
+File: apps/web/workflows/transcribe.ts
+
+1) The 30s probe constant exists and is unconditional per attempt:
+   line 105: const FREE_TRANSCRIBE_PROBE_MS = 30_000;
+   line 786-811 (runSync, single-chunk / first-chunk path):
+     const freeKey = serverEnv().GEMINI_API_KEY_FREE;
+     if (freeKey) {
+       try {
+         const freeResult = await withCostGuard({
+           ...
+           fn: async () => {
+             const isFast = context.aiSpeedMode !== "cheap";
+             const runFree = (signal?: AbortSignal) => transcribeWithGemini(audioUrl, {...});
+             const res = isFast
+               ? await withDeadline(FREE_TRANSCRIBE_PROBE_MS, runFree)   // <-- 30s deadline, every call
+               : await runFree();
+             ...
+           },
+         });
+         return freeResult.transcriptVtt;
+       } catch (error) { ... falls back to paid ... }
+     }
+
+2) The multi-chunk path (transcribeAudioChunks, line 938+) calls
+   transcribeChunk() / transcribeAudio() PER CHUNK independently inside
+   processChunk() (line 1037-1064). Grepped the whole file for any run-scoped
+   "remember quota exhausted" signal:
+
+   grep -n "FREE_TRANSCRIBE_PROBE_MS|freeProbeState|skipFreeProbe|Free probe aborted" workflows/transcribe.ts
+   -> ONLY the constant definition (line 105) and its one usage (line 810).
+   No freeProbeState / skipFreeProbe / persisted quota-exhausted flag exists
+   anywhere in the file.
+
+3) Confirms the documented HELD status in
+   docs/plans/2026-07-21-free-probe-skip-HELD.md: a Sonnet-authored fix that
+   threads a run-scoped `freeProbeState={exhausted}` object into transcribeAudio
+   was written (patch: docs/plans/2026-07-21-free-probe-skip-HELD.patch, test:
+   docs/plans/2026-07-21-free-probe-skip-test.ts.txt) but NEVER MERGED, because
+   transcribeAudio is a "use step" (durable workflow step) and mutating an
+   input object across a step boundary is not guaranteed to propagate — the
+   unit test passes in-process (no serialization) but the real prod effect was
+   judged unverified/fragile, so it was held rather than shipped.
+
+VERDICT: on the CURRENT deployed build (201165f), once the free ~20/day Gemini
+quota is exhausted mid-run, EVERY remaining chunk still pays the full 30s
+FREE_TRANSCRIBE_PROBE_MS deadline before falling back to paid — there is no
+memory of the quota-exhausted signal across chunks. This is a LATENCY/malfunction
+waste (not a $ waste — the free attempt fails for $0, cost guard's `free: true`
+flag makes it $0 -- see ai-cost-guard.ts `costUsdMicros = options.free ? 0 : ...`),
+but on an N-chunk long video it adds up to N * 30s of pure wait once quota is
+gone. Documented as a KNOWN, already-analyzed gap; not something this QA pass
+can safely reproduce live (would require exhausting the real daily free quota
+and running a real long multi-chunk transcription — a paid/quota-risking action
+outside this flow's $0 budget).

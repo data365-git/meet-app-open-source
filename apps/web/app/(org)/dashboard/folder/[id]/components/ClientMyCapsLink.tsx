@@ -23,7 +23,11 @@ export function ClientMyCapsLink({
 	const { activeSpace } = useDashboardContext();
 
 	const processDrop = useCallback(
-		async (capData: { id: Video.VideoId; name: string }) => {
+		async (capData: {
+			id: Video.VideoId;
+			name: string;
+			ids?: Video.VideoId[];
+		}) => {
 			setIsDragOver(false);
 
 			try {
@@ -32,19 +36,31 @@ export function ClientMyCapsLink({
 					return;
 				}
 
+				// A card dragged out of a multi-selection carries every selected id on
+				// the payload. Move all of them — otherwise this target would silently
+				// take one video and leave the rest behind while reporting success.
+				// A single card has `ids` of length 1 (or none), so this is unchanged.
+				const ids =
+					capData.ids && capData.ids.length > 0 ? capData.ids : [capData.id];
+
 				setIsMovingVideo(true);
 
-				await moveVideoToFolder({
-					videoId: capData.id,
-					folderId: null,
-					spaceId: spaceId ?? null,
-				});
-				router.refresh();
-				if (activeSpace) {
-					toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
-				} else {
-					toast.success(`Moved "${capData.name}" to Instructional recordings`);
+				for (const videoId of ids) {
+					await moveVideoToFolder({
+						videoId,
+						folderId: null,
+						spaceId: spaceId ?? null,
+					});
 				}
+				router.refresh();
+				const destination = activeSpace
+					? `"${activeSpace.name}"`
+					: "Instructional recordings";
+				toast.success(
+					ids.length > 1
+						? `Moved ${ids.length} caps to ${destination}`
+						: `Moved "${capData.name}" to ${destination}`,
+				);
 			} catch (error) {
 				console.error("Error moving video:", error);
 				toast.error("Failed to move video");
@@ -59,20 +75,28 @@ export function ClientMyCapsLink({
 		async (
 			e:
 				| React.DragEvent<HTMLAnchorElement>
-				| { id: Video.VideoId; name: string },
+				| { id: Video.VideoId; name: string; ids?: Video.VideoId[] },
 		) => {
 			if ("preventDefault" in e) {
 				e.preventDefault();
 
 				try {
-					const capData = JSON.parse(e.dataTransfer.getData("application/cap"));
+					const capData: {
+						id?: Video.VideoId;
+						name?: string;
+						ids?: Video.VideoId[];
+					} = JSON.parse(e.dataTransfer.getData("application/cap"));
 
 					if (!capData || !capData.id) {
 						console.error("Invalid cap data");
 						return;
 					}
 
-					await processDrop(capData);
+					await processDrop({
+						id: capData.id,
+						name: capData.name ?? "",
+						ids: capData.ids,
+					});
 				} catch (error) {
 					console.error("Error processing drop:", error);
 					toast.error("Failed to move video");
@@ -101,7 +125,7 @@ export function ClientMyCapsLink({
 
 		const unregister = registerDropTarget(linkRef.current, (data) => {
 			if (data && data.type === "application/cap") {
-				handleDrop({ id: data.id, name: data.name });
+				handleDrop({ id: data.id, name: data.name, ids: data.ids });
 			}
 		});
 

@@ -1,3 +1,14 @@
+import { getMeetingId } from "../shared/meeting-url";
+import type { CaptureTier } from "../shared/recording-quality";
+import {
+	applyInPageCaptureTier,
+	isInPageRecording,
+	pauseInPageRecording,
+	resumeInPageRecording,
+	startInPageRecording,
+	stopInPageRecording,
+} from "./inpage-recorder";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type NudgeState =
@@ -57,12 +68,18 @@ const settings: Settings = {
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let countdownRemaining = 0;
 let recordingStartTime = 0;
+// Accumulated paused time (ms), mirrored from the background state, so the pill
+// timer excludes paused spans (matches the recorded media) instead of counting
+// wall-clock across a pause/resume.
+let pillPausedAccumMs = 0;
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+let meetEndTimer: ReturnType<typeof setTimeout> | null = null;
 
 let shadowHost: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
 
 const LATER_MS = 12 * 60 * 1000;
+const MEET_END_DEBOUNCE_MS = 5000;
 
 // ── Meet detection ────────────────────────────────────────────────────────────
 
@@ -79,9 +96,45 @@ function isInMeeting(): boolean {
 	);
 }
 
+// ONE parser, shared with the popup and the SW command handler. This used to be
+// a local regex that kept the LEADING SLASH ("/abc-defg-hij") while every other
+// caller produced "abc-defg-hij" — a copy-pasted twin that had drifted. Two
+// consequences, both measured 2026-07-20 by the in-page audio proof:
+//   • MEET_CALL_ENDED compares its id against the recording's own meetingId, so
+//     for shortcut-path recordings (id from the popup, no slash) it NEVER
+//     matched — the meeting-ended prompt silently never fired.
+//   • The in-page path files the upload under the id it sends, so meetings
+//     would have been filed as "/abc-defg-hij".
 function currentMeetingId(): string | null {
-	const m = location.pathname.match(/^(\/[a-z]+-[a-z]+-[a-z]+)/);
-	return m ? m[1] : null;
+	return getMeetingId(location.href);
+}
+
+function cancelMeetEnded(): void {
+	if (meetEndTimer !== null) {
+		clearTimeout(meetEndTimer);
+		meetEndTimer = null;
+	}
+}
+
+function scheduleMeetEnded(): void {
+	if (meetEndTimer !== null) return;
+	const id = meetingId;
+	meetEndTimer = setTimeout(() => {
+		meetEndTimer = null;
+		if (!inCall) return;
+		if (isMeetingUrl() && isInMeeting()) return;
+		inCall = false;
+		if (id) sendToBackground({ type: "MEET_CALL_ENDED", meetingId: id });
+		stopCountdown();
+		if (elapsedTimer !== null) {
+			clearInterval(elapsedTimer);
+			elapsedTimer = null;
+		}
+		if (nudgeState !== "recording") {
+			clearNudge();
+			nudgeState = "hidden";
+		}
+	}, MEET_END_DEBOUNCE_MS);
 }
 
 // ── Sound helpers ─────────────────────────────────────────────────────────────
@@ -116,15 +169,15 @@ function soundDroplet(ctx: AudioContext, t: number): void {
 	osc.frequency.setValueAtTime(1700, t);
 	osc.frequency.exponentialRampToValueAtTime(360, t + 0.11);
 	gain.gain.setValueAtTime(0, t);
-	gain.gain.linearRampToValueAtTime(0.3, t + 0.005);
+	gain.gain.linearRampToValueAtTime(0.12, t + 0.005);
 	gain.gain.exponentialRampToValueAtTime(0.001, t + 0.36);
 	osc.start(t);
-	osc.stop(t + 0.38);
+	osc.stop(t + 0.28);
 }
 
 function soundChime(ctx: AudioContext, t: number): void {
-	sineNode(ctx, 880, t, 0, 0.38, 0.22);
-	sineNode(ctx, 1318, t, 0.16, 0.5, 0.18);
+	sineNode(ctx, 880, t, 0, 0.38, 0.12);
+	sineNode(ctx, 1318, t, 0.16, 0.5, 0.10);
 }
 
 function playAudio(fn: (ctx: AudioContext, t: number) => void): void {
@@ -310,6 +363,26 @@ const NUDGE_CSS = `
 }
 
 .cap-nudge-no-auto:hover { color: #6b7280; }
+
+.cap-nudge-live-note {
+	margin-top: 8px;
+	max-width: 320px;
+	background: #111827;
+	color: #f9fafb;
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-size: 12px;
+	line-height: 1.35;
+	box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.cap-nudge-live-note-error { color: #fca5a5; }
+
+.cap-nudge-confirm {
+	margin-top: 12px;
+	padding-top: 12px;
+	border-top: 1px solid #e5e7eb;
+}
 
 .cap-nudge-pill {
 	background: #111827;
@@ -536,6 +609,36 @@ function formatElapsed(ms: number): string {
 
 // ── Nudge rendering ───────────────────────────────────────────────────────────
 
+/** In-card yes/no for the one question that must never be answered silently:
+ * start a meeting recording that will NOT contain the other participants'
+ * voices? Replaces the recorder page's #view-confirm on this path. */
+function confirmWithoutClientAudioInCard(card: HTMLElement): Promise<boolean> {
+	return new Promise((resolve) => {
+		const existing = card.querySelector(".cap-nudge-confirm");
+		if (existing) existing.remove();
+
+		const box = makeEl("div", "cap-nudge-confirm");
+		const msg = makeEl(
+			"div",
+			"cap-nudge-subtitle",
+			"The other person's audio wasn't captured — 'Share system audio' isn't enabled. Cancel, record again, and turn it on. Record without it anyway?",
+		);
+		const buttons = makeEl("div", "cap-nudge-buttons");
+		const yes = makeBtn("cap-nudge-btn-primary", "Start anyway");
+		const no = makeBtn("cap-nudge-btn-secondary", "Cancel");
+		buttons.append(yes, no);
+		box.append(msg, buttons);
+		card.appendChild(box);
+
+		const finish = (proceed: boolean) => {
+			box.remove();
+			resolve(proceed);
+		};
+		yes.addEventListener("click", () => finish(true), { once: true });
+		no.addEventListener("click", () => finish(false), { once: true });
+	});
+}
+
 function renderDefaultNudge(): void {
 	const root = ensureShadowRoot();
 	const container = root.getElementById("cap-nudge-container");
@@ -548,27 +651,44 @@ function renderDefaultNudge(): void {
 	const subtitle = makeEl(
 		"div",
 		"cap-nudge-subtitle",
-		"Make sure participants have agreed.",
+		"When the screen picker opens, choose 'Entire Screen' and turn on 'Share system audio' — that's how the other person's voice gets recorded.",
 	);
 	const buttons = makeEl("div", "cap-nudge-buttons");
 
 	const btnRecord = makeBtn("cap-nudge-btn-primary", "Record now");
 	const btnLater = makeBtn("cap-nudge-btn-secondary", "Later");
-	const btnDismiss = makeBtn("cap-nudge-btn-dismiss", "Dismiss");
+	const btnDismiss = makeBtn("cap-nudge-btn-dismiss", "Close");
 
 	buttons.append(btnRecord, btnLater, btnDismiss);
 	card.append(title, subtitle, buttons);
 	container.appendChild(card);
 	nudgeState = "default";
 
-	btnRecord.addEventListener("click", () => {
-		sendToBackground({
-			type: "MEET_NUDGE_RECORD_NOW",
-			meetingId: meetingId ?? "",
+	// TWO-STEP FLOW (2026-07-20): this click IS the user activation
+	// getDisplayMedia() needs, so the picker opens straight from here — click,
+	// pick, done. The remote participants' voices come from Meet's own media
+	// elements via captureStream() (measured on a real call 2026-07-19), which
+	// needs no activeTab grant, so the old "click the extension icon instead"
+	// detour is gone. The Ctrl+Shift+9 path stays available and unchanged.
+	btnRecord.addEventListener("click", (event) => {
+		event.stopImmediatePropagation();
+		btnRecord.disabled = true;
+		btnRecord.textContent = "Starting…";
+		void startInPageRecording(meetingId, {
+			note: (text, isError) => showLiveNote(text, isError),
+			confirmWithoutClientAudio: () => confirmWithoutClientAudioInCard(card),
+			onRecordingStarted: () => {
+				recordingStartTime = Date.now();
+				pillPausedAccumMs = 0;
+				clearNudge(() => renderRecordingPill(false));
+			},
+			onFailed: () => {
+				btnRecord.disabled = false;
+				btnRecord.textContent = "Record now";
+			},
 		});
-		clearNudge();
-		nudgeState = "hidden";
 	});
+
 
 	btnLater.addEventListener("click", () => {
 		sendToBackground({ type: "MEET_NUDGE_LATER" });
@@ -628,12 +748,17 @@ function renderCountdownNudge(): void {
 		if (countdownRemaining <= 0) {
 			stopCountdown();
 			playAudio(soundChime);
-			sendToBackground({
-				type: "MEET_NUDGE_RECORD_NOW",
-				meetingId: meetingId ?? "",
-			});
-			clearNudge();
-			nudgeState = "hidden";
+			renderDefaultNudge();
+			const activeCard = getNudgeContainer()?.querySelector(
+				".cap-nudge-card",
+			) as HTMLElement | null;
+			if (activeCard) {
+				showStartNote(
+					activeCard,
+					"Press \"Record now\" to start — the screen picker opens right away.",
+					false,
+				);
+			}
 		}
 	}, 1000);
 }
@@ -650,6 +775,11 @@ function renderRecordingPill(paused = false): void {
 	const container = root.getElementById("cap-nudge-container");
 	if (!container) return;
 
+	// showLiveNote's contract is that a note (the "recording via system audio"
+	// reassurance, the silence-watchdog warning) SURVIVES the card→pill swap.
+	// textContent="" used to wipe it, so a note emitted at start flashed for one
+	// frame and vanished. Carry it across the clear so it stays visible.
+	const liveNote = container.querySelector(".cap-nudge-live-note");
 	container.textContent = "";
 	if (recordingStartTime === 0) recordingStartTime = Date.now();
 
@@ -658,7 +788,7 @@ function renderRecordingPill(paused = false): void {
 	const elapsed = makeEl(
 		"span",
 		"cap-nudge-elapsed",
-		formatElapsed(Date.now() - recordingStartTime),
+		formatElapsed(Date.now() - recordingStartTime - pillPausedAccumMs),
 	);
 	elapsed.id = "cap-elapsed";
 	const btnStop = makeBtn("cap-nudge-btn-stop", "Stop");
@@ -671,13 +801,17 @@ function renderRecordingPill(paused = false): void {
 	}
 
 	container.appendChild(pill);
+	if (liveNote) container.appendChild(liveNote);
 	nudgeState = "recording";
 
 	if (elapsedTimer !== null) clearInterval(elapsedTimer);
 	if (!paused) {
 		elapsedTimer = setInterval(() => {
 			const el = container.querySelector("#cap-elapsed");
-			if (el) el.textContent = formatElapsed(Date.now() - recordingStartTime);
+			if (el)
+				el.textContent = formatElapsed(
+					Date.now() - recordingStartTime - pillPausedAccumMs,
+				);
 		}, 1000);
 	}
 
@@ -742,7 +876,7 @@ function renderCompletePill(shareUrl: string): void {
 		window.open(shareUrl, "_blank");
 	});
 
-	const dismissBtn = makeBtn("cap-nudge-btn-dismiss", "Dismiss");
+	const dismissBtn = makeBtn("cap-nudge-btn-dismiss", "Close");
 	dismissBtn.addEventListener("click", () => {
 		sendToBackground({ type: "CANCEL" } as OutboundMessage);
 		clearNudge();
@@ -781,7 +915,7 @@ function renderErrorCard(reason: string, recoverable: boolean): void {
 		buttons.appendChild(retryBtn);
 	}
 
-	const dismissBtn = makeBtn("cap-nudge-btn-secondary", "Dismiss");
+	const dismissBtn = makeBtn("cap-nudge-btn-secondary", "Close");
 	dismissBtn.addEventListener("click", () => {
 		sendToBackground({ type: "CANCEL" } as OutboundMessage);
 		clearNudge();
@@ -800,27 +934,59 @@ function sendToBackground(msg: OutboundMessage): void {
 	chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
+/** A note that survives the card being replaced by the recording pill.
+ *
+ * The in-page recorder's warnings (silence watchdog, waived client audio) used
+ * to be written into the CARD element captured when the button was clicked —
+ * but starting a recording removes that card, so every mid-recording warning
+ * landed in detached DOM and the owner never saw it. The watchdog is this
+ * path's only ongoing remote-audio guarantee; a warning nobody can see is not
+ * one. Writes into the live container instead, so it renders under whatever is
+ * currently shown. Empty text clears it. */
+function showLiveNote(text: string, isError: boolean): void {
+	const container = getNudgeContainer();
+	if (!container) return;
+	const existing = container.querySelector(
+		".cap-nudge-live-note",
+	) as HTMLElement | null;
+	if (!text) {
+		existing?.remove();
+		return;
+	}
+	const note = existing ?? makeEl("div", "cap-nudge-live-note");
+	note.classList.toggle("cap-nudge-live-note-error", isError);
+	note.textContent = text;
+	if (!existing) container.appendChild(note);
+}
+
+function showStartNote(card: HTMLElement, text: string, isError: boolean): void {
+	const existing = card.querySelector(
+		".cap-nudge-send-err",
+	) as HTMLElement | null;
+	const note = existing ?? document.createElement("p");
+	note.className = "cap-nudge-send-err";
+	note.style.cssText = isError
+		? "font-size:12px;color:#e53e3e;margin:6px 0 0;"
+		: "font-size:12px;color:#6b7280;margin:6px 0 0;";
+	note.textContent = text;
+	if (!existing) card.appendChild(note);
+}
+
 // ── Main gate ─────────────────────────────────────────────────────────────────
 
 function maybeShow(): void {
 	if (!isMeetingUrl() || !isInMeeting()) {
 		if (inCall) {
-			inCall = false;
-			const id = meetingId;
-			if (id) sendToBackground({ type: "MEET_CALL_ENDED", meetingId: id });
-			stopCountdown();
-			if (elapsedTimer !== null) {
-				clearInterval(elapsedTimer);
-				elapsedTimer = null;
-			}
-			clearNudge();
-			nudgeState = "hidden";
+			scheduleMeetEnded();
 		}
 		return;
 	}
 
+	cancelMeetEnded();
+
 	const id = currentMeetingId();
 	if (id !== meetingId) {
+		cancelMeetEnded();
 		meetingId = id;
 		dismissed = false;
 		laterUntil = 0;
@@ -867,6 +1033,8 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 			if (recordingStartTime === 0) {
 				recordingStartTime = state.startedAt ?? Date.now();
 			}
+			pillPausedAccumMs =
+				(state as { pausedAccumMs?: number }).pausedAccumMs ?? 0;
 			clearNudge(() => renderRecordingPill(state.paused ?? false));
 			break;
 		case "uploading":
@@ -902,12 +1070,74 @@ function handleStateChange(state: StateChangedMessage["state"]): void {
 	}
 }
 
-chrome.runtime.onMessage.addListener((msg: unknown) => {
+chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 	if (!msg || typeof msg !== "object") return;
 	const message = msg as Record<string, unknown>;
 	if (message.type === "STATE_CHANGED" && message.state) {
 		handleStateChange(message.state as StateChangedMessage["state"]);
+		return;
 	}
+	// Liveness probe. The SW asks this before treating a tab "loading" event as a
+	// reload: Meet's in-call dialogs (Add people, chat) are same-document history
+	// navigations that look identical to a reload from the SW's side, and acting
+	// on them killed live recordings. A reloaded document cannot answer this at
+	// all; a dialog leaves the recorder running and answers `true`. Always
+	// answers — an unconditional reply is the point, "false" is a real answer.
+	if (message.type === "IS_INPAGE_RECORDING") {
+		sendResponse({ recording: isInPageRecording() });
+		return;
+	}
+	// Capture controls for the IN-PAGE path. The SW routes these to this tab via
+	// the arming record's contentRecorderTabId. Ack CONDITIONALLY — answering
+	// when this tab owns no capture would tell sendControlWithRetry the command
+	// was delivered while nothing acted on it, which is exactly how a recording
+	// gets stuck in "recording" with its uploaded parts orphaned (the same trap
+	// the recorder page documents on its STOP_CAPTURE handler).
+	if (message.type === "STOP_CAPTURE") {
+		if (isInPageRecording()) {
+			stopInPageRecording();
+			sendResponse({ ok: true });
+		}
+	} else if (message.type === "PAUSE_CAPTURE") {
+		// Ack whenever THIS tab owns the capture, even if the recorder is already
+		// paused: pause is idempotent, and staying silent on a no-op made the SW
+		// burn four delivery retries and report {ok:false} to the popup.
+		if (isInPageRecording()) {
+			pauseInPageRecording();
+			sendResponse({ ok: true });
+		}
+	} else if (message.type === "RESUME_CAPTURE") {
+		if (isInPageRecording()) {
+			resumeInPageRecording();
+			sendResponse({ ok: true });
+		}
+	} else if (message.type === "CAPTURE_TIER") {
+		// Adaptive capture: the SW watched the upload backlog and picked a tier.
+		// This only re-constrains the LIVE video track — it never stops, recreates
+		// or restarts the recorder, and never touches audio. Ack only when this tab
+		// owns the capture (same rule as the controls above), and ack ASYNCHRONOUSLY
+		// once the constraints have actually been applied, so the SW's
+		// "delivered" flag means the capture really moved.
+		if (isInPageRecording()) {
+			const tierSessionId =
+				typeof message.sessionId === "string" ? message.sessionId : undefined;
+			applyInPageCaptureTier(message.tier as CaptureTier, tierSessionId)
+				// The ack carries the session it was answered FOR, so the SW can tell
+				// this reply apart from one produced by a leftover recorder that is
+				// still listening for an earlier recording's messages.
+				.then((applied) =>
+					sendResponse({ ok: applied, sessionId: tierSessionId }),
+				)
+				.catch(() => sendResponse({ ok: false, sessionId: tierSessionId }));
+			return true; // keep the message channel open for the async reply
+		}
+	}
+});
+
+// Closing/reloading the Meet tab mid-recording: stop cleanly so the SW can
+// finalize whatever was captured instead of stranding the multipart upload.
+window.addEventListener("beforeunload", () => {
+	if (isInPageRecording()) stopInPageRecording();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {

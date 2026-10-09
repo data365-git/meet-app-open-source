@@ -28,9 +28,10 @@ function createDesktopRedirectPage(primaryUrl: string, fallbackUrl: string) {
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
 		<meta http-equiv="Pragma" content="no-cache" />
-		<title>Open Cap</title>
+		<title>Open data365</title>
 		<style>
 			:root {
+				--brand: #005cb1;
 				color-scheme: light;
 				font-family: Inter, "Segoe UI", sans-serif;
 			}
@@ -86,7 +87,7 @@ function createDesktopRedirectPage(primaryUrl: string, fallbackUrl: string) {
 			}
 
 			button {
-				background: #2563eb;
+				background: var(--brand);
 				color: white;
 			}
 
@@ -148,7 +149,7 @@ app.get(
 	zValidator(
 		"query",
 		z.object({
-			port: z.string().optional(),
+			port: z.coerce.number().int().min(1).max(65535).optional(), // SECURITY: numeric localhost port only; a free-form string allowed "port=3000@attacker.com" so the 127.0.0.1:${port} redirect leaked the session token (account takeover)
 			platform: z
 				.union([z.literal("web"), z.literal("desktop")])
 				.default("web"),

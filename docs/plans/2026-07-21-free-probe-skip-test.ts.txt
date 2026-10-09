@@ -1,0 +1,145 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// COST FIX: once one chunk's free-tier attempt dies with a quota-like error
+// (the daily ~20-call free quota is spent for the WHOLE account), every LATER
+// chunk in the SAME transcribeAudioChunks run must skip the free probe
+// entirely and go straight to paid — re-probing a dead-for-the-day free key
+// per chunk only burns FREE_TRANSCRIBE_PROBE_MS (30s) for nothing. A one-off
+// NON-quota (transient) free failure must NOT trip that skip.
+
+const H = vi.hoisted(() => ({
+  serverEnv: vi.fn(),
+  withCostGuard: vi.fn(),
+  transcribeWithGemini: vi.fn(),
+}));
+
+vi.mock("@cap/database", () => ({ db: vi.fn() }));
+vi.mock("@cap/env", () => ({ serverEnv: () => H.serverEnv() }));
+vi.mock("@cap/web-backend", () => ({ Storage: {} }));
+vi.mock("@cap/database/crypto", () => ({ decrypt: vi.fn(async () => "decrypted-key") }));
+vi.mock("@cap/utils", () => ({ userIsPro: vi.fn() }));
+vi.mock("@cap/web-domain", () => ({}));
+vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
+vi.mock("@/lib/video-storage", () => ({ getStorageAccessForVideo: vi.fn() }));
+vi.mock("@/lib/ai-generation-request", () => ({ shouldStartAiAfterTranscription: vi.fn() }));
+vi.mock("@/lib/audio-enhance", () => ({
+  ENHANCED_AUDIO_CONTENT_TYPE: "audio/wav",
+  ENHANCED_AUDIO_EXTENSION: "wav",
+  enhanceAudioFromUrl: vi.fn(),
+}));
+vi.mock("@/lib/audio-extract", () => ({
+  checkHasAudioTrack: vi.fn(),
+  extractAudioChunksFromUrl: vi.fn(),
+  extractAudioFromUrl: vi.fn(),
+  extractAudioSpanFromUrl: vi.fn(),
+}));
+vi.mock("@/lib/generate-ai", () => ({ startAiGeneration: vi.fn() }));
+vi.mock("@/lib/transcription-settings", () => ({ isTranscriptionDisabled: vi.fn() }));
+vi.mock("@/lib/restore-russian-script", () => ({ restoreRussianScript: (s: string) => s }));
+vi.mock("server-only", () => ({}));
+vi.mock("workflow", () => ({
+  FatalError: class FatalError extends Error {
+    readonly _tag = "FatalError";
+  },
+}));
+vi.mock("@/lib/ai-cost-guard", () => ({ withCostGuard: (o: unknown) => H.withCostGuard(o) }));
+// Real gemini-transcribe implementation stays wired (mergeChunkedWebVtt,
+// extractSpeakerLabels, rescaleChunkVtt, setRescaleAnchorProbe are all pure and
+// exercised for real) — only the network call is stubbed.
+vi.mock("@/lib/gemini-transcribe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/gemini-transcribe")>();
+  return {
+    ...actual,
+    transcribeWithGemini: (u: string, o: unknown) => H.transcribeWithGemini(u, o),
+  };
+});
+
+// ─── Import AFTER mocks ───────────────────────────────────────────────────────
+import { transcribeAudioChunks } from "@/workflows/transcribe";
+
+const CTX = { userId: "u1", orgId: "o1", videoId: "v1", aiSpeedMode: "fast" as const };
+const PAID_RESULT = (label: string) => ({
+  transcriptVtt: `WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\n${label}\n\n`,
+  inputTokens: 20,
+  outputTokens: 8,
+  audioInTokens: 6,
+});
+
+type GeminiOpt = { apiKey?: string; models?: readonly string[] };
+
+function makeChunk(startSec: number) {
+  return {
+    key: `chunk-${startSec}`,
+    url: `https://example.com/audio-${startSec}.mp3`,
+    startSec,
+    // null duration ⇒ needSec=0 and largestGap=0 for our single-cue fixtures,
+    // so transcribeAudioChunkWithRetry accepts the first attempt — isolates
+    // the probe-skip behavior from the coverage/retry logic (already covered
+    // by transcribe-chunks.test.ts).
+    durationSec: null as number | null,
+  };
+}
+
+function makeAudio(startSecs: number[]) {
+  return { chunks: startSecs.map(makeChunk), totalDurationSec: null };
+}
+
+describe("free-probe skip after quota exhaustion (cost fix)", () => {
+  beforeEach(() => {
+    H.serverEnv.mockReset();
+    H.withCostGuard.mockReset();
+    H.transcribeWithGemini.mockReset();
+    H.withCostGuard.mockImplementation(async (o: { fn: () => Promise<unknown> }) => o.fn());
+    H.serverEnv.mockReturnValue({
+      GEMINI_API_KEY: "paid-key",
+      GEMINI_API_KEY_FREE: "free-key",
+    });
+  });
+
+  it("quota-like free failure on chunk 0 makes chunk 1 skip the free probe and go straight to paid", async () => {
+    const audio = makeAudio([0, 900]);
+
+    H.transcribeWithGemini
+      // chunk 0: free probe — quota exhausted
+      .mockRejectedValueOnce(new Error("429 RESOURCE_EXHAUSTED"))
+      // chunk 0: paid fallback — succeeds
+      .mockResolvedValueOnce(PAID_RESULT("chunk-0"))
+      // chunk 1: should be called EXACTLY once, straight on the paid key —
+      // never a free attempt first.
+      .mockResolvedValueOnce(PAID_RESULT("chunk-1"));
+
+    const result = await transcribeAudioChunks(audio, null, CTX);
+
+    expect(result).toContain("chunk-0");
+    expect(result).toContain("chunk-1");
+    // 2 calls for chunk 0 (free fail + paid fallback) + exactly 1 for chunk 1
+    // (paid only, no free probe) = 3 total.
+    expect(H.transcribeWithGemini).toHaveBeenCalledTimes(3);
+
+    const chunk1Call = H.transcribeWithGemini.mock.calls[2]?.[1] as GeminiOpt;
+    expect(chunk1Call.apiKey).toBe("paid-key");
+    expect(chunk1Call.models).toBeUndefined();
+  });
+
+  it("a non-quota transient free failure on chunk 0 does NOT trip the skip — chunk 1 still tries free", async () => {
+    const audio = makeAudio([0, 900]);
+
+    H.transcribeWithGemini
+      // chunk 0: free probe — transient, non-quota failure
+      .mockRejectedValueOnce(new Error("free model returned malformed VTT"))
+      // chunk 0: paid fallback — succeeds
+      .mockResolvedValueOnce(PAID_RESULT("chunk-0"))
+      // chunk 1: free is still tried first (flag not tripped) and succeeds.
+      .mockResolvedValueOnce(PAID_RESULT("chunk-1"));
+
+    const result = await transcribeAudioChunks(audio, null, CTX);
+
+    expect(result).toContain("chunk-0");
+    expect(result).toContain("chunk-1");
+    expect(H.transcribeWithGemini).toHaveBeenCalledTimes(3);
+
+    const chunk1Call = H.transcribeWithGemini.mock.calls[2]?.[1] as GeminiOpt;
+    expect(chunk1Call.apiKey).toBe("free-key");
+    expect(chunk1Call.models).toEqual(["gemini-3.5-flash"]);
+  });
+});

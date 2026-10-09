@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useEffect } from "react";
 import { getStorageUsage } from "@/actions/organization/get-storage-usage";
 
@@ -27,6 +28,7 @@ function fmtBytes(bytes: number): string {
 }
 
 export function StorageIndicator() {
+	const t = useTranslations("nav");
 	const { data, isLoading, error } = useQuery({
 		queryKey: ["storage-usage"],
 		queryFn: () => getStorageUsage(),
@@ -43,13 +45,14 @@ export function StorageIndicator() {
 
 	if (isLoading) {
 		return (
-			<div className="block p-3 rounded-lg border border-gray-5 bg-gray-2">
-				<div className="flex justify-between items-baseline mb-1.5">
-					<span className="text-sm font-medium text-gray-12">Storage</span>
+			<div className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1">
+				<div className="flex justify-between items-baseline mb-1">
+					<span className="text-[11px] font-medium text-gray-11">
+						{t("storage")}
+					</span>
 					<span className="h-3 w-16 rounded bg-gray-4 animate-pulse" />
 				</div>
-				<div className="h-1.5 w-full rounded-full bg-gray-4 animate-pulse" />
-				<div className="mt-1.5 h-2.5 w-20 rounded bg-gray-4 animate-pulse" />
+				<div className="h-1 w-full rounded-full bg-gray-4 animate-pulse" />
 			</div>
 		);
 	}
@@ -57,54 +60,54 @@ export function StorageIndicator() {
 	if (error || !data) {
 		if (isStaleActionError(error)) {
 			return (
-				<div className="block p-3 rounded-lg border border-gray-5 bg-gray-2">
-					<div className="text-sm font-medium text-gray-12 mb-1">Storage</div>
-					<div className="text-xs text-gray-10">Updating…</div>
+				<div className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1">
+					<div className="text-[11px] font-medium text-gray-11 mb-1">
+						{t("storage")}
+					</div>
+					<div className="text-xs text-gray-10">{t("storageUpdating")}</div>
 				</div>
 			);
 		}
 		return (
 			<Link
 				href="/dashboard/settings/storage"
-				className="block p-3 rounded-lg border border-red-300 bg-red-50 hover:bg-red-100"
+				className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2"
 			>
-				<div className="text-sm font-medium text-red-700 mb-1">Storage</div>
-				<div className="text-xs text-red-600">
-					Couldn't load — click to retry
+				<div className="text-[11px] font-medium text-gray-11 mb-1">
+					{t("storage")}
 				</div>
+				<div className="text-xs text-gray-10">{t("storageLoadError")}</div>
 			</Link>
 		);
 	}
 
 	const pct = Math.min(100, data.percentUsed);
-	const barColor =
-		pct >= 90 ? "bg-red-500" : pct > 75 ? "bg-amber-500" : "bg-blue-500";
-	const freeStr = (() => {
-		const f = 100 - pct;
-		const s = f.toFixed(1);
-		return s.endsWith(".0") ? f.toFixed(0) : s;
-	})();
+	const usedPct = pct < 0.5 ? 0 : pct;
 
 	return (
 		<Link
 			href="/dashboard/settings/storage"
-			className="block p-3 rounded-lg border border-gray-5 bg-gray-2 hover:bg-gray-3 transition-colors"
+			className="block p-2.5 rounded-lg border border-gray-5 bg-gray-1 hover:bg-gray-2 transition-colors"
 		>
-			<div className="flex justify-between items-baseline mb-1.5">
-				<span className="text-sm font-medium text-gray-12">Storage</span>
-				<span className="text-xs text-gray-10">
+			<div className="flex justify-between items-baseline mb-1">
+				<span className="text-[11px] font-medium text-gray-11">
+					{t("storage")}
+				</span>
+				<span className="text-[11px] font-medium tabular-nums text-gray-10">
 					{fmtBytes(data.usedBytes)} / {fmtBytes(data.quotaBytes)}
 				</span>
 			</div>
-			<div className="h-1.5 w-full rounded-full bg-gray-5 overflow-hidden">
+			<div className="h-1 w-full rounded-full bg-gray-5 overflow-hidden">
 				<div
-					className={`h-full rounded-full transition-all ${barColor}`}
-					style={{ width: `${Math.max(pct, 1)}%` }}
+					className="h-full rounded-full bg-[var(--brand)] transition-all"
+					style={{ width: `${usedPct}%` }}
 				/>
 			</div>
-			<p className="mt-1.5 text-[11px] text-gray-10">
-				{pct >= 99 ? "Quota full" : `${freeStr}% free`}
-			</p>
+			{/* Percent line only when it carries a WARNING — the bar + numbers
+			    already say the rest. Saves a sidebar line (option-1 compacting). */}
+			{pct >= 99 && (
+				<p className="mt-1 text-[11px] text-red-10">{t("quotaFull")}</p>
+			)}
 		</Link>
 	);
 }

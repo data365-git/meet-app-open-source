@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
-import { copyFileSync, cpSync, mkdirSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { copyFileSync, cpSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,11 +12,26 @@ const publicDir = join(rootDir, "public");
 
 const isWatch = process.argv.includes("--watch");
 
+// Env keys forwarded from the build machine into the bundles. Extension pages
+// have no `process`, so anything read through `globalThis.process?.env` would
+// otherwise always fall back to its default. Kept to an explicit allowlist so a
+// stray shell variable can never leak into a packaged extension.
+const FORWARDED_ENV_KEYS = ["EXTENSION_VIDEO_BITS_PER_SECOND"];
+
+const forwardedEnv = Object.fromEntries(
+	FORWARDED_ENV_KEYS.map((key) => [key, process.env[key]]).filter(
+		([, value]) => typeof value === "string" && value.trim() !== "",
+	),
+);
+
 const commonOptions = {
 	bundle: true,
 	target: "chrome120",
 	sourcemap: true,
 	logLevel: "info",
+	banner: {
+		js: `globalThis.process = Object.assign({}, globalThis.process); globalThis.process.env = Object.assign({}, globalThis.process.env, ${JSON.stringify(forwardedEnv)});`,
+	},
 };
 
 const entryPoints = [
@@ -33,6 +48,11 @@ const entryPoints = [
 	{
 		path: join(srcDir, "offscreen/recorder.ts"),
 		outfile: join(distDir, "offscreen.js"),
+		format: "esm",
+	},
+	{
+		path: join(srcDir, "recorder/recorder-page.ts"),
+		outfile: join(distDir, "recorder-page.js"),
 		format: "esm",
 	},
 	{
@@ -87,6 +107,7 @@ function copyAssets() {
 	const pages = [
 		{ dir: "popup", files: ["popup.html", "popup.css"] },
 		{ dir: "offscreen", files: ["offscreen.html"] },
+		{ dir: "recorder", files: ["recorder.html"] },
 		{ dir: "options", files: ["options.html", "options.css"] },
 	];
 	for (const page of pages) {

@@ -1,40 +1,32 @@
 "use client";
 
 import { Button, LogoBadge } from "@cap/ui";
-import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import {
-	getDownloadButtonText,
-	getDownloadUrl,
-	getPlatformIcon,
-} from "@/utils/platform";
-
-const recordingModes = [
-	{
-		name: "Instant Mode",
-		icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
-		description:
-			"Hit record, stop, share link. Your video is live in seconds with automatically generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
-	},
-	{
-		name: "Studio Mode",
-		icon: (
-			<Clapperboard
-				fill="var(--blue-9)"
-				className="mb-4 size-8"
-				strokeWidth={1.5}
-			/>
-		),
-		description:
-			"Professional recordings with local editing, custom backgrounds, and export options. When you need pixel-perfect demos, tutorials, or presentations that represent your brand.",
-	},
-];
 
 export function DownloadPage() {
-	const { platform, isIntel } = useDetectPlatform();
-	const loading = platform === null;
+	const t = useTranslations("onboarding");
 	const router = useRouter();
+
+	const recordingModes = [
+		{
+			name: t("instantMode"),
+			icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
+			description: t("instantModeDesc"),
+		},
+		{
+			name: t("studioMode"),
+			icon: (
+				<Clapperboard
+					fill="var(--brand)"
+					className="mb-4 size-8"
+					strokeWidth={1.5}
+				/>
+			),
+			description: t("studioModeDesc"),
+		},
+	];
 
 	return (
 		<div className="flex flex-col gap-12 justify-center items-center min-h-fit lg:gap-20">
@@ -42,9 +34,11 @@ export function DownloadPage() {
 				<div className="flex flex-col gap-6 justify-center items-center">
 					<LogoBadge className="mx-auto w-auto h-12" />
 					<div className="space-y-1 text-center">
-						<h1 className="text-3xl font-medium text-gray-12">Download Cap</h1>
+						<h1 className="text-3xl font-medium text-gray-12">
+							{t("installTitle")}
+						</h1>
 						<p className="text-lg text-center text-gray-11 text-pretty">
-							Start recording beautiful screen recordings today
+							{t("installSubtitle")}
 						</p>
 					</div>
 				</div>
@@ -69,11 +63,10 @@ export function DownloadPage() {
 				<Button
 					variant="blue"
 					size="lg"
-					href={getDownloadUrl(platform, isIntel)}
-					className="hidden justify-center items-center py-6 font-medium text-white lg:flex"
+					href="/dashboard/extension"
+					className="flex justify-center items-center py-6 font-medium text-white"
 				>
-					{!loading && getPlatformIcon(platform)}
-					{getDownloadButtonText(platform, loading, isIntel)}
+					{t("installExtension")}
 				</Button>
 				<Button
 					onClick={() => router.push("/dashboard/caps")}
@@ -81,7 +74,7 @@ export function DownloadPage() {
 					variant="dark"
 					size="lg"
 				>
-					Continue
+					{t("continue")}
 				</Button>
 			</div>
 		</div>

@@ -1,0 +1,8 @@
+data: {"token":"U"}
+
+data: {"token":"shbu darsda qomusiylik tushunchasining mohiyati,"}
+
+data: {"token":" ilmlarning bo'linishi va har bir sohadagi eng muhim fundamental qonuniyatlarni bilishning ahamiyati tushuntiriladi [00:00]."}
+
+data: [DONE]
+

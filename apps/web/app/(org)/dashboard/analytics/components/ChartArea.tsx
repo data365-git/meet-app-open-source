@@ -1,6 +1,7 @@
 "use client";
 
 import { formatPlatformDateShort } from "@cap/utils";
+import { useTranslations } from "next-intl";
 import { useId, useMemo } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
@@ -11,25 +12,6 @@ import {
 } from "@/components/ui/chart";
 
 export const description = "An area chart with gradient fill";
-
-const chartConfig = {
-	views: {
-		label: "Views",
-		color: "#3b82f6",
-	},
-	comments: {
-		label: "Comments",
-		color: "#ec4899",
-	},
-	reactions: {
-		label: "Reactions",
-		color: "#f97316",
-	},
-	caps: {
-		label: "Caps",
-		color: "var(--gray-12)",
-	},
-} satisfies ChartConfig;
 
 interface ChartAreaProps {
 	selectedMetrics: Array<"caps" | "views" | "comments" | "reactions">;
@@ -44,6 +26,25 @@ interface ChartAreaProps {
 }
 
 function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
+	const t = useTranslations("analytics");
+	const chartConfig = {
+		views: {
+			label: t("metrics.views"),
+			color: "#3b82f6",
+		},
+		comments: {
+			label: t("metrics.comments"),
+			color: "#ec4899",
+		},
+		reactions: {
+			label: t("metrics.reactions"),
+			color: "#f97316",
+		},
+		caps: {
+			label: t("metrics.caps"),
+			color: "var(--gray-12)",
+		},
+	} satisfies ChartConfig;
 	const viewsGradientId = useId();
 	const commentsGradientId = useId();
 	const reactionsGradientId = useId();
@@ -116,7 +117,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 	if (chartData.length === 0) {
 		return (
 			<div className="flex h-[300px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-5 text-sm text-gray-9">
-				No analytics data yet.
+				{t("chart.empty")}
 			</div>
 		);
 	}
@@ -124,7 +125,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 	if (selectedMetrics.length === 0) {
 		return (
 			<div className="flex h-[300px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-5 text-sm text-gray-9">
-				Select at least one metric to view.
+				{t("chart.noMetric")}
 			</div>
 		);
 	}

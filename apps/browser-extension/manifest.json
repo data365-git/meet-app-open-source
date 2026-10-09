@@ -1,8 +1,8 @@
 {
 	"manifest_version": 3,
-	"name": "Cap Recorder",
-	"version": "0.1.0",
-	"description": "Record your screen and share instantly with Cap — the open-source Loom alternative.",
+	"name": "data365 Recorder",
+	"version": "0.5.11",
+	"description": "Record your screen and share instantly with data365.",
 	"action": {
 		"default_popup": "popup.html",
 		"default_icon": {
@@ -11,12 +11,23 @@
 			"128": "icons/icon-128.png"
 		}
 	},
+	"options_ui": {
+		"page": "options.html",
+		"open_in_tab": true
+	},
+	"commands": {
+		"start-meeting-recording": {
+			"suggested_key": { "default": "Ctrl+Shift+9" },
+			"description": "Start meeting recording on the current Meet tab"
+		}
+	},
 	"background": {
 		"service_worker": "background.js",
 		"type": "module"
 	},
 	"permissions": [
 		"storage",
+		"unlimitedStorage",
 		"alarms",
 		"scripting",
 		"activeTab",
@@ -24,9 +35,9 @@
 		"offscreen",
 		"notifications",
 		"tabCapture",
-		"desktopCapture"
+		"identity"
 	],
-	"host_permissions": ["https://*/*"],
+	"host_permissions": ["https://*/*", "http://localhost:3001/*"],
 	"content_scripts": [
 		{
 			"matches": ["https://meet.google.com/*"],
@@ -42,9 +53,9 @@
 	],
 	"externally_connectable": {
 		"matches": [
-			"https://web-production-e6fe4.up.railway.app/*",
-			"https://*.up.railway.app/*",
-			"http://localhost:3000/*"
+			"https://data365.duckdns.org/*",
+			"http://localhost:3000/*",
+			"http://localhost:3001/*"
 		]
 	}
 }

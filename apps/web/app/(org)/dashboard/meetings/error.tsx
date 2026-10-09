@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useEffect } from "react";
 
 const STALE_ACTION_PHRASES = [
@@ -22,6 +23,7 @@ export default function MeetingsError({
 	error: Error & { digest?: string };
 	reset: () => void;
 }) {
+	const t = useTranslations("errorBoundary");
 	const stale = isStaleActionError(error);
 
 	useEffect(() => {
@@ -30,17 +32,17 @@ export default function MeetingsError({
 
 	useEffect(() => {
 		if (!stale) return;
-		const t = setTimeout(() => window.location.reload(), 1500);
-		return () => clearTimeout(t);
+		const timeoutId = setTimeout(() => window.location.reload(), 1500);
+		return () => clearTimeout(timeoutId);
 	}, [stale]);
 
 	if (stale) {
 		return (
 			<div className="flex flex-col items-center justify-center w-full p-12 text-center">
-				<h2 className="text-xl font-semibold text-gray-12 mb-2">Updating…</h2>
-				<p className="text-sm text-gray-10">
-					A new version was deployed. Reloading in a moment.
-				</p>
+				<h2 className="text-xl font-semibold text-gray-12 mb-2">
+					{t("staleTitle")}
+				</h2>
+				<p className="text-sm text-gray-10">{t("staleDescDeployed")}</p>
 			</div>
 		);
 	}
@@ -48,17 +50,15 @@ export default function MeetingsError({
 	return (
 		<div className="flex flex-col items-center justify-center w-full p-12 text-center">
 			<h2 className="text-xl font-semibold text-gray-12 mb-2">
-				Couldn't load your meeting recordings
+				{t("meetingsTitle")}
 			</h2>
-			<p className="text-sm text-gray-10 mb-4 max-w-md">
-				Something went wrong loading this page. The error has been logged.
-			</p>
+			<p className="text-sm text-gray-10 mb-4 max-w-md">{t("genericDesc")}</p>
 			{error.digest && (
 				<p className="text-xs text-gray-9 mb-4 font-mono">
-					Error ID: {error.digest}
+					{t("errorIdLabel", { digest: error.digest })}
 				</p>
 			)}
-			{error.message && (
+			{process.env.NODE_ENV !== "production" && error.message && (
 				<pre className="text-xs text-red-600 mb-4 max-w-2xl text-left overflow-auto p-3 bg-gray-2 rounded border border-gray-5">
 					{error.message}
 					{error.stack && `\n\n${error.stack}`}
@@ -66,7 +66,7 @@ export default function MeetingsError({
 			)}
 			<div className="flex gap-2">
 				<Button variant="dark" onClick={reset}>
-					Try again
+					{t("tryAgain")}
 				</Button>
 				<Button
 					variant="gray"
@@ -74,7 +74,7 @@ export default function MeetingsError({
 						window.location.href = "/dashboard";
 					}}
 				>
-					Back to dashboard
+					{t("backToDashboard")}
 				</Button>
 			</div>
 		</div>

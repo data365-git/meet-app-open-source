@@ -5,24 +5,15 @@ import {
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
 import { S3Bucket, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
-import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
+import { requireAdmin } from "@/lib/admin/require-admin";
 import { runPromise } from "@/lib/server";
-
-async function requireAdmin() {
-	const user = await getCurrentUser();
-	if (!user || user.email !== MESSENGER_ADMIN_EMAIL) {
-		throw new Error("Unauthorized");
-	}
-	return user;
-}
 
 async function getVideoOrThrow(videoId: string) {
 	const [video] = await db()
@@ -64,6 +55,23 @@ export async function getVideoReplaceUploadUrl(videoId: string) {
 export async function invalidateVideoCache(videoId: string) {
 	await requireAdmin();
 	const video = await getVideoOrThrow(videoId);
+
+	// The admin replace flow's finish line: ReplaceVideoPanel calls this only
+	// after the presigned POST of the new result.mp4 succeeded. Write the
+	// durable `metadata.processedAt` marker (see process-video.ts's
+	// markProcessingFinished) so the recover-stale-ai-jobs rowless pass never
+	// re-encodes the raw upload over the admin's replacement. JSON_SET, never a
+	// whole-object overwrite. Before the early return below, so a custom-bucket
+	// video gets it too.
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	if (video.bucket) {
 		return;

@@ -3,21 +3,18 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Schedule } from "effect";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
-import { decodeStorageVideo } from "@/lib/video-storage";
+import { getStorageAccessForVideo } from "@/lib/video-storage";
 
 async function verifyRawFileUploaded(
 	video: typeof videos.$inferSelect,
 	rawFileKey: string,
 ) {
-	const [bucket] = await Storage.getAccessForVideo(
-		decodeStorageVideo(video),
-	).pipe(runPromise);
+	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
 	const head = await bucket
 		.headObject(rawFileKey)
 		.pipe(
@@ -59,7 +56,41 @@ export async function triggerVideoProcessing({
 		bucketId,
 		processingMessage: "Starting video processing...",
 		startFailureMessage: "Video processing could not start.",
+		// The import upload already finished (bytes are fully in storage by the
+		// time this runs — verifyRawFileUploaded just confirmed it), so
+		// videoUploads.uploaded >= total is already true. Without mode set to
+		// "multipart" here, lib/transcribe.ts's isUploadInProgress would treat
+		// that byte-complete row as NOT in progress despite phase="processing",
+		// letting a manual "AI tahlil" click race in mid-remux. See the matching
+		// comment in app/api/upload/[...route]/multipart.ts's finalize branch.
+		mode: "multipart",
 	});
 
 	return { success: true };
+}
+
+/**
+ * Positive "this video was removed" signal for the uploader. True ONLY when
+ * the caller's own row exists and is soft-deleted; false for everything
+ * else, including a missing row (not a deletion signal, and answering true
+ * would let any user probe which ids exist), any error, no session or
+ * someone else's video — so a healthy upload is never told it was cancelled
+ * because a lookup hiccuped.
+ */
+export async function isVideoDeleted(videoId: Video.VideoId): Promise<boolean> {
+	try {
+		const user = await getCurrentUser();
+		if (!user) return false;
+
+		const [video] = await db()
+			.select({ ownerId: videos.ownerId, deletedAt: videos.deletedAt })
+			.from(videos)
+			.where(eq(videos.id, videoId));
+
+		if (!video) return false;
+		if (video.ownerId !== user.id) return false;
+		return video.deletedAt != null;
+	} catch {
+		return false;
+	}
 }

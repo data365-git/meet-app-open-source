@@ -1,284 +1,296 @@
 "use client";
 
-import { Clock, LayoutGrid, List } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { RichText } from "../RichText";
-import { Skeleton, SkeletonGroup } from "../Skeleton";
-import "../panels.css";
+import type { Video } from "@cap/web-domain";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { updateTaskStatus } from "@/actions/videos/update-task-status";
 
 interface Task {
 	title: string;
-	category?: string;
 	assignee?: string;
 	priority?: "high" | "medium" | "low";
 	deadline?: string;
 	done: boolean;
+	category?: string;
 }
 
-const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+// Stable render order for category sections (T8). Legacy tasks (generated
+// before this field existed) and anything outside this controlled vocab fall
+// into "Boshqa" so the grouping never drops a task.
+const TASK_CATEGORIES = [
+	"Sotuv",
+	"Marketing",
+	"Moliya",
+	"Texnik",
+	"HR",
+	"Operatsion",
+	"Strategiya",
+	"Boshqa",
+] as const;
+
+const TASK_CATEGORY_KEYS = {
+	Sotuv: "taskCategorySales",
+	Marketing: "taskCategoryMarketing",
+	Moliya: "taskCategoryFinance",
+	Texnik: "taskCategoryTechnical",
+	HR: "taskCategoryHr",
+	Operatsion: "taskCategoryOperations",
+	Strategiya: "taskCategoryStrategy",
+	Boshqa: "taskCategoryOther",
+} as const;
+
+function categoryOf(task: Task): (typeof TASK_CATEGORIES)[number] {
+	return (TASK_CATEGORIES as readonly string[]).includes(task.category ?? "")
+		? (task.category as (typeof TASK_CATEGORIES)[number])
+		: "Boshqa";
+}
+
+function groupTasksByCategory(tasks: Task[]): {
+	category: (typeof TASK_CATEGORIES)[number];
+	items: { task: Task; index: number }[];
+}[] {
+	const groups = new Map<string, { task: Task; index: number }[]>();
+	tasks.forEach((task, index) => {
+		const category = categoryOf(task);
+		const items = groups.get(category);
+		if (items) items.push({ task, index });
+		else groups.set(category, [{ task, index }]);
+	});
+	return TASK_CATEGORIES.filter((category) => groups.has(category)).map(
+		(category) => ({ category, items: groups.get(category) ?? [] }),
+	);
+}
 
 interface TasksPanelProps {
 	videoId: string;
-	transcriptionStatus?: string | null;
-	aiGenerationStatus?: string | null;
 	tasks?: Task[];
+	canEdit?: boolean;
 }
 
-type TasksMode = "board" | "checklist";
-
-const PRIORITY_ORDER: Array<"high" | "medium" | "low" | undefined> = [
-	"high",
-	"medium",
-	"low",
-	undefined,
-];
-
-const GROUP_LABEL: Record<string, string> = {
-	high: "High priority",
-	medium: "Medium priority",
-	low: "Low priority",
-	none: "No priority",
-};
-
-function initials(name: string): string {
+function Initials({ name }: { name: string }) {
 	const parts = name.trim().split(/\s+/);
-	return (
+	const letters =
 		parts.length >= 2
-			? (parts[0]?.[0] ?? "") + (parts[parts.length - 1]?.[0] ?? "")
-			: name.slice(0, 2)
-	).toUpperCase();
+			? (
+					(parts[0]?.[0] ?? "") + (parts[parts.length - 1]?.[0] ?? "")
+				).toUpperCase()
+			: name.slice(0, 2).toUpperCase();
+	return (
+		<span
+			className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--brand-wash)] text-[9px] font-semibold text-[var(--brand)]"
+			title={name}
+		>
+			{letters}
+		</span>
+	);
 }
 
-const AVATAR_COLORS = ["#475569", "#2563eb", "#0ea5e9", "#7c3aed", "#0d9488"];
-function avatarColor(name: string): string {
-	let h = 0;
-	for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-	return AVATAR_COLORS[h % AVATAR_COLORS.length] ?? "#475569";
+function DeadlinePill({ deadline }: { deadline: string }) {
+	return (
+		<span className="whitespace-nowrap rounded-full bg-[var(--brand-wash)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand)]">
+			{deadline}
+		</span>
+	);
+}
+
+function PriorityDot({
+	priority,
+	label,
+}: {
+	priority?: "high" | "medium" | "low";
+	label?: string;
+}) {
+	if (!priority) return null;
+	const color =
+		priority === "high"
+			? "bg-[var(--ds-error)]"
+			: priority === "medium"
+				? "bg-[var(--ds-warning)]"
+				: "bg-gray-7";
+	return (
+		<span
+			role="img"
+			aria-label={label}
+			title={label}
+			className={`mt-1.5 size-2 shrink-0 rounded-full ${color}`}
+		/>
+	);
+}
+
+function ProgressBar({
+	done,
+	total,
+	label,
+}: {
+	done: number;
+	total: number;
+	label: string;
+}) {
+	const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+	return (
+		<div className="flex items-center gap-3">
+			<div className="relative h-1 flex-1 overflow-hidden rounded-full bg-gray-4">
+				<div
+					className="absolute inset-y-0 left-0 rounded-full bg-[var(--brand)] transition-[width] duration-300 motion-reduce:transition-none"
+					style={{ width: `${pct}%` }}
+				/>
+			</div>
+			<span className="shrink-0 whitespace-nowrap font-mono text-[11.5px] text-gray-10">
+				{label}
+			</span>
+		</div>
+	);
 }
 
 export function TasksPanel({
 	videoId,
-	transcriptionStatus,
-	aiGenerationStatus,
 	tasks: initialTasks = [],
+	canEdit = false,
 }: TasksPanelProps) {
-	const [mode, setMode] = useState<TasksMode>("board");
+	const t = useTranslations("share");
 	const [tasks, setTasks] = useState<Task[]>(initialTasks);
-	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	// Persist the Board/Checklist choice (design: localStorage key `taskView`).
 	useEffect(() => {
-		const saved = localStorage.getItem("taskView");
-		if (saved === "checklist" || saved === "board") setMode(saved);
-	}, []);
-	const setView = (v: TasksMode) => {
-		setMode(v);
-		localStorage.setItem("taskView", v);
-	};
+		setTasks(initialTasks);
+	}, [initialTasks]);
 
 	const done = tasks.filter((t) => t.done).length;
 	const total = tasks.length;
-	const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+	const priorityLabels = {
+		high: t("taskPriorityHigh"),
+		medium: t("taskPriorityMedium"),
+		low: t("taskPriorityLow"),
+	};
 
-	function toggle(index: number) {
-		setTasks((prev) => {
-			const next = prev.map((t, i) =>
-				i === index ? { ...t, done: !t.done } : t,
+	async function toggle(index: number) {
+		if (!canEdit) return;
+		const task = tasks[index];
+		if (!task) return;
+		const newDone = !task.done;
+		setTasks((prev) =>
+			prev.map((t, i) => (i === index ? { ...t, done: newDone } : t)),
+		);
+		try {
+			const result = await updateTaskStatus(
+				videoId as Video.VideoId,
+				index,
+				newDone,
 			);
-			if (debounceRef.current) clearTimeout(debounceRef.current);
-			debounceRef.current = setTimeout(() => {
-				fetch("/api/video/tasks/toggle", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						videoId,
-						taskIndex: index,
-						done: next[index]?.done,
-					}),
-				}).catch(() => undefined);
-			}, 400);
-			return next;
-		});
+			if (!result.success) {
+				setTasks((prev) =>
+					prev.map((t, i) => (i === index ? { ...t, done: task.done } : t)),
+				);
+				toast.error(t("taskUpdateFailed"));
+			}
+		} catch (error) {
+			console.error("Failed to update task status:", error);
+			setTasks((prev) =>
+				prev.map((t, i) => (i === index ? { ...t, done: task.done } : t)),
+			);
+			toast.error(t("taskUpdateFailed"));
+		}
 	}
 
 	if (total === 0) {
-		const isInFlight =
-			aiGenerationStatus === "PROCESSING" ||
-			aiGenerationStatus === "QUEUED" ||
-			transcriptionStatus === "PROCESSING" ||
-			transcriptionStatus === "QUEUED";
-
-		if (isInFlight) {
-			return (
-				<SkeletonGroup>
-					{[0, 1, 2, 3].map((i) => (
-						<div
-							key={i}
-							style={{ display: "flex", alignItems: "center", gap: 10 }}
-						>
-							<Skeleton
-								style={{
-									width: 20,
-									height: 20,
-									borderRadius: "50%",
-									flexShrink: 0,
-								}}
-							/>
-							<Skeleton style={{ flex: 1, height: 20 }} />
-							<Skeleton style={{ width: 36, height: 20, flexShrink: 0 }} />
-						</div>
-					))}
-				</SkeletonGroup>
-			);
-		}
-
-		return (
-			<div className="rd-empty">
-				Hali tayyor emas — yuqoridagi tugma orqali generatsiya qiling.
-			</div>
-		);
+		return <p className="text-sm text-gray-11">{t("noActionItems")}</p>;
 	}
 
-	// Group by the AI's chosen context axis (category: a person, workstream, or
-	// stage) when it provided one; otherwise fall back to priority buckets.
-	// Priority still drives each card's accent colour either way.
-	const hasCategories = tasks.some((t) => (t.category ?? "").trim() !== "");
-
-	const groups = hasCategories
-		? Array.from(
-				tasks
-					.map((t, i) => ({ t, i }))
-					.reduce((map, entry) => {
-						const key = (entry.t.category ?? "").trim() || "Other";
-						const bucket = map.get(key) ?? [];
-						bucket.push(entry);
-						map.set(key, bucket);
-						return map;
-					}, new Map<string, Array<{ t: Task; i: number }>>()),
-			).map(([key, items]) => ({
-				key,
-				label: key,
-				items: [...items].sort(
-					(a, b) =>
-						(PRIORITY_RANK[a.t.priority ?? "low"] ?? 3) -
-						(PRIORITY_RANK[b.t.priority ?? "low"] ?? 3),
-				),
-			}))
-		: PRIORITY_ORDER.map((p) => ({
-				key: p ?? "none",
-				label: GROUP_LABEL[p ?? "none"],
-				items: tasks
-					.map((t, i) => ({ t, i }))
-					.filter(({ t }) => t.priority === p),
-			})).filter(({ items }) => items.length > 0);
-
 	return (
-		<>
-			{/* Progress header */}
-			<div className="tasks-head">
-				<div className="th-top">
-					<span className="t">
-						{done} / {total} done
-					</span>
-					<span className="th-pct">{pct}%</span>
-				</div>
-				<div className="th-bar">
-					<div className="th-bar-fill" style={{ width: `${pct}%` }} />
-				</div>
-				<div className="s">Extracted action items from this meeting</div>
-			</div>
-
-			{/* View switch */}
-			<div className="tasks-toolbar">
-				<div className="tasks-switch" role="tablist" aria-label="Tasks view">
-					<button
-						type="button"
-						role="tab"
-						aria-selected={mode === "board"}
-						aria-controls="tasks-panel-board"
-						className={`tasks-switch-btn${mode === "board" ? " active" : ""}`}
-						onClick={() => setView("board")}
-					>
-						<LayoutGrid aria-hidden="true" /> Board
-					</button>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={mode === "checklist"}
-						aria-controls="tasks-panel-checklist"
-						className={`tasks-switch-btn${mode === "checklist" ? " active" : ""}`}
-						onClick={() => setView("checklist")}
-					>
-						<List aria-hidden="true" /> Checklist
-					</button>
-				</div>
-			</div>
-
-			<div
-				className="tasks-wrap"
-				data-tasks={mode}
-				id={mode === "board" ? "tasks-panel-board" : "tasks-panel-checklist"}
-				role="tabpanel"
-			>
-				{groups.map((g) => (
-					<div className="task-group" key={g.key}>
-						<div className="task-group-header">
-							{g.label}
-							<span className="task-group-count">{g.items.length}</span>
-						</div>
-						<div className="task-grid">
-							{g.items.map(({ t, i }) => {
-								const prioClass = t.done
-									? "is-done"
-									: t.priority === "high"
-										? "p-high"
-										: t.priority === "medium"
-											? "p-med"
-											: t.priority === "low"
-												? "p-low"
-												: "";
-								return (
-									<div className={`task-card ${prioClass}`} key={i}>
-										<button
-											type="button"
-											aria-label={t.done ? "Mark not done" : "Mark done"}
-											className={`task-check${t.done ? " done" : ""}`}
-											onClick={() => toggle(i)}
-										/>
-										<div className="task-body">
-											<div className="task-title">
-												<RichText inline>{t.title}</RichText>
-											</div>
-											{(t.assignee || t.deadline) && (
-												<div className="task-meta">
-													{t.assignee && (
-														<span className="task-assignee">
-															<span
-																className="assignee-av"
-																style={{ background: avatarColor(t.assignee) }}
-															>
-																{initials(t.assignee)}
-															</span>
-															<span className="assignee-name">
-																{t.assignee}
-															</span>
-														</span>
-													)}
-													{t.deadline && (
-														<span className="task-tag deadline">
-															<Clock aria-hidden="true" /> {t.deadline}
-														</span>
-													)}
-												</div>
+		<div className="flex flex-col gap-4">
+			<ProgressBar
+				done={done}
+				total={total}
+				label={t("taskProgress", { done, total })}
+			/>
+			<div className="flex flex-col gap-5">
+				{groupTasksByCategory(tasks).map(({ category, items }) => (
+					<section key={category} className="flex min-w-0 flex-col">
+						<h4 className="px-1 pb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-10">
+							{t(TASK_CATEGORY_KEYS[category])}
+						</h4>
+						{items.map(({ task, index }) => (
+							<div
+								key={task.title + index}
+								className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-gray-4 px-1 py-3 last:border-b-0"
+							>
+								<label
+									className={[
+										"-my-3 -ml-3 flex size-11 items-center justify-center",
+										canEdit ? "cursor-pointer" : "cursor-default",
+									].join(" ")}
+								>
+									<input
+										type="checkbox"
+										checked={task.done}
+										onChange={() => toggle(index)}
+										disabled={!canEdit}
+										aria-label={task.title}
+										className="peer sr-only"
+									/>
+									<span
+										className={[
+											"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+											task.done
+												? "border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-fg)]"
+												: "border-gray-7 bg-gray-1 text-transparent",
+											canEdit
+												? "cursor-pointer hover:border-[var(--brand)]"
+												: "cursor-default opacity-70",
+											"peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--brand)]",
+										].join(" ")}
+									>
+										<svg
+											width="11"
+											height="11"
+											viewBox="0 0 12 12"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											aria-hidden="true"
+										>
+											<path d="m2.5 6 2.1 2.1L9.5 3.5" />
+										</svg>
+									</span>
+								</label>
+								<div className="min-w-0">
+									<p
+										className={[
+											"break-words text-[13.5px] font-medium leading-snug",
+											task.done ? "text-gray-10 line-through" : "text-gray-12",
+										].join(" ")}
+									>
+										{task.title}
+									</p>
+									{(task.assignee || task.deadline) && (
+										<div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+											{task.assignee && (
+												<>
+													<Initials name={task.assignee} />
+													<span className="max-w-full truncate text-[11px] text-gray-10">
+														{task.assignee}
+													</span>
+												</>
+											)}
+											{task.deadline && (
+												<DeadlinePill deadline={task.deadline} />
 											)}
 										</div>
-									</div>
-								);
-							})}
-						</div>
-					</div>
+									)}
+								</div>
+								<PriorityDot
+									priority={task.priority}
+									label={
+										task.priority ? priorityLabels[task.priority] : undefined
+									}
+								/>
+							</div>
+						))}
+					</section>
 				))}
 			</div>
-		</>
+		</div>
 	);
 }

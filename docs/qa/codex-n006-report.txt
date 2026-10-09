@@ -1,0 +1,23 @@
+Implemented N006.
+
+What changed:
+- Added shared HMAC helper: [authApiKeyHash.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/packages/web-backend/src/authApiKeyHash.ts)
+- Exported it from [index.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/packages/web-backend/src/index.ts)
+- New extension minting now returns `cak_<32 random bytes hex>`, stores only the HMAC hash, and rotates existing rows: [route.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/app/api/extension/mint-key/route.ts)
+- `getAuth()` and backend `HttpAuthMiddlewareLive` now accept both:
+  - new `cak_...` hashed keys
+  - old 36-char plaintext legacy keys
+- Updated extension/desktop direct auth paths so fresh `cak_` keys actually work:
+  - [utils.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/app/api/utils.ts)
+  - [Auth.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/packages/web-backend/src/Auth.ts)
+  - [extension me route](/abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/app/api/extension/me/route.ts)
+  - [desktop root](</abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/app/api/desktop/[...route]/root.ts>)
+  - [desktop session](</abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/app/api/desktop/[...route]/session.ts>)
+  - [extension server action](/abs/path/C:/Users/localhost/Desktop/ustoz-github/apps/web/actions/extension/mint-token.ts)
+
+Important: I widened `authApiKeys.id` from `varchar(36)` to `varchar(64)` in [schema.ts](/abs/path/C:/Users/localhost/Desktop/ustoz-github/packages/database/schema.ts). No new columns. This was necessary because the required HMAC hex is 64 chars; leaving it at 36 would make new hashed key inserts fail at runtime.
+
+Verification:
+- `pnpm.cmd typecheck` passed.
+- I did not commit, deploy, run calibrate, or touch production secrets.
+- Worktree had pre-existing unrelated modified files; I left them alone.

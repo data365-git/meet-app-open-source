@@ -2,10 +2,7 @@ import "server-only";
 
 import { serverEnv } from "@cap/env";
 import Supermemory from "supermemory";
-import {
-	MESSENGER_ADMIN_EMAIL,
-	MESSENGER_DEFAULT_KNOWLEDGE_TAG,
-} from "./constants";
+import { MESSENGER_DEFAULT_KNOWLEDGE_TAG } from "./constants";
 
 export type SupermemoryConversationMessage = {
 	role: "user" | "assistant";
@@ -100,8 +97,8 @@ export const storeConversationInSupermemory = async ({
 	});
 };
 
-export const syncCapKnowledgeBase = async (requestedByEmail: string) => {
-	if (requestedByEmail !== MESSENGER_ADMIN_EMAIL) {
+export const syncCapKnowledgeBase = async (requestedByAdmin: boolean) => {
+	if (!requestedByAdmin) {
 		throw new Error("Unauthorized");
 	}
 

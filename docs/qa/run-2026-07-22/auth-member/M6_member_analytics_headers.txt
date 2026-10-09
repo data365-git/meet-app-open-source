@@ -1,0 +1,16 @@
+HTTP/1.1 200 OK
+Alt-Svc: h3=":443"; ma=2592000
+Cache-Control: no-store, must-revalidate
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/html; charset=utf-8
+Date: Wed, 22 Jul 2026 10:00:11 GMT
+Link: </_next/static/media/028c0d39d2e8f589-s.p.woff2>; rel=preload; as="font"; crossorigin=""; type="font/woff2", </_next/static/css/5b3a6016dfd8d9ca.css>; rel=preload; as="style", </_next/static/css/d4237278a95b76d6.css>; rel=preload; as="style", </_next/static/css/3aa1b106d9338de0.css>; rel=preload; as="style", </_next/static/css/20720a659c31249d.css>; rel=preload; as="style"
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+X-Powered-By: Next.js
+Transfer-Encoding: chunked
+

@@ -1,8 +1,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
+import { patchVideoMetadata } from "@/lib/video-metadata";
 
 const USER_EDITABLE_METADATA_FIELDS = [
 	"customCreatedAt",
@@ -35,7 +36,10 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 
-	const query = await db().select().from(videos).where(eq(videos.id, videoId));
+	const query = await db()
+		.select()
+		.from(videos)
+		.where(and(eq(videos.id, videoId), isNull(videos.deletedAt)));
 
 	if (query.length === 0) {
 		return Response.json({ error: true }, { status: 401 });
@@ -50,15 +54,10 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 
-	await db()
-		.update(videos)
-		.set({
-			metadata: {
-				...((result.metadata as Record<string, unknown> | null) ?? {}),
-				...editableMetadata,
-			},
-		})
-		.where(eq(videos.id, videoId));
+	await patchVideoMetadata(videoId, (current) => ({
+		...current,
+		...editableMetadata,
+	}));
 
 	return Response.json(true, { status: 200 });
 }

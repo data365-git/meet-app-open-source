@@ -1,6 +1,17 @@
 # Cap V2 — Operations Reference
 
-Production URL: `https://web-production-e6fe4.up.railway.app`
+> # ⛔ HISTORICAL — DO NOT FOLLOW THIS FILE
+>
+> This describes the **retired Railway deployment**, which no longer exists. The
+> URL below is dead and the architecture table is wrong: the app runs on a VPS
+> under Coolify with a self-managed MySQL container, not on Railway plugins.
+>
+> Kept only as a record of the pre-migration setup.
+>
+> **Current operations → `docs/RUNBOOK.md`**
+> **Moving to a new server → `docs/MIGRATION.md`**
+
+Production URL (DEAD — retired Railway deployment): `https://web-production-e6fe4.up.railway.app`
 
 ---
 

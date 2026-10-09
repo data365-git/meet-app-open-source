@@ -2,7 +2,7 @@
 
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
-import { Avatar, Logo } from "@cap/ui";
+import { Avatar } from "@cap/ui";
 import type { ViewerSettings } from "@cap/web-backend";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
@@ -15,10 +15,7 @@ import {
 } from "react";
 import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
-import {
-	PreparingVideoOverlay,
-	RecordingInProgressOverlay,
-} from "@/app/s/[videoId]/_components/RecordingInProgress";
+import { RecordingInProgressOverlay } from "@/app/s/[videoId]/_components/RecordingInProgress";
 import {
 	formatChaptersAsVTT,
 	formatTranscriptAsVTT,
@@ -80,6 +77,7 @@ export const EmbedVideo = forwardRef<
 			data.duration ?? 0,
 		);
 		const [isPlaying, setIsPlaying] = useState(false);
+		const [overlayVisible, setOverlayVisible] = useState(true);
 		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
@@ -90,14 +88,14 @@ export const EmbedVideo = forwardRef<
 		const captionsDisabled = viewerSettings?.disableCaptions ?? false;
 		const chaptersDisabled = viewerSettings?.disableChapters ?? false;
 
-		const { data: transcriptContent, error: transcriptError } = useTranscript(
+		const { data: transcript, error: transcriptError } = useTranscript(
 			data.id,
 			captionsDisabled ? null : data.transcriptionStatus,
 		);
 
 		useEffect(() => {
-			if (transcriptContent) {
-				const parsed = parseVTT(transcriptContent);
+			if (transcript?.content) {
+				const parsed = parseVTT(transcript.content);
 				setTranscriptData(parsed);
 			} else if (transcriptError) {
 				console.error(
@@ -105,7 +103,7 @@ export const EmbedVideo = forwardRef<
 					transcriptError.message,
 				);
 			}
-		}, [transcriptContent, transcriptError]);
+		}, [transcript, transcriptError]);
 
 		useEffect(() => {
 			if (
@@ -175,12 +173,20 @@ export const EmbedVideo = forwardRef<
 		// All source types use the native <video> player via the mp4 playlist endpoint.
 		const videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
 		const rawFallbackSrc =
-			data.source.type === "webMP4" ||
-			data.source.type === "webAudio" ||
-			data.source.type === "extensionWeb"
+			data.source.type === "webMP4" || data.source.type === "extensionWeb"
 				? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=raw-preview`
 				: undefined;
 		const enableCrossOrigin = true;
+
+		// Auto-hide overlay shortly after playback starts; re-show on pause.
+		useEffect(() => {
+			if (isPlaying) {
+				const timer = setTimeout(() => setOverlayVisible(false), 2500);
+				return () => clearTimeout(timer);
+			} else {
+				setOverlayVisible(true);
+			}
+		}, [isPlaying]);
 
 		useEffect(() => {
 			if (!videoRef.current) return;
@@ -209,14 +215,21 @@ export const EmbedVideo = forwardRef<
 
 		return (
 			<>
-				<div className="relative w-screen h-screen rounded-xl">
+				<div className="relative w-full h-[100dvh]">
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
 							className="w-full h-full"
 						/>
 					) : isTransitioning ? (
-						<PreparingVideoOverlay className="w-full h-full" />
+						<div className="flex flex-col gap-2 justify-center items-center bg-black rounded-xl w-full h-full">
+							<svg className="w-8 h-8 sm:w-10 sm:h-10 text-white/60 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+								<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+								<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+							</svg>
+							<p className="text-white/50 text-sm">Preparing video...</p>
+							<p className="text-white/30 text-xs text-center max-w-[220px] leading-relaxed">Your recording is being processed and will be ready shortly.</p>
+						</div>
 					) : (
 						<CapVideoPlayer
 							videoId={data.id}
@@ -236,14 +249,14 @@ export const EmbedVideo = forwardRef<
 				</div>
 
 				<AnimatePresence>
-					{!isPlaying && (
-						<div className="absolute top-3 left-3 z-10 space-y-2">
+					{overlayVisible && (
+						<div className="absolute top-3 left-3 z-10 space-y-2 pointer-events-none">
 							<motion.div
 								initial={{ opacity: 0, y: 10 }}
 								animate={{ opacity: 1, y: 0 }}
 								exit={{ opacity: 0, y: 10 }}
 								transition={{ duration: 0.3, delay: 0.2 }}
-								className="z-10 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl"
+								className="z-10 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl pointer-events-auto"
 							>
 								<div className="flex gap-2 items-center sm:gap-3">
 									{ownerName && (
@@ -258,7 +271,7 @@ export const EmbedVideo = forwardRef<
 											href={`/s/${data.id}`}
 											target="_blank"
 											rel="noopener noreferrer"
-											className="block"
+											className="flex items-center min-h-[44px]"
 											onClick={(e) => e.stopPropagation()}
 										>
 											<h1 className="text-xs max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
@@ -290,15 +303,17 @@ export const EmbedVideo = forwardRef<
 								transition={{ duration: 0.3, delay: 0.1 }}
 								onClick={(e) => {
 									e.stopPropagation();
-									window.open("https://cap.so", "_blank");
+									window.open(process.env.NEXT_PUBLIC_WEB_URL ?? "#", "_blank");
 								}}
-								className="hidden z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 sm:flex border-white/10 w-fit text-white/80 hover:text-white bg-black/50"
-								aria-label="Powered by Cap"
+								className="flex z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 border-white/10 w-fit text-white/80 hover:text-white bg-black/50 pointer-events-auto"
+								aria-label="Powered by data365"
 							>
 								<span className="text-xs md:text-sm text-white/80">
 									Powered by
 								</span>
-								<Logo className="w-auto h-4" white={true} />
+								<span className="text-sm font-semibold leading-none text-white">
+									data365
+								</span>
 							</motion.button>
 						</div>
 					)}

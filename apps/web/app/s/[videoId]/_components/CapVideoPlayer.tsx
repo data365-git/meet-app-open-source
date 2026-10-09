@@ -8,10 +8,17 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon, InfoIcon } from "lucide-react";
+import { AlertTriangleIcon, InfoIcon, RotateCcw, RotateCw } from "lucide-react";
+import {
+	MediaActionTypes,
+	useMediaDispatch,
+} from "media-chrome/react/media-store";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { useThumnailQuery } from "@/components/VideoThumbnail";
+import { AudioPlayerChrome } from "./AudioPlayer";
 import CommentStamp from "./CommentStamp";
 import { getActiveCaptionText } from "./caption-cues";
 import {
@@ -33,6 +40,7 @@ import {
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
 import { VideoPreviewGif } from "./VideoPreviewGif";
+import type { TranscriptLanguageOptions } from "./LanguagePicker";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -44,8 +52,6 @@ import {
 	MediaPlayerPiP,
 	MediaPlayerPlay,
 	MediaPlayerPlaybackSpeedDial,
-	MediaPlayerSeekBackward,
-	MediaPlayerSeekForward,
 	MediaPlayerSettings,
 	MediaPlayerTime,
 	MediaPlayerVideo,
@@ -54,28 +60,49 @@ import {
 } from "./video/media-player";
 import { SegmentedProgressBar } from "./video/SegmentedProgressBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
+import "./docked-chrome.css";
 
 const { circumference } = getProgressCircleConfig();
 
-function getProgressStatusText(
-	status: "uploading" | "processing" | "generating_thumbnail",
-) {
-	switch (status) {
-		case "processing":
-			return "Processing";
-		case "generating_thumbnail":
-			return "Finishing up";
-		default:
-			return "Uploading";
-	}
+function RawPlaybackStatusBadge({
+	visible,
+	label,
+	description,
+}: {
+	visible: boolean;
+	label: string;
+	description: string;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					data-slot="playback-status-badge"
+					className={clsx(
+						"absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70",
+						visible ? "opacity-100" : "pointer-events-none opacity-0",
+					)}
+					aria-hidden={!visible}
+					aria-label={description}
+					tabIndex={visible ? undefined : -1}
+				>
+					<InfoIcon className="size-3" />
+					<span>{label}</span>
+				</button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				align="start"
+				className="max-w-[260px] border border-white/10 bg-black/90 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
+			>
+				{description}
+			</TooltipContent>
+		</Tooltip>
+	);
 }
 
 type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
-
-interface CaptionOption {
-	code: string;
-	name: string;
-}
 
 interface Props {
 	videoSrc: string;
@@ -103,18 +130,17 @@ interface Props {
 	onSeek?: (time: number) => void;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
-	captionLanguage?: string;
-	onCaptionLanguageChange?: (language: string) => void;
-	availableCaptions?: CaptionOption[];
-	isCaptionLoading?: boolean;
-	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
+	canReplaceWithAudio?: boolean;
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
 	chapters?: { startSec: number; title: string }[];
+	isAudio?: boolean;
+	videoName?: string;
+	transcriptLanguages?: TranscriptLanguageOptions;
 }
 
 export function CapVideoPlayer({
@@ -137,22 +163,42 @@ export function CapVideoPlayer({
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
-	captionLanguage,
-	onCaptionLanguageChange,
-	availableCaptions = [],
-	isCaptionLoading = false,
-	hasCaptions = false,
 	canRetryProcessing = false,
+	canReplaceWithAudio = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
 	chapters = [],
+	isAudio = false,
+	videoName,
+	transcriptLanguages,
 }: Props) {
+	const t = useTranslations("share");
+	const getProgressStatusText = (
+		status: "uploading" | "processing" | "generating_thumbnail",
+	) => {
+		switch (status) {
+			case "processing":
+				return t("videoStatusProcessing");
+			case "generating_thumbnail":
+				return t("videoStatusFinishing");
+			default:
+				return t("videoStatusUploading");
+		}
+	};
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
+	// AudioPlayerChrome's transport is always visible (no hover-to-reveal like
+	// the video chrome), so mark controls "visible" for audio up front —
+	// otherwise comment stamps (gated on mainControlsVisible) never render
+	// since MediaPlayerControls (the thing that normally reports this) is not
+	// rendered for isAudio.
+	useEffect(() => {
+		if (isAudio) setMainControlsVisible(true);
+	}, [isAudio]);
 	const [toggleCaptions, setToggleCaptionsState] = useState<boolean>(() => {
 		if (typeof window === "undefined") return false;
 		const stored = localStorage.getItem("cap-captions-enabled");
@@ -194,6 +240,9 @@ export function CapVideoPlayer({
 	const hasActiveProgress =
 		isUploading || isProcessing || isGeneratingThumbnail;
 	const shouldDeferResolvedSource = shouldDeferPlaybackSource(uploadProgress);
+
+	const thumbnailQuery = useThumnailQuery(videoId);
+	const posterUrl: string | undefined = thumbnailQuery.data ?? undefined;
 
 	const resolvedSrc = useQuery<ResolvedPlaybackSource | null>({
 		queryKey: [
@@ -362,9 +411,7 @@ export function CapVideoPlayer({
 	]);
 
 	useEffect(() => {
-		if (!captionsSrc) {
-			setCurrentCue("");
-		}
+		setCurrentCue("");
 	}, [captionsSrc]);
 
 	useEffect(() => {
@@ -410,6 +457,47 @@ export function CapVideoPlayer({
 			setHasError(true);
 		};
 
+		const handleLoadedMetadata = () => {
+			setVideoLoaded(true);
+			setHasError(false);
+			if (!hasPlayedOnce) {
+				setShowPlayButton(true);
+			}
+		};
+
+		video.addEventListener("loadeddata", handleLoadedData);
+		video.addEventListener("canplay", handleCanPlay);
+		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("error", handleError as EventListener);
+
+		if (video.readyState === 4) {
+			handleLoadedData();
+		}
+
+		return () => {
+			video.removeEventListener("loadeddata", handleLoadedData);
+			video.removeEventListener("canplay", handleCanPlay);
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("error", handleError as EventListener);
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		};
+	}, [
+		hasPlayedOnce,
+		hasTriedRawFallback,
+		rawFallbackSrc,
+		resolvedSrc.data?.type,
+		resolvedSrc.isPending,
+		videoRef.current,
+	]);
+
+	// Separate effect for caption text-track wiring so that play/seek events
+	// (which toggle hasPlayedOnce) do NOT tear down and re-add the cuechange
+	// listener — which would cause the overlay to freeze after the first play.
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+
 		let captionTrack: TextTrack | null = null;
 
 		const handleCueChange = (): void => {
@@ -418,11 +506,16 @@ export function CapVideoPlayer({
 
 		const setupTracks = (): void => {
 			const tracks = Array.from(video.textTracks);
-
 			for (const track of tracks) {
 				if (track.kind === "captions" || track.kind === "subtitles") {
+					// Remove any previously attached listener before (re-)attaching
+					// to stay idempotent across repeated setupTracks calls.
+					if (captionTrack && captionTrack !== track) {
+						captionTrack.removeEventListener("cuechange", handleCueChange);
+					}
 					captionTrack = track;
 					track.mode = "hidden";
+					track.removeEventListener("cuechange", handleCueChange);
 					track.addEventListener("cuechange", handleCueChange);
 					break;
 				}
@@ -440,43 +533,22 @@ export function CapVideoPlayer({
 			}
 		};
 
-		const handleLoadedMetadataWithTracks = () => {
-			setVideoLoaded(true);
-			setHasError(false);
-			if (!hasPlayedOnce) {
-				setShowPlayButton(true);
-			}
-			setupTracks();
-		};
-
 		const handleTrackChange = () => {
 			ensureTracksHidden();
 			setupTracks();
 		};
 
-		video.addEventListener("loadeddata", handleLoadedData);
-		video.addEventListener("canplay", handleCanPlay);
-		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
-		video.addEventListener("play", handlePlay);
-		video.addEventListener("error", handleError as EventListener);
-
 		video.textTracks.addEventListener("change", handleTrackChange);
 		video.textTracks.addEventListener("addtrack", handleTrackChange);
 		video.textTracks.addEventListener("removetrack", handleTrackChange);
+		video.addEventListener("loadedmetadata", setupTracks);
 
-		if (video.readyState === 4) {
-			handleLoadedData();
-		}
+		// Wire up immediately in case the track + metadata already exist
+		// (covers re-mount and the case where metadata loaded before this effect ran).
+		setupTracks();
 
 		return () => {
-			video.removeEventListener("loadeddata", handleLoadedData);
-			video.removeEventListener("canplay", handleCanPlay);
-			video.removeEventListener("play", handlePlay);
-			video.removeEventListener("error", handleError as EventListener);
-			video.removeEventListener(
-				"loadedmetadata",
-				handleLoadedMetadataWithTracks,
-			);
+			video.removeEventListener("loadedmetadata", setupTracks);
 			video.textTracks.removeEventListener("change", handleTrackChange);
 			video.textTracks.removeEventListener("addtrack", handleTrackChange);
 			video.textTracks.removeEventListener("removetrack", handleTrackChange);
@@ -484,14 +556,7 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [
-		hasPlayedOnce,
-		hasTriedRawFallback,
-		rawFallbackSrc,
-		resolvedSrc.data?.type,
-		resolvedSrc.isPending,
-		videoRef.current,
-	]);
+	}, [captionsSrc, resolvedSrc.data?.url, videoRef.current]);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
@@ -505,6 +570,7 @@ export function CapVideoPlayer({
 	const uploadFailureMessage = getUploadFailureMessage(
 		uploadProgress,
 		canRetryProcessing,
+		t,
 	);
 
 	const retryProcessing = useCallback(async () => {
@@ -521,16 +587,16 @@ export function CapVideoPlayer({
 			});
 			toast.success(
 				result.status === "started"
-					? "Video processing restarted."
-					: "Video is still processing.",
+					? t("retryProcessingStarted")
+					: t("retryProcessingStillRunning"),
 			);
 		} catch (error) {
 			console.error("Failed to retry video processing", error);
-			toast.error("Could not retry video processing.");
+			toast.error(t("retryProcessingError"));
 		} finally {
 			setIsRetryingProcessing(false);
 		}
-	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId]);
+	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId, t]);
 
 	const prevUploadProgress =
 		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
@@ -590,16 +656,20 @@ export function CapVideoPlayer({
 		(!resolvedSrc.isSuccess || Boolean(resolvedSrc.data));
 	const showPlaybackResolutionError =
 		hasError && !uploadProgress && !resolvedSrc.data && !resolvedSrc.isPending;
-	const showRawPlaybackBadge =
-		showPlaybackStatusBadge && resolvedSrc.data?.type === "raw";
+	// Owner-only "optimizing" badge removed (owner 2026-07-14): it only ever
+	// showed to the video owner (viewers/team never saw it) and read as noise;
+	// raw-source playback works fine. `showPlaybackStatusBadge` is referenced
+	// below only to keep the prop wired; flip this back on if the optimize
+	// pipeline is fixed and the signal is wanted again.
+	const showRawPlaybackBadge = false && showPlaybackStatusBadge;
 	const rawPlaybackBadgeLabel =
 		uploadProgressRaw?.status === "error"
-			? "Original upload"
-			: "Optimizing video";
+			? t("originalUploadBadge")
+			: t("optimizingVideoBadge");
 	const rawPlaybackBadgeDescription =
 		uploadProgressRaw?.status === "error"
-			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
-			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
+			? t("originalUploadDesc")
+			: t("optimizingVideoDesc");
 	const blockPlaybackControls =
 		((blockPlaybackDuringProcessing || !videoLoaded) && hasActiveProgress) ||
 		showUploadFailureOverlay;
@@ -629,7 +699,7 @@ export function CapVideoPlayer({
 							disabled={isRetryingProcessing}
 							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
 						>
-							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+							{isRetryingProcessing ? t("retrying") : t("retryProcessing")}
 						</button>
 					)}
 				</div>
@@ -638,7 +708,7 @@ export function CapVideoPlayer({
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						Could not load a playable video source. Reload to try again.
+						{t("videoLoadError")}
 					</p>
 				</div>
 			)}
@@ -654,30 +724,15 @@ export function CapVideoPlayer({
 					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
 				</div>
 			</div>
-			{showRawPlaybackBadge && (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70"
-							aria-label={rawPlaybackBadgeDescription}
-						>
-							<InfoIcon className="size-3" />
-							<span>{rawPlaybackBadgeLabel}</span>
-						</button>
-					</TooltipTrigger>
-					<TooltipContent
-						side="bottom"
-						align="start"
-						className="max-w-[260px] border border-white/10 bg-black/90 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
-					>
-						{rawPlaybackBadgeDescription}
-					</TooltipContent>
-				</Tooltip>
-			)}
+			<RawPlaybackStatusBadge
+				visible={showRawPlaybackBadge}
+				label={rawPlaybackBadgeLabel}
+				description={rawPlaybackBadgeDescription}
+			/>
 			<VideoPreviewGif
 				videoId={videoId}
 				visible={
+					!isAudio &&
 					!disablePreviewGif &&
 					videoLoaded &&
 					!hasPlayedOnce &&
@@ -702,6 +757,7 @@ export function CapVideoPlayer({
 					}
 					playsInline
 					autoPlay={autoplay}
+					poster={posterUrl}
 				>
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
@@ -715,6 +771,31 @@ export function CapVideoPlayer({
 					)}
 				</MediaPlayerVideo>
 			)}
+			{isAudio &&
+				resolvedSrc.data &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<AudioPlayerChrome
+						videoRef={videoRef}
+						videoName={videoName}
+						duration={playerDuration}
+						chapters={chapters}
+						defaultPlaybackSpeed={defaultPlaybackSpeed}
+					/>
+				)}
+			{!isAudio &&
+				hasPlayedOnce &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<MobileSeekGestureLayer
+						videoRef={videoRef}
+						duration={playerDuration}
+					/>
+				)}
 			<AnimatePresence>
 				{(blockPlaybackDuringProcessing || !videoLoaded) &&
 					hasActiveProgress &&
@@ -750,7 +831,7 @@ export function CapVideoPlayer({
 									className="w-4 h-4 transform -rotate-90"
 									viewBox="0 0 20 20"
 								>
-									<title>Progress</title>
+									<title>{t("progressTitle")}</title>
 									<circle
 										cx="10"
 										cy="10"
@@ -778,7 +859,8 @@ export function CapVideoPlayer({
 							</motion.div>
 						</>
 					)}
-				{showPlayButton &&
+				{!isAudio &&
+					showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
 					!showUploadFailureOverlay &&
@@ -791,6 +873,7 @@ export function CapVideoPlayer({
 							exit={{ opacity: 0, y: 10 }}
 							transition={{ duration: 0.2 }}
 							onClick={() => videoRef.current?.play()}
+							data-slot="center-play-button"
 							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
 						>
 							<FontAwesomeIcon
@@ -800,7 +883,8 @@ export function CapVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
-			{resolvedSrc.data &&
+			{!isAudio &&
+				resolvedSrc.data &&
 				videoLoaded &&
 				!hasActiveProgress &&
 				!showUploadFailureOverlay &&
@@ -870,60 +954,56 @@ export function CapVideoPlayer({
 					});
 				})()}
 
-			<MediaPlayerControls
-				className={clsx(
-					"flex-col items-start gap-2.5",
-					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
-				)}
-				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={blockPlaybackControls}
-			>
-				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<SegmentedProgressBar
-					chapters={chapters}
-					duration={playerDuration}
-					videoRef={videoRef}
-				/>
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
-						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
+			{!isAudio && (
+				<MediaPlayerControls
+					className={clsx(
+						"flex-col items-start gap-2.5",
+						showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+					)}
+					mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
+					isUploadingOrFailed={blockPlaybackControls}
+				>
+					<MediaPlayerControlsOverlay className="rounded-b-xl" />
+					<SegmentedProgressBar
+						chapters={chapters}
+						duration={playerDuration}
+						videoRef={videoRef}
+					/>
+					<div className="flex gap-2 items-center w-full">
+						<div className="flex flex-1 gap-2 items-center">
+							<MediaPlayerPlay className="sm:size-11" />
+							<MediaPlayerVolume
+								expandable
+								// enhancedAudioEnabled={enhancedAudioEnabled}
+								// enhancedAudioMuted={enhancedAudioMuted}
+								// setEnhancedAudioMuted={setEnhancedAudioMuted}
 							/>
-						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
+							<MediaPlayerTime fallbackDuration={playerDuration} />
+						</div>
+						<div className="flex gap-2 items-center">
+							{!disableCaptions && (
+								<MediaPlayerCaptions
+									setToggleCaptions={setToggleCaptions}
+									toggleCaptions={toggleCaptions}
+								/>
+							)}
+							{/* <MediaPlayerEnhancedAudio
+								enhancedAudioStatus={enhancedAudioStatus}
+								enhancedAudioEnabled={enhancedAudioEnabled}
+								setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+							/> */}
+							<MediaPlayerSettings
 							// enhancedAudioStatus={enhancedAudioStatus}
 							// enhancedAudioEnabled={enhancedAudioEnabled}
 							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-							captionLanguage={captionLanguage}
-							onCaptionLanguageChange={onCaptionLanguageChange}
-							availableCaptions={availableCaptions}
-							isCaptionLoading={isCaptionLoading}
-							hasCaptions={hasCaptions}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
+							transcriptLanguages={transcriptLanguages}
+							/>
+							<MediaPlayerPiP />
+							<MediaPlayerFullscreen />
+						</div>
 					</div>
-				</div>
-			</MediaPlayerControls>
+				</MediaPlayerControls>
+			)}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio
@@ -944,4 +1024,204 @@ export function CapVideoPlayer({
 			)} */}
 		</MediaPlayer>
 	);
+}
+
+const GESTURE_SEEK_SECONDS = 10;
+const GESTURE_TAP_SLOP_PX = 12;
+const GESTURE_DOUBLE_TAP_WINDOW_MS = 320;
+
+/**
+ * T5: mobile-only (`sm:hidden`) gesture surface over the video so touch
+ * behaves like YouTube/MX Player — double-tap left/right thirds to seek ±10s,
+ * center third toggles play/pause, horizontal drag scrubs with a live time
+ * preview. Bottom strip is left uncovered so the real control bar (play,
+ * progress-bar drag, etc.) stays reachable and unaffected. Desktop mouse
+ * behavior is untouched — this layer simply doesn't render there.
+ */
+function MobileSeekGestureLayer({
+	videoRef,
+	duration,
+}: {
+	videoRef: React.RefObject<HTMLVideoElement | null>;
+	duration: number;
+}) {
+	const dispatch = useMediaDispatch();
+	const [flash, setFlash] = useState<{
+		side: "left" | "right";
+		key: number;
+	} | null>(null);
+	const [scrubTime, setScrubTime] = useState<number | null>(null);
+	const dragRef = useRef<{
+		startX: number;
+		startY: number;
+		startTime: number;
+		width: number;
+		dragging: boolean;
+	} | null>(null);
+	const lastSideTapRef = useRef<{
+		side: "left" | "right";
+		at: number;
+	} | null>(null);
+
+	const seekTo = useCallback(
+		(time: number) => {
+			const clamped = Math.max(
+				0,
+				Math.min(duration > 0 ? duration : Number.POSITIVE_INFINITY, time),
+			);
+			if (videoRef.current) videoRef.current.currentTime = clamped;
+			dispatch({ type: MediaActionTypes.MEDIA_SEEK_REQUEST, detail: clamped });
+			return clamped;
+		},
+		[dispatch, duration, videoRef],
+	);
+
+	useEffect(() => {
+		if (!flash) return;
+		const timeout = setTimeout(() => setFlash(null), 550);
+		return () => clearTimeout(timeout);
+	}, [flash]);
+
+	const onPointerDown = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const rect = e.currentTarget.getBoundingClientRect();
+			dragRef.current = {
+				startX: e.clientX,
+				startY: e.clientY,
+				startTime: videoRef.current?.currentTime ?? 0,
+				width: rect.width,
+				dragging: false,
+			};
+		},
+		[videoRef],
+	);
+
+	const onPointerMove = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			if (!drag) return;
+			const dx = e.clientX - drag.startX;
+			const dy = e.clientY - drag.startY;
+			if (!drag.dragging) {
+				if (Math.abs(dx) < GESTURE_TAP_SLOP_PX || Math.abs(dx) < Math.abs(dy)) {
+					return;
+				}
+				drag.dragging = true;
+				e.currentTarget.setPointerCapture(e.pointerId);
+			}
+			const target = drag.startTime + (dx / drag.width) * duration;
+			setScrubTime(seekTo(target));
+		},
+		[duration, seekTo],
+	);
+
+	const endDrag = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			dragRef.current = null;
+			if (!drag) return;
+
+			if (drag.dragging) {
+				try {
+					e.currentTarget.releasePointerCapture(e.pointerId);
+				} catch {
+					// ignore
+				}
+				setScrubTime(null);
+				return;
+			}
+
+			// Double-tap the left/right third to seek. A single side tap waits for
+			// its pair so it never skips by accident.
+			const rect = e.currentTarget.getBoundingClientRect();
+			const x = e.clientX - rect.left;
+			const third = rect.width / 3;
+			const video = videoRef.current;
+			const side = x < third ? "left" : x > third * 2 ? "right" : null;
+
+			if (side) {
+				const now = performance.now();
+				const lastTap = lastSideTapRef.current;
+				if (
+					lastTap?.side === side &&
+					now - lastTap.at <= GESTURE_DOUBLE_TAP_WINDOW_MS
+				) {
+					const direction = side === "left" ? -1 : 1;
+					seekTo((video?.currentTime ?? 0) + direction * GESTURE_SEEK_SECONDS);
+					setFlash({ side, key: Date.now() });
+					lastSideTapRef.current = null;
+				} else {
+					lastSideTapRef.current = { side, at: now };
+				}
+			} else if (video) {
+				lastSideTapRef.current = null;
+				dispatch({
+					type: video.paused
+						? MediaActionTypes.MEDIA_PLAY_REQUEST
+						: MediaActionTypes.MEDIA_PAUSE_REQUEST,
+				});
+			}
+		},
+		[dispatch, seekTo, videoRef],
+	);
+
+	const onPointerCancel = useCallback(() => {
+		dragRef.current = null;
+		setScrubTime(null);
+	}, []);
+
+	return (
+		<div
+			aria-hidden="true"
+			data-slot="mobile-seek-gesture-layer"
+			// Gate on POINTER TYPE, not viewport width: mobile fullscreen rotates
+			// to landscape (width >= sm), so the old `sm:hidden` wrongly hid the
+			// gesture layer in fullscreen and tap-to-seek stopped working (owner
+			// 2026-07-14). Coarse pointer = touch → keep the gesture at any width
+			// (portrait, landscape, fullscreen); fine pointer (mouse) = desktop →
+			// hide it so mouse behavior is untouched.
+			className="absolute inset-x-0 top-0 bottom-24 z-[6] touch-pan-y select-none [@media(pointer:fine)]:hidden"
+			onPointerDown={onPointerDown}
+			onPointerMove={onPointerMove}
+			onPointerUp={endDrag}
+			onPointerCancel={onPointerCancel}
+		>
+			<AnimatePresence>
+				{flash && (
+					<motion.div
+						key={flash.key}
+						initial={{ opacity: 0, scale: 0.7 }}
+						animate={{ opacity: 1, scale: 1 }}
+						exit={{ opacity: 0, scale: 0.85 }}
+						transition={{ duration: 0.2 }}
+						className={clsx(
+							"pointer-events-none absolute top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 rounded-full bg-black/60 px-3 py-2 text-white",
+							flash.side === "left" ? "left-6" : "right-6",
+						)}
+					>
+						{flash.side === "left" ? (
+							<RotateCcw className="size-5" />
+						) : (
+							<RotateCw className="size-5" />
+						)}
+						<span className="text-[11px] font-medium tabular-nums">
+							{GESTURE_SEEK_SECONDS}s
+						</span>
+					</motion.div>
+				)}
+			</AnimatePresence>
+			{scrubTime !== null && (
+				<div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium tabular-nums text-white">
+					{formatGestureTime(scrubTime)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function formatGestureTime(sec: number): string {
+	const s = Math.max(0, Math.floor(sec));
+	const m = Math.floor(s / 60);
+	const r = s % 60;
+	return `${m}:${r.toString().padStart(2, "0")}`;
 }

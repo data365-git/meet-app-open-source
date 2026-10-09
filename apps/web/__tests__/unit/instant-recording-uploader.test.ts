@@ -6,8 +6,11 @@ import {
 import type { VideoId } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/web-recorder-types";
 
 const STREAMED_PART_BYTES = 5 * 1024 * 1024 + 128;
+const STREAM_PART_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_BYTES = 16 * 1024 * 1024;
-const OVERFLOW_PART_BYTES = 129 * 1024 * 1024;
+// 9 full 16 MiB stream parts: the 9th enqueue pushes pending bytes past the
+// 128 MiB in-flight cap and must surface the overflow error.
+const OVERFLOW_PART_BYTES = 144 * 1024 * 1024;
 const FINALIZED_BLOB_BYTES = 129 * 1024 * 1024;
 
 type UploadOutcome =
@@ -391,8 +394,16 @@ describe("InstantRecordingUploader", () => {
 
 				if (url === "/api/upload/multipart/complete") {
 					expect(body.parts).toEqual([
-						expect.objectContaining({ partNumber: 1, etag: "etag-1" }),
-						expect.objectContaining({ partNumber: 2, etag: "etag-2" }),
+						expect.objectContaining({
+							partNumber: 1,
+							etag: "etag-1",
+							size: STREAM_PART_BYTES,
+						}),
+						expect.objectContaining({
+							partNumber: 2,
+							etag: "etag-2",
+							size: STREAM_PART_BYTES,
+						}),
 					]);
 					return makeJsonResponse({ success: true });
 				}
@@ -417,12 +428,9 @@ describe("InstantRecordingUploader", () => {
 			onChunkStateChange: vi.fn(),
 		});
 
-		const firstChunk = makeBlob(
-			STREAMED_PART_BYTES,
-			"video/webm;codecs=vp9,opus",
-		);
+		const firstChunk = makeBlob(STREAM_PART_BYTES, "video/webm;codecs=vp9,opus");
 		const secondChunk = makeBlob(
-			STREAMED_PART_BYTES,
+			STREAM_PART_BYTES,
 			"video/webm;codecs=vp9,opus",
 		);
 
@@ -433,6 +441,79 @@ describe("InstantRecordingUploader", () => {
 			durationSeconds: 14,
 			subpath: "raw-upload.webm",
 		});
+	});
+
+	it("splits unevenly-sized streamed chunks into equal non-trailing parts", async () => {
+		// Regression: R2 rejects completeMultipart with InvalidPart ("All
+		// non-trailing parts must have the same length") when parts differ in
+		// size. Feeding uneven recorder chunks must still produce equal-size
+		// non-trailing parts, with only the final part allowed to be smaller.
+		let completedParts:
+			| Array<{ partNumber: number; etag: string; size: number }>
+			| undefined;
+
+		const fetchMock = vi.fn(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = input.toString();
+				const body = init?.body ? JSON.parse(init.body as string) : null;
+
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: `https://uploads.example/part-${body.partNumber}`,
+					});
+				}
+
+				if (url === "/api/upload/multipart/complete") {
+					completedParts = body.parts;
+					return makeJsonResponse({ success: true });
+				}
+
+				throw new Error(`Unexpected fetch call: ${url}`);
+			},
+		);
+
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes(
+			Array.from({ length: 8 }, (_, index) => ({
+				type: "success" as const,
+				etag: `etag-${index + 1}`,
+			})),
+		);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "video/webm;codecs=vp9,opus",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			onChunkStateChange: vi.fn(),
+		});
+
+		const MB = 1024 * 1024;
+		const unevenChunkSizes = [6 * MB, 9 * MB, 6 * MB, 9 * MB, 6 * MB];
+		let recorded = 0;
+		for (const size of unevenChunkSizes) {
+			const chunk = makeBlob(size, "video/webm;codecs=vp9,opus");
+			recorded += size;
+			uploader.handleChunk(chunk, recorded);
+		}
+
+		await uploader.finalize({
+			durationSeconds: 30,
+			subpath: "raw-upload.webm",
+		});
+
+		expect(completedParts).toBeDefined();
+		const parts = completedParts as Array<{ size: number }>;
+		expect(parts.length).toBeGreaterThan(1);
+		const nonTrailing = parts.slice(0, -1);
+		for (const part of nonTrailing) {
+			expect(part.size).toBe(STREAM_PART_BYTES);
+		}
+		// Total bytes are preserved across the split.
+		const total = parts.reduce((sum, part) => sum + part.size, 0);
+		expect(total).toBe(36 * MB);
 	});
 
 	it("retries a failed part upload before completing", async () => {
@@ -695,8 +776,54 @@ describe("InstantRecordingUploader", () => {
 		).rejects.toBeInstanceOf(MultipartCompletionUncertainError);
 	});
 
-	it("surfaces upload overflow before multipart completion", async () => {
+	// (R11) Reaching the in-flight cap must NOT destroy the recording. It used
+	// to throw "Upload could not keep up with recording" the moment pending
+	// bytes crossed 128 MiB — a slow uplink or a brief stall killed an
+	// otherwise-healthy recording. Now the excess stays buffered (backpressure)
+	// and only a genuinely unbounded backlog fails loudly.
+	it("applies backpressure instead of losing the recording when uploads fall behind", async () => {
 		const onOverflow = vi.fn();
+		const onFatalError = vi.fn();
+		// Uploads never resolve, so pending bytes stay pinned at the cap.
+		MockXMLHttpRequest.setOutcomes(
+			Array.from({ length: 40 }, () => ({ type: "pending" as const })),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				makeJsonResponse({ presignedUrl: "https://uploads.example/part" }),
+			),
+		);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "video/webm;codecs=vp9,opus",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			onOverflow,
+			onFatalError,
+		});
+
+		const chunk = makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus");
+
+		expect(() => uploader.handleChunk(chunk, chunk.size)).not.toThrow();
+		expect(onOverflow).not.toHaveBeenCalled();
+		expect(onFatalError).not.toHaveBeenCalled();
+	});
+
+	it("still fails loudly when the backlog grows past the hard ceiling", async () => {
+		const onOverflow = vi.fn();
+		MockXMLHttpRequest.setOutcomes(
+			Array.from({ length: 80 }, () => ({ type: "pending" as const })),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				makeJsonResponse({ presignedUrl: "https://uploads.example/part" }),
+			),
+		);
 
 		const uploader = new InstantRecordingUploader({
 			videoId,
@@ -708,18 +835,18 @@ describe("InstantRecordingUploader", () => {
 			onOverflow,
 		});
 
-		const chunk = makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus");
-
-		expect(() => uploader.handleChunk(chunk, chunk.size)).toThrow(
-			"Upload could not keep up with recording",
-		);
-		expect(onOverflow).toHaveBeenCalledTimes(1);
-		await expect(
-			uploader.finalize({
-				durationSeconds: 20,
-				subpath: "raw-upload.webm",
-			}),
-		).rejects.toThrow("Upload could not keep up with recording");
+		// 512 MiB total-backlog ceiling: keep feeding 144 MiB chunks past it.
+		expect(() => {
+			let recorded = 0;
+			for (let i = 0; i < 6; i++) {
+				recorded += OVERFLOW_PART_BYTES;
+				uploader.handleChunk(
+					makeBlob(OVERFLOW_PART_BYTES, "video/webm;codecs=vp9,opus"),
+					recorded,
+				);
+			}
+		}).toThrow("Upload could not keep up with recording");
+		expect(onOverflow).toHaveBeenCalled();
 	});
 
 	it("uploads large finalized blobs in multiple parts without hitting live overflow limits", async () => {
@@ -850,7 +977,9 @@ describe("InstantRecordingUploader", () => {
 			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
 		});
 
-		const chunk = makeBlob(STREAMED_PART_BYTES, "video/webm;codecs=vp9,opus");
+		// A full stream part is flushed immediately, so a part upload is in flight
+		// before finalize (a smaller chunk would only flush on finalize).
+		const chunk = makeBlob(STREAM_PART_BYTES, "video/webm;codecs=vp9,opus");
 		uploader.handleChunk(chunk, chunk.size);
 
 		await new Promise((resolve) => setTimeout(resolve, 0));

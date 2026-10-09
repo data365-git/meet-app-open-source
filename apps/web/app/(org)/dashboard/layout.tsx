@@ -1,13 +1,17 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
+import AiQuotaStatus from "./_components/AiQuotaStatus";
 import DashboardInner from "./_components/DashboardInner";
+import DashboardLoadError from "./_components/DashboardLoadError";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
+import PendingAccess from "./_components/PendingAccess";
 import { DashboardContexts } from "./Contexts";
 import { UploadingProvider } from "./caps/UploadingContext";
 import {
@@ -38,6 +42,10 @@ export default async function DashboardLayout({
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
 	let userPreferences: UserPreferences;
+	// An empty organizationSelect means either "genuine no-membership requester"
+	// or "the lookup itself failed" — those must render different UI, or a DB
+	// blip would show a real paying member the sales-lead pending screen.
+	let dashboardDataFailed = false;
 	try {
 		const dashboardData = await getDashboardData(user);
 		organizationSelect = dashboardData.organizationSelect;
@@ -46,6 +54,7 @@ export default async function DashboardLayout({
 		userPreferences = dashboardData.userPreferences?.preferences || null;
 		spacesData = dashboardData.spacesData;
 		anyNewNotifications = dashboardData.anyNewNotifications;
+		dashboardDataFailed = dashboardData.hasError;
 	} catch (error) {
 		console.error("Failed to load dashboard data", error);
 		organizationSelect = [];
@@ -54,6 +63,14 @@ export default async function DashboardLayout({
 		spacesData = [];
 		anyNewNotifications = false;
 		userPreferences = null;
+		dashboardDataFailed = true;
+	}
+
+	if (organizationSelect.length === 0 && !user.isAdmin) {
+		if (dashboardDataFailed) {
+			return <DashboardLoadError />;
+		}
+		return <PendingAccess />;
 	}
 
 	let activeOrganization = organizationSelect.find(
@@ -88,7 +105,17 @@ export default async function DashboardLayout({
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">
 							<MobileNav />
-							<DashboardInner>{children}</DashboardInner>
+							<DashboardInner>
+								{/* Owner-only status line (free Gemini quota + OpenRouter
+								    balance). Suspensed + admin-gated so it can never delay
+								    the dashboard or appear to regular users. */}
+								{user.isAdmin ? (
+									<Suspense fallback={null}>
+										<AiQuotaStatus />
+									</Suspense>
+								) : null}
+								{children}
+							</DashboardInner>
 						</div>
 						<MobileTab />
 					</div>

@@ -1,0 +1,156 @@
+=== E1: CORS evil origin vs legit origin on /api/thumbnail ===
+--- evil origin ---
+HTTP/1.1 200 OK
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Methods: GET, OPTIONS
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain;charset=UTF-8
+Date: Wed, 22 Jul 2026 09:58:58 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+--- legit origin ---
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Origin: https://data365.duckdns.org
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain;charset=UTF-8
+Date: Wed, 22 Jul 2026 09:58:59 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+
+=== E2: hono route /api/desktop/user/profile with evil Origin ===
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Credentials: true
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain; charset=UTF-8
+Date: Wed, 22 Jul 2026 09:59:42 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+Vary: Origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+
+=== E2: hono route /api/desktop/user/profile with legit Origin ===
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: https://data365.duckdns.org
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain; charset=UTF-8
+Date: Wed, 22 Jul 2026 09:59:43 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+Vary: Origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+
+=== E2: Effect-API /api/erpc OPTIONS preflight with evil Origin ===
+HTTP/1.1 204 No Content
+Allow: GET, HEAD, OPTIONS, POST
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 09:59:43 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+
+
+=== E2: Effect-API /api/erpc OPTIONS preflight with legit Origin ===
+HTTP/1.1 204 No Content
+Allow: GET, HEAD, OPTIONS, POST
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 09:59:43 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+
+
+=== ANALYSIS ===
+
+E1: PASS. /api/thumbnail (uses utils/helpers.ts getHeaders): evil origin gets
+NEITHER Access-Control-Allow-Origin NOR -Credentials; legit origin gets BOTH,
+correctly scoped to https://data365.duckdns.org. Matches plan's expectation
+exactly, CONFIRMED live 2026-07-22.
+
+E2: hono route /api/desktop/user/profile (uses hono/cors via
+app/api/utils.ts corsMiddleware, allowedOrigins allowlist):
+  - Access-Control-Allow-Origin: correctly OMITTED for evil.example.com,
+    correctly present (https://data365.duckdns.org) for the legit origin.
+    This is the security-critical gate and it holds -- a browser will NOT
+    expose the response body to evil.example.com's JS because ACAO is
+    absent/non-matching (browsers require ACAO to match before exposing a
+    credentialed cross-origin response, regardless of ACAC).
+  - HOWEVER: Access-Control-Allow-Credentials: true is sent UNCONDITIONALLY
+    for BOTH the evil AND the legit origin -- code-read of
+    apps/web/app/api/utils.ts:133-154 (`corsMiddleware = cors({ origin: fn,
+    credentials: true, ... })`) shows this is hono/cors's own upstream
+    behavior: when `credentials:true` is configured, hono sets
+    Access-Control-Allow-Credentials on every response, independent of
+    whether the `origin` callback returned a match. Only
+    Access-Control-Allow-Origin is conditionally gated by the allowlist.
+  - allowedOrigins allowlist (utils.ts:124-131) = [NEXT_PUBLIC_WEB_URL,
+    localhost:3000/3001, tauri://localhost, http(s)://tauri.localhost] plus
+    any chrome-extension://* origin (accepted risk, documented in-code as
+    "S1 review 2026-07-21" for unpacked/dev extension IDs) and
+    process.env.CAP_BROWSER_EXTENSION_ORIGIN. cap.so / cap.link are NOT in
+    this allowlist -- confirmed absent. Matches expectation.
+
+  FLAG (should, not blocker): the desktop/hono CORS mechanism is
+  inconsistent with the /api/thumbnail (getHeaders) mechanism -- one omits
+  both CORS headers together for a disallowed origin, the other omits only
+  ACAO but still emits ACAC:true. Not currently exploitable (ACAO still
+  gates browser access), but it is a CORS-header-hygiene deviation from the
+  B1 fix's intent ("no credentialed reflection for any of the 3
+  mechanisms") and a latent risk if the origin-matching logic is ever
+  loosened (e.g. a future change that reflects Origin more permissively
+  while this ACAC:true-always behavior remains). Recommend wrapping
+  hono/cors so Access-Control-Allow-Credentials is only emitted when the
+  origin callback actually matched, for defense-in-depth / consistency
+  across the 3 CORS mechanisms.
+
+Effect-API /api/erpc OPTIONS preflight: for BOTH evil and legit origin, the
+response is a bare 204 with `Allow: GET, HEAD, OPTIONS, POST` and NO
+Access-Control-Allow-Origin/-Credentials headers at all -- i.e. this
+particular endpoint's OPTIONS handler doesn't answer CORS preflights with
+any origin-specific headers either way (neither reflects evil.example.com
+nor grants the legit origin CORS access via preflight). Net effect for
+security: evil.example.com gets nothing (safe). This does mean a real
+cross-origin *credentialed* browser client for /api/erpc would fail its own
+preflight even from data365.duckdns.org itself if this endpoint is ever
+called cross-origin (it works fine same-origin via cookies, as observed
+live on the share page, since same-origin requests don't need CORS
+preflight/headers at all). Not a security hole either way -- PASS for the
+"no credentialed reflection" bar; flagged only as an observation, not a
+defect.

@@ -1,22 +1,146 @@
 import { createCapApi } from "./api";
+import { isMeetingFiling, maybeAutoOpenMeetingVideo } from "./meeting";
 import type { CompletedPart, ExtensionSettings } from "./state";
 import { getSettings, getState, setState } from "./state";
 
-const MIN_PART_SIZE = 5 * 1024 * 1024;
+export const MIN_PART_SIZE = 5 * 1024 * 1024;
 const RETRY_QUEUE_KEY = "capExtRetryQueue";
 const DEAD_LETTER_KEY = "capExtDeadLetterQueue";
-const MAX_ATTEMPTS = 6;
+// (R6) Retry horizons. The old flat MAX_ATTEMPTS = 6 with a 256s backoff cap gave
+// EVERY queued item a ~10-minute death clock: an ordinary 10-minute WiFi drop or
+// server restart permanently lost a meeting whose bytes were already safe. Both
+// classes of item hold durable data, so giving up early is never the right trade:
+//   - "part": the bytes live in chrome.storage.local (durable across SW eviction).
+//   - "complete"/"recording-complete": carry NO bytes at all — the whole recording
+//     is already in R2 and only the finalize API call remains. Abandoning one loses
+//     a fully-saved meeting, which is the worst failure this product has.
+// Both are still bounded, so a genuinely permanent failure cannot spin forever.
+// (R6-b, audit 2026-07-19) BOTH horizons are 400 (≈ 28h) — deliberately equal.
+// The old 30-attempt part horizon was a ~1.8h death clock on the items that
+// hold the recording's actual BYTES, while the metadata-only finalize items
+// outlived them by a day: a two-hour outage with the browser open dead-lettered
+// a fully-captured meeting and told the user to re-record it. The bytes are
+// durable in chrome.storage.local; abandoning them before the finalize that
+// depends on them is never the right trade. Keep the two constants separate so
+// a future divergence is a visible decision, not an accident.
+export const PART_MAX_ATTEMPTS = 400; // ≈ 28h — must NOT be shorter than FINALIZE
+export const FINALIZE_MAX_ATTEMPTS = 400; // ≈ 28h — survives any realistic outage
 
 const BACKOFF_SECONDS = [1, 4, 16, 64, 256];
 
+// (P1.5 / M3) A dedicated alarm drives periodic drains of the retry queue.
+// Deliberately NOT the keepalive alarm (see keepalive.ts) — that one is
+// cleared exactly when retries are needed (RECORDER_ERROR, finalizeRecording
+// in sw.ts), so piggybacking it would barely fire at all. This alarm's
+// lifecycle is centralized in setRetryQueue below, so it can never drift out
+// of sync with whether the queue actually has anything to drain.
+export const RETRY_ALARM_NAME = "cap-retry-queue";
+const RETRY_ALARM_INTERVAL_MINUTES = 1;
+
+export function isRetryAlarm(name: string): boolean {
+	return name === RETRY_ALARM_NAME;
+}
+
 interface RetryItem {
-	kind: "part" | "complete" | "recording-complete";
+	kind: "part" | "complete" | "recording-complete" | "discard";
 	payload: Record<string, unknown>;
 	attempts: number;
 	nextRetryAt: number;
 }
 
 let inMemoryBuffer: Uint8Array = new Uint8Array(0);
+
+// ── Pending-buffer persistence (D6a: survive MV3 service-worker eviction) ──
+//
+// `inMemoryBuffer` above lives only in the SW's JS heap. Chrome can evict an
+// idle MV3 service worker (or the browser can be closed) at any time between
+// message deliveries; on respawn all module-level state resets to its
+// initial value, silently dropping up to MIN_PART_SIZE (~5MB) of recording
+// tail that had not yet been flushed into an uploaded part. Persisting the
+// buffer to chrome.storage.local — throttled so we don't thrash storage on
+// every small chunk — lets a respawned SW restore it before continuing.
+const PENDING_BUFFER_KEY_PREFIX = "pendingBuffer:";
+const PENDING_BUFFER_PERSIST_INTERVAL_MS = 2000;
+const PENDING_BUFFER_PERSIST_GROWTH_BYTES = 1 * 1024 * 1024;
+
+let lastPersistedForUploadId: string | undefined;
+let lastPersistAt = 0;
+let lastPersistedLength = 0;
+
+function pendingBufferKey(uploadId: string): string {
+	return `${PENDING_BUFFER_KEY_PREFIX}${uploadId}`;
+}
+
+async function persistPendingBuffer(uploadId: string): Promise<void> {
+	await chrome.storage.local.set({
+		[pendingBufferKey(uploadId)]: bytesToBase64(inMemoryBuffer),
+	});
+	lastPersistedForUploadId = uploadId;
+	lastPersistAt = Date.now();
+	lastPersistedLength = inMemoryBuffer.length;
+}
+
+/** Persist the current buffer if enough time or growth has passed since the last persist. */
+async function maybePersistPendingBuffer(uploadId: string): Promise<void> {
+	const now = Date.now();
+	const grew = inMemoryBuffer.length - lastPersistedLength;
+	const isNewUpload = lastPersistedForUploadId !== uploadId;
+
+	if (
+		isNewUpload ||
+		now - lastPersistAt >= PENDING_BUFFER_PERSIST_INTERVAL_MS ||
+		grew >= PENDING_BUFFER_PERSIST_GROWTH_BYTES
+	) {
+		await persistPendingBuffer(uploadId);
+	}
+}
+
+async function clearPendingBuffer(uploadId: string): Promise<void> {
+	await chrome.storage.local.remove(pendingBufferKey(uploadId));
+	if (lastPersistedForUploadId === uploadId) {
+		lastPersistedForUploadId = undefined;
+		lastPersistAt = 0;
+		lastPersistedLength = 0;
+	}
+}
+
+/**
+ * Restore a persisted pending buffer into `inMemoryBuffer` for the given
+ * upload if the in-memory copy is empty (i.e. this SW instance never saw
+ * the buffered bytes — a fresh respawn after eviction). Safe to call
+ * unconditionally at the top of any buffer-touching entry point.
+ */
+async function restorePendingBufferIfNeeded(uploadId: string): Promise<void> {
+	if (inMemoryBuffer.length > 0) return;
+
+	const result = await chrome.storage.local.get(pendingBufferKey(uploadId));
+	const stored = result[pendingBufferKey(uploadId)] as string | undefined;
+	if (!stored) return;
+
+	// (F2c) The storage read above is an await, and `inMemoryBuffer` is global. A
+	// CANCEL plus the start of a NEW recording during that await would make this
+	// line paste the OLD upload's bytes into the new recording's buffer — the
+	// caller's identity re-check then correctly drops the incoming chunk, but the
+	// restored bytes are already sitting there and the next legitimate chunk
+	// appends straight onto them. Re-verify that this upload is still the live one
+	// before writing, and that nothing else refilled the buffer meanwhile.
+	const stateNow = await getState();
+	const liveUploadId =
+		stateNow.kind === "recording" || stateNow.kind === "uploading"
+			? stateNow.uploadId
+			: undefined;
+	if (liveUploadId !== uploadId || inMemoryBuffer.length > 0) {
+		console.warn(
+			`[upload] skipped restoring the pending buffer for ${uploadId}: it is no longer the live upload`,
+		);
+		return;
+	}
+
+	inMemoryBuffer = base64ToBytes(stored);
+	lastPersistedForUploadId = uploadId;
+	lastPersistAt = Date.now();
+	lastPersistedLength = inMemoryBuffer.length;
+}
 
 interface PartRetryPayload {
 	partNumber: number;
@@ -87,6 +211,94 @@ function drainBuffer(): Uint8Array {
 	return drained;
 }
 
+/**
+ * Slice `buffer` into as many fixed-`partSize` parts as it contains, keeping
+ * whatever is left over (< partSize) as the remainder. Pure — no chrome.*,
+ * no network, no module-level state — so every non-trailing multipart part
+ * is guaranteed byte-identical in size, per R2's "all parts except the last
+ * must be the same size" requirement.
+ */
+export function takeFixedSizeParts(
+	buffer: Uint8Array,
+	partSize: number,
+): { parts: Uint8Array[]; remainder: Uint8Array } {
+	const parts: Uint8Array[] = [];
+	let offset = 0;
+
+	while (buffer.length - offset >= partSize) {
+		parts.push(buffer.slice(offset, offset + partSize));
+		offset += partSize;
+	}
+
+	return { parts, remainder: buffer.slice(offset) };
+}
+
+/**
+ * (M7) The next PartNumber to use for a persisted "uploading" state's
+ * trailing remainder. `parts.length + 1` is wrong whenever the part numbers
+ * have a gap (e.g. parts [1,2,4] because part 3 is still queued elsewhere
+ * from a prior crash) — it would reassign an already-used number (4), and
+ * the non-upsert append in finalizeUpload then produces a duplicate
+ * PartNumber in the completeMultipart call. Use max(PartNumber)+1 instead,
+ * accounting for both already-uploaded parts AND any part still queued for
+ * retry for this exact upload (which will also eventually claim a number).
+ */
+function computeNextPartNumberForUploading(
+	parts: CompletedPart[],
+	queue: RetryItem[],
+	videoId: string,
+	uploadId: string,
+): number {
+	let maxPartNumber = 0;
+	for (const part of parts) {
+		if (part.PartNumber > maxPartNumber) maxPartNumber = part.PartNumber;
+	}
+	for (const item of queue) {
+		if (item.kind !== "part") continue;
+		const payload = getPartRetryPayload(item);
+		if (!payload) continue;
+		if (payload.videoId !== videoId || payload.uploadId !== uploadId) continue;
+		if (payload.partNumber > maxPartNumber) maxPartNumber = payload.partNumber;
+	}
+	return maxPartNumber + 1;
+}
+
+/**
+ * (H1) Decoded byte length of a base64 payload, without decoding it. Part
+ * payloads are multi-megabyte, so materialising them just to measure them
+ * would be wasteful — base64 is a pure size transform, so the count is exact.
+ */
+function base64DecodedLength(base64: string): number {
+	const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+	return (base64.length / 4) * 3 - padding;
+}
+
+/**
+ * (H1) Bytes of THIS upload that are already durable in the retry queue.
+ * A part whose PUT failed is persisted whole in chrome.storage.local, so its
+ * bytes are exactly as recoverable as an uploaded part's — the viability
+ * check in finalizeUpload must count them or it declares a real recording
+ * unviable ("no video data was saved") and strands them (see the comment at
+ * the call site).
+ */
+async function queuedPartBytesForUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<number> {
+	const queue = await getRetryQueue();
+	let bytes = 0;
+
+	for (const item of queue) {
+		if (item.kind !== "part") continue;
+		const payload = getPartRetryPayload(item);
+		if (!payload) continue;
+		if (payload.videoId !== videoId || payload.uploadId !== uploadId) continue;
+		bytes += base64DecodedLength(payload.partDataBase64);
+	}
+
+	return bytes;
+}
+
 async function getRetryQueue(): Promise<RetryItem[]> {
 	const result = await chrome.storage.local.get(RETRY_QUEUE_KEY);
 	return (result[RETRY_QUEUE_KEY] as RetryItem[] | undefined) ?? [];
@@ -94,6 +306,17 @@ async function getRetryQueue(): Promise<RetryItem[]> {
 
 async function setRetryQueue(queue: RetryItem[]): Promise<void> {
 	await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: queue });
+	// Every writer of the retry queue (addToRetryQueue, retryQueuedPartsForUpload,
+	// retryPendingUploads) funnels through here, so the alarm's lifecycle stays
+	// in lockstep with the persisted queue by construction — it can't be created
+	// without something to drain, or left running once drained.
+	if (queue.length > 0) {
+		chrome.alarms.create(RETRY_ALARM_NAME, {
+			periodInMinutes: RETRY_ALARM_INTERVAL_MINUTES,
+		});
+	} else {
+		chrome.alarms.clear(RETRY_ALARM_NAME);
+	}
 }
 
 async function addToRetryQueue(
@@ -110,11 +333,56 @@ async function moveToDeadLetter(item: RetryItem): Promise<void> {
 	dead.push(item);
 	await chrome.storage.local.set({ [DEAD_LETTER_KEY]: dead });
 
+	// This upload is over — release the UI to a terminal state, or the message
+	// below is a cruel joke: state would stay "uploading" forever, isInProgress()
+	// would refuse EVERY new recording with "a recording is already in progress",
+	// and the user is told to re-record something the extension then blocks. Only
+	// release it if the live state is still this upload's — a newer recording must
+	// never be stomped (same reason as the drain's completion guard).
+	// A discard that ran out of retries is a CLEANUP failure, not a lost
+	// recording: the user already has their local state back, and "please
+	// re-record" / an error state would be nonsense for a recording they asked
+	// us to destroy. Record it and stay quiet about re-recording.
+	if (item.kind === "discard") {
+		chrome.notifications.create({
+			type: "basic",
+			iconUrl: "/icons/icon-48.png",
+			title: "Could not delete recording from the server",
+			message:
+				"This recording was removed from this device, but we could not delete it from the server. Please delete it from your dashboard.",
+		});
+		return;
+	}
+
+	const deadVideoId = (item.payload as { videoId?: string })?.videoId;
+	if (deadVideoId) {
+		const liveState = await getState();
+		const liveVideoId =
+			liveState.kind === "error"
+				? liveState.previousVideoId
+				: "videoId" in liveState
+					? liveState.videoId
+					: undefined;
+		if (
+			liveVideoId === deadVideoId &&
+			(liveState.kind === "uploading" || liveState.kind === "finishing")
+		) {
+			await setState({
+				kind: "error",
+				reason:
+					"Upload failed and could not be recovered. Please re-record — you can start a new recording now.",
+				recoverable: true,
+				previousVideoId: deadVideoId,
+			});
+		}
+	}
+
 	chrome.notifications.create({
 		type: "basic",
 		iconUrl: "/icons/icon-48.png",
-		title: "Cap upload failed",
-		message: "Upload failed — recording saved locally as fallback",
+		title: "data365 upload failed",
+		message:
+			"Upload failed and could not be recovered. This recording is lost — please re-record.",
 	});
 }
 
@@ -211,7 +479,17 @@ function enqueuePartRetryPayload(
 
 function scheduleRetry(item: RetryItem, now: number): RetryItem | undefined {
 	const nextAttempts = item.attempts + 1;
-	if (nextAttempts >= MAX_ATTEMPTS) return undefined;
+	// "discard" joins the long-horizon class: it carries no bytes, and giving up
+	// on it leaves a confidential recording sitting in R2 — the exact outcome the
+	// button exists to prevent. It must outlive an overnight outage.
+	const isFinalization =
+		item.kind === "complete" ||
+		item.kind === "recording-complete" ||
+		item.kind === "discard";
+	const maxAttempts = isFinalization
+		? FINALIZE_MAX_ATTEMPTS
+		: PART_MAX_ATTEMPTS;
+	if (nextAttempts >= maxAttempts) return undefined;
 
 	const delaySec = BACKOFF_SECONDS[nextAttempts - 1] ?? 256;
 	return {
@@ -226,7 +504,11 @@ async function retryQueuedPartsForUpload(
 	uploadId: string,
 	parts: CompletedPart[],
 	settings: ExtensionSettings,
-): Promise<{ parts: CompletedPart[]; failed: boolean }> {
+): Promise<{
+	parts: CompletedPart[];
+	failed: boolean;
+	remainingPartsQueued: boolean;
+}> {
 	const queue = await getRetryQueue();
 	const remaining: RetryItem[] = [];
 	const now = Date.now();
@@ -234,7 +516,8 @@ async function retryQueuedPartsForUpload(
 	let failed = false;
 
 	for (const item of queue) {
-		const payload = item.kind === "part" ? getPartRetryPayload(item) : undefined;
+		const payload =
+			item.kind === "part" ? getPartRetryPayload(item) : undefined;
 		if (item.kind !== "part") {
 			remaining.push(item);
 			continue;
@@ -287,8 +570,51 @@ async function retryQueuedPartsForUpload(
 		}
 	}
 
+	const remainingPartsQueued = remaining.some(
+		(item) =>
+			item.kind === "part" &&
+			item.payload.videoId === videoId &&
+			item.payload.uploadId === uploadId,
+	);
 	await setRetryQueue(remaining);
-	return { parts: nextParts, failed };
+	return { parts: nextParts, failed, remainingPartsQueued };
+}
+
+/**
+ * Elapsed recording time in whole seconds, excluding paused spans — mirrors
+ * the on-screen timer math in popup.ts/recorder-page.ts. Returns undefined
+ * for a non-positive result (clock skew, or called too early) rather than 0:
+ * callers must OMIT durationInSecs from the complete request rather than
+ * send a bogus value.
+ */
+/**
+ * How long the recording actually RAN, in seconds.
+ *
+ * @param endedAt when the capture stopped producing media. Defaults to now,
+ *   which is right only when the finalize happens promptly after the stop.
+ *   MEASURED (2026-08-05, throttled 800 kbit/s soak): it does not. The finalize
+ *   waits for the recorder's last chunk to be acknowledged, and on a slow link
+ *   the service worker is still shipping the backlog long after the user pressed
+ *   Stop — a 361-second recording reported 663 seconds, i.e. the player would be
+ *   told the file is nearly twice as long as its content. The caller passes the
+ *   timestamp of the last chunk the recorder actually produced, which is when
+ *   the media ends no matter how far behind the upload is.
+ */
+export function computeDurationInSecs(
+	startedAt: number,
+	pausedAccumMs: number | undefined,
+	paused: boolean | undefined,
+	pausedAt: number | undefined,
+	endedAt?: number,
+): number | undefined {
+	const now =
+		typeof endedAt === "number" && Number.isFinite(endedAt) && endedAt > 0
+			? endedAt
+			: Date.now();
+	const openPauseMs = paused && pausedAt !== undefined ? now - pausedAt : 0;
+	const elapsedMs = now - startedAt - (pausedAccumMs ?? 0) - openPauseMs;
+	const secs = Math.round(elapsedMs / 1000);
+	return secs > 0 ? secs : undefined;
 }
 
 export async function initializeUpload(
@@ -306,8 +632,8 @@ export async function initializeUpload(
 	});
 	const name =
 		mode === "meeting" && meetingId
-			? `Cap Meeting — ${meetingId}`
-			: `Cap Recording — ${dateStr}`;
+			? `data365 Meeting — ${meetingId}`
+			: `data365 Recording — ${dateStr}`;
 
 	const { id: videoId } = await api.createVideo({
 		recordingMode: "extensionWeb",
@@ -323,44 +649,371 @@ export async function initializeUpload(
 	});
 
 	inMemoryBuffer = new Uint8Array(0);
+	lastPersistedForUploadId = undefined;
+	lastPersistAt = 0;
+	lastPersistedLength = 0;
 
 	return { videoId, uploadId };
+}
+
+/** Discard any pending-buffer persistence for an aborted/cancelled upload. */
+export async function abortUpload(uploadId: string): Promise<void> {
+	await clearPendingBuffer(uploadId);
+}
+
+/** Drop every queued retry and dead-letter entry belonging to this video.
+ * Keyed on videoId, not uploadId: "recording-complete" items carry only the
+ * videoId, and leaving one behind would resurrect a finalize for a recording
+ * the user just asked us to destroy. */
+async function purgeQueuedWorkForVideo(videoId: string): Promise<void> {
+	// "discard" is exempt: it IS the destruction this purge serves, not work to
+	// be destroyed. Without this exemption the purge would eat the very retry
+	// task a failed discard leaves behind — the cleanup would look queued and
+	// then silently vanish.
+	const belongsToVideo = (item: RetryItem) =>
+		item.kind !== "discard" &&
+		(item.payload as { videoId?: string })?.videoId === videoId;
+
+	const queue = await getRetryQueue();
+	const keptQueue = queue.filter((item) => !belongsToVideo(item));
+	// Always route through setRetryQueue — it owns the retry alarm's lifecycle,
+	// so a direct storage write would leave the alarm running with nothing to
+	// drain (or, worse, silently stopped while work remains).
+	if (keptQueue.length !== queue.length) await setRetryQueue(keptQueue);
+
+	const deadResult = await chrome.storage.local.get(DEAD_LETTER_KEY);
+	const dead = (deadResult[DEAD_LETTER_KEY] as RetryItem[] | undefined) ?? [];
+	const keptDead = dead.filter((item) => !belongsToVideo(item));
+	if (keptDead.length !== dead.length) {
+		await chrome.storage.local.set({ [DEAD_LETTER_KEY]: keptDead });
+	}
+}
+
+/**
+ * PERMANENTLY destroy a recording, everywhere it exists.
+ *
+ * `abortUpload` above only forgets the local buffer, which is right for its
+ * callers but was catastrophically wrong as the implementation of a button
+ * labelled "Cancel upload": the user was told the recording was cancelled while
+ * orphan parts accumulated in R2 and queued retries kept running in the
+ * background. For a confidential meeting "was that actually deleted?" has to
+ * have an answer.
+ *
+ * Returns whether the SERVER side was cleaned. The caller must not tell the user
+ * the recording is gone when this is false — the local state is idle either way,
+ * but bytes may still be sitting in R2.
+ */
+export async function discardUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<{ serverCleaned: boolean }> {
+	// (W3a) The durable marker goes FIRST — before ANY destructive step, local
+	// or remote. Queuing after a failure was observed lost the cleanup for good
+	// whenever the browser died mid-request (nothing was queued, so nothing ever
+	// retried and a confidential recording sat in R2 forever); queuing after the
+	// local mutations left a narrower but real window where an interruption had
+	// already destroyed the local evidence yet planted no marker — startup then
+	// saw an ordinary in-progress upload and RESURRECTED the recording the user
+	// destroyed. Marker-first / remove-on-success makes an interruption at ANY
+	// point recoverable: startup sees the pending discard and finishes the
+	// destruction instead of publishing it. (purgeQueuedWorkForVideo exempts
+	// "discard" items, so the purge below cannot eat this marker.)
+	await enqueueDiscardRetry(videoId, uploadId);
+
+	// Local next, and unconditionally: these can't fail in a way worth
+	// reporting, and doing them before the network attempt guarantees no
+	// background retry re-uploads a part we are in the middle of deleting.
+	await clearPendingBuffer(uploadId);
+	await purgeQueuedWorkForVideo(videoId);
+
+	const settings = await getSettings();
+	if (!settings.apiKey) {
+		// Nothing can be cleaned without credentials; the durable task already
+		// stands, so the drain finishes it once a key exists.
+		return { serverCleaned: false };
+	}
+
+	const serverCleaned = await cleanUpDiscardedVideoOnServer(
+		videoId,
+		uploadId,
+		settings,
+	);
+	if (serverCleaned) await removeDiscardRetry(videoId, uploadId);
+
+	return { serverCleaned };
+}
+
+/**
+ * The server half of a discard, in the ONLY safe order. Returns whether storage
+ * was fully cleaned; never throws.
+ *
+ * The ordering is load-bearing, not stylistic. `deleteVideo` hits
+ * /api/video/delete-permanent, which HARD-deletes the video row — and that row is
+ * the ownership record the abort route authorizes against. Deleting it after a
+ * FAILED abort is unrecoverable in both directions: R2's ListObjectsV2 cannot see
+ * the parts of an incomplete multipart, so the delete never removes them, and a
+ * later abort retry now finds no row, gets a 404, and api.ts reports that 404 as
+ * SUCCESS. The result is orphaned parts in R2 plus a UI confidently claiming the
+ * recording was deleted. So: if the abort does not succeed, stop — leave the row
+ * standing so the queued retry can still authorize itself. Only fully-successful
+ * storage cleanup earns the right to remove the row.
+ *
+ * Safe to repeat at every interruption point: abort tolerates an already-aborted
+ * or already-completed multipart (api.ts), and delete-permanent is idempotent on
+ * an already-erased video.
+ */
+async function cleanUpDiscardedVideoOnServer(
+	videoId: string,
+	uploadId: string,
+	settings: ExtensionSettings,
+): Promise<boolean> {
+	const api = createCapApi(settings.apiBaseUrl, settings.apiKey);
+
+	try {
+		await api.abortMultipart({ uploadId, videoId, subpath: "result.mp4" });
+	} catch (err) {
+		console.warn("[upload] discard: multipart abort failed", err);
+		return false;
+	}
+
+	// Only now, with the multipart provably released: delete covers the case the
+	// abort cannot — a multipart that already completed, leaving a finished
+	// object plus a video record — and takes the ownership row with it.
+	try {
+		await api.deleteVideo({ videoId });
+	} catch (err) {
+		console.warn("[upload] discard: video delete failed", err);
+		return false;
+	}
+
+	return true;
+}
+
+/** Queue (or refresh) the ONE durable discard task for this upload. Upserts
+ * rather than pushes: a repeated discard of the same upload must not stack
+ * duplicate tasks. Routed through setRetryQueue so the retry alarm is armed by
+ * construction — a raw storage write would leave the task with nothing to drain
+ * it. Callers are already inside enqueueRecorder's serialization. */
+async function enqueueDiscardRetry(
+	videoId: string,
+	uploadId: string,
+): Promise<void> {
+	const queue = await getRetryQueue();
+	const withoutExisting = queue.filter(
+		(item) =>
+			!(
+				item.kind === "discard" &&
+				item.payload.videoId === videoId &&
+				item.payload.uploadId === uploadId
+			),
+	);
+	withoutExisting.push({
+		kind: "discard",
+		payload: { videoId, uploadId },
+		attempts: 0,
+		nextRetryAt: Date.now() + 1000,
+	});
+	await setRetryQueue(withoutExisting);
+}
+
+/** Remove the durable discard task for this upload — the mirror of
+ * enqueueDiscardRetry, run once the server cleanup has FULLY succeeded so the
+ * drain has nothing left to repeat. Routed through setRetryQueue for the same
+ * alarm-lifecycle reason. */
+async function removeDiscardRetry(
+	videoId: string,
+	uploadId: string,
+): Promise<void> {
+	const queue = await getRetryQueue();
+	const without = queue.filter(
+		(item) =>
+			!(
+				item.kind === "discard" &&
+				item.payload.videoId === videoId &&
+				item.payload.uploadId === uploadId
+			),
+	);
+	if (without.length !== queue.length) await setRetryQueue(without);
+}
+
+/** (W3b) True if a durable discard task is queued for this recording. Every
+ * startup/resume path that could finalize or re-publish an upload must consult
+ * this first: the user permanently discarded the recording, so reviving it
+ * would resurrect exactly what they destroyed. */
+export async function hasPendingDiscard(videoId: string): Promise<boolean> {
+	const queue = await getRetryQueue();
+	return queue.some(
+		(item) => item.kind === "discard" && item.payload.videoId === videoId,
+	);
+}
+
+/** (W3a) Finish the LOCAL half of a pending discard. discardUpload plants the
+ * durable marker before its local cleanup, so a browser death in between leaves
+ * the marker standing while the pending buffer and queued part work for the
+ * video survive. Startup calls this when it finds a pending discard: without it
+ * the drain would re-upload parts of a destroyed recording (each failing after
+ * the abort) and the orphaned buffer would linger in storage. Idempotent — both
+ * steps no-op when there is nothing left to clean. Must NOT run inside the
+ * drain loop (purgeQueuedWorkForVideo writes the queue; see the drain's
+ * discard-handler comment). */
+export async function finishLocalDiscardTraces(videoId: string): Promise<void> {
+	const queue = await getRetryQueue();
+	for (const item of queue) {
+		if (item.kind === "discard" && item.payload.videoId === videoId) {
+			const uploadId = (item.payload as { uploadId?: string }).uploadId;
+			if (uploadId) await clearPendingBuffer(uploadId);
+		}
+	}
+	await purgeQueuedWorkForVideo(videoId);
+}
+
+/** (F2) True when `expected` does not own the recording described by `state`.
+ *
+ * The comparison MUST be made against the very state object the caller then acts
+ * on — never against a separate earlier read. CANCEL and RECORDER_STARTED write
+ * state OUTSIDE enqueueRecorder (see the R7 note further down), so a check made
+ * before the job's own getState() is time-of-check/time-of-use: session A passes,
+ * B becomes live, and A's bytes land in B. That is exactly how the 2026-07-23
+ * recording ended up as two interleaved fMP4 streams.
+ *
+ * STRICT: once a recording carries an id, an UNSTAMPED message is a mismatch too.
+ * Accept-if-absent would re-open the same hole for any sender left unstamped, and
+ * the failure mode of strictness is loud (that path's chunks all drop, tests catch
+ * it) while the failure mode of leniency is silent corruption discovered only when
+ * an owner's recording will not play.
+ */
+export function isForeignRecorderSession(
+	live: { recorderSessionId?: string },
+	expected: string | undefined,
+): boolean {
+	if (!live.recorderSessionId) return false; // pre-F2 state: nothing to compare
+	return expected !== live.recorderSessionId;
 }
 
 export async function handleChunk(
 	chunk: ArrayBuffer,
 	_index: number,
 	_mime: string,
-): Promise<void> {
+	expectedSessionId?: string,
+): Promise<"accepted" | "stale"> {
 	const state = await getState();
-	if (state.kind !== "recording") return;
+	if (state.kind !== "recording") return "stale";
+	if (isForeignRecorderSession(state, expectedSessionId)) {
+		console.warn(
+			`[upload] dropped a chunk from a stale recorder session (${expectedSessionId ?? "unstamped"}); live=${state.recorderSessionId}`,
+		);
+		return "stale";
+	}
+
+	await restorePendingBufferIfNeeded(state.uploadId);
+
+	// (F2b) RE-CHECK IMMEDIATELY BEFORE THE WRITE. The check above happened before
+	// an await, and `inMemoryBuffer` is module-global: a CANCEL + start of a new
+	// recording during that await swaps the buffer underneath us, and appending
+	// here would put THIS session's bytes into the NEW recording's buffer. Bailing
+	// after the fact is not enough — by then the bytes are already mixed in, which
+	// is the whole failure mode this change exists to prevent.
+	const stateAtWrite = await getState();
+	if (
+		stateAtWrite.kind !== "recording" ||
+		stateAtWrite.uploadId !== state.uploadId ||
+		isForeignRecorderSession(stateAtWrite, expectedSessionId)
+	) {
+		console.warn(
+			`[upload] dropped a chunk whose recording changed while its buffer was being restored (session ${expectedSessionId ?? "unstamped"})`,
+		);
+		return "stale";
+	}
 
 	const data = new Uint8Array(chunk);
 	appendToBuffer(data);
 
-	const newTotalBytes = state.totalBytes + data.length;
+	const newTotalBytes = stateAtWrite.totalBytes + data.length;
 
-	if (inMemoryBuffer.length >= MIN_PART_SIZE) {
-		const partData = drainBuffer();
-		const settings = await requireSettings();
+	// Slice off every fixed-MIN_PART_SIZE part the buffer now contains, keeping
+	// only the (< MIN_PART_SIZE) remainder — R2 requires all non-trailing parts
+	// to be the same size, so we must never upload a "whatever's in the buffer"
+	// sized part (see takeFixedSizeParts).
+	const { parts: fullParts, remainder } = takeFixedSizeParts(
+		inMemoryBuffer,
+		MIN_PART_SIZE,
+	);
 
+	if (fullParts.length === 0) {
+		await maybePersistPendingBuffer(state.uploadId);
+		// (R7/F2) Re-read before writing, exactly as the part-upload loop below
+		// does. `state` was read before two awaits, and CANCEL/RECORDER_STARTED
+		// write outside this queue — spreading a stale snapshot here would
+		// RESURRECT a finished recording (id and all) over the live one, after
+		// which the live recorder's own chunks would strict-drop as foreign.
+		const freshState = await getState();
+		if (
+			freshState.kind !== "recording" ||
+			freshState.videoId !== state.videoId ||
+			freshState.uploadId !== state.uploadId
+		) {
+			return "stale";
+		}
+		await setState({ ...freshState, totalBytes: newTotalBytes });
+		return "accepted";
+	}
+
+	inMemoryBuffer = remainder;
+	// Persist the remainder rather than clear it: unlike the old drain-everything
+	// path (which left nothing behind to lose), we now keep up to partSize-1
+	// bytes in memory. Clearing here would leave those bytes RAM-only, so an SW
+	// eviction before the next chunk would punch a hole in the middle of the
+	// recording. Persist before the network calls so the window is never open.
+	//
+	// (R10) A storage failure here must NOT be fatal. `fullParts` has already
+	// been sliced out of inMemoryBuffer above, so letting this throw would drop
+	// those bytes on the floor — never uploaded, never queued — and the
+	// recording would complete with a silent 5 MiB hole (R2 accepts the gap).
+	// Losing the persisted remainder only re-opens the documented eviction
+	// window; losing a sliced part is real, immediate data loss. Keep going.
+	try {
+		await persistPendingBuffer(state.uploadId);
+	} catch (err) {
+		console.error(
+			"[upload] Failed to persist pending buffer — continuing so the already-sliced parts are still uploaded:",
+			err,
+		);
+	}
+	const settings = await requireSettings();
+
+	let partNumber = state.nextPartNumber;
+
+	for (const partData of fullParts) {
 		try {
 			const completedPart = await uploadPart(
 				partData,
-				state.nextPartNumber,
+				partNumber,
 				state.videoId,
 				state.uploadId,
 				settings,
 			);
 
 			const freshState = await getState();
-			if (freshState.kind !== "recording") return;
+			// (R7) Identity guard, same as recordCompletedPart's. `kind` alone is
+			// not enough: CANCEL and RECORDER_STARTED write state outside
+			// enqueueRecorder, so a cancel-then-start-a-new-meeting during this
+			// part's PUT would leave a NEW recording in "recording" — and this
+			// continuation would then write the OLD upload's PartNumber/ETag (and
+			// bump nextPartNumber) into it, poisoning the new meeting into a
+			// foreign/non-sequential part list that can never complete.
+			if (
+				freshState.kind !== "recording" ||
+				freshState.videoId !== state.videoId ||
+				freshState.uploadId !== state.uploadId
+			) {
+				return "accepted";
+			}
 
 			await setState({
 				...freshState,
 				parts: [...freshState.parts, completedPart],
-				nextPartNumber: freshState.nextPartNumber + 1,
-				totalBytes: newTotalBytes,
+				nextPartNumber: Math.max(freshState.nextPartNumber, partNumber + 1),
+				totalBytes: Math.max(freshState.totalBytes, newTotalBytes),
 				uploadedBytes: freshState.uploadedBytes + partData.length,
 			});
 		} catch (err) {
@@ -368,43 +1021,123 @@ export async function handleChunk(
 			await addToRetryQueue(
 				enqueuePartRetryPayload(
 					partData,
-					state.nextPartNumber,
+					partNumber,
 					state.videoId,
 					state.uploadId,
 				),
 			);
 
 			const freshState = await getState();
-			if (freshState.kind === "recording") {
+			// (R7) Same identity guard as the success path above — never bump a
+			// DIFFERENT recording's nextPartNumber/totalBytes.
+			if (
+				freshState.kind === "recording" &&
+				freshState.videoId === state.videoId &&
+				freshState.uploadId === state.uploadId
+			) {
 				await setState({
 					...freshState,
-					nextPartNumber: Math.max(
-						freshState.nextPartNumber,
-						state.nextPartNumber + 1,
-					),
-					totalBytes: newTotalBytes,
+					nextPartNumber: Math.max(freshState.nextPartNumber, partNumber + 1),
+					totalBytes: Math.max(freshState.totalBytes, newTotalBytes),
 				});
 			}
 		}
-	} else {
-		await setState({ ...state, totalBytes: newTotalBytes });
+
+		partNumber += 1;
 	}
+	return "accepted";
 }
 
-export async function finalizeUpload(): Promise<void> {
+export async function finalizeUpload(
+	explicitDurationInSecs?: number,
+): Promise<void> {
 	const state = await getState();
 	if (state.kind !== "recording" && state.kind !== "uploading") return;
 
 	const settings = await requireSettings();
 	const api = createCapApi(settings.apiBaseUrl, settings.apiKey);
 
+	// The caller (sw.ts finalizeRecording / the onStartup crash-resume path)
+	// reads the "recording" state and computes this BEFORE transitioning to
+	// "uploading", which drops startedAt/pausedAccumMs — pass it down rather
+	// than lose it. Falls back to computing it here for a caller still holding
+	// "recording" at this point (RECORDER_ERROR, which calls this before any
+	// state transition of its own).
+	const durationInSecs =
+		explicitDurationInSecs ??
+		(state.kind === "recording"
+			? computeDurationInSecs(
+					state.startedAt,
+					state.pausedAccumMs,
+					state.paused,
+					state.pausedAt,
+				)
+			: undefined);
+
+	// Was this upload a MEETING? Computed once here (from the recording state's
+	// mode/meetingRequired via the shared filing rule, or from the isMeeting
+	// flag a recording→uploading transition already persisted) and carried into
+	// every state/retry payload below, so each completion path can decide
+	// whether to auto-open the video page. A persisted pre-0.5.10 "uploading"
+	// state has no flag → false → no auto-open (documented in the spec).
+	const isMeeting =
+		state.kind === "recording"
+			? isMeetingFiling(state.mode, state.meetingRequired)
+			: state.isMeeting === true;
+
 	let parts = [...state.parts];
 	let nextPartNumber =
-		state.kind === "recording" ? state.nextPartNumber : state.parts.length + 1;
+		state.kind === "recording"
+			? state.nextPartNumber
+			: computeNextPartNumberForUploading(
+					state.parts,
+					await getRetryQueue(),
+					state.videoId,
+					state.uploadId,
+				);
 	const totalBytes = state.totalBytes;
 	const uploadedBytes =
 		"uploadedBytes" in state ? (state.uploadedBytes as number) : 0;
 	const { videoId, uploadId } = state;
+
+	// Restore any pending buffer an evicted-then-respawned SW never saw, BEFORE
+	// computing durable bytes below — otherwise those bytes would look "lost"
+	// even though they are still recoverable from chrome.storage.local.
+	await restorePendingBufferIfNeeded(uploadId);
+
+	// MIN_VIABLE_BYTES must count DURABLE bytes only: bytes already in
+	// uploaded parts (uploadedBytes) plus whatever is still sitting in the
+	// pending buffer right now (restored above if applicable). `totalBytes` is
+	// a running counter that also includes bytes from a buffer that could have
+	// been evicted before persistence caught up — using it here would let a
+	// recording with genuinely-lost tail bytes pass the viability check.
+	//
+	// (H1) Queued part payloads are durable too — they live in
+	// chrome.storage.local, not just in RAM. Omitting them lost recordings
+	// outright: stop while offline and every full part sits in the retry queue
+	// with uploadedBytes still 0, so a recording whose pending buffer happens to
+	// hold less than MIN_VIABLE_BYTES at stop time was declared unviable and
+	// flipped to a terminal error. The drain would then upload the queued
+	// megabytes while nothing was left to complete the multipart with — the
+	// meeting was gone despite every byte being safe.
+	const durableBytes =
+		uploadedBytes +
+		inMemoryBuffer.length +
+		(await queuedPartBytesForUpload(videoId, uploadId));
+
+	const MIN_VIABLE_BYTES = 10 * 1024; // header-only mp4 is ~1.2KB; a real recording is far larger
+	if (durableBytes < MIN_VIABLE_BYTES) {
+		console.error(
+			`[upload] Recording too small (${durableBytes} durable bytes) — refusing to publish a broken video.`,
+		);
+		await setState({
+			kind: "error",
+			reason: `No video data was saved — only ${durableBytes} bytes were durably stored, far less than a single frame, so there is nothing to publish. This is a capture/upload failure, not a length limit: please check the recording permission for the tab and record again.`,
+			recoverable: true,
+			previousVideoId: videoId,
+		});
+		return;
+	}
 
 	if (state.kind === "recording") {
 		await setState({
@@ -414,6 +1147,7 @@ export async function finalizeUpload(): Promise<void> {
 			parts,
 			totalBytes,
 			uploadedBytes,
+			isMeeting,
 		});
 	}
 
@@ -429,6 +1163,19 @@ export async function finalizeUpload(): Promise<void> {
 			);
 			parts = [...parts, completedPart];
 			nextPartNumber += 1;
+			// (R1) Persist the finalize-time remainder into durable state. The
+			// deferred P1.6 "complete" record below carries no parts snapshot and
+			// the drain rebuilds the part list from live state.parts — which only
+			// ever holds parts run through recordCompletedPart. Without this, a
+			// remainder that uploaded here (but whose sibling part is still queued)
+			// is dropped from the completed multipart and the video tail is
+			// silently truncated. Idempotent (upserts by PartNumber).
+			await recordCompletedPart(
+				videoId,
+				uploadId,
+				completedPart,
+				remaining.length,
+			);
 		} catch (err) {
 			console.error("[upload] Final part upload failed:", err);
 			await addToRetryQueue(
@@ -436,6 +1183,19 @@ export async function finalizeUpload(): Promise<void> {
 			);
 		}
 	}
+	// (F2) Cleared only NOW — after the remainder is either uploaded (and
+	// persisted by recordCompletedPart) or handed to the durable retry queue.
+	// It used to be cleared BEFORE the uploadPart above, and the old comment
+	// claiming the copy was "no longer needed" was false for exactly that
+	// window: with the remainder PUT in flight the pendingBuffer:<id> record is
+	// already gone, so an SW eviction / browser death mid-PUT (i.e. stopping on
+	// bad WiFi) leaves a respawn's finalizeUpload finding state "uploading" with
+	// an EMPTY buffer, passing the viability check on uploadedBytes alone, and
+	// completing the multipart with only the earlier parts — "complete", share
+	// link issued, the meeting's tail silently gone. Unlike R3 (a slice that was
+	// never durable), these bytes WERE on disk and the code deleted them before
+	// the network attempt.
+	await clearPendingBuffer(uploadId);
 
 	const queuedPartsResult = await retryQueuedPartsForUpload(
 		videoId,
@@ -446,6 +1206,31 @@ export async function finalizeUpload(): Promise<void> {
 	parts = queuedPartsResult.parts;
 
 	if (queuedPartsResult.failed) {
+		if (queuedPartsResult.remainingPartsQueued) {
+			// (P1.6 / invariant b) At least one part is still queued for retry —
+			// the multipart can still be completed once it lands, so this must NOT
+			// dead-end in "error" with nothing durable behind it (that stranded a
+			// fully-uploadable recording forever). Enqueue a durable, retryable
+			// "complete" record and leave state at "uploading": the drain (retry
+			// alarm / onStartup) will finish the job once the queued part(s)
+			// succeed. recordCompletedPart keeps enriching `state.parts` on each
+			// successful part retry because state stays "uploading".
+			await addToRetryQueue({
+				kind: "complete",
+				payload: {
+					uploadId,
+					videoId,
+					...(durationInSecs !== undefined ? { durationInSecs } : {}),
+					// The drained completion must still know to auto-open.
+					...(isMeeting ? { isMeeting: true } : {}),
+				},
+			});
+			return;
+		}
+
+		// No parts remain queued for this upload — the failure(s) above were
+		// dead-lettered outright (no reschedule left), so there is nothing left
+		// to retry and the recording cannot be completed. Terminal state.
 		await setState({
 			kind: "error",
 			reason: "Upload part retry failed. Check network and try again.",
@@ -472,7 +1257,18 @@ export async function finalizeUpload(): Promise<void> {
 		return;
 	}
 
-	await setState({ kind: "finishing", videoId });
+	// (R9) Carry the uploadId + parts into "finishing" so a crash/restart during
+	// completeMultipart can RESUME the finalize instead of writing off a
+	// recording whose bytes are already fully in R2. durationInSecs rides along
+	// so that resume can still report it (see resumeInterruptedFinishing).
+	await setState({
+		kind: "finishing",
+		videoId,
+		uploadId,
+		parts,
+		...(durationInSecs !== undefined ? { durationInSecs } : {}),
+		isMeeting,
+	});
 
 	try {
 		const apiParts = parts.map((p) => ({
@@ -485,6 +1281,7 @@ export async function finalizeUpload(): Promise<void> {
 			parts: apiParts,
 			videoId,
 			subpath: "result.mp4",
+			...(durationInSecs !== undefined ? { durationInSecs } : {}),
 		});
 	} catch (err) {
 		console.error("[upload] completeMultipart failed:", err);
@@ -498,6 +1295,10 @@ export async function finalizeUpload(): Promise<void> {
 					etag: p.ETag,
 					size: 0,
 				})),
+				...(durationInSecs !== undefined ? { durationInSecs } : {}),
+				// The drained completion (which clears this error state via the
+				// stillOurs guard) must still know to auto-open.
+				...(isMeeting ? { isMeeting: true } : {}),
 			},
 		});
 		await setState({
@@ -521,6 +1322,61 @@ export async function finalizeUpload(): Promise<void> {
 
 	const shareUrl = `${settings.apiBaseUrl}/s/${videoId}`;
 	await setState({ kind: "complete", videoId, shareUrl });
+	// A finished MEETING opens its video page by itself (at most once per
+	// videoId; never for instructions; a failure here cannot affect the
+	// already-persisted "complete" state).
+	await maybeAutoOpenMeetingVideo(videoId, shareUrl, isMeeting);
+}
+
+/**
+ * (R9) Resume a finalize that a crash/restart interrupted. The "finishing"
+ * state now carries the uploadId + parts, so the completeMultipart can simply
+ * be re-queued durably and the normal drain will finish the recording — every
+ * byte is already in R2. Returns false for a legacy persisted state that has
+ * no snapshot (nothing to resume from).
+ */
+export async function resumeInterruptedFinishing(
+	videoId: string,
+	uploadId: string | undefined,
+	parts: CompletedPart[] | undefined,
+	durationInSecs?: number,
+	isMeeting?: boolean,
+): Promise<boolean> {
+	if (!uploadId || !parts || parts.length === 0) return false;
+
+	await addToRetryQueue({
+		kind: "complete",
+		payload: {
+			uploadId,
+			videoId,
+			parts: parts.map((p) => ({
+				partNumber: p.PartNumber,
+				etag: p.ETag,
+				size: 0,
+			})),
+			...(durationInSecs !== undefined ? { durationInSecs } : {}),
+			// The drained completion must still know to auto-open (undefined for
+			// a pre-0.5.10 persisted "finishing" state → treated as false).
+			...(isMeeting ? { isMeeting: true } : {}),
+		},
+	});
+	return true;
+}
+
+/** (R4) True if a PART for this upload has been permanently dead-lettered —
+ * meaning the multipart is missing bytes and must never be "completed". */
+async function deadLetterHasPartForUpload(
+	videoId: string,
+	uploadId: string,
+): Promise<boolean> {
+	const result = await chrome.storage.local.get(DEAD_LETTER_KEY);
+	const dead = (result[DEAD_LETTER_KEY] as RetryItem[] | undefined) ?? [];
+	return dead.some(
+		(d) =>
+			d.kind === "part" &&
+			d.payload.videoId === videoId &&
+			d.payload.uploadId === uploadId,
+	);
 }
 
 export async function retryPendingUploads(): Promise<void> {
@@ -539,6 +1395,40 @@ export async function retryPendingUploads(): Promise<void> {
 		if (item.nextRetryAt > now) {
 			remaining.push(item);
 			continue;
+		}
+
+		if (item.kind === "complete") {
+			const { uploadId, videoId } = item.payload as {
+				uploadId: string;
+				videoId: string;
+			};
+			// (P1.6 / invariant b) A sibling "part" item for the same upload is
+			// still in the queue — completing now would call R2 with a partial
+			// part list and produce a truncated video. Defer without consuming an
+			// attempt; the next drain pass (once the part has resolved) retries.
+			const siblingPartsQueued = queue.some(
+				(other) =>
+					other !== item &&
+					other.kind === "part" &&
+					other.payload.videoId === videoId &&
+					other.payload.uploadId === uploadId,
+			);
+			if (siblingPartsQueued) {
+				remaining.push(item);
+				continue;
+			}
+
+			// (R4) A part for this upload permanently failed (dead-lettered) → the
+			// multipart is missing bytes and can never be completed honestly.
+			// Completing anyway produces a video with a hole that R2 accepts
+			// (part-number gaps are legal), and the stillOurs block below would
+			// then stamp it "complete" with a share link — contradicting the
+			// dead-letter's honest "lost" notification + error state. Drop this
+			// complete record: the part's dead-letter already set the terminal
+			// error and notified the user. Do not complete, re-notify, or re-queue.
+			if (await deadLetterHasPartForUpload(videoId, uploadId)) {
+				continue;
+			}
 		}
 
 		try {
@@ -564,20 +1454,129 @@ export async function retryPendingUploads(): Promise<void> {
 					partData.length,
 				);
 			} else if (item.kind === "complete") {
-				const { uploadId, videoId, parts } = item.payload as {
+				const {
+					uploadId,
+					videoId,
+					parts: snapshotParts,
+					durationInSecs,
+					isMeeting: payloadIsMeeting,
+				} = item.payload as {
 					uploadId: string;
 					videoId: string;
-					parts: Array<{ partNumber: number; etag: string; size: number }>;
+					parts?: Array<{ partNumber: number; etag: string; size: number }>;
+					durationInSecs?: number;
+					isMeeting?: boolean;
 				};
+
+				// The P1.6 durable-completion record carries no parts snapshot (it
+				// was enqueued before all parts were known) — read the live,
+				// durably-tracked state instead, which recordCompletedPart has kept
+				// enriched on every successful part retry above. The legacy
+				// completeMultipart-failure record (enqueued elsewhere, once all
+				// parts were already final) still carries its own snapshot; use it
+				// directly.
+				let parts = snapshotParts;
+				if (!parts) {
+					const liveState = await getState();
+					parts =
+						liveState.kind === "uploading" &&
+						liveState.videoId === videoId &&
+						liveState.uploadId === uploadId
+							? liveState.parts.map((p) => ({
+									partNumber: p.PartNumber,
+									etag: p.ETag,
+									size: 0,
+								}))
+							: [];
+				}
+
 				await api.completeMultipart({
 					uploadId,
 					parts,
 					videoId,
 					subpath: "result.mp4",
+					...(durationInSecs !== undefined ? { durationInSecs } : {}),
 				});
+
+				try {
+					await api.recordingComplete({ videoId });
+				} catch (recErr) {
+					console.error(
+						"[upload] recordingComplete failed after drained complete:",
+						recErr,
+					);
+					// Push directly into `remaining` (not addToRetryQueue): this loop
+					// writes the queue exactly once via setRetryQueue(remaining) after
+					// the loop below, so a separate get-then-set here would be
+					// clobbered by that final write.
+					remaining.push({
+						kind: "recording-complete",
+						payload: { videoId },
+						attempts: 0,
+						nextRetryAt: Date.now() + 1000,
+					});
+				}
+
+				// Only claim the UI if the live state still belongs to THIS upload.
+				// The drain now runs every minute mid-session (not just at startup),
+				// so a late complete for an OLD recording can land while a NEW one is
+				// already recording — an unconditional write here would stomp it to
+				// "complete", after which handleChunk early-returns and
+				// finalizeRecording bails: the new meeting is lost silently, behind a
+				// ✓ badge. Same idea as recordCompletedPart's guard.
+				// "error" counts as ours via previousVideoId: the legacy path sets
+				// error when completeMultipart fails, so when the retry finally lands
+				// we MUST clear it — leaving a failure on screen for a recording that
+				// is now saved is the same lie in reverse.
+				const liveState = await getState();
+				const liveVideoId =
+					liveState.kind === "error"
+						? liveState.previousVideoId
+						: "videoId" in liveState
+							? liveState.videoId
+							: undefined;
+				const stillOurs =
+					liveVideoId === videoId &&
+					(liveState.kind === "uploading" ||
+						liveState.kind === "finishing" ||
+						liveState.kind === "error");
+
+				if (stillOurs) {
+					const shareUrl = `${settings.apiBaseUrl}/s/${videoId}`;
+					await setState({ kind: "complete", videoId, shareUrl });
+					// Meeting completions auto-open their video page here too
+					// (retry/resume path). The flag comes ONLY from the retry
+					// payload (written at enqueue time): the live state here may
+					// be "error" — the enqueueing path set it right after
+					// queueing — and "error" carries no isMeeting, so the payload
+					// copy is the one load-bearing source.
+					await maybeAutoOpenMeetingVideo(
+						videoId,
+						shareUrl,
+						payloadIsMeeting === true,
+					);
+				}
 			} else if (item.kind === "recording-complete") {
 				const { videoId } = item.payload as { videoId: string };
 				await api.recordingComplete({ videoId });
+			} else if (item.kind === "discard") {
+				const { videoId, uploadId } = item.payload as {
+					videoId: string;
+					uploadId: string;
+				};
+				// The server-only helper, NOT discardUpload: discardUpload runs
+				// purgeQueuedWorkForVideo, which would write the queue from under this
+				// loop while it holds a stale `remaining` that it then writes over —
+				// the same lost-update class as every unserialized queue writer here.
+				// The local side was already done when the discard was first attempted.
+				const cleaned = await cleanUpDiscardedVideoOnServer(
+					videoId,
+					uploadId,
+					settings,
+				);
+				// Throw so the shared catch below reschedules it with backoff; the
+				// helper reports failure by value rather than by throwing.
+				if (!cleaned) throw new Error("[upload] discard retry: cleanup failed");
 			}
 		} catch (err) {
 			console.error(`[upload] Retry failed for ${item.kind}:`, err);

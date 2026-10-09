@@ -1,14 +1,11 @@
 "use client";
 
-import { Clock, LayoutGrid, ListChecks, Sparkles, Users } from "lucide-react";
-import { RichText } from "../RichText";
-import { Skeleton, SkeletonGroup } from "../Skeleton";
-import "../panels.css";
-import { formatTimeMinutes } from "../utils/transcript-utils";
+import { useState } from "react";
+import { useTranslations } from "next-intl";
+import { clampStartSec, formatTimeMinutes } from "../utils/transcript-utils";
+import { renderMarkdownBold } from "./markdownBold";
 
 interface SummaryPanelProps {
-	transcriptionStatus?: string | null;
-	aiGenerationStatus?: string | null;
 	data: {
 		duration?: number;
 		aiSummary?: {
@@ -22,131 +19,228 @@ interface SummaryPanelProps {
 	onVideoJump?: (seconds: number) => void;
 }
 
-export function SummaryPanel({
-	transcriptionStatus,
-	aiGenerationStatus,
-	data,
-}: SummaryPanelProps) {
+function buildCopyText(aiSummary: {
+	overview?: string;
+	topics?: { title: string; body: string }[];
+	nextSteps?: string[];
+}): string {
+	const parts: string[] = [];
+	if (aiSummary.overview) {
+		parts.push(aiSummary.overview.replace(/\*\*/g, ""));
+	}
+	const topics = aiSummary.topics ?? [];
+	if (topics.length > 0) {
+		parts.push("Topics:");
+		for (const topic of topics) {
+			parts.push(
+				`- ${topic.title.replace(/\*\*/g, "")}: ${topic.body.replace(/\*\*/g, "")}`,
+			);
+		}
+	}
+	const nextSteps = aiSummary.nextSteps ?? [];
+	if (nextSteps.length > 0) {
+		parts.push("Next steps:");
+		for (const step of nextSteps) {
+			parts.push(`- ${step.replace(/\*\*/g, "")}`);
+		}
+	}
+	return parts.join("\n");
+}
+
+export function SummaryPanel({ data, onVideoJump }: SummaryPanelProps) {
+	const t = useTranslations("share");
+	const [copied, setCopied] = useState(false);
 	const { aiSummary } = data;
 	const topics = aiSummary?.topics ?? [];
 	const nextSteps = aiSummary?.nextSteps ?? [];
+	const chapters = aiSummary?.chapters ?? [];
 
 	if (!aiSummary) {
-		const isInFlight =
-			aiGenerationStatus === "PROCESSING" ||
-			aiGenerationStatus === "QUEUED" ||
-			transcriptionStatus === "PROCESSING" ||
-			transcriptionStatus === "QUEUED";
-
-		if (isInFlight) {
-			return (
-				<SkeletonGroup>
-					{/* Stat strip */}
-					<div style={{ display: "flex", gap: 8 }}>
-						{[0, 1, 2, 3].map((i) => (
-							<Skeleton key={i} style={{ height: 56, flex: 1 }} />
-						))}
-					</div>
-					{/* Lead card */}
-					<Skeleton style={{ height: 80 }} />
-					{/* Topic cards */}
-					<Skeleton style={{ height: 52 }} />
-					<Skeleton style={{ height: 52 }} />
-					<Skeleton style={{ height: 52 }} />
-				</SkeletonGroup>
-			);
-		}
-
-		return (
-			<div className="rd-empty">
-				<span>Hali tayyor emas — yuqoridagi tugma orqali generatsiya qiling.</span>
-			</div>
-		);
+		return null;
 	}
 
-	const stats: { icon: React.ReactNode; num: string; label: string }[] = [
-		{
-			icon: <Clock />,
-			num: data.duration ? formatTimeMinutes(data.duration) : "—",
-			label: "Duration",
-		},
-		{
-			icon: <Users />,
-			num: String(data.speakerCount ?? "—"),
-			label: "Participants",
-		},
-		{ icon: <LayoutGrid />, num: String(topics.length), label: "Topics" },
-		{ icon: <ListChecks />, num: String(nextSteps.length), label: "Next steps" },
-	];
+	function handleCopy() {
+		const text = buildCopyText(aiSummary!);
+		navigator.clipboard.writeText(text).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	}
 
 	return (
-		<>
-			{/* Stat strip */}
-			<div className="sum-stats">
-				{stats.map((s) => (
-					<div className="stat-card" key={s.label}>
-						<div className="stat-ic">{s.icon}</div>
-						<div className="stat-num">{s.num}</div>
-						<div className="stat-lbl">{s.label}</div>
-					</div>
-				))}
+		<div className="flex flex-col gap-5">
+			{/* Header row: copy button */}
+			<div style={{ display: "flex", justifyContent: "flex-end" }}>
+				<button
+					onClick={handleCopy}
+					style={{
+						display: "inline-flex",
+						alignItems: "center",
+						gap: "5px",
+						padding: "4px 10px",
+						fontSize: "12px",
+						fontWeight: 500,
+						color: copied ? "var(--brand)" : "var(--gray-11)",
+						background: "transparent",
+						border: `1px solid ${copied ? "var(--brand)" : "var(--gray-5)"}`,
+						borderRadius: "7px",
+						cursor: "pointer",
+						transition: "color 150ms, border-color 150ms",
+					}}
+				>
+					{copied ? t("copied") : t("copyTranscript")}
+				</button>
 			</div>
-
-			{/* Overview lead card */}
+			{/* Overview — lead paragraph, no card */}
 			{aiSummary.overview && (
-				<div className="lead-card">
-					<RichText>{aiSummary.overview}</RichText>
+				<p
+					style={{
+						fontSize: "15px",
+						lineHeight: 1.65,
+						color: "var(--gray-12)",
+						maxWidth: "70ch",
+					}}
+				>
+					{renderMarkdownBold(aiSummary.overview)}
+				</p>
+			)}
+
+			{/* Topics */}
+			{topics.length > 0 && (
+				<div>
+					<h3
+						className="mb-2"
+						style={{ fontSize: "14px", fontWeight: 700, color: "var(--gray-12)", letterSpacing: "-.01em" }}
+					>
+						{t("topicsHeading")}
+					</h3>
+					<div className="flex flex-col">
+						{topics.map((topic) => (
+							<TopicCard key={topic.title} topic={topic} />
+						))}
+					</div>
 				</div>
 			)}
 
-			{/* Topic cards */}
-			{topics.length > 0 && (
-				<>
-					<div className="sec-eyebrow">
-						<span className="ic" aria-hidden="true">
-							<LayoutGrid size={14} aria-hidden="true" />
-						</span>
-						Topics
-					</div>
-					<div className="topic-grid">
-						{topics.map((topic) => (
-							<div className="topic-card" key={topic.title}>
-								<div className="topic-dot" aria-hidden="true">
-									<Sparkles aria-hidden="true" />
-								</div>
-								<div className="topic-text">
-									<b>{topic.title}</b>
-									{topic.body ? <> — <RichText inline>{topic.body}</RichText></> : null}
-								</div>
-							</div>
-						))}
-					</div>
-				</>
-			)}
-
-			{/* Next steps — accent checklist */}
+			{/* Next Steps */}
 			{nextSteps.length > 0 && (
-				<>
-					<div className="sec-eyebrow">
-						<span className="ic" aria-hidden="true">
-							<ListChecks size={14} aria-hidden="true" />
-						</span>
-						Next steps
-					</div>
-					<div className="step-list">
+				<div>
+					<h3
+						className="mb-2"
+						style={{ fontSize: "14px", fontWeight: 700, color: "var(--gray-12)", letterSpacing: "-.01em" }}
+					>
+						{t("nextStepsHeading")}
+					</h3>
+					<ol
+						style={{
+							display: "flex",
+							flexDirection: "column",
+							gap: "10px",
+							listStyle: "none",
+							padding: 0,
+							margin: 0,
+						}}
+					>
 						{nextSteps.map((step, i) => (
-							<div className="step-item" key={step}>
-								<span className="step-num">{String(i + 1).padStart(2, "0")}</span>
-								<span className="t"><RichText inline>{step}</RichText></span>
-							</div>
+							<li
+								key={i}
+								style={{
+									display: "flex",
+									gap: "12px",
+									alignItems: "flex-start",
+								}}
+							>
+								<span
+									style={{
+										flexShrink: 0,
+										fontSize: "13px",
+										fontWeight: 700,
+										color: "var(--brand)",
+										fontVariantNumeric: "tabular-nums",
+										minWidth: "18px",
+									}}
+								>
+									{i + 1}
+								</span>
+								<span style={{ fontSize: "13px", lineHeight: 1.6, color: "var(--gray-12)" }}>{renderMarkdownBold(step)}</span>
+							</li>
 						))}
-					</div>
-				</>
+					</ol>
+				</div>
 			)}
 
-			{topics.length === 0 && nextSteps.length === 0 && (
-				<div className="rd-empty">No content available yet.</div>
+			{/* Chapters */}
+			{chapters.length > 0 && (
+				<div>
+					<h3
+						className="mb-2"
+						style={{ fontSize: "14px", fontWeight: 700, color: "var(--gray-12)", letterSpacing: "-.01em" }}
+					>
+						{t("chaptersHeading")}
+					</h3>
+					<div className="flex flex-col">
+						{chapters.map((chapter) => {
+							const startSec = clampStartSec(chapter.startSec, data.duration);
+							return (
+								<button
+									key={chapter.startSec}
+									type="button"
+									onClick={() => onVideoJump?.(startSec)}
+									className="flex items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-gray-3"
+									style={{
+										background: "transparent",
+										border: "none",
+										cursor: "pointer",
+									}}
+								>
+									<span
+										className="font-mono"
+										style={{
+											fontSize: "12.5px",
+											color: "var(--brand)",
+											flexShrink: 0,
+										}}
+									>
+										{formatTimeMinutes(startSec)}
+									</span>
+									<span style={{ fontSize: "13px", color: "var(--gray-12)" }}>
+										{chapter.title}
+									</span>
+								</button>
+							);
+						})}
+					</div>
+				</div>
 			)}
-		</>
+
+			{/* Empty state when all sections are empty */}
+			{topics.length === 0 &&
+				nextSteps.length === 0 &&
+				chapters.length === 0 &&
+				!aiSummary.overview && (
+					<p className="text-sm text-gray-10">{t("noContentYet")}</p>
+				)}
+		</div>
+	);
+}
+
+function TopicCard({ topic }: { topic: { title: string; body: string } }) {
+	return (
+		<div
+			style={{
+				borderBottom: "1px solid var(--gray-4)",
+				padding: "10px 0",
+			}}
+		>
+			<p
+				className="mb-1"
+				style={{ fontSize: "14px", fontWeight: 600, color: "var(--gray-12)" }}
+			>
+				{renderMarkdownBold(topic.title)}
+			</p>
+			<p style={{ fontSize: "13.5px", lineHeight: 1.55, color: "var(--gray-11)" }}>
+				{renderMarkdownBold(topic.body)}
+			</p>
+		</div>
 	);
 }

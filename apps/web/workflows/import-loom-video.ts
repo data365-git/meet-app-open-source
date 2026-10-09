@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage, validateLoomDownloadUrl } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { runPromise } from "@/lib/server";
 
 interface ImportLoomPayload {
@@ -94,25 +95,83 @@ async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
 	);
 }
 
+const MAX_REDIRECTS = 5;
+
 async function downloadVideoContent(downloadUrl: string): Promise<Buffer> {
-	const loomResponse = await fetch(downloadUrl);
-	if (!loomResponse.ok) {
+	if (!validateLoomDownloadUrl(downloadUrl)) {
 		throw new FatalError(
-			`Failed to download from Loom: ${loomResponse.status} ${loomResponse.statusText}`,
+			"Refused to download from an invalid or untrusted Loom URL.",
 		);
 	}
 
-	const contentType = loomResponse.headers.get("content-type") ?? "";
-	if (
-		contentType.includes("text/html") ||
-		contentType.includes("application/json")
-	) {
-		throw new FatalError(
-			`Loom returned non-video content (${contentType}). The download URL may have expired.`,
-		);
-	}
+	// Manually walk redirects so we can validate each hop BEFORE fetching it,
+	// preventing SSRF via a redirect to an internal/metadata host.
+	let currentUrl = downloadUrl;
+	let redirectCount = 0;
 
-	return Buffer.from(await loomResponse.arrayBuffer());
+	while (true) {
+		const response = await fetch(currentUrl, { redirect: "manual" });
+
+		// 3xx — validate the Location before following
+		if (
+			response.status >= 300 &&
+			response.status < 400 &&
+			response.status !== 304
+		) {
+			if (redirectCount >= MAX_REDIRECTS) {
+				throw new FatalError(
+					`Loom download exceeded the maximum redirect limit (${MAX_REDIRECTS}). The import was blocked for security reasons.`,
+				);
+			}
+
+			const location = response.headers.get("location");
+			if (!location) {
+				throw new FatalError(
+					"Loom download returned a redirect with no Location header.",
+				);
+			}
+
+			// Resolve the Location URL relative to the current URL, then validate
+			// it against the Loom allow-list BEFORE following the hop.
+			let nextUrl: string;
+			try {
+				nextUrl = new URL(location, currentUrl).toString();
+			} catch {
+				throw new FatalError(
+					"Loom download redirect contained a malformed Location URL.",
+				);
+			}
+
+			if (!validateLoomDownloadUrl(nextUrl)) {
+				throw new FatalError(
+					"Loom download was redirected to an untrusted host. The import was blocked for security reasons.",
+				);
+			}
+
+			currentUrl = nextUrl;
+			redirectCount++;
+			continue;
+		}
+
+		// Final 2xx response — run content checks here
+		if (!response.ok) {
+			throw new FatalError(
+				`Failed to download from Loom: ${response.status} ${response.statusText}`,
+			);
+		}
+
+		const contentType = response.headers.get("content-type") ?? "";
+		if (
+			contentType.includes("text/html") ||
+			contentType.includes("application/json")
+		) {
+			throw new FatalError(
+				`Loom returned non-video content (${contentType}). The download URL may have expired.`,
+			);
+		}
+
+		return Buffer.from(await response.arrayBuffer());
+	}
 }
 
 interface VideoProcessingResult {
@@ -168,7 +227,15 @@ async function downloadLoomToS3(
 
 	const freshDownloadUrl = await fetchFreshLoomDownloadUrl(loomVideoId);
 
-	if (isStreamingUrl(freshDownloadUrl)) {
+	const validatedDownloadUrl = validateLoomDownloadUrl(freshDownloadUrl);
+	if (!validatedDownloadUrl) {
+		throw new FatalError(
+			"Loom returned an invalid or untrusted download URL. The import was blocked for security reasons.",
+		);
+	}
+	const safeDownloadUrl = validatedDownloadUrl.toString();
+
+	if (isStreamingUrl(safeDownloadUrl)) {
 		// Streaming URLs (HLS/DASH) cannot be downloaded as a single file
 		throw new FatalError(
 			"This Loom video uses streaming format (HLS/DASH) and cannot be imported directly.",
@@ -203,7 +270,7 @@ async function downloadLoomToS3(
 		);
 	}).pipe(runPromise);
 
-	const videoBuffer = await downloadVideoContent(freshDownloadUrl);
+	const videoBuffer = await downloadVideoContent(safeDownloadUrl);
 
 	if (videoBuffer.length < MINIMUM_VIDEO_SIZE) {
 		throw new FatalError(
@@ -236,6 +303,22 @@ async function downloadLoomToS3(
 async function completeImport(videoId: string): Promise<void> {
 	"use step";
 
+	// A finished Loom import leaves a raw-upload.mp4, no upload row and never
+	// runs processVideoWorkflow — the exact shape the recover-stale-ai-jobs
+	// rowless pass treats as "processing died". The same durable success marker
+	// process-video.ts writes (markProcessingFinished) keeps it out of that
+	// pass. Written BEFORE the row delete so there is no marker-less rowless
+	// moment. JSON_SET, never a whole-object overwrite.
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(
+				COALESCE(${videos.metadata}, JSON_OBJECT()),
+				'$.processedAt', ${new Date().toISOString()}
+			)`,
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
+
 	await db()
 		.delete(videoUploads)
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
@@ -253,7 +336,9 @@ async function setProcessingError(
 			phase: "error",
 			processingProgress: 0,
 			processingMessage: "Loom import failed",
-			processingError: errorMessage,
+			// Allowlist token only — the raw message can carry a presigned
+			// URL and this field reaches every share-page viewer (round-18).
+			processingError: persistableProcessingError(errorMessage),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));

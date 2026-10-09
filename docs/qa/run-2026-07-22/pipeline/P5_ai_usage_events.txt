@@ -1,0 +1,68 @@
+P5 -- SELECT videoId, operation, model, COUNT(*) AS n FROM ai_usage_events
+GROUP BY videoId, operation, model ORDER BY videoId; (2026-07-22, capdb via SSH+docker exec, read-only)
+
+videoId          operation      model                  n
+NULL             chat           gemini-2.5-flash       37   (guest/global chat events not tied to one video? -- see note)
+NULL             embedding      gemini-embedding-001   64
+NULL             summary        gemini-2.5-flash       344
+NULL             summary        gemini-3-flash-preview 41
+NULL             transcription  gemini-2.5-flash       140
+NULL             transcription  gemini-3-flash-preview 45
+NULL             transcription  gemini-3.5-flash       1
+NULL             translate      gemini-2.5-flash       16
+15xgcytw49pmrj8  chat           gemini-2.5-flash       2
+15xgcytw49pmrj8  embedding      gemini-embedding-001   3
+15xgcytw49pmrj8  summary        gemini-3.5-flash       3
+15xgcytw49pmrj8  transcription  gemini-3.5-flash       1
+aydm0823n9f20s4  summary        gemini-3-flash-preview 3
+aydm0823n9f20s4  transcription  gemini-3.5-flash       1
+bbzt2424z6vvy6t  summary        gemini-3-flash-preview 42
+bbzt2424z6vvy6t  transcription  gemini-3-flash-preview 67
+bbzt2424z6vvy6t  transcription  gemini-3.5-flash       4
+fm3pz7yref328m7  chat           gemini-2.5-flash       2
+fm3pz7yref328m7  embedding      gemini-embedding-001   3
+fm3pz7yref328m7  summary        gemini-3-flash-preview 54
+fm3pz7yref328m7  summary        gemini-3.5-flash       8
+fm3pz7yref328m7  transcription  gemini-3-flash-preview 26
+fm3pz7yref328m7  transcription  gemini-3.5-flash       20
+j1q9mjg8kewr2en  chat           gemini-2.5-flash       1
+j1q9mjg8kewr2en  embedding      gemini-embedding-001   2
+j1q9mjg8kewr2en  summary        gemini-3-flash-preview 6
+j1q9mjg8kewr2en  summary        gemini-3.5-flash       9
+j1q9mjg8kewr2en  transcription  gemini-3-flash-preview 5
+j1q9mjg8kewr2en  transcription  gemini-3.5-flash       8
+p52hh76m1epfhb3  summary        gemini-3-flash-preview 3
+p52hh76m1epfhb3  transcription  gemini-3-flash-preview 1
+q7qty7tw1dxgt5z  chat           gemini-2.5-flash       1
+q7qty7tw1dxgt5z  embedding      gemini-embedding-001   2
+q7qty7tw1dxgt5z  summary        gemini-3-flash-preview 4
+q7qty7tw1dxgt5z  transcription  gemini-3.5-flash       1
+t91bnh582gnhgy8  summary        gemini-3-flash-preview 3
+t91bnh582gnhgy8  transcription  gemini-3-flash-preview 2
+t91bnh582gnhgy8  transcription  gemini-3.5-flash       1
+
+OBSERVATIONS:
+- transcription + summary rows exist for every one of the 8 COMPLETE videos -> cost
+  accounting is happening (no under-reporting / H5 gap for these).
+- Current build's model gemini-3-flash-preview IS the dominant model in the most
+  recent/heaviest rows (fm3pz7yref328m7: 26/46 transcription + 54/62 summary calls;
+  bbzt2424z6vvy6t: 67/71 transcription + 42/42 summary calls). Older gemini-3.5-flash
+  rows co-exist on the same videos -- consistent with the plan's own caveat that
+  P1-P4 read OLD-build stored results spanning a model migration, not a live-build defect.
+- 15xgcytw49pmrj8 and q7qty7tw1dxgt5z show ONLY gemini-3.5-flash for transcription
+  (no gemini-3-flash-preview row) -- these two were transcribed before the model
+  switch and never re-run since; their DB aiSummary content is still coherent/correct
+  per P1-P4, so this is a historical-model note, not a correctness defect.
+- bbzt2424z6vvy6t has 71 transcription accounting rows for ONE video (67+4). Checked
+  timing (see P5_bbzt_transcription_by_day.txt): all 71 fired 2026-07-07 between
+  17:09 and 21:37 (a single ~4.5h dev day), video duration = 6993.71s (~116 min).
+  At the OLD 360s chunk size that is ~19-20 chunks expected for one clean run, so 71
+  events reflects REPEATED dev re-transcribes on 2026-07-07 (consistent with the
+  plan's own K6 note: "July spend ~90% one-time dev re-transcribes, no structural
+  waste") rather than a live per-run duplicate-accounting bug on build 201165f --
+  but flagging it because taken at face value it matches P5's own BROKEN bullet
+  ("dozens of retries for one step"). Could not fully rule out a per-chunk
+  duplicate-logging bug from data alone; would need the same check on a video
+  transcribed exactly once on the CURRENT build to close this out cleanly.
+- No evidence of a video whose ai_usage_events SUM(costUsdMicros) exceeds a sane
+  bound in this table alone (see K3/K6, out of this flow's scope).

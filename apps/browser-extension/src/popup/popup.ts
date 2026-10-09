@@ -1,4 +1,9 @@
 import type { ExtensionSettings, ExtensionState } from "../background/state";
+import { sendCaptureCommand } from "../shared/capture-command";
+import { DEFAULT_API_BASE_URL } from "../shared/config";
+import { populateDeviceSelect } from "../shared/device-picker";
+import { getMeetingId } from "../shared/meeting-url";
+import { attachFlash, type FlashState, NO_FLASH, reconcileFlash } from "./flash-message";
 
 interface PopupData {
 	state: ExtensionState;
@@ -9,10 +14,24 @@ interface PopupData {
 }
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
+// The data render() last drew, and the honest one-line message layered over it.
+// Both live at module scope so an async reply (pause failure, discard result) can
+// fold its message into RENDERED STATE and re-render, instead of appending a node
+// to a root the next ~5/s re-render has already detached. See flash-message.ts.
+let currentData: PopupData | null = null;
+let flash: FlashState = NO_FLASH;
 let micStream: MediaStream | null = null;
 let audioCtx: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
 let meterRaf: number | null = null;
+const PENDING_MEET_START_KEY = "capPendingMeetStart";
+const PENDING_MEET_START_TTL_MS = 15000;
+
+interface PendingMeetStart {
+	tabId?: number;
+	meetingId?: string;
+	createdAt?: number;
+}
 
 function stopTimer(): void {
 	if (timerInterval !== null) {
@@ -78,6 +97,20 @@ function sendMsg(msg: Record<string, unknown>): void {
 	chrome.runtime.sendMessage(msg, () => {
 		if (chrome.runtime.lastError) {
 		}
+	});
+}
+
+function sendMsgAwait(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
+	return new Promise((resolve) => {
+		chrome.runtime.sendMessage(msg, (response: unknown) => {
+			if (chrome.runtime.lastError) {
+				resolve({ ok: false, error: chrome.runtime.lastError.message });
+			} else if (response && typeof response === "object") {
+				resolve(response as Record<string, unknown>);
+			} else {
+				resolve({ ok: false, error: "No response from recorder" });
+			}
+		});
 	});
 }
 
@@ -149,61 +182,6 @@ function buildMicMeter(): { meterEl: HTMLElement; bars: HTMLElement[] } {
 	return { meterEl, bars };
 }
 
-async function checkPermission(name: PermissionName): Promise<PermissionState> {
-	try {
-		const status = await navigator.permissions.query({ name });
-		return status.state;
-	} catch {
-		return "prompt";
-	}
-}
-
-async function populateDeviceSelect(
-	select: HTMLSelectElement,
-	kind: "audioinput" | "videoinput",
-	currentDeviceId: string,
-	permissionConstraint: MediaStreamConstraints,
-): Promise<"granted" | "blocked"> {
-	const permName = (
-		kind === "audioinput" ? "microphone" : "camera"
-	) as PermissionName;
-	let permState = await checkPermission(permName);
-
-	if (permState !== "granted") {
-		try {
-			const testStream =
-				await navigator.mediaDevices.getUserMedia(permissionConstraint);
-			for (const t of testStream.getTracks()) t.stop();
-			permState = "granted";
-		} catch {
-			return "blocked";
-		}
-	}
-
-	const devices = await navigator.mediaDevices.enumerateDevices();
-	const filtered = devices.filter((d) => d.kind === kind);
-
-	const defaultOpt = document.createElement("option");
-	defaultOpt.value = "";
-	defaultOpt.textContent =
-		kind === "audioinput" ? "Default microphone" : "Default camera";
-	select.appendChild(defaultOpt);
-
-	for (const device of filtered) {
-		const label =
-			device.label ||
-			`${kind === "audioinput" ? "Mic" : "Camera"} ${device.deviceId.slice(0, 6)}`;
-		const opt = document.createElement("option");
-		opt.value = device.deviceId;
-		opt.textContent = label;
-		if (device.deviceId === currentDeviceId) opt.selected = true;
-		select.appendChild(opt);
-	}
-
-	if (!currentDeviceId) select.value = "";
-	return "granted";
-}
-
 function renderIdlePanel(
 	root: HTMLElement,
 	settings: ExtensionSettings,
@@ -215,23 +193,28 @@ function renderIdlePanel(
 	logo.src = "icons/icon-128.png";
 	logo.width = 28;
 	logo.height = 28;
-	logo.alt = "Cap";
+	logo.alt = "data365";
 
 	const logoLabel = el(
 		"span",
 		{ className: "panel-logo-label" },
-		"Cap Recorder",
+		"data365 Recorder",
 	);
 	const logoRow = el("div", { className: "panel-logo-row" }, logo, logoLabel);
 	root.appendChild(logoRow);
 
 	const actionsSection = el("div", { className: "panel-section" });
 
+	// On a Meet tab, "Record full-screen meeting" is the GUARANTEED path
+	// (sourceTabId + meeting:true → fail-closed if the client's audio can't be
+	// captured, per the owner's requirement). "Record Meet tab only" (START_MEET)
+	// stays available but demoted — it records only the Meet tab, not the whole
+	// screen. Off a Meet tab there is no client-audio requirement at all.
 	const meetBtn = document.createElement("button");
-	meetBtn.className = "btn btn-primary";
+	meetBtn.className = "btn btn-secondary";
 
 	if (isMeetTab && meetingId) {
-		meetBtn.textContent = `Record Meeting · ${meetingId}`;
+		meetBtn.textContent = `Record Meet tab only · ${meetingId}`;
 		meetBtn.addEventListener("click", () => {
 			const msg: Record<string, unknown> = { type: "START_MEET", meetingId };
 			if (activeTabId !== undefined) msg.tabId = activeTabId;
@@ -239,23 +222,37 @@ function renderIdlePanel(
 			window.close();
 		});
 	} else {
-		meetBtn.textContent = "Record Meeting";
+		meetBtn.textContent = "Record Meet tab only";
 		meetBtn.disabled = true;
 		meetBtn.classList.add("btn--disabled");
 	}
 
 	const instrBtn = el(
 		"button",
-		{ className: "btn btn-secondary" },
-		"Record Instruction",
+		{ className: isMeetTab ? "btn btn-primary" : "btn btn-secondary" },
+		isMeetTab ? "Record full-screen meeting" : "Record screen",
 	);
 	instrBtn.addEventListener("click", () => {
-		sendMsg({ type: "START_INSTRUCTION" });
+		const msg: Record<string, unknown> = { type: "START_INSTRUCTION" };
+		// Only on a Meet tab: pass it so the recorder mixes in the OTHER party's
+		// audio via tabCapture, and require the guarantee to fail closed rather
+		// than silently record client-less. NOT for plain instruction recordings
+		// from a random tab — that would silently capture whatever audio that
+		// tab plays (privacy), and there is no client-audio guarantee to make.
+		if (isMeetTab && activeTabId !== undefined) {
+			msg.sourceTabId = activeTabId;
+			msg.meeting = true;
+			// So the recording files as a meeting (title "data365 Meeting — <id>",
+			// extensionContext "meeting") instead of a plain instruction recording —
+			// see sw.ts START_INSTRUCTION/RECORDER_STARTED.
+			if (meetingId) msg.meetingId = meetingId;
+		}
+		sendMsg(msg);
 		window.close();
 	});
 
-	actionsSection.appendChild(meetBtn);
 	actionsSection.appendChild(instrBtn);
+	actionsSection.appendChild(meetBtn);
 
 	if (!isMeetTab || !meetingId) {
 		const hint = el(
@@ -348,63 +345,69 @@ function renderIdlePanel(
 			meterEl.classList.add("mic-meter--off");
 		});
 
-	let cameraEnabled = settings.cameraOverlay;
-	let cameraDeviceId = settings.cameraDeviceId ?? "";
-
-	const cameraSelect = document.createElement("select");
-	cameraSelect.className = "device-select";
-	cameraSelect.disabled = !cameraEnabled;
-
-	const cameraToggleWrap = createToggleEl("camera-toggle", cameraEnabled);
-	const cameraToggleInput = cameraToggleWrap.querySelector(
-		"input",
-	) as HTMLInputElement;
-
-	const cameraEnableBtn = el(
-		"button",
-		{ className: "btn btn-secondary perm-btn" },
-		"Enable camera",
-	);
-	cameraEnableBtn.style.display = "none";
-	cameraEnableBtn.addEventListener("click", () => {
-		chrome.runtime.openOptionsPage();
-	});
-
-	const cameraRow = el(
-		"div",
-		{ className: "device-row" },
-		el("span", { className: "device-row-label" }, "Camera"),
-		cameraToggleWrap,
-		cameraSelect,
-		cameraEnableBtn,
-	);
-	devicesSection.appendChild(cameraRow);
-
-	cameraToggleInput.addEventListener("change", () => {
-		cameraEnabled = cameraToggleInput.checked;
-		cameraSelect.disabled = !cameraEnabled;
-		sendMsg({
-			type: "SAVE_SETTINGS",
-			settings: { cameraOverlay: cameraEnabled },
-		});
-	});
-
-	cameraSelect.addEventListener("change", () => {
-		cameraDeviceId = cameraSelect.value;
-		sendMsg({ type: "SAVE_SETTINGS", settings: { cameraDeviceId } });
-	});
-
-	populateDeviceSelect(cameraSelect, "videoinput", cameraDeviceId, {
-		video: true,
-	})
-		.then((result) => {
-			if (result === "blocked") {
-				cameraSelect.style.display = "none";
-				cameraToggleWrap.style.display = "none";
-				cameraEnableBtn.style.display = "";
-			}
-		})
-		.catch(() => {});
+	// Camera overlay toggle + device dropdown: HIDDEN (R4) — nothing in the
+	// recording pipeline (recorder/offscreen recorder/service worker) ever
+	// reads cameraOverlay/cameraDeviceId, so this control did nothing. Keeping
+	// the settings fields themselves untouched; just not rendering the dead
+	// UI. See CLAUDE.md R4.
+	//
+	// let cameraEnabled = settings.cameraOverlay;
+	// let cameraDeviceId = settings.cameraDeviceId ?? "";
+	//
+	// const cameraSelect = document.createElement("select");
+	// cameraSelect.className = "device-select";
+	// cameraSelect.disabled = !cameraEnabled;
+	//
+	// const cameraToggleWrap = createToggleEl("camera-toggle", cameraEnabled);
+	// const cameraToggleInput = cameraToggleWrap.querySelector(
+	// 	"input",
+	// ) as HTMLInputElement;
+	//
+	// const cameraEnableBtn = el(
+	// 	"button",
+	// 	{ className: "btn btn-secondary perm-btn" },
+	// 	"Enable camera",
+	// );
+	// cameraEnableBtn.style.display = "none";
+	// cameraEnableBtn.addEventListener("click", () => {
+	// 	chrome.runtime.openOptionsPage();
+	// });
+	//
+	// const cameraRow = el(
+	// 	"div",
+	// 	{ className: "device-row" },
+	// 	el("span", { className: "device-row-label" }, "Camera"),
+	// 	cameraToggleWrap,
+	// 	cameraSelect,
+	// 	cameraEnableBtn,
+	// );
+	// devicesSection.appendChild(cameraRow);
+	//
+	// cameraToggleInput.addEventListener("change", () => {
+	// 	cameraEnabled = cameraToggleInput.checked;
+	// 	cameraSelect.disabled = !cameraEnabled;
+	// 	sendMsg({
+	// 		type: "SAVE_SETTINGS",
+	// 		settings: { cameraOverlay: cameraEnabled },
+	// 	});
+	// });
+	//
+	// cameraSelect.addEventListener("change", () => {
+	// 	cameraDeviceId = cameraSelect.value;
+	// 	sendMsg({ type: "SAVE_SETTINGS", settings: { cameraDeviceId } });
+	// });
+	//
+	// populateDeviceSelect(cameraSelect, "videoinput", cameraDeviceId, {
+	// 	video: true,
+	// })
+	// 	.then((result) => {
+	// 		if (result === "blocked") {
+	// 			cameraSelect.style.display = "none";
+	// 			cameraToggleWrap.style.display = "none";
+	// 			cameraEnableBtn.style.display = "";
+	// 		}
+	// 	})
+	// 	.catch(() => {});
 
 	root.appendChild(devicesSection);
 	root.appendChild(el("div", { className: "panel-divider" }));
@@ -429,31 +432,64 @@ function renderNotSignedIn(
 			src: "icons/icon-128.png",
 			width: 48,
 			height: 48,
-			alt: "Cap",
+			alt: "data365",
 		} as unknown as Partial<HTMLImageElement>),
-		el("h1", {}, "Cap Recorder"),
+		el("h1", {}, "data365 Recorder"),
 	);
 
+	// ── PRIMARY: OAuth button ──────────────────────────────────────────────
 	const signInBtn = el(
 		"button",
 		{ className: "btn btn-primary" },
-		"Sign in to Cap",
+		"Sign in with data365",
 	);
+
+	const oauthMsg = el("p", { className: "inline-msg" });
+
 	signInBtn.addEventListener("click", () => {
-		const url = `${settings.apiBaseUrl}/extension/callback?extensionId=${chrome.runtime.id}`;
-		chrome.tabs.create({ url });
+		oauthMsg.textContent = "Opening sign-in…";
+		oauthMsg.style.color = "";
+		chrome.runtime.sendMessage({ type: "START_SIGNIN" }, (resp) => {
+			if (chrome.runtime.lastError) return; // popup may have closed; SW still finishes
+			const ok = typeof resp === "object" && resp !== null && (resp as { ok?: boolean }).ok === true;
+			if (ok) {
+				location.reload();
+			} else {
+				oauthMsg.textContent = "Couldn't sign in automatically — paste your key below instead";
+				oauthMsg.style.color = "#e53e3e";
+			}
+		});
 	});
+
+	// ── SECONDARY: API-key paste (always visible) ─────────────────────────
+	const keyDivider = el(
+		"p",
+		{ className: "inline-msg" },
+		"— or paste your API key —",
+	);
+	keyDivider.style.textAlign = "center";
+	keyDivider.style.color = "#888";
+	keyDivider.style.margin = "6px 0 2px";
+
+	const keyHint = el(
+		"p",
+		{ className: "inline-msg" },
+		"Find your key at: data365 server → /extension/callback",
+	);
+	keyHint.style.fontSize = "11px";
+	keyHint.style.color = "#888";
+	keyHint.style.margin = "0 0 4px";
 
 	const apiKeyInput = el("input", {
 		className: "api-key-input",
 		type: "text",
-		placeholder: "Paste your Cap API key",
+		placeholder: "Paste your cak_... key here",
 	} as unknown as Partial<HTMLInputElement>);
 
 	const connectBtn = el(
 		"button",
 		{ className: "btn btn-secondary" },
-		"Connect",
+		"Connect with key",
 	);
 
 	const inlineMsg = el("p", { className: "inline-msg" });
@@ -462,6 +498,7 @@ function renderNotSignedIn(
 		const key = (apiKeyInput as HTMLInputElement).value.trim();
 		if (!key) {
 			inlineMsg.textContent = "Please paste a key";
+			inlineMsg.style.color = "#e53e3e";
 			return;
 		}
 		inlineMsg.textContent = "";
@@ -473,17 +510,49 @@ function renderNotSignedIn(
 				settings: { apiKey: key, apiBaseUrl: settings.apiBaseUrl },
 			},
 			async () => {
+				// Fix #4: bail out if the save itself failed
+				if (chrome.runtime.lastError) {
+					inlineMsg.textContent = "Couldn't save key — try again";
+					inlineMsg.style.color = "#e53e3e";
+					connectBtn.disabled = false;
+					connectBtn.textContent = "Connect with key";
+					return;
+				}
 				try {
 					const res = await fetch(`${settings.apiBaseUrl}/api/extension/me`, {
 						headers: { Authorization: `Bearer ${key}` },
 					});
 					if (res.ok) {
-						location.reload();
-					} else {
+						const data = (await res.json().catch(() => ({}))) as Record<
+							string,
+							unknown
+						>;
+						const name =
+							typeof data.name === "string"
+								? data.name
+								: typeof data.email === "string"
+									? data.email
+									: "";
+						if (name) {
+							inlineMsg.textContent = `Connected as ${name}`;
+							inlineMsg.style.color = "#38a169";
+						}
+						setTimeout(() => location.reload(), 800);
+					} else if (res.status === 401) {
 						inlineMsg.textContent =
-							"That key isn't valid — check it and try again";
+							"Key not accepted — sign in again or paste a new key";
+						inlineMsg.style.color = "#e53e3e";
 						connectBtn.disabled = false;
-						connectBtn.textContent = "Connect";
+						connectBtn.textContent = "Connect with key";
+						chrome.runtime.sendMessage({
+							type: "SAVE_SETTINGS",
+							settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
+						});
+					} else {
+						inlineMsg.textContent = `Server error (${res.status}) — try again`;
+						inlineMsg.style.color = "#e53e3e";
+						connectBtn.disabled = false;
+						connectBtn.textContent = "Connect with key";
 						chrome.runtime.sendMessage({
 							type: "SAVE_SETTINGS",
 							settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
@@ -491,9 +560,10 @@ function renderNotSignedIn(
 					}
 				} catch {
 					inlineMsg.textContent =
-						"That key isn't valid — check it and try again";
+						"Can't reach the server — check the address in Settings";
+					inlineMsg.style.color = "#e53e3e";
 					connectBtn.disabled = false;
-					connectBtn.textContent = "Connect";
+					connectBtn.textContent = "Connect with key";
 					chrome.runtime.sendMessage({
 						type: "SAVE_SETTINGS",
 						settings: { apiKey: "", apiBaseUrl: settings.apiBaseUrl },
@@ -505,9 +575,22 @@ function renderNotSignedIn(
 
 	root.appendChild(logoWrap);
 	root.appendChild(signInBtn);
+	root.appendChild(oauthMsg);
+	root.appendChild(keyDivider);
+	root.appendChild(keyHint);
 	root.appendChild(apiKeyInput);
 	root.appendChild(connectBtn);
 	root.appendChild(inlineMsg);
+}
+
+// Elapsed recording time, EXCLUDING paused spans. While paused it freezes on
+// the moment pause began; after resume it excludes the accumulated paused time
+// — so the timer matches the actual recorded media (which also excludes pauses).
+function recordingElapsedMs(
+	state: Extract<ExtensionState, { kind: "recording" }>,
+): number {
+	const ref = state.paused ? (state.pausedAt ?? Date.now()) : Date.now();
+	return Math.max(0, ref - state.startedAt - (state.pausedAccumMs ?? 0));
 }
 
 function renderRecording(
@@ -526,25 +609,46 @@ function renderRecording(
 	const timerEl = el(
 		"div",
 		{ className: "timer" },
-		formatElapsed(Date.now() - state.startedAt),
+		formatElapsed(recordingElapsedMs(state)),
 	);
 
+	// state.mode stays "instruction" for the guaranteed full-screen meeting flow
+	// (it is the STOP/PAUSE/RESUME/CANCEL control-flow discriminator and must
+	// not change) — branch on meetingRequired too so that flow still LABELS as
+	// "Meeting" instead of misleadingly showing "Instruction".
+	const isMeeting = state.mode === "meeting" || state.meetingRequired === true;
 	const modeEl = el(
 		"p",
 		{ className: "mode-label" },
-		state.mode === "meeting" ? "Meeting" : "Instruction",
+		isMeeting ? "Meeting" : "Instruction",
 	);
 
 	const pauseLabel = state.paused ? "Resume" : "Pause";
 	const pauseBtn = el("button", { className: "btn btn-secondary" }, pauseLabel);
 	pauseBtn.addEventListener("click", () => {
-		pauseBtn.disabled = true;
-		pauseBtn.textContent = state.paused ? "Resuming..." : "Pausing...";
-		sendMsg({ type: state.paused ? "RESUME" : "PAUSE" });
-		setTimeout(() => {
-			pauseBtn.disabled = false;
-			pauseBtn.textContent = state.paused ? "Resume" : "Pause";
-		}, 200);
+		void (async () => {
+			const command = state.paused ? "RESUME" : "PAUSE";
+			pauseBtn.disabled = true;
+			pauseBtn.textContent = command === "PAUSE" ? "Pausing..." : "Resuming...";
+			// AWAIT the answer. This used to fire-and-forget and re-enable itself on
+			// a fixed 200ms timer — shorter than the SW's own retry budget, so the
+			// button went live while the command was still retrying, and a command
+			// the SW reported as FAILED ({ok:false}, recorder never paused) was
+			// indistinguishable from one that worked.
+			const result = await sendCaptureCommand(sendMsgAwait, command);
+			if (result.ok) {
+				// setState in the SW broadcasts STATE_CHANGED and the whole view
+				// re-renders from truth. The paused flag flips, which reconcileFlash
+				// treats as a transition and clears any prior failure line.
+				return;
+			}
+			// Do NOT move to the new state. Put the reason into RENDERED STATE so the
+			// ~5/s recording re-render REDRAWS it, instead of appending a node to a
+			// root that a re-render has already detached (the wave-1 bug: the error
+			// was never seen). showFlash re-renders, which also restores the button
+			// to "Pause"/"Resume", enabled, from the unchanged state.
+			showFlash({ text: result.error, isError: true });
+		})();
 	});
 
 	const stopBtn = el("button", { className: "btn btn-danger" }, "Stop");
@@ -562,9 +666,8 @@ function renderRecording(
 	root.appendChild(modeEl);
 	root.appendChild(btnRow);
 
-	const startedAt = state.startedAt;
 	timerInterval = setInterval(() => {
-		timerEl.textContent = formatElapsed(Date.now() - startedAt);
+		timerEl.textContent = formatElapsed(recordingElapsedMs(state));
 	}, 1000);
 }
 
@@ -590,15 +693,81 @@ function renderUploading(
 	const progressText = `${formatBytes(state.uploadedBytes)} uploaded (${pct}%)`;
 	const partsEl = el("p", { className: "parts-count" }, progressText);
 
-	const cancelLink = el("button", { className: "link-btn" }, "Cancel upload");
-	cancelLink.addEventListener("click", () => {
-		sendMsg({ type: "CANCEL" });
+	// TWO DISTINCT ACTIONS. This used to be a single "Cancel upload" link, which
+	// was a false promise in both directions: it destroyed the finalize for the
+	// user who only wanted the popup gone (the upload deliberately parks here for
+	// up to ~2h across an offline spell, and every byte is already durable), and
+	// it did NOT actually delete anything server-side for the user who really did
+	// want it gone. Closing is now the default and non-destructive; deleting is
+	// explicit and confirmed.
+	const closeBtn = el(
+		"button",
+		{ className: "btn btn-primary" },
+		"Close — upload continues in the background",
+	);
+	closeBtn.addEventListener("click", () => {
+		window.close();
+	});
+
+	const discardBtn = el(
+		"button",
+		{ className: "link-btn link-btn--danger" },
+		"Permanently discard",
+	);
+	// Step two of two. Deliberately in-place rather than a confirm() dialog: the
+	// popup closes the moment it loses focus, which would dismiss a native modal.
+	discardBtn.addEventListener("click", () => {
+		if (discardBtn.dataset.confirming === "1") {
+			discardBtn.textContent = "Discarding...";
+			discardBtn.disabled = true;
+			// AWAIT the reply. Fire-and-forget left "Discarding..." on screen forever
+			// and, worse, would have had to claim success blind. Only two honest
+			// endings exist: the server side is provably clean, or the cleanup is
+			// queued and will retry. Never an unconditional "Deleted".
+			void sendMsgAwait({ type: "DISCARD_UPLOAD" }).then((res) => {
+				// Into RENDERED STATE, not this button's label: the uploading view
+				// re-renders on every progress broadcast, which replaced the button
+				// (and its result text) with a fresh "Permanently discard" before the
+				// user could read it. showFlash survives those re-renders.
+				//
+				// Render exactly the outcome the reply names — never more (W3c). The
+				// reply distinguishes three real endings: "deleted" (server provably
+				// clean), "queued" (a durable retry is genuinely pending), and "noop"
+				// (the upload already moved on, so nothing was attempted or queued).
+				// Fall back to deriving the outcome from ok/serverCleaned for any
+				// reply that predates the explicit field — but never fold the "noop"
+				// (ok === false) case into "queued", which was the false promise.
+				const outcome =
+					res.outcome === "deleted" ||
+					res.outcome === "queued" ||
+					res.outcome === "noop"
+						? res.outcome
+						: res.ok === true
+							? res.serverCleaned === true
+								? "deleted"
+								: "queued"
+							: "noop";
+				showFlash({
+					text:
+						outcome === "deleted"
+							? "Deleted"
+							: outcome === "queued"
+								? "Delete queued; will retry"
+								: "Nothing to delete — this recording already moved on",
+					isError: false,
+				});
+			});
+			return;
+		}
+		discardBtn.dataset.confirming = "1";
+		discardBtn.textContent = "Tap again to delete this recording for good";
 	});
 
 	wrap.appendChild(title);
 	wrap.appendChild(spinner);
 	wrap.appendChild(partsEl);
-	wrap.appendChild(cancelLink);
+	wrap.appendChild(closeBtn);
+	wrap.appendChild(discardBtn);
 	root.appendChild(wrap);
 }
 
@@ -693,9 +862,28 @@ function renderArming(root: HTMLElement): void {
 	root.appendChild(msg);
 }
 
+// Fold an async reply's honest message into RENDERED STATE, then re-render so it
+// is drawn as part of the popup rather than appended to a soon-detached root.
+function showFlash(message: { text: string; isError: boolean }): void {
+	if (!currentData) return;
+	flash = attachFlash(currentData.state, message);
+	render(currentData);
+}
+
+// The single entry point for a new app-state from the SW: drop a now-stale flash
+// (its state has transitioned), record the state, and re-render.
+function applyState(newState: ExtensionState): void {
+	if (!currentData) return;
+	flash = reconcileFlash(flash, newState);
+	currentData = { ...currentData, state: newState };
+	render(currentData);
+}
+
 function render(data: PopupData): void {
 	stopTimer();
 	teardownMic();
+
+	currentData = data;
 
 	const root = document.getElementById("root");
 	if (!root) return;
@@ -725,6 +913,15 @@ function render(data: PopupData): void {
 		renderIdlePanel(popup, settings, isMeetTab, meetingId, activeTabId);
 	}
 
+	// Drawn on every rebuild so a re-render preserves the message instead of
+	// destroying it. .inline-msg has no CSS rule, so the colour is set inline (as
+	// at the sign-in error), and an absent message adds no empty node.
+	if (flash.message) {
+		const msgEl = el("p", { className: "inline-msg" }, flash.message.text);
+		if (flash.message.isError) msgEl.style.color = "#e53e3e";
+		popup.appendChild(msgEl);
+	}
+
 	root.appendChild(popup);
 	requestAnimationFrame(() => {
 		requestAnimationFrame(() => {
@@ -733,15 +930,68 @@ function render(data: PopupData): void {
 	});
 }
 
-function getMeetingId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.endsWith("meet.google.com")) return null;
-		const match = /^\/([a-z]+-[a-z]+-[a-z]+)$/i.exec(parsed.pathname);
-		return match ? match[1] : null;
-	} catch {
-		return null;
+async function maybeStartPendingMeet(data: PopupData): Promise<boolean> {
+	const result = await chrome.storage.local.get(PENDING_MEET_START_KEY);
+	const pending = result[PENDING_MEET_START_KEY] as PendingMeetStart | undefined;
+	if (!pending) return false;
+
+	await chrome.storage.local.remove(PENDING_MEET_START_KEY);
+
+	if (
+		typeof pending.createdAt !== "number" ||
+		Date.now() - pending.createdAt > PENDING_MEET_START_TTL_MS
+	) {
+		return false;
 	}
+
+	const tabId = pending.tabId ?? data.activeTabId;
+	const meetingId = pending.meetingId ?? data.meetingId;
+	if (tabId === undefined || !meetingId) return false;
+
+	const resp = await sendMsgAwait({ type: "START_MEET", meetingId, tabId });
+	if (resp.ok === true) {
+		window.close();
+		return true;
+	}
+	return false;
+}
+
+// ── Meeting flow: 4 clicks → 2 ───────────────────────────────────────────
+//
+// Toolbar icon click → recorder tab opens → one "Start" click → picker →
+// recording starts. Previously the popup itself was a required click (pick
+// "Record full-screen meeting" from the panel) before the recorder tab even
+// opened. When the popup opens directly onto an idle, signed-in Meet tab,
+// skip straight to the same START_INSTRUCTION the "Record full-screen
+// meeting" button sends and close — the recorder tab's own mic control /
+// "Record Meet tab only" affordance (recorder-page.ts) now covers what
+// the skipped popup screen used to offer.
+//
+// Only called once, from init() below (a popup document is fresh every time
+// it opens, so there is no separate re-entrancy flag to maintain) — and only
+// when `data.state.kind === "idle"`, which also rules out firing over an
+// arming/recording/uploading/... state.
+async function maybeAutoStartMeeting(data: PopupData): Promise<boolean> {
+	if (data.state.kind !== "idle") return false;
+	if (data.settings.apiKey.length === 0) return false;
+	if (!data.isMeetTab || !data.meetingId || data.activeTabId === undefined) {
+		return false;
+	}
+
+	const resp = await sendMsgAwait({
+		type: "START_INSTRUCTION",
+		sourceTabId: data.activeTabId,
+		meeting: true,
+		meetingId: data.meetingId,
+	});
+	if (resp.ok === true) {
+		window.close();
+		return true;
+	}
+	// Failed (race: a recording started elsewhere between GET_STATE and here,
+	// or the recorder tab couldn't open) — fall through to the ordinary panel
+	// instead of leaving the popup blank.
+	return false;
 }
 
 async function getSettingsFromSW(): Promise<ExtensionSettings> {
@@ -755,7 +1005,7 @@ async function getSettingsFromSW(): Promise<ExtensionSettings> {
 					typeof response !== "object"
 				) {
 					resolve({
-						apiBaseUrl: "https://web-production-e6fe4.up.railway.app",
+						apiBaseUrl: DEFAULT_API_BASE_URL,
 						apiKey: "",
 						autoRecordOnMeet: false,
 						autoRecordCountdownSec: 5,
@@ -797,14 +1047,14 @@ function renderOnboarding(root: HTMLElement, onDone: () => void): void {
 	logo.src = "icons/icon-128.png";
 	logo.width = 48;
 	logo.height = 48;
-	logo.alt = "Cap";
+	logo.alt = "data365";
 
-	const heading = el("h1", {}, "Welcome to Cap");
+	const heading = el("h1", {}, "Welcome to data365");
 
 	const list = el(
 		"ul",
 		{ className: "onboarding-list" },
-		el("li", {}, "Cap records what you choose — screen, window, or tab"),
+		el("li", {}, "data365 records what you choose — screen, window, or tab"),
 		el(
 			"li",
 			{},
@@ -839,25 +1089,36 @@ async function init(): Promise<void> {
 	const meetingId = getMeetingId(tabUrl);
 	const isMeetTab = meetingId !== null;
 
-	let currentData: PopupData = {
+	const data: PopupData = {
 		state,
 		settings,
 		isMeetTab,
 		meetingId,
 		activeTabId: activeTab?.id,
 	};
+	currentData = data;
 
 	const root = document.getElementById("root");
 	if (!root) return;
 
+	if (await maybeStartPendingMeet(data)) return;
+
 	const firstRunResult = await chrome.storage.local.get("capExtFirstRun");
-	if (firstRunResult.capExtFirstRun !== false) {
+	const firstRunDone = firstRunResult.capExtFirstRun === false;
+	// One-click meeting flow: fires only past first-run (a brand-new user still
+	// sees onboarding first) — see maybeAutoStartMeeting for the idle/signed-in/
+	// Meet-tab gates. On success the popup has already closed itself.
+	if (firstRunDone && (await maybeAutoStartMeeting(data))) return;
+
+	if (!firstRunDone) {
 		renderOnboarding(root, () => {
 			while (root.firstChild) root.removeChild(root.firstChild);
-			render(currentData);
+			// currentData, not `data`: a STATE_CHANGED may have arrived while the
+			// onboarding screen was up, and applyState keeps currentData current.
+			render(currentData ?? data);
 		});
 	} else {
-		render(currentData);
+		render(data);
 	}
 
 	chrome.runtime.onMessage.addListener((message: unknown) => {
@@ -866,18 +1127,15 @@ async function init(): Promise<void> {
 			message !== null &&
 			(message as Record<string, unknown>).type === "STATE_CHANGED"
 		) {
-			const newState = (message as Record<string, unknown>)
-				.state as ExtensionState;
-			currentData = { ...currentData, state: newState };
-			render(currentData);
+			applyState(
+				(message as Record<string, unknown>).state as ExtensionState,
+			);
 		}
 	});
 
 	chrome.storage.onChanged.addListener((changes, area) => {
 		if (area === "local" && changes.capExtState?.newValue) {
-			const newState = changes.capExtState.newValue as ExtensionState;
-			currentData = { ...currentData, state: newState };
-			render(currentData);
+			applyState(changes.capExtState.newValue as ExtensionState);
 		}
 	});
 }

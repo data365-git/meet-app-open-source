@@ -18,6 +18,7 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
+import type { Video as VideoDomain } from "@cap/web-domain";
 import {
 	faBuilding,
 	faCircleInfo,
@@ -26,10 +27,19 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { Check, ChevronDown, Moon, MoreVertical, Plus, Sun } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	Moon,
+	MoreVertical,
+	Plus,
+	Sun,
+	Video,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { useTranslations } from "next-intl";
 import {
 	cloneElement,
 	forwardRef,
@@ -40,11 +50,14 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
+import { setVideosLibraryKind } from "@/actions/videos/set-library-kind";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { StorageIndicator } from "@/components/StorageIndicator";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { type LibraryKind, libraryDragType } from "@/lib/library-kind";
 import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
@@ -52,23 +65,19 @@ import {
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
-	CapIcon,
 	ChartLineIcon,
 	CodeIcon,
 	CogIcon,
 	DownloadIcon,
+	GraduationCapIcon,
 	HomeIcon,
-	ImportIcon,
 	LogoutIcon,
-	MessageCircleMoreIcon,
 	ReferIcon,
-	RecordIcon,
 	SettingsGearIcon,
+	UsersIcon,
 } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import type { DownloadIconHandle } from "../AnimatedIcons/Download";
-import { MemberAvatars } from "./MemberAvatars";
-import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
 
 interface Props {
@@ -79,60 +88,73 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
+	const t = useTranslations("nav");
 
-	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
+	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS =
+		process.env.NEXT_PUBLIC_DEVELOPER_DASHBOARD_ALLOWED_EMAILS?.split(",") ??
+		[];
 
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
 
-	const manageNavigation = [
+	const mainNavigation = [
 		{
-			name: "Instructional recordings",
+			name: t("instructions"),
 			href: `/dashboard/caps`,
-			extraText: userCapsCount,
-			icon: <CapIcon />,
-			subNav: [],
+			extraText: userCapsCount as number | null,
+			adminOnly: false,
+			ownerOnly: false,
+			matchChildren: false,
+			icon: <GraduationCapIcon />,
+			// Dropping a dragged cap here moves it into the Recordings library.
+			libraryKind: "recording" as LibraryKind,
+			subNav: [] as { name: string; href: string }[],
 		},
 		{
-			name: "Meeting Recordings",
+			name: t("meetingRecordings"),
 			href: `/dashboard/meetings`,
 			matchChildren: true,
-			icon: <CapIcon />,
+			adminOnly: false,
+			ownerOnly: false,
+			icon: <UsersIcon />,
+			libraryKind: "meeting" as LibraryKind,
 			subNav: [],
 		},
 		{
-			name: "Analytics",
+			name: t("analytics"),
 			href: `/dashboard/analytics`,
 			matchChildren: true,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <ChartLineIcon />,
 			subNav: [],
 		},
+	];
+
+	const manageNavigation = [
 		{
-			name: "Record a Cap",
-			href: `/dashboard/caps/record`,
-			icon: <RecordIcon />,
+			name: t("installExtension"),
+			href: `/dashboard/extension`,
+			matchChildren: true,
+			adminOnly: false,
+			ownerOnly: false,
+			icon: <DownloadIcon />,
 			subNav: [],
 		},
 		{
-			name: "Import",
-			href: `/dashboard/import`,
-			matchChildren: true,
-			icon: <ImportIcon />,
-			subNav: [],
-		},
-		{
-			name: "Organization Settings",
-			href: `/dashboard/settings/organization`,
-			adminOnly: true,
-			matchChildren: true,
+			name: t("settings"),
+			href: `/dashboard/settings/account`,
+			extraText: null as number | null,
+			adminOnly: false,
+			ownerOnly: false,
 			icon: <CogIcon />,
 			subNav: [],
 		},
 		...(showDeveloperDashboard
 			? [
 					{
-						name: "Developers",
+						name: t("developers"),
 						href: `/dashboard/developers`,
 						ownerOnly: true,
 						matchChildren: true,
@@ -141,17 +163,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					},
 				]
 			: []),
-		...(user.isAdmin
-			? [
-					{
-						name: "Access Management",
-						href: `/dashboard/admin/access`,
-						matchChildren: true,
-						icon: <CogIcon />,
-						subNav: [] as { name: string; href: string }[],
-					},
-				]
-			: []),
+	];
+	const navigationGroups = [
+		{ label: t("navGroupMain"), items: mainNavigation },
+		{ label: t("navGroupManage"), items: manageNavigation },
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -191,7 +206,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				<Tooltip
 					disable={open || sidebarCollapsed === false}
 					position="right"
-					content={activeOrg?.organization.name ?? "No organization found"}
+					content={activeOrg?.organization.name ?? t("noOrganization")}
 				>
 					<PopoverTrigger suppressHydrationWarning asChild>
 						<motion.div
@@ -200,8 +215,15 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								duration: 0.2,
 							}}
 							className={clsx(
-								"mt-1.5 mx-auto rounded-xl cursor-pointer bg-gray-3",
-								sidebarCollapsed ? "w-fit px-2 py-0.5" : "w-full p-2.5",
+								// Owner picked variant B (2026-07-07): solid neutral gray so the
+								// card separates from the white sidebar without adding a second
+								// blue accent (the record button owns the accent).
+								"mx-auto rounded-xl border cursor-pointer transition-colors",
+								open
+									? "bg-gray-4 border-gray-5"
+									: "border-gray-4 bg-gray-3 hover:bg-gray-4 hover:border-gray-5",
+								sidebarCollapsed ? "w-fit px-2 py-1" : "w-full px-3 py-2.5",
+								toggleMobileNav ? "mt-0 mb-4" : "mt-2 mb-2",
 							)}
 						>
 							<div
@@ -224,24 +246,21 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									<div className="flex items-center">
 										<SignedImageUrl
 											image={activeOrg?.organization.iconUrl}
-											name={
-												activeOrg?.organization.name ?? "No organization found"
-											}
+											name={activeOrg?.organization.name ?? t("noOrganization")}
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
 											className={clsx(
-												"relative flex-shrink-0 mx-auto",
+												"relative flex-shrink-0",
 												sidebarCollapsed ? "size-6" : "size-7",
 											)}
 										/>
 									</div>
-									<div className="flex flex-col flex-1 items-center h-10">
+									<div className="flex flex-col flex-1 min-w-0">
 										<div className="flex justify-between items-center w-full">
 											{!sidebarCollapsed && (
-												<p className="text-sm truncate leading-0 text-gray-12">
-													{activeOrg?.organization.name ??
-														"No organization found"}
+												<p className="text-sm truncate leading-tight text-gray-12">
+													{activeOrg?.organization.name ?? t("noOrganization")}
 												</p>
 											)}
 											{!sidebarCollapsed && (
@@ -251,7 +270,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 												/>
 											)}
 										</div>
-										{!sidebarCollapsed && (
+										{!sidebarCollapsed && isDomainSetupVerified && (
 											<Link
 												href={
 													isDomainSetupVerified
@@ -270,155 +289,186 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													icon={isDomainSetupVerified ? faLink : faCircleInfo}
 													className="duration-200 size-3 text-gray-10"
 												/>
-												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
+												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-tight text-gray-11">
 													{isDomainSetupVerified
 														? activeOrg?.organization.customDomain
-														: "No custom domain set"}
+														: t("noCustomDomain")}
 												</p>
 											</Link>
 										)}
 									</div>
 								</div>
 							</div>
-							<PopoverContent
-								className={clsx(
-									"p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
-									sidebarCollapsed ? "ml-3" : "mx-auto",
-								)}
-							>
-								<Command>
-									<CommandInput placeholder="Search organizations..." />
-									<CommandEmpty>No organizations found</CommandEmpty>
-									<CommandGroup>
-										{orgData?.map((organization) => {
-											const isSelected =
-												activeOrg?.organization.id ===
-												organization.organization.id;
-											return (
-												<CommandItem
-													className={clsx(
-														"rounded-lg transition-colors duration-300 group",
-														isSelected
-															? "pointer-events-none"
-															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
-													)}
-													key={`${organization.organization.name}-organization-${organization.organization.id}`}
-													onSelect={async () => {
-														await updateActiveOrganization(
-															organization.organization.id,
-														);
-														setOpen(false);
-														router.push("/dashboard/caps");
-													}}
-												>
-													<div className="flex gap-2 items-center w-full">
-														<SignedImageUrl
-															image={organization.organization.iconUrl}
-															name={organization.organization.name}
-															letterClass="text-xs"
-															className="relative flex-shrink-0 size-5"
-														/>
-														<p
-															className={clsx(
-																"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
-																isSelected ? "text-gray-12" : "text-gray-10",
-															)}
-														>
-															{organization.organization.name}
-														</p>
-													</div>
-													{isSelected && (
-														<Check
-															size={18}
-															className={"ml-auto text-gray-12"}
-														/>
-													)}
-												</CommandItem>
-											);
-										})}
-										<DialogTrigger asChild>
-											<Button
-												variant="dark"
-												size="sm"
-												className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
-											>
-												<Plus className="w-3.5 h-auto" />
-												New organization
-											</Button>
-										</DialogTrigger>
-									</CommandGroup>
-								</Command>
-							</PopoverContent>
 						</motion.div>
 					</PopoverTrigger>
 				</Tooltip>
+				<PopoverContent
+					className={clsx(
+						"p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
+						sidebarCollapsed ? "ml-3" : "mx-auto",
+					)}
+				>
+					<Command>
+						<CommandInput placeholder={t("searchOrganizations")} />
+						<CommandEmpty>{t("noOrganizationsFound")}</CommandEmpty>
+						<CommandGroup>
+							{orgData?.map((organization) => {
+								const isSelected =
+									activeOrg?.organization.id === organization.organization.id;
+								return (
+									<CommandItem
+										className={clsx(
+											"rounded-lg transition-colors duration-300 group",
+											isSelected
+												? "pointer-events-none"
+												: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
+										)}
+										key={`${organization.organization.name}-organization-${organization.organization.id}`}
+										onSelect={async () => {
+											await updateActiveOrganization(
+												organization.organization.id,
+											);
+											setOpen(false);
+											router.push("/dashboard/caps");
+										}}
+									>
+										<div className="flex gap-2 items-center w-full">
+											<SignedImageUrl
+												image={organization.organization.iconUrl}
+												name={organization.organization.name}
+												letterClass="text-xs"
+												className="relative flex-shrink-0 size-5"
+											/>
+											<p
+												className={clsx(
+													"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
+													isSelected ? "text-gray-12" : "text-gray-10",
+												)}
+											>
+												{organization.organization.name}
+											</p>
+										</div>
+										{isSelected && (
+											<Check size={18} className={"ml-auto text-gray-12"} />
+										)}
+									</CommandItem>
+								);
+							})}
+							<DialogTrigger asChild>
+								<Button
+									variant="dark"
+									size="sm"
+									className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
+								>
+									<Plus className="w-3.5 h-auto" />
+									{t("newOrganization")}
+								</Button>
+							</DialogTrigger>
+						</CommandGroup>
+					</Command>
+				</PopoverContent>
 			</Popover>
-			<MemberAvatars />
-			<nav
-				className="flex flex-col justify-between w-full h-full"
-				aria-label="Sidebar"
-			>
+			<nav className="flex h-full min-h-0 w-full flex-col" aria-label="Sidebar">
 				<div
 					className={clsx(
-						"mt-5",
+						"-mr-1 min-h-0 flex-1 overflow-y-auto pr-1",
+						toggleMobileNav ? "mt-1" : "mt-2",
 						sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
 					)}
 				>
-					{manageNavigation
-						.filter((item) => !item.ownerOnly || isOwner)
-						.filter((item) => !item.adminOnly || canViewSettings)
-						.map((item) => (
-							<div
-								key={item.name}
-								className="flex relative justify-center items-center mb-1.5 w-full"
-							>
-								{isPathActive(item.href, item.matchChildren ?? false) && (
-									<motion.div
-										animate={{
-											width: sidebarCollapsed ? 36 : "100%",
-										}}
-										transition={{
-											layout: {
-												type: "tween",
-												duration: 0.15,
-											},
-											width: {
-												type: "tween",
-												duration: 0.05,
-											},
-										}}
-										layoutId="navlinks"
-										className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
-									/>
+					<Tooltip
+						disable={!sidebarCollapsed}
+						position="right"
+						content={t("newRecording")}
+					>
+						<Link
+							href="/dashboard/caps/record"
+							onClick={() => toggleMobileNav?.()}
+							className={clsx(
+								"flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--brand)] px-3 text-[13px] font-semibold text-[var(--brand-fg)] shadow-sm shadow-blue-950/10 transition-opacity hover:opacity-90",
+								sidebarCollapsed && "mx-auto size-11 px-0",
+								toggleMobileNav ? "mb-6 min-h-12 py-3" : "mb-4 min-h-11 py-2.5",
+							)}
+						>
+							<Video className="size-4 shrink-0" strokeWidth={2.4} />
+							<span className={clsx(sidebarCollapsed && "sr-only")}>
+								{t("newRecording")}
+							</span>
+						</Link>
+					</Tooltip>
+					{navigationGroups.map((group) => {
+						const items = group.items
+							.filter((item) => !item.ownerOnly || isOwner)
+							.filter((item) => !item.adminOnly || canViewSettings);
+
+						if (items.length === 0) return null;
+
+						return (
+							<div key={group.label} className="mb-3 w-full">
+								{!sidebarCollapsed && (
+									<p className="mb-2 px-3 text-[10.5px] font-semibold font-mono uppercase tracking-[0.12em] text-gray-10">
+										{group.label}
+									</p>
 								)}
+								{items.map((item) => (
+									<div
+										key={item.name}
+										className="flex relative justify-center items-center mb-1.5 w-full"
+									>
+										{isPathActive(item.href, item.matchChildren ?? false) && (
+											<motion.div
+												animate={{
+													width: sidebarCollapsed ? 36 : "100%",
+												}}
+												transition={{
+													layout: {
+														type: "tween",
+														duration: 0.15,
+													},
+													width: {
+														type: "tween",
+														duration: 0.05,
+													},
+												}}
+												layoutId="navlinks"
+												className={clsx(
+													"absolute w-full rounded-xl pointer-events-none bg-gray-3",
+													toggleMobileNav ? "h-[44px]" : "h-[36px]",
+												)}
+											/>
+										)}
 
-								<NavItem
-									name={item.name}
-									href={item.href}
-									icon={item.icon}
-									sidebarCollapsed={sidebarCollapsed}
-									toggleMobileNav={toggleMobileNav}
-									isPathActive={isPathActive}
-									extraText={item.extraText}
-									matchChildren={item.matchChildren ?? false}
-								/>
+										<NavItem
+											name={item.name}
+											href={item.href}
+											icon={item.icon}
+											sidebarCollapsed={sidebarCollapsed}
+											toggleMobileNav={toggleMobileNav}
+											isPathActive={isPathActive}
+											extraText={item.extraText}
+											matchChildren={item.matchChildren ?? false}
+											libraryKind={
+												"libraryKind" in item ? item.libraryKind : undefined
+											}
+										/>
+									</div>
+								))}
 							</div>
-						))}
-
-					<SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
+						);
+					})}
 				</div>
-				<div className="pb-4 mt-auto w-full flex flex-col gap-2">
+				<div className="pb-2 pt-2 mt-auto w-full flex flex-col gap-2 shrink-0">
 					<StorageIndicator />
-					<SidebarUser />
+					<SidebarUser inline={!!toggleMobileNav} />
 				</div>
 			</nav>
 			<DialogContent className="p-0 w-full max-w-md rounded-xl bg-gray-2">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faBuilding} />}
-					description="A new organization to share caps with your team"
+					description={t("createOrgDescription")}
 				>
 					<DialogTitle className="text-lg text-gray-12">
-						Create New Organization
+						{t("createOrgTitle")}
 					</DialogTitle>
 				</DialogHeader>
 				<div className="p-5">
@@ -431,7 +481,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<DialogFooter>
 					<Button variant="gray" size="sm" onClick={() => setDialogOpen(false)}>
-						Cancel
+						{t("cancel")}
 					</Button>
 					<Button
 						variant="dark"
@@ -441,7 +491,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						onClick={() => formRef.current?.requestSubmit()}
 						type="submit"
 					>
-						{createLoading ? "Creating..." : "Create"}
+						{createLoading ? t("creating") : t("create")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -449,27 +499,27 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	);
 };
 
-const SidebarUser = () => {
+const SidebarUser = ({ inline }: { inline?: boolean }) => {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const { user, sidebarCollapsed } = useDashboardContext();
 	const { theme, setThemeHandler } = useTheme();
+	const t = useTranslations("nav");
 	const nextTheme = theme === "light" ? "dark" : "light";
-	const themeLabel =
-		theme === "light" ? "Toggle Dark Mode" : "Toggle Light Mode";
+	const themeLabel = theme === "light" ? t("toggleDark") : t("toggleLight");
 
 	const menuItems = useMemo(
 		() => [
 			{
-				name: "Homepage",
+				name: t("homepage"),
 				icon: <HomeIcon />,
-				href: "/home",
+				href: "/dashboard/caps",
 				onClick: () => setMenuOpen(false),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
 			},
 			{
-				name: "Upgrade to Pro",
+				name: t("upgradeToPro"),
 				icon: <ArrowUpIcon />,
 				onClick: () => {
 					setMenuOpen(false);
@@ -479,26 +529,12 @@ const SidebarUser = () => {
 				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP && !user.isPro,
 			},
 			{
-				name: "Earn 40% Referral",
+				name: t("earnReferral"),
 				icon: <ReferIcon />,
 				href: "/dashboard/refer",
 				onClick: () => setMenuOpen(false),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
-			},
-			{
-				name: "Chat Support",
-				icon: <MessageCircleMoreIcon />,
-				onClick: () => window.open("https://cap.link/discord", "_blank"),
-				iconClassName: "text-gray-11 group-hover:text-gray-12",
-				showCondition: true,
-			},
-			{
-				name: "Download App",
-				icon: <DownloadIcon />,
-				onClick: () => window.open("https://cap.so/download", "_blank"),
-				iconClassName: "text-gray-11 group-hover:text-gray-12",
-				showCondition: true,
 			},
 			{
 				name: themeLabel,
@@ -517,7 +553,7 @@ const SidebarUser = () => {
 				showCondition: true,
 			},
 			{
-				name: "Settings",
+				name: t("settings"),
 				icon: <SettingsGearIcon />,
 				href: "/dashboard/settings/account",
 				onClick: () => setMenuOpen(false),
@@ -525,7 +561,7 @@ const SidebarUser = () => {
 				showCondition: true,
 			},
 			{
-				name: "Sign Out",
+				name: t("signOut"),
 				icon: <LogoutIcon />,
 				onClick: () => {
 					setMenuOpen(false);
@@ -535,8 +571,92 @@ const SidebarUser = () => {
 				showCondition: true,
 			},
 		],
-		[nextTheme, setThemeHandler, themeLabel, user.isPro],
+		[nextTheme, setThemeHandler, themeLabel, user.isPro, t],
 	);
+
+	if (inline) {
+		return (
+			<>
+				<UpgradeModal
+					open={upgradeModalOpen}
+					onOpenChange={setUpgradeModalOpen}
+				/>
+				<div className="relative w-full">
+					{/* Profile header — non-interactive, mirrors the Popover trigger markup */}
+					<button
+						type="button"
+						aria-expanded={menuOpen}
+						aria-label={t("user")}
+						onClick={() => setMenuOpen((value) => !value)}
+						className={clsx(
+							"flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border p-2 text-left transition-colors",
+							menuOpen
+								? "border-gray-4 bg-gray-3"
+								: "border-transparent hover:border-gray-3 hover:bg-gray-3",
+						)}
+					>
+						<span className="flex min-w-0 items-center gap-2">
+							<SignedImageUrl
+								image={user.imageUrl}
+								name={user.name ?? t("user")}
+								letterClass="text-xs"
+								className="flex-shrink-0 size-6 text-gray-12"
+							/>
+							<span className="text-sm truncate text-gray-12">
+								{user.name ?? t("user")}
+							</span>
+						</span>
+						<MoreVertical
+							className="h-4 w-4 flex-shrink-0 text-gray-10"
+							aria-hidden="true"
+						/>
+					</button>
+					{menuOpen && (
+						<div className="absolute right-0 bottom-full left-0 z-[200] mb-2 flex flex-col rounded-xl border border-gray-4 bg-gray-2 p-1 shadow-2xl shadow-black/25">
+							{menuItems
+								.filter((item) => item.showCondition)
+								.map((item, index) => {
+									const sharedClassName =
+										"flex items-center gap-2 w-full min-h-[44px] px-2 py-2 rounded-lg text-sm text-gray-12 hover:bg-gray-5 transition-colors cursor-pointer text-left";
+									const iconEl = cloneElement(item.icon, {
+										className: item.iconClassName,
+										size: 14,
+									});
+									if ("href" in item && item.href) {
+										return (
+											<Link
+												key={index.toString()}
+												href={item.href}
+												className={sharedClassName}
+												onClick={item.onClick}
+											>
+												<span className="flex flex-shrink-0 justify-center items-center w-3.5 h-3.5">
+													{iconEl}
+												</span>
+												{item.name}
+											</Link>
+										);
+									}
+									return (
+										<button
+											key={index.toString()}
+											type="button"
+											className={sharedClassName}
+											onClick={item.onClick}
+										>
+											<span className="flex flex-shrink-0 justify-center items-center w-3.5 h-3.5">
+												{iconEl}
+											</span>
+											{item.name}
+										</button>
+									);
+								})}
+						</div>
+					)}
+				</div>
+			</>
+		);
+	}
 
 	return (
 		<>
@@ -546,7 +666,7 @@ const SidebarUser = () => {
 			/>
 			<Tooltip
 				disable={!sidebarCollapsed}
-				content={user.name ?? "User"}
+				content={user.name ?? t("user")}
 				position="right"
 			>
 				<Popover open={menuOpen} onOpenChange={setMenuOpen}>
@@ -564,13 +684,13 @@ const SidebarUser = () => {
 							<div className="flex items-center gap-2">
 								<SignedImageUrl
 									image={user.imageUrl}
-									name={user.name ?? "User"}
+									name={user.name ?? t("user")}
 									letterClass="text-xs"
 									className="flex-shrink-0 size-6 text-gray-12"
 								/>
 								{!sidebarCollapsed && (
 									<span className="text-sm truncate text-gray-12">
-										{user.name ?? "User"}
+										{user.name ?? t("user")}
 									</span>
 								)}
 							</div>
@@ -583,12 +703,17 @@ const SidebarUser = () => {
 						</div>
 					</PopoverTrigger>
 					<PopoverContent
-						className={clsx(
-							"p-1 w-48",
-							sidebarCollapsed ? "ml-3" : "mx-auto",
-						)}
+						className={clsx("p-1 w-48", sidebarCollapsed ? "ml-3" : "mx-auto")}
 						side="top"
 						align="start"
+						sideOffset={6}
+						// The trigger (user profile) sits at the BOTTOM of the sidebar /
+						// mobile drawer, so the menu must always open UPWARD. Without this,
+						// Radix's collision avoidance could flip it DOWN — off the bottom of
+						// the screen on mobile, where it flashes and vanishes ("can't sign
+						// out on mobile"). Force upward + keep it on-screen.
+						avoidCollisions={false}
+						collisionPadding={12}
 					>
 						<Command>
 							<CommandGroup>
@@ -698,6 +823,7 @@ const NavItem = ({
 	isPathActive,
 	matchChildren,
 	extraText,
+	libraryKind,
 }: {
 	name: string;
 	href: string;
@@ -711,8 +837,97 @@ const NavItem = ({
 	isPathActive: (path: string, matchChildren: boolean) => boolean;
 	extraText: number | null | undefined;
 	matchChildren: boolean;
+	/**
+	 * When set, this sidebar entry is a drop target: dragging a cap card onto it
+	 * moves that cap into this library. Same server action the Move menu uses —
+	 * ONE code path for a move — and it only ever writes `libraryKind`, never
+	 * `videos.source`.
+	 */
+	libraryKind?: LibraryKind;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
+	const router = useRouter();
+	const [isDragOver, setIsDragOver] = useState(false);
+	const [isMovingVideo, setIsMovingVideo] = useState(false);
+
+	// True when the cap currently in the air already lives in THIS library, so a
+	// drop here would move nothing. Read from `dataTransfer.types` because that
+	// is all the browser exposes mid-drag (`getData` is blocked until drop).
+	const isNoOpDrop = (e: React.DragEvent<HTMLAnchorElement>) =>
+		!!libraryKind && e.dataTransfer.types.includes(libraryDragType(libraryKind));
+
+	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
+		if (!libraryKind) return;
+		if (!e.dataTransfer.types.includes("application/cap")) return;
+		if (isNoOpDrop(e)) {
+			// Not a valid target: leave the default (no preventDefault) so the
+			// browser shows the "can't drop here" cursor, and stay unhighlighted —
+			// the highlight has to mean "this drop will do something".
+			e.dataTransfer.dropEffect = "none";
+			setIsDragOver(false);
+			return;
+		}
+		// Only preventDefault for a cap payload — otherwise the link keeps its
+		// normal behaviour and other drags (files, text) fall through untouched.
+		e.preventDefault();
+		// Re-asserted on EVERY dragover: the browser resets dropEffect to its
+		// default before each event, so setting it once would flicker back.
+		e.dataTransfer.dropEffect = "move";
+		setIsDragOver(true);
+	};
+
+	const handleDragLeave = () => setIsDragOver(false);
+
+	const handleDrop = async (e: React.DragEvent<HTMLAnchorElement>) => {
+		if (!libraryKind) return;
+		e.preventDefault();
+		setIsDragOver(false);
+		// Belt-and-braces: dragover already refuses this case, so the browser
+		// should never fire a drop here — but never run a no-op move if it does.
+		if (isNoOpDrop(e)) return;
+
+		let capData: {
+			id: VideoDomain.VideoId;
+			name: string;
+			ids?: VideoDomain.VideoId[];
+		} | null = null;
+		try {
+			capData = JSON.parse(e.dataTransfer.getData("application/cap"));
+		} catch (error) {
+			console.error("Error processing drop:", error);
+		}
+
+		if (!capData?.id) {
+			toast.error("Failed to move video");
+			return;
+		}
+
+		// The card drags the whole multi-selection when it belongs to one, so move
+		// every id on the payload — same as the Move menu does for a selection.
+		const ids =
+			capData.ids && capData.ids.length > 0 ? capData.ids : [capData.id];
+
+		setIsMovingVideo(true);
+		try {
+			const result = await setVideosLibraryKind(ids, libraryKind);
+			if (!result.success) {
+				toast.error(result.error);
+				return;
+			}
+			toast.success(
+				ids.length > 1
+					? `Moved ${ids.length} caps to ${name}`
+					: `Moved "${capData.name}" to ${name}`,
+			);
+			router.refresh();
+		} catch (error) {
+			console.error("Error moving video:", error);
+			toast.error("Failed to move video");
+		} finally {
+			setIsMovingVideo(false);
+		}
+	};
+
 	return (
 		<Tooltip disable={!sidebarCollapsed} content={name} position="right">
 			<Link
@@ -726,11 +941,18 @@ const NavItem = ({
 				}}
 				prefetch={true}
 				passHref
+				onDragOver={libraryKind ? handleDragOver : undefined}
+				onDragLeave={libraryKind ? handleDragLeave : undefined}
+				onDrop={libraryKind ? handleDrop : undefined}
 				className={classNames(
 					"relative border border-transparent transition z-3",
+					isDragOver && "border-blue-9 bg-blue-3",
+					isMovingVideo && "opacity-70",
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
-						: "px-3 py-2 w-full",
+						: toggleMobileNav
+							? "px-3 py-2.5 min-h-[44px] w-full"
+							: "px-3 py-2 w-full",
 					isPathActive(href, matchChildren)
 						? "bg-transparent pointer-events-none"
 						: "hover:bg-gray-2",

@@ -12,6 +12,14 @@ module.exports = (__app, _options) => {
 	}
 
 	const config = {
+		// The whole design system already switches on the `dark` CLASS that
+		// public/theme-script.js puts on <body> (radix tokens ship as
+		// `.dark, .dark-theme`, and globals.css keys `.dark` / `body.dark`).
+		// Tailwind was left at its default `media`, so every `dark:` utility
+		// followed the OS instead — meaning the app's own theme toggle could
+		// change the token surfaces but NOT any `dark:` class. That mismatch
+		// is what leaves a white card sitting on a dark page. Aligning the two.
+		darkMode: "class",
 		content: [
 			`../../apps/*/pages/**/*.{js,ts,jsx,tsx,mdx}`,
 			`../../apps/*/components/**/*.{js,ts,jsx,tsx,mdx}`,
@@ -75,6 +83,19 @@ module.exports = (__app, _options) => {
 					gray: getColorScale("gray"),
 					"gray-a": getColorScale("gray-a", true),
 					blue: getColorScale("blue"),
+					// Was missing while ~10 sites already used `green-3` / `green-11`
+					// / `border-green-6` — every one of them resolved to no class at
+					// all and rendered unstyled (found 2026-08-03, fixed 2026-08-05).
+					// The `--green-*` variables were already imported in globals.css,
+					// light and dark, so this only connects a scale that was there.
+					green: getColorScale("green"),
+					// Same defect, same cause: amber/purple/yellow classes were in
+					// use (ShareVideo's caption notice, the recorder's how-it-works
+					// panel, the developer environment badge) with no scale behind
+					// them. Found by the test that now guards this file.
+					amber: getColorScale("amber"),
+					purple: getColorScale("purple"),
+					yellow: getColorScale("yellow"),
 					border: "hsl(var(--border))",
 					input: "hsl(var(--input))",
 					ring: "hsl(var(--ring))",
@@ -140,6 +161,17 @@ module.exports = (__app, _options) => {
 						20: "rgba(34,64,122,0.2)",
 					},
 					red: {
+						// Radix 1..12 AND the bespoke 50..400 live side by side; the step
+						// numbers cannot collide and both are genuinely in use. ~20 sites
+						// already wrote `bg-red-3` / `text-red-11` (the share page's AI
+						// error panel, the Loom import failure banner, the recorder's
+						// error bar) and every one rendered NOTHING — the same defect
+						// that hit green/amber/purple/yellow. The old note feared a wide
+						// blast radius from switching `red` to the Radix scale; measured,
+						// the bespoke steps have exactly THREE call sites (components/
+						// mdx.tsx), so merging costs nothing and replacing would have
+						// cost those three. `--red-*` was already imported in globals.css.
+						...getColorScale("red"),
 						50: "#FFEBEE",
 						100: "#FFADBB",
 						200: "#FF8599",

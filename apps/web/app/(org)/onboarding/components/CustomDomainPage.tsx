@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
@@ -9,6 +10,7 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
 export function CustomDomainPage() {
+	const t = useTranslations("onboarding");
 	const router = useRouter();
 	const rpc = useRpcClient();
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -22,13 +24,13 @@ export function CustomDomainPage() {
 		onSuccess: (_, redirect) => {
 			startTransition(() => {
 				if (redirect) {
-					router.push("/onboarding/invite-team");
+					router.push("/onboarding/download");
 					router.refresh();
 				}
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error(t("errorGeneric"));
 		},
 	});
 
@@ -37,15 +39,15 @@ export function CustomDomainPage() {
 
 	return (
 		<Base
-			title="Custom Domain"
+			title={t("customDomainTitle")}
 			description={
 				<div>
 					<p className="w-full text-base max-w-[340px] text-gray-10">
-						Pro users can setup a custom domain to access their shareable Cap
-						links i.e{" "}
-						<span className="font-medium text-blue-500">
-							cap.yourdomain.com
-						</span>
+						{t.rich("customDomainDescription", {
+							domain: (chunks) => (
+								<span className="font-medium text-blue-500">{chunks}</span>
+							),
+						})}
 					</p>
 				</div>
 			}
@@ -57,18 +59,18 @@ export function CustomDomainPage() {
 				disabled={customDomainMutation.isPending}
 				variant="blue"
 			>
-				Upgrade to Pro
+				{t("upgradeToPro")}
 			</Button>
 			<div className="w-full h-px bg-gray-4" />
 			<Button
 				type="button"
-				variant="dark"
+				variant="transparent"
 				spinner={customDomainMutation.isPending}
 				disabled={customDomainMutation.isPending}
 				className="mx-auto w-full"
 				onClick={() => handleSubmit()}
 			>
-				Skip
+				{t("skip")}
 			</Button>
 			<UpgradeModal
 				onCheckout={async () => {

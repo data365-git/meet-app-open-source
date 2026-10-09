@@ -1,0 +1,16 @@
+HTTP/1.1 200 OK
+Accept-Ranges: bytes
+Alt-Svc: h3=":443"; ma=2592000
+Cache-Control: public, max-age=0
+Content-Length: 472188
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: application/zip
+Date: Wed, 22 Jul 2026 10:00:38 GMT
+Etag: W/"7347c-19f89167450"
+Last-Modified: Wed, 22 Jul 2026 09:09:38 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+

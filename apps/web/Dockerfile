@@ -52,11 +52,24 @@ COPY . .
 ENV NEXT_PUBLIC_DOCKER_BUILD=true
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Build-time public env vars (baked into Next.js client bundle)
-ARG WEB_URL=https://web-production-e6fe4.up.railway.app
-ARG NEXT_PUBLIC_WEB_URL=https://web-production-e6fe4.up.railway.app
+# Build-time public env vars (baked into Next.js client bundle).
+# The fallbacks used to point at the retired Railway host, which 404s since
+# 2026-07-18 — a build that lost the arg would silently bake a dead URL into
+# the client bundle. Defaults now match the live Coolify deployment.
+ARG WEB_URL=https://data365.duckdns.org
+ARG NEXT_PUBLIC_WEB_URL=https://data365.duckdns.org
 ENV WEB_URL=$WEB_URL
 ENV NEXT_PUBLIC_WEB_URL=$NEXT_PUBLIC_WEB_URL
+
+# Node's default old-space ceiling on this image is ~2 GB, and `next build` sits
+# right on that line: it has now died with SIGABRT at ~1961 MB twice (2026-07-28
+# and 2026-08-03) while the HOST still had 3.5-5 GB free, and the SAME commit
+# built fine an hour earlier. A build that passes or fails on the margin is the
+# worst kind, because Coolify removes the new version and prod keeps serving the
+# OLD image with a green health check — a failed deploy is invisible from
+# outside. Raising the ceiling makes it deterministic instead of a coin flip.
+# 4096 is safe: the host has ~4.7 GB available and this runs alone.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 # Build upstream packages first (database, env, utils, web-backend, web-domain)
 # Then build Next.js app using standard webpack (not turbopack) for lower memory usage

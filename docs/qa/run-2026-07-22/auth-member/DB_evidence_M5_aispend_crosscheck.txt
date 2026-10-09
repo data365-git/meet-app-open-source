@@ -1,0 +1,9 @@
+=== M5 cross-check: ai_usage_events monthly SUM for org fjgf6h4p46ym40s ===
+billingMonth	totalUsd	n
+2026-06	0.431267	185
+2026-07	5.700007	794
+mysql: [Warning] Using a password on the command line interface can be insecure.
+
+=== page-embedded totals (grep of M5_admin_aispend_body.html) ===
+\"totalUsdCents\":43
+\"totalUsdCents\":570

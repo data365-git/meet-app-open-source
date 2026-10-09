@@ -16,6 +16,8 @@ dist-ssr
 .env.production
 .env.development
 .env.test
+.env.bak*
+.env.backup*
 target
 target-agent
 target-phase8
@@ -67,7 +69,9 @@ scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
-/docs/
+# Upstream Cap ignored /docs/ wholesale; this fork tracks project docs
+# (STATE.md, plans, audits). Ignore only generated SEO junk inside it.
+/docs/seo/
 /.growth-agent/
 
 # OpenCode commands (local)
@@ -76,3 +80,37 @@ analysis/
 analysis/plans/
 .ralphy
 tmp/
+tmp-qa/
+
+# Never commit local secrets worksheets
+/docs/DEPLOY_SECRETS.md
+
+# Session / QA artifacts — regenerable evidence, not project history.
+# The QA *reports* (docs/qa/**/*.md) stay tracked; only the heavy dumps go.
+/scratchpad/
+/work/
+/qa-evidence/
+/autoresearch/
+/docs/qa-screenshots/
+/docs/qa/shots/
+
+# Ad-hoc probe scripts pointing at the DEAD Railway host (capweb-production-*).
+# Kept on disk, out of git: a stale URL in-repo is what sent an operator to the
+# wrong host mid-incident once already. Delete them once the migration lands.
+/apps/web/_login-loop-test.mjs
+/apps/web/_probe-dashboard.mjs
+
+# Raw agent prompt/output dumps — scratch, not project history. One of them
+# (_codex-embed310.output) contains a cleartext admin password (since rotated);
+# committing any of these would put a credential in git history permanently.
+/docs/_codex-*
+
+# Local scratch from the 2026-08-03/04 session: soak timestamp, one-off import
+# and timestamp-experiment scripts. Kept on disk, out of git.
+/apps/browser-extension/e2e-audio-proof/soak-start.txt
+/apps/web/scripts/_qa-import.ts
+/apps/web/scripts/import-real-video.ts
+/apps/web/scripts/scribe-poc/
+/apps/web/scripts/timestamp-ab/
+.goalkeeper-contract-*.json
+.goalkeeper/

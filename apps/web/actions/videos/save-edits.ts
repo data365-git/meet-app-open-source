@@ -4,13 +4,11 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import type { VideoEditSpec } from "@cap/database/types";
-import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
 import { runPromise } from "@/lib/server";
 import { getEditSourceKey } from "@/lib/video-edit-processing";
 import {
@@ -21,7 +19,6 @@ import {
 	normalizeKeepRanges,
 } from "@/lib/video-edits";
 import { decodeStorageVideo } from "@/lib/video-storage";
-import { isAiGenerationEnabled } from "@/utils/flags";
 import { editVideoWorkflow } from "@/workflows/edit-video";
 
 const ACTIVE_PHASES = [
@@ -142,12 +139,6 @@ export async function saveVideoEdits(
 	const user = await getCurrentUser();
 	if (!user)
 		return { ok: false, error: "You're signed out. Please log in again." };
-	if (!userIsPro(user)) {
-		return {
-			ok: false,
-			error: "Cap Pro is required to edit videos.",
-		};
-	}
 
 	const [video] = await db()
 		.select()
@@ -235,34 +226,19 @@ export async function saveVideoEdits(
 		return { ok: false, error: message };
 	}
 
-	const aiGenerationEnabled = await isAiGenerationEnabled(user);
-
 	await markEditProcessing({ videoId, sourceKey });
 
-	try {
-		await start(editVideoWorkflow, [
-			{
-				videoId,
-				userId: user.id,
-				sourceKey,
-				previousSpec,
-				editSpec: normalizedEditSpec,
-				keepRanges: normalizedEditSpec.keepRanges,
-				aiGenerationEnabled,
-			},
-		]);
-	} catch (error) {
-		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-		console.error("[saveVideoEdits] workflow start failed", {
-			videoId,
-			err: error instanceof Error ? error.message : String(error),
-		});
-		return {
-			ok: false,
-			error:
-				"Couldn't start the edit job. The processing service may be unavailable — try again in a few minutes.",
-		};
-	}
+	editVideoWorkflow({
+		videoId,
+		userId: user.id,
+		sourceKey,
+		previousSpec,
+		editSpec: normalizedEditSpec,
+		keepRanges: normalizedEditSpec.keepRanges,
+		aiGenerationEnabled: false,
+	}).catch((err) => {
+		console.error("[saveVideoEdits] Inline workflow failed", err);
+	});
 
 	revalidatePath(`/s/${videoId}`);
 	revalidatePath(`/s/${videoId}/edit`);

@@ -1,6 +1,8 @@
 "use client";
 import clsx from "clsx";
 import {
+	Camera,
+	CameraOff,
 	Mic,
 	MicOff,
 	MoreVertical,
@@ -12,6 +14,7 @@ import {
 import {
 	type ComponentProps,
 	type MouseEvent as ReactMouseEvent,
+	type TouchEvent as ReactTouchEvent,
 	useCallback,
 	useEffect,
 	useRef,
@@ -28,14 +31,7 @@ import type {
 	RecorderPhase,
 	RecordingFailureDownload,
 } from "./web-recorder-types";
-
-const phaseMessages: Partial<Record<RecorderPhase, string>> = {
-	recording: "Recording",
-	paused: "Paused",
-	creating: "Finishing up",
-	converting: "Converting",
-	uploading: "Uploading",
-};
+import { useTranslations } from "next-intl";
 
 const clamp = (value: number, min: number, max: number) => {
 	if (Number.isNaN(value)) return min;
@@ -54,6 +50,12 @@ interface InProgressRecordingBarProps {
 	phase: RecorderPhase;
 	durationMs: number;
 	hasAudioTrack: boolean;
+	isMicMuted?: boolean;
+	toggleMicMute?: () => void;
+	canToggleMic?: boolean;
+	isCameraOff?: boolean;
+	toggleCameraMute?: () => void;
+	canToggleCamera?: boolean;
 	chunkUploads: ChunkUploadState[];
 	onStop: () => void | Promise<void>;
 	onPause?: () => void | Promise<void>;
@@ -65,10 +67,25 @@ interface InProgressRecordingBarProps {
 
 const DRAG_PADDING = 12;
 
+const shouldTogglePopoverOnClick = (
+	event: ReactMouseEvent<HTMLButtonElement>,
+) => {
+	if (event.detail === 0) return true;
+	if (typeof window === "undefined" || !window.matchMedia) return true;
+
+	return window.matchMedia("(hover: none), (pointer: coarse)").matches;
+};
+
 export const InProgressRecordingBar = ({
 	phase,
 	durationMs,
 	hasAudioTrack,
+	isMicMuted = false,
+	toggleMicMute,
+	canToggleMic = false,
+	isCameraOff = false,
+	toggleCameraMute,
+	canToggleCamera = false,
 	chunkUploads,
 	onStop,
 	onPause,
@@ -78,6 +95,7 @@ export const InProgressRecordingBar = ({
 	errorDownload,
 }: InProgressRecordingBarProps) => {
 	const [mounted, setMounted] = useState(false);
+	const t = useTranslations("recorder");
 	const [position, setPosition] = useState({ x: 0, y: 24 });
 	const [isDragging, setIsDragging] = useState(false);
 	const dragOffsetRef = useRef({ x: 0, y: 0 });
@@ -152,34 +170,70 @@ export const InProgressRecordingBar = ({
 		[position],
 	);
 
+	const handleTouchStart = useCallback(
+		(event: ReactTouchEvent<HTMLDivElement>) => {
+			if ((event.target as HTMLElement)?.closest("[data-no-drag]")) {
+				return;
+			}
+
+			const touch = event.touches[0];
+			if (!touch) return;
+
+			setIsDragging(true);
+			dragOffsetRef.current = {
+				x: touch.clientX - position.x,
+				y: touch.clientY - position.y,
+			};
+		},
+		[position],
+	);
+
 	useEffect(() => {
 		if (!isDragging || typeof window === "undefined") {
 			return undefined;
 		}
 
-		const handleMouseMove = (event: MouseEvent) => {
+		const getUpdatedPosition = (clientX: number, clientY: number) => {
 			const rect = containerRef.current?.getBoundingClientRect();
 			const width = rect?.width ?? 360;
 			const height = rect?.height ?? 64;
 			const maxX = window.innerWidth - width - DRAG_PADDING;
 			const maxY = window.innerHeight - height - DRAG_PADDING;
+			return {
+				x: clamp(clientX - dragOffsetRef.current.x, DRAG_PADDING, maxX),
+				y: clamp(clientY - dragOffsetRef.current.y, DRAG_PADDING, maxY),
+			};
+		};
 
-			setPosition({
-				x: clamp(event.clientX - dragOffsetRef.current.x, DRAG_PADDING, maxX),
-				y: clamp(event.clientY - dragOffsetRef.current.y, DRAG_PADDING, maxY),
-			});
+		const handleMouseMove = (event: MouseEvent) => {
+			setPosition(getUpdatedPosition(event.clientX, event.clientY));
 		};
 
 		const handleMouseUp = () => {
 			setIsDragging(false);
 		};
 
+		const handleTouchMove = (event: TouchEvent) => {
+			const touch = event.touches[0];
+			if (!touch) return;
+			event.preventDefault();
+			setPosition(getUpdatedPosition(touch.clientX, touch.clientY));
+		};
+
+		const handleTouchEnd = () => {
+			setIsDragging(false);
+		};
+
 		window.addEventListener("mousemove", handleMouseMove);
 		window.addEventListener("mouseup", handleMouseUp);
+		window.addEventListener("touchmove", handleTouchMove, { passive: false });
+		window.addEventListener("touchend", handleTouchEnd);
 
 		return () => {
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
+			window.removeEventListener("touchmove", handleTouchMove);
+			window.removeEventListener("touchend", handleTouchEnd);
 		};
 	}, [isDragging]);
 
@@ -191,9 +245,16 @@ export const InProgressRecordingBar = ({
 	const isErrorState = phase === "error";
 	const canStop = (phase === "recording" || isPaused) && !isErrorState;
 	const showTimer = (phase === "recording" || isPaused) && !isErrorState;
+	const phaseMessages: Partial<Record<RecorderPhase, string>> = {
+		recording: t("phaseRecording"),
+		paused: t("phasePaused"),
+		creating: t("phaseFinishing"),
+		converting: t("phaseConverting"),
+		uploading: t("phaseUploading"),
+	};
 	const statusText = showTimer
 		? formatDuration(durationMs)
-		: (phaseMessages[phase] ?? "Processing");
+		: (phaseMessages[phase] ?? t("phaseProcessing"));
 
 	const handleStop = () => {
 		try {
@@ -262,11 +323,12 @@ export const InProgressRecordingBar = ({
 			)}
 			style={{ left: `${position.x}px`, top: `${position.y}px` }}
 			onMouseDown={handlePointerDown}
+			onTouchStart={handleTouchStart}
 			role="presentation"
 			tabIndex={-1}
 			aria-live="polite"
 		>
-			<div className="flex flex-row items-stretch rounded-[0.9rem] border border-gray-5 bg-gray-1 text-gray-12 shadow-[0_16px_60px_rgba(0,0,0,0.35)] min-w-[360px]">
+			<div className="flex flex-row items-stretch rounded-[0.9rem] border border-gray-5 bg-gray-1 text-gray-12 shadow-[0_16px_60px_rgba(0,0,0,0.35)] min-w-0 w-[calc(100vw-2rem)] max-w-[360px]">
 				{isErrorState ? (
 					<div
 						className="flex flex-1 items-center justify-between gap-3 p-3"
@@ -274,7 +336,7 @@ export const InProgressRecordingBar = ({
 					>
 						<div className="flex flex-col text-left">
 							<span className="text-[0.95rem] font-semibold text-red-11">
-								Recording failed.
+								{t("recordingFailed")}
 							</span>
 							{errorDownload ? (
 								<a
@@ -282,11 +344,11 @@ export const InProgressRecordingBar = ({
 									download={errorDownload.fileName}
 									className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
 								>
-									Download here.
+									{t("downloadHere")}
 								</a>
 							) : (
 								<span className="text-[0.8rem] text-gray-11">
-									Download unavailable.
+									{t("downloadUnavailable")}
 								</span>
 							)}
 						</div>
@@ -295,7 +357,7 @@ export const InProgressRecordingBar = ({
 								data-no-drag
 								onClick={handleRestart}
 								disabled={!(canRestart || phase === "error")}
-								aria-label="Restart recording"
+								aria-label={t("restartRecording")}
 								aria-busy={isRestarting}
 							>
 								<RotateCcw
@@ -321,31 +383,39 @@ export const InProgressRecordingBar = ({
 
 						<div className="flex gap-3 items-center" data-no-drag>
 							<InlineChunkProgress chunkUploads={chunkUploads} />
-							<div className="flex relative justify-center items-center w-8 h-8">
-								{hasAudioTrack ? (
-									<>
-										<Mic className="size-5 text-gray-12" />
-										<div className="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
-											<div
-												className="absolute inset-0 bg-blue-9 transition-transform duration-200"
-												style={{
-													transform: hasAudioTrack
-														? "translateX(0%)"
-														: "translateX(-100%)",
-												}}
-											/>
-										</div>
-									</>
+							<ActionButton
+								data-no-drag
+								onClick={toggleMicMute}
+								disabled={!canToggleMic || !toggleMicMute}
+								aria-label={isMicMuted ? t("unmuteMic") : t("muteMic")}
+								aria-pressed={isMicMuted}
+							>
+								{isMicMuted || !hasAudioTrack ? (
+									<MicOff className={hasAudioTrack ? "size-5" : "text-gray-7 size-5"} />
 								) : (
-									<MicOff className="text-gray-7 size-5" />
+									<Mic className="size-5 text-gray-12" />
 								)}
-							</div>
+							</ActionButton>
+
+							<ActionButton
+								data-no-drag
+								onClick={toggleCameraMute}
+								disabled={!canToggleCamera || !toggleCameraMute}
+								aria-label={isCameraOff ? t("turnCameraOn") : t("turnCameraOff")}
+								aria-pressed={isCameraOff}
+							>
+								{isCameraOff || !canToggleCamera ? (
+									<CameraOff className={canToggleCamera ? "size-5" : "text-gray-7 size-5"} />
+								) : (
+									<Camera className="size-5 text-gray-12" />
+								)}
+							</ActionButton>
 
 							<ActionButton
 								data-no-drag
 								onClick={handlePauseToggle}
 								disabled={!canTogglePause}
-								aria-label={isPaused ? "Resume recording" : "Pause recording"}
+								aria-label={isPaused ? t("resumeRecording") : t("pauseRecording")}
 							>
 								{isPaused ? (
 									<PlayCircle className="size-5" />
@@ -357,7 +427,7 @@ export const InProgressRecordingBar = ({
 								data-no-drag
 								onClick={handleRestart}
 								disabled={!canRestart}
-								aria-label="Restart recording"
+								aria-label={t("restartRecording")}
 								aria-busy={isRestarting}
 							>
 								<RotateCcw
@@ -399,6 +469,7 @@ const InlineChunkProgress = ({
 }: {
 	chunkUploads: ChunkUploadState[];
 }) => {
+	const t = useTranslations("recorder");
 	const hasChunks = chunkUploads.length > 0;
 	const completedCount = chunkUploads.filter(
 		(chunk) => chunk.status === "complete",
@@ -457,24 +528,34 @@ const InlineChunkProgress = ({
 		}, 180);
 	}, [clearHoverTimeout]);
 
+	const togglePopoverOnClick = useCallback(
+		(event: ReactMouseEvent<HTMLButtonElement>) => {
+			event.preventDefault();
+			if (!shouldTogglePopoverOnClick(event)) return;
+			clearHoverTimeout();
+			setIsPopoverOpen((prev) => !prev);
+		},
+		[clearHoverTimeout],
+	);
+
 	useEffect(() => () => clearHoverTimeout(), [clearHoverTimeout]);
 
 	const statusSummary = [
-		{ label: "Uploading", count: uploadingCount, color: "text-blue-11" },
-		{ label: "Pending", count: queuedCount, color: "text-amber-11" },
-		{ label: "Completed", count: completedCount, color: "text-green-11" },
+		{ label: t("chunkStatusUploading"), count: uploadingCount, color: "text-blue-11" },
+		{ label: t("chunkStatusPending"), count: queuedCount, color: "text-amber-11" },
+		{ label: t("chunkStatusCompleted"), count: completedCount, color: "text-green-11" },
 		{
-			label: "Failed",
+			label: t("chunkStatusFailed"),
 			count: chunkUploads.filter((chunk) => chunk.status === "error").length,
 			color: "text-red-11",
 		},
 	].filter((item) => item.count > 0);
 
 	const statusLabels: Record<ChunkUploadState["status"], string> = {
-		uploading: "Uploading",
-		queued: "Pending",
-		complete: "Completed",
-		error: "Failed",
+		uploading: t("chunkStatusUploading"),
+		queued: t("chunkStatusPending"),
+		complete: t("chunkStatusCompleted"),
+		error: t("chunkStatusFailed"),
 	};
 
 	const statusAccent: Record<ChunkUploadState["status"], string> = {
@@ -506,17 +587,18 @@ const InlineChunkProgress = ({
 				<button
 					type="button"
 					data-no-drag
+					onClick={togglePopoverOnClick}
 					className="inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-[12px] text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
-					aria-label="Show upload segments"
+					aria-label={t("showUploadSegments")}
 					aria-expanded={isPopoverOpen}
 				>
 					<div
 						className="relative h-5 w-5"
 						role="img"
-						aria-label="Upload progress"
+						aria-label={t("uploadProgress")}
 					>
 						<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
-							<title>Upload progress</title>
+							<title>{t("uploadProgress")}</title>
 							<circle
 								className="fill-none stroke-gray-4"
 								strokeWidth={4}
@@ -557,12 +639,12 @@ const InlineChunkProgress = ({
 			>
 				<div className="space-y-3">
 					<div className="text-[11px] text-gray-11">
-						Uploaded {formatBytes(uploadedBytes)} of {formatBytes(totalBytes)}
+						{t("uploadedOf", { uploaded: formatBytes(uploadedBytes), total: formatBytes(totalBytes) })}
 					</div>
 					<div className="flex flex-wrap gap-2">
 						{statusSummary.length === 0 ? (
 							<span className="text-[11px] text-gray-11">
-								Preparing chunks…
+								{t("preparingChunks")}
 							</span>
 						) : (
 							statusSummary.map((item) => (
@@ -585,9 +667,7 @@ const InlineChunkProgress = ({
 								className="flex flex-col rounded-lg border border-gray-4 bg-gray-2 px-2 py-1"
 							>
 								<div className="flex items-center justify-between text-[11px]">
-									<span className="font-medium text-gray-12">
-										Part {chunk.partNumber}
-									</span>
+									<span className="font-medium text-gray-12">{t("partNumber", { n: chunk.partNumber })}</span>
 									<span
 										className={clsx(
 											"text-[11px] font-semibold",
@@ -599,12 +679,12 @@ const InlineChunkProgress = ({
 								</div>
 								<div className="text-[10px] text-gray-11">
 									{chunk.status === "uploading"
-										? `${Math.round(chunk.progress * 100)}% of ${formatBytes(chunk.sizeBytes)}`
+										? t("chunkProgressUploading", { pct: Math.round(chunk.progress * 100), size: formatBytes(chunk.sizeBytes) })
 										: chunk.status === "complete"
-											? `Uploaded ${formatBytes(chunk.sizeBytes)}`
+											? t("chunkProgressComplete", { size: formatBytes(chunk.sizeBytes) })
 											: chunk.status === "queued"
-												? `Waiting • ${formatBytes(chunk.sizeBytes)}`
-												: `Needs attention • ${formatBytes(chunk.sizeBytes)}`}
+												? t("chunkProgressQueued", { size: formatBytes(chunk.sizeBytes) })
+												: t("chunkProgressError", { size: formatBytes(chunk.sizeBytes) })}
 								</div>
 							</div>
 						))}

@@ -30,9 +30,9 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { start } from "workflow/api";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
+import { titleOriginMetadata } from "@/lib/title-origin";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 interface LoomUrlResponse {
@@ -371,6 +371,9 @@ async function importLoomVideoForOwner({
 			ownerId,
 			orgId,
 			source: { type: "webMP4" as const },
+			// Loom's own title was typed by a human — only the dated fallback
+			// template is machine-derived and eligible for AI renaming.
+			metadata: { ...titleOriginMetadata(videoName) },
 			bucket: Option.getOrNull(writable.bucketId),
 			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
@@ -405,16 +408,16 @@ async function importLoomVideoForOwner({
 			.catch(() => {});
 	}
 
-	await start(importLoomVideoWorkflow, [
-		{
-			videoId,
-			userId: ownerId,
-			rawFileKey,
-			bucketId: Option.getOrNull(writable.bucketId),
-			loomDownloadUrl: downloadUrl,
-			loomVideoId,
-		},
-	]);
+	importLoomVideoWorkflow({
+		videoId,
+		userId: ownerId,
+		rawFileKey,
+		bucketId: Option.getOrNull(writable.bucketId),
+		loomDownloadUrl: downloadUrl,
+		loomVideoId,
+	}).catch((err) => {
+		console.error("[importLoomVideo] Inline workflow failed", err);
+	});
 
 	revalidatePath("/dashboard/caps");
 
@@ -434,7 +437,7 @@ export async function importFromLoom({
 	if (!userIsPro(user)) {
 		return {
 			success: false,
-			error: "Importing from Loom requires a Cap Pro subscription.",
+			error: "Importing from Loom requires a data365 Pro subscription.",
 		};
 	}
 
@@ -631,7 +634,7 @@ export async function importFromLoomCsv({
 			importedCount: 0,
 			failedCount: 0,
 			results: [],
-			error: "Importing from Loom requires a Cap Pro subscription.",
+			error: "Importing from Loom requires a data365 Pro subscription.",
 		};
 	}
 

@@ -5,7 +5,6 @@ import { formatPlatformDateTime } from "@cap/utils";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
-import { inviteByEmail } from "@/actions/organization/invite-by-email";
 import { createInviteLink } from "@/actions/organization/invite-by-link";
 
 type Mode = "direct" | "link";
@@ -19,30 +18,41 @@ export function InviteMemberForm() {
 	const [role, setRole] = useState<"admin" | "member">("member");
 	const [loading, setLoading] = useState(false);
 	const [generatedLink, setGeneratedLink] = useState<string | null>(null);
+	const [generatedLinkEmail, setGeneratedLinkEmail] = useState("");
 
 	return (
-		<div className="space-y-3 p-4 border rounded">
-			<div className="flex gap-2">
-				<Button
-					variant={mode === "direct" ? "dark" : "gray"}
+		<div className="space-y-3 p-4 border border-gray-4 rounded">
+			<div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-3 p-0.5">
+				<button
+					type="button"
+					className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${
+						mode === "direct"
+							? "bg-gray-1 text-gray-12 shadow-sm"
+							: "text-gray-10 hover:text-gray-12"
+					}`}
 					onClick={() => {
 						setMode("direct");
 						setGeneratedLink(null);
+						setGeneratedLinkEmail("");
 					}}
-					type="button"
 				>
 					Add by email
-				</Button>
-				<Button
-					variant={mode === "link" ? "dark" : "gray"}
+				</button>
+				<button
+					type="button"
+					className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${
+						mode === "link"
+							? "bg-gray-1 text-gray-12 shadow-sm"
+							: "text-gray-10 hover:text-gray-12"
+					}`}
 					onClick={() => {
 						setMode("link");
 						setGeneratedLink(null);
+						setGeneratedLinkEmail("");
 					}}
-					type="button"
 				>
 					Generate one-time link
-				</Button>
+				</button>
 			</div>
 			<form
 				onSubmit={async (e) => {
@@ -50,20 +60,26 @@ export function InviteMemberForm() {
 					if (!email) return;
 					setLoading(true);
 					try {
+						const inviteEmail = email.trim();
 						if (mode === "direct") {
-							await inviteByEmail({ email, role });
+							const { url, expiresAt } = await createInviteLink({
+								email: inviteEmail,
+								role,
+							});
+							setGeneratedLink(url);
+							setGeneratedLinkEmail(inviteEmail);
 							toast.success(
-								`${email} added — they can sign in at /login with this email.`,
-								{ duration: 6000 },
+								`Invite link ready until ${formatPlatformDateTime(expiresAt)}`,
 							);
 							setEmail("");
 							router.refresh();
 						} else {
 							const { url, expiresAt } = await createInviteLink({
-								email,
+								email: inviteEmail,
 								role,
 							});
 							setGeneratedLink(url);
+							setGeneratedLinkEmail(inviteEmail);
 							toast.success(
 								`Link valid until ${formatPlatformDateTime(expiresAt)}`,
 							);
@@ -74,10 +90,10 @@ export function InviteMemberForm() {
 						setLoading(false);
 					}
 				}}
-				className="flex gap-2 items-end"
+				className="flex flex-col gap-2 sm:flex-row sm:items-end"
 			>
 				<div className="flex-1">
-					<label htmlFor={emailId} className="text-sm">
+					<label htmlFor={emailId} className="text-sm text-gray-12">
 						Email
 					</label>
 					<Input
@@ -89,12 +105,12 @@ export function InviteMemberForm() {
 					/>
 				</div>
 				<div>
-					<label htmlFor={roleId} className="text-sm">
+					<label htmlFor={roleId} className="text-sm text-gray-12">
 						Role
 					</label>
 					<select
 						id={roleId}
-						className="block border rounded px-2 py-1"
+						className="block border border-gray-4 rounded px-2 py-1 bg-gray-1 text-gray-12"
 						value={role}
 						onChange={(e) => setRole(e.target.value as "admin" | "member")}
 					>
@@ -111,10 +127,14 @@ export function InviteMemberForm() {
 				</Button>
 			</form>
 			{generatedLink && (
-				<div className="p-3 bg-gray-2 rounded border space-y-2">
-					<p className="text-sm text-gray-500">
-						Copy this link and share it with <strong>{email}</strong>. It
-						expires in 72 hours and can only be used once.
+				<div className="p-3 bg-gray-2 rounded border border-gray-4 space-y-2">
+					<p className="text-sm font-medium text-gray-12">
+						Invite link ready
+					</p>
+					<p className="text-sm text-gray-10">
+						Email may not send on self-hosted installs. Copy this link and send
+						it to <strong>{generatedLinkEmail}</strong> manually. It expires in
+						72 hours and can only be used once.
 					</p>
 					<div className="flex gap-2">
 						<Input

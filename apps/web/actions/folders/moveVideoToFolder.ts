@@ -5,11 +5,12 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	folders,
 	sharedVideos,
+	spaces,
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 export async function moveVideoToFolder({
 	videoId,
@@ -34,7 +35,7 @@ export async function moveVideoToFolder({
 			ownerId: videos.ownerId,
 		})
 		.from(videos)
-		.where(eq(videos.id, videoId));
+		.where(and(eq(videos.id, videoId), isNull(videos.deletedAt)));
 
 	if (!currentVideo) throw new Error("Video not found");
 	if (currentVideo.ownerId !== user.id) throw new Error("Unauthorized");
@@ -46,17 +47,23 @@ export async function moveVideoToFolder({
 	// If folderId is provided, verify it exists and belongs to the same organization
 	if (folderId) {
 		const [folder] = await db()
-			.select()
+			.select({ id: folders.id, organizationId: folders.organizationId })
 			.from(folders)
-			.where(
-				and(
-					eq(folders.id, folderId),
-					eq(folders.organizationId, user.activeOrganizationId),
-				),
-			);
+			.where(eq(folders.id, folderId));
 
-		if (!folder) {
+		if (!folder || folder.organizationId !== user.activeOrganizationId) {
 			throw new Error("Folder not found or not accessible");
+		}
+	}
+
+	if (spaceId && !isAllSpacesEntry) {
+		const [space] = await db()
+			.select({ organizationId: spaces.organizationId })
+			.from(spaces)
+			.where(eq(spaces.id, spaceId));
+
+		if (!space || space.organizationId !== user.activeOrganizationId) {
+			throw new Error("Space not found");
 		}
 	}
 

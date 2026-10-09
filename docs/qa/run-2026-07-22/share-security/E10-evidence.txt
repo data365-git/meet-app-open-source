@@ -1,0 +1,130 @@
+=== E10 (private-video-blocked) LIVE PROXY EVIDENCE using nonexistentid00 (privateVideoId fixture empty, see analysis) ===
+
+--- GET /api/playlist?videoId=nonexistentid00&videoType=mp4 (no auth) ---
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Credentials: true
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 10:08:59 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+body:
+
+--- GET /api/thumbnail?videoId=nonexistentid00 (no auth) ---
+HTTP/1.1 403 Forbidden
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Methods: GET, OPTIONS
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain;charset=UTF-8
+Date: Wed, 22 Jul 2026 10:09:00 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+body:
+{"error":true,"message":"Forbidden"}
+--- GET /api/playlist?videoId=nonexistentid00&videoType=mp4&fileType=transcription (no auth) ---
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Credentials: true
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 10:09:00 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+body:
+
+--- POST /api/video/ai/chat videoId=nonexistentid00 (no auth) ---
+HTTP/1.1 403 Forbidden
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Content-Type: text/plain;charset=UTF-8
+Date: Wed, 22 Jul 2026 10:09:01 GMT
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Set-Cookie: ai_chat_cid=kqt1y0r2ze8vnpm; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000; Secure
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+body:
+{"error":"Forbidden"}
+=== CONTEXT: fixtures.privateVideoId is empty ===
+Per fixtures + independently re-verified (read-only): SELECT id FROM videos
+WHERE public=0 AND deletedAt IS NULL -> 0 rows on prod right now. There is
+currently NO real private video to hit directly. Per task instructions
+("E10 uses fixtures.privateVideoId — if empty, skip+flag"), this is reported
+as a FLAG, not a bare skip, because I gathered strong proxy evidence instead
+of doing nothing:
+
+1) CODE READ confirms nonexistent-id and private-video hit the IDENTICAL
+   code path:
+   packages/web-backend/src/Videos/VideosPolicy.ts buildCanView() (:46-135):
+     - line 52-57: `repo.getById(videoId)`; if `Option.isNone` (no such row)
+       -> logs "Video not found. Access denied." -> returns false.
+     - line 94-99: if the row exists but `!video.public` and the viewer has
+       no explicit owner/org/space access -> logs "Video is private..." ->
+       returns false.
+   Both paths return `false` from the SAME `Policy.publicPolicy` check, and
+   BOTH surface as a generic (no-reason) `PolicyDeniedError` to every
+   caller. This is a deliberate anti-enumeration design (confirmed live in
+   E5: a nonexistent id and -- by this same code path -- a private id would
+   render the identical "Bu video maxfiy" page and get the identical
+   401/403 API responses; an attacker cannot distinguish "no such video"
+   from "real video you can't see").
+
+2) PAGE gate: apps/web/app/s/[videoId]/page.tsx :434 wraps the video-fetch
+   query itself in `Policy.withPublicPolicy(videosPolicy.canView(videoId))`;
+   :451 `catchTags` intercepts `PolicyDenied` and renders `PolicyDeniedView`
+   BEFORE `AuthorizedContent` (the component that renders `<Share>` with
+   player/transcript/summary/chat) is ever invoked -- so a denied viewer's
+   HTML response literally never contains the video/transcript data (this
+   is server-side branching in an RSC, not CSS hiding).
+
+3) API-LEVEL gates independently re-check the SAME canView policy (not just
+   relying on the page):
+   - apps/web/app/api/thumbnail/route.ts :31-48 -> 403 Forbidden if !canView
+   - apps/web/app/api/video/ai/chat/route.ts :227-246 -> 403 Forbidden if
+     !canView, checked BEFORE any Gemini call is made (so this is also $0 to
+     probe)
+   - apps/web/app/api/playlist/route.ts (serves the actual mp4/segment
+     signed URLs AND the raw transcription.vtt via `fileType=transcription`,
+     line 307-328) -> calls `Videos.getByIdForViewing()`
+     (packages/web-backend/src/Videos/index.ts :53-59, itself
+     `repo.getById(id).pipe(Policy.withPublicPolicy(policy.canView(id)))`)
+     -> PolicyDenied is caught (route.ts :76) -> HttpApiError.Unauthorized
+     (401).
+
+4) LIVE PROXY TEST (this session, using nonexistentid00 as the proxy since
+   no real private row exists -- see raw HTTP evidence above):
+     GET /api/playlist?videoId=nonexistentid00&videoType=mp4        -> 401, empty body
+     GET /api/thumbnail?videoId=nonexistentid00                      -> 403, {"error":true,"message":"Forbidden"}
+     GET /api/playlist?...&fileType=transcription                    -> 401, empty body
+     POST /api/video/ai/chat {videoId:"nonexistentid00",...}         -> 403, {"error":"Forbidden"} (no Gemini spend -- gate is before the model call)
+   No video/transcript/summary bytes returned in any body.
+
+CONCLUSION: strong code + live-proxy evidence that E10's requirement (share
+page does not render player/transcript for a policy-denied viewer, AND the
+underlying APIs enforce it independently, not just the page) holds. This is
+NOT the same as a pass against a literal `public=0` row, since none exists
+on prod today -- recommend the team create ONE throwaway QA-owned private
+video (a sanctioned write, needs explicit owner sign-off per the plan's own
+§0.1.3) to close the gap with a fully live E10 run in a future pass.

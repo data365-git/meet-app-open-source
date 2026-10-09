@@ -1,10 +1,12 @@
-import { formatPlatformDateRelative, formatPlatformDateTime } from "@cap/utils";
+import { formatPlatformDateTime } from "@cap/utils";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
+import Link from "next/link";
+import { useFormatter, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -12,222 +14,254 @@ import { Tooltip } from "@/components/Tooltip";
 import type { CapCardProps } from "./CapCard";
 
 interface CapContentProps {
-	cap: CapCardProps["cap"];
-	userId?: string;
-	sharedCapCard?: boolean;
-	hideSharedStatus?: boolean;
-	isOwner: boolean;
-	setIsSharingDialogOpen: (isSharingDialogOpen: boolean) => void;
+  cap: CapCardProps["cap"];
+  userId?: string;
+  sharedCapCard?: boolean;
+  hideSharedStatus?: boolean;
+  isOwner: boolean;
+  views: number;
+  setIsSharingDialogOpen: (isSharingDialogOpen: boolean) => void;
+  /** Bumped by the card menu's "Rename" item; each bump opens the title editor. */
+  renameRequest?: number;
 }
 
 export const CapCardContent: React.FC<CapContentProps> = ({
-	cap,
-	userId,
-	sharedCapCard = false,
-	hideSharedStatus,
-	isOwner,
-	setIsSharingDialogOpen,
+  cap,
+  userId,
+  sharedCapCard = false,
+  hideSharedStatus,
+  renameRequest,
+  isOwner,
+  views,
+  setIsSharingDialogOpen,
 }) => {
-	const router = useRouter();
-	const effectiveDate = cap.metadata?.customCreatedAt
-		? new Date(cap.metadata.customCreatedAt)
-		: cap.createdAt;
+  const t = useTranslations("library");
+  const format = useFormatter();
+  const router = useRouter();
+  const effectiveDate = cap.metadata?.customCreatedAt
+    ? new Date(cap.metadata.customCreatedAt)
+    : cap.createdAt;
 
-	const [dateValue, setDateValue] = useState(
-		moment(effectiveDate).format("YYYY-MM-DD HH:mm"),
-	);
-	const [isDateEditing, setIsDateEditing] = useState(false);
-	const [showFullDate, setShowFullDate] = useState(false);
-	const [title, setTitle] = useState(cap.name);
-	const [isEditing, setIsEditing] = useState(false);
+  const [dateValue, setDateValue] = useState(
+    moment(effectiveDate).format("YYYY-MM-DD HH:mm"),
+  );
+  const [isDateEditing, setIsDateEditing] = useState(false);
+  const [showFullDate, setShowFullDate] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-	const handleTitleBlur = async (capName: string) => {
-		if (!title || capName === title) {
-			setIsEditing(false);
-			return;
-		}
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  const [title, setTitle] = useState(cap.name);
+  const [isEditing, setIsEditing] = useState(false);
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (renameRequest && !sharedCapCard && userId === cap.ownerId) {
+      setIsEditing(true);
+      // Focus once the textarea has mounted. CapCard's menu skips its
+      // close-time focus return for Rename, so nothing steals it back.
+      const timer = setTimeout(() => {
+        titleInputRef.current?.focus();
+        titleInputRef.current?.select();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [renameRequest, sharedCapCard, userId, cap.ownerId]);
 
-		try {
-			await editTitle(cap.id, title);
-			toast.success("Video title updated");
-			setIsEditing(false);
-			router.refresh();
-		} catch (error) {
-			if (error instanceof Error) {
-				toast.error(error.message);
-			} else {
-				toast.error("Failed to update title - please try again.");
-			}
-		}
-	};
+  const handleTitleBlur = async (capName: string) => {
+    if (!title || capName === title) {
+      setIsEditing(false);
+      return;
+    }
 
-	const handleDateClick = () => {
-		if (userId === cap.ownerId) {
-			if (!isDateEditing) {
-				setIsDateEditing(true);
-			}
-		} else {
-			setShowFullDate(!showFullDate);
-		}
-	};
+    try {
+      await editTitle(cap.id, title);
+      toast.success(t("titleUpdated"));
+      setIsEditing(false);
+      router.refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error(t("titleUpdateFailed"));
+      }
+      setTitle(cap.name);
+      setIsEditing(false);
+    }
+  };
 
-	const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-		if (e.key === "Enter") {
-			e.preventDefault();
-		}
-	};
+  const handleDateClick = () => {
+    if (userId === cap.ownerId) {
+      if (!isDateEditing) {
+        setIsDateEditing(true);
+      }
+    } else {
+      setShowFullDate(!showFullDate);
+    }
+  };
 
-	const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		setDateValue(e.target.value);
-	};
+  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+    }
+  };
 
-	const handleDateBlur = async () => {
-		const isValidDate = moment(dateValue).isValid();
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDateValue(e.target.value);
+  };
 
-		if (!isValidDate) {
-			toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
-			setIsDateEditing(false);
-			return;
-		}
+  const handleDateBlur = async () => {
+    const isValidDate = moment(dateValue).isValid();
 
-		const selectedDate = moment(dateValue);
-		const currentDate = moment();
+    if (!isValidDate) {
+      toast.error(t("invalidDateFormat"));
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
+      setIsDateEditing(false);
+      return;
+    }
 
-		if (selectedDate.isAfter(currentDate)) {
-			toast.error("Cannot set a date in the future");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
-			setIsDateEditing(false);
-			return;
-		}
+    const selectedDate = moment(dateValue);
+    const currentDate = moment();
 
-		if (selectedDate.isSame(effectiveDate)) {
-			setIsDateEditing(false);
-			return;
-		}
+    if (selectedDate.isAfter(currentDate)) {
+      toast.error(t("dateInFuture"));
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
+      setIsDateEditing(false);
+      return;
+    }
 
-		try {
-			await editDate(cap.id, selectedDate.toISOString());
-			toast.success("Video date updated");
-			setIsDateEditing(false);
-			router.refresh();
-		} catch (error) {
-			if (error instanceof Error) {
-				toast.error(error.message);
-			} else {
-				toast.error("Failed to update date - please try again.");
-			}
-		}
-	};
+    if (selectedDate.isSame(effectiveDate)) {
+      setIsDateEditing(false);
+      return;
+    }
 
-	const handleDateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-		if (e.key === "Enter") {
-			e.preventDefault();
-			handleDateBlur();
-		} else if (e.key === "Escape") {
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
-			setIsDateEditing(false);
-		}
-	};
+    try {
+      await editDate(cap.id, selectedDate.toISOString());
+      toast.success(t("dateUpdated"));
+      setIsDateEditing(false);
+      router.refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error(t("dateUpdateFailed"));
+      }
+    }
+  };
 
-	const renderSharedStatus = () => {
-		const baseClassName = clsx(
-			"text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
-			"hover:text-gray-12",
-			hideSharedStatus ? "pointer-events-none" : "cursor-pointer",
-		);
-		if (isOwner && !hideSharedStatus) {
-			const hasSpaceSharing =
-				(cap.sharedOrganizations?.length ?? 0) > 0 ||
-				(cap.sharedSpaces?.length ?? 0) > 0;
-			const isPublic = cap.public;
+  const handleDateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleDateBlur();
+    } else if (e.key === "Escape") {
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm"));
+      setIsDateEditing(false);
+    }
+  };
 
-			if (!hasSpaceSharing && !isPublic) {
-				return (
-					<p
-						className={baseClassName}
-						onClick={() => setIsSharingDialogOpen(true)}
-					>
-						Not shared{" "}
-						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-					</p>
-				);
-			} else {
-				return (
-					<p
-						className={baseClassName}
-						onClick={() => setIsSharingDialogOpen(true)}
-					>
-						Shared{" "}
-						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-					</p>
-				);
-			}
-		} else {
-			return <p className={baseClassName}>Shared with you</p>;
-		}
-	};
+  const renderSharedStatus = () => {
+    const baseClassName = clsx(
+      "text-sm text-gray-11 transition-colors duration-200 flex items-center mb-1",
+      "hover:text-gray-12",
+      hideSharedStatus ? "pointer-events-none" : "cursor-pointer",
+    );
+    if (isOwner && !hideSharedStatus) {
+      const hasSpaceSharing =
+        (cap.sharedOrganizations?.length ?? 0) > 0 ||
+        (cap.sharedSpaces?.length ?? 0) > 0;
+      const isPublic = cap.public;
 
-	return (
-		<div>
-			<div className="h-[1.25rem] mb-1">
-				{" "}
-				{/* Fixed height container */}
-				{isEditing && !sharedCapCard ? (
-					<textarea
-						rows={1}
-						value={title}
-						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
-						onKeyDown={(e) => handleTitleKeyDown(e)}
-						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
-					/>
-				) : (
-					<p
-						className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
-						onClick={() => {
-							if (!sharedCapCard) {
-								if (userId === cap.ownerId) {
-									setIsEditing(true);
-								}
-							}
-						}}
-					>
-						{title}
-					</p>
-				)}
-			</div>
+      if (!hasSpaceSharing && !isPublic) {
+        return (
+          <p
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      } else {
+        return (
+          <p
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      }
+    } else {
+      return <p className={baseClassName}>Shared with you</p>;
+    }
+  };
 
-			{renderSharedStatus()}
-			<div className="mb-1 h-[1.5rem]">
-				{" "}
-				{isDateEditing && !sharedCapCard ? (
-					<div className="flex items-center h-full">
-						<input
-							type="text"
-							value={dateValue}
-							onChange={handleDateChange}
-							onBlur={handleDateBlur}
-							onKeyDown={handleDateKeyDown}
-							className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
-							placeholder="YYYY-MM-DD HH:mm"
-						/>
-					</div>
-				) : (
-					<Tooltip
-						content={`Cap created at ${formatPlatformDateTime(effectiveDate)}`}
-					>
-						<p
-							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
-							onClick={handleDateClick}
-						>
-							{showFullDate
-								? formatPlatformDateTime(effectiveDate)
-								: formatPlatformDateRelative(effectiveDate)}
-						</p>
-					</Tooltip>
-				)}
-			</div>
-		</div>
-	);
+  return (
+    <div>
+      <div className="h-[1.25rem] mb-1">
+        {" "}
+        {/* Fixed height container */}
+        {isEditing && !sharedCapCard ? (
+          <textarea
+            ref={titleInputRef}
+            rows={1}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => handleTitleBlur(cap.name)}
+            onKeyDown={(e) => handleTitleKeyDown(e)}
+            className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
+          />
+        ) : (
+          <Link
+            href={`/s/${cap.id}`}
+            title={title}
+            // Not a drag source: the browser would drag a bare URL that no
+            // folder understands. The thumbnail is the drag handle.
+            draggable={false}
+            className="block truncate text-[14.5px] leading-[1.25rem] text-gray-12 font-semibold p-0 m-0 h-[1.25rem] tracking-normal"
+          >
+            {title}
+          </Link>
+        )}
+      </div>
+
+      {!hideSharedStatus && sharedCapCard && renderSharedStatus()}
+      <div className="h-[1.25rem]">
+        {" "}
+        {isDateEditing && !sharedCapCard ? (
+          <div className="flex items-center h-full">
+            <input
+              type="text"
+              value={dateValue}
+              onChange={handleDateChange}
+              onBlur={handleDateBlur}
+              onKeyDown={handleDateKeyDown}
+              className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
+              placeholder="YYYY-MM-DD HH:mm"
+            />
+          </div>
+        ) : (
+          <Tooltip
+            content={`Cap created at ${formatPlatformDateTime(effectiveDate)}`}
+          >
+            <p
+              className="flex items-center h-full truncate text-[12px] leading-[1.25rem] text-gray-10 cursor-pointer"
+              onClick={handleDateClick}
+            >
+              {cap.ownerName || t("unknownOwner")}{" "}
+              <span className="px-1.5 text-gray-8">{"\u00b7"}</span>
+              {t("views", { count: views })}{" "}
+              <span className="px-1.5 text-gray-8">{"\u00b7"}</span>
+              {showFullDate
+                ? formatPlatformDateTime(effectiveDate)
+                : mounted
+                  ? format.relativeTime(effectiveDate, Date.now())
+                  : ""}
+            </p>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
 };

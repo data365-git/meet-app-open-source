@@ -15,6 +15,7 @@ import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import { libraryKindRecordingFilter } from "@/lib/dashboard-data";
 import {
 	canManageOrganizationMembers,
 	canManageOrganizationProSeats,
@@ -285,7 +286,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						and(
 							eq(videos.orgId, activeOrgInfo.id),
 							eq(videos.ownerId, user.id),
-							sql`NOT (JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'extensionWeb' AND JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.context')) = 'meeting')`,
+							isNull(videos.deletedAt),
+							libraryKindRecordingFilter,
 						),
 					);
 
@@ -477,6 +479,9 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			anyNewNotifications,
 			userPreferences,
 			userCapsCount,
+			// Fetch succeeded — an empty organizationSelect here is a genuine
+			// no-membership (pending requester) state, not a lookup failure.
+			hasError: false,
 		};
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
@@ -487,6 +492,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			anyNewNotifications: false,
 			userPreferences: null,
 			organizationSettings: null,
+			// The lookup itself failed (e.g. a DB blip). Callers must not treat
+			// this the same as a real "no organization" requester — failing
+			// closed on access is correct, but the reason must stay honest.
+			hasError: true,
 		};
 	}
 }

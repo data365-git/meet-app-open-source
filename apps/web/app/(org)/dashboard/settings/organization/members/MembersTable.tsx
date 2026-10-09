@@ -118,31 +118,60 @@ export function MembersTable({
 		},
 	});
 
+	if (members.length === 0 && pendingInvites.length === 0) {
+		return (
+			<div className="flex flex-col items-center gap-3 py-12 text-center border border-gray-4 rounded-lg">
+				<div className="flex items-center justify-center size-12 rounded-full bg-gray-2">
+					<svg
+						className="size-6 text-gray-9"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						aria-hidden="true"
+					>
+						<path
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							strokeWidth={1.5}
+							d="M17 20h5v-2a4 4 0 00-5.356-3.712M9 20H4v-2a4 4 0 015.356-3.712M15 7a4 4 0 11-8 0 4 4 0 018 0zm6 4a3 3 0 11-6 0 3 3 0 016 0z"
+						/>
+					</svg>
+				</div>
+				<div>
+					<p className="text-sm font-medium text-gray-12">No members yet</p>
+					<p className="text-xs text-gray-10 mt-0.5">
+						Use the form above to invite someone to your organization.
+					</p>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="space-y-8">
 			<section>
-				<h2 className="text-lg font-medium mb-3">Current Members</h2>
-				<div className="border rounded divide-y">
+				<h2 className="text-lg font-medium mb-3 text-gray-12">Current Members</h2>
+				<div className="border border-gray-4 rounded divide-y divide-gray-4">
 					{members.map((m) => {
 						const isOwner = m.userId === ownerId;
 						const isMe = m.userId === currentUserId;
 						return (
 							<div
 								key={m.memberId}
-								className="flex items-center justify-between p-3"
+								className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between"
 							>
 								<div>
-									<div className="font-medium">{m.name ?? m.email}</div>
-									<div className="text-sm text-gray-500">{m.email}</div>
+									<div className="font-medium text-gray-12">{m.name ?? m.email}</div>
+									<div className="text-sm text-gray-10">{m.email}</div>
 								</div>
-								<div className="flex items-center gap-4">
+								<div className="flex flex-wrap items-center gap-3">
 									{isOwner || isMe ? (
-										<span className="text-sm text-gray-500 capitalize">
+										<span className="text-sm text-gray-10 capitalize">
 											{isOwner ? "Owner" : m.role}
 										</span>
 									) : (
 										<select
-											className="text-sm text-gray-500 capitalize bg-transparent border rounded px-2 py-1"
+											className="text-sm text-gray-12 capitalize bg-gray-1 border border-gray-4 rounded px-2 py-1"
 											value={m.role}
 											disabled={actionInFlight === `role-${m.memberId}`}
 											onChange={(e) =>
@@ -156,7 +185,7 @@ export function MembersTable({
 											<option value="member">Member</option>
 										</select>
 									)}
-									<span className="text-xs text-gray-400">
+									<span className="hidden text-xs text-gray-10 sm:inline">
 										{formatPlatformDate(m.joinedAt)}
 									</span>
 									{!isOwner && !isMe && (
@@ -179,21 +208,21 @@ export function MembersTable({
 
 			{pendingInvites.length > 0 && (
 				<section>
-					<h2 className="text-lg font-medium mb-3">Pending Invites</h2>
-					<div className="border rounded divide-y">
+					<h2 className="text-lg font-medium mb-3 text-gray-12">Pending Invites</h2>
+					<div className="border border-gray-4 rounded divide-y divide-gray-4">
 						{pendingInvites.map((invite) => (
 							<div
 								key={invite.id}
 								className="flex items-center justify-between p-3"
 							>
 								<div>
-									<div className="font-medium">{invite.invitedEmail}</div>
-									<div className="text-xs text-gray-400">
+									<div className="font-medium text-gray-12">{invite.invitedEmail}</div>
+									<div className="text-xs text-gray-10">
 										Invited {formatPlatformDate(invite.createdAt)} ·{" "}
 										{invite.role}
 									</div>
 								</div>
-								<div className="flex items-center gap-2">
+								<div className="flex flex-wrap items-center gap-2">
 									<Button
 										type="button"
 										size="xs"

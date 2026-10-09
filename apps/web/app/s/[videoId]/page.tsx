@@ -15,6 +15,8 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, serverEnv } from "@cap/env";
+import { hasPaidGeminiKey } from "@/lib/gemini-paid-key";
+import { hasOpenRouterKey } from "@/lib/openrouter-key";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -38,6 +40,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
@@ -49,6 +52,7 @@ import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { canUseAI } from "@/lib/permissions/ai-access";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
@@ -57,6 +61,7 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
+import { isInMeetingsLibrary } from "@/lib/hermes-meeting";
 import {
 	isEditSourceKey,
 	reconcileStaleEditUpload,
@@ -66,6 +71,7 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
+import { HermesMeeting } from "./_components/HermesMeeting";
 import { Share } from "./Share";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
@@ -151,28 +157,21 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-function PolicyDeniedView({ reason }: { reason?: string }) {
-	let title = "This video is private";
-	let description: React.ReactNode = (
-		<>
-			If you own this video, please <Link href="/login">sign in</Link> to manage
-			sharing.
-		</>
+async function PolicyDeniedView({ reason }: { reason?: string }) {
+	const t = await getTranslations("share");
+	const signIn = (chunks: React.ReactNode) => (
+		<Link href="/login">{chunks}</Link>
 	);
 
+	let title = t("policyPrivateTitle");
+	let description: React.ReactNode = t.rich("policyPrivateDesc", { signIn });
+
 	if (reason === "email_restriction_login_required") {
-		title = "This video requires sign-in";
-		description = (
-			<>
-				The owner of this video has restricted access. Please{" "}
-				<Link href="/login">sign in</Link> with an authorized email address to
-				view.
-			</>
-		);
+		title = t("policyRequiresSignInTitle");
+		description = t.rich("policyRequiresSignInDesc", { signIn });
 	} else if (reason === "email_restriction_denied") {
-		title = "Access restricted";
-		description =
-			"Your email address does not meet the requirements set by the video owner.";
+		title = t("policyRestrictedTitle");
+		description = t("policyRestrictedDesc");
 	}
 
 	return (
@@ -220,14 +219,16 @@ export async function generateMetadata(
 	const canRenderSocialPreview =
 		isAllowedReferrer || isSocialCrawlerUserAgent(requestUserAgent);
 
+	const t = await getTranslations("share");
+
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () =>
 					awaitRecording
 						? {
-								title: "Cap: Preparing Video",
-								description: "This recording is being made available.",
+								title: t("metaPreparingTitle"),
+								description: t("metaPreparingDesc"),
 								robots: "noindex, nofollow",
 							}
 						: notFound(),
@@ -247,7 +248,7 @@ export async function generateMetadata(
 
 					return {
 						title: `${video.name} | data365`,
-						description: "Watch this video on Cap",
+						description: t("metaWatchDesc"),
 						openGraph: {
 							images: [
 								{
@@ -274,7 +275,7 @@ export async function generateMetadata(
 						twitter: {
 							card: "player",
 							title: `${video.name} | data365`,
-							description: "Watch this video on Cap",
+							description: t("metaWatchDesc"),
 							images: [
 								{
 									url: previewImageUrl,
@@ -308,8 +309,8 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "data365: This video is restricted",
-					description: "This video has restricted access.",
+					title: t("metaRestrictedTitle"),
+					description: t("metaRestrictedDesc"),
 					openGraph: {
 						images: [
 							{
@@ -337,8 +338,8 @@ export async function generateMetadata(
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "data365: Password Protected Video",
-					description: "This video is password protected.",
+					title: t("metaPasswordTitle"),
+					description: t("metaPasswordDesc"),
 					openGraph: {
 						images: [
 							{
@@ -353,8 +354,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "summary_large_image",
-						title: "data365: Password Protected Video",
-						description: "This video is password protected.",
+						title: t("metaPasswordTitle"),
+						description: t("metaPasswordDesc"),
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -391,6 +392,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					effectiveCreatedAt: videos.effectiveCreatedAt,
+					deletedAt: videos.deletedAt,
 					bucket: videos.bucket,
 					storageIntegrationId: videos.storageIntegrationId,
 					metadata: videos.metadata,
@@ -406,6 +408,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
+					libraryKind: videos.libraryKind,
 					videoSettings: videos.settings,
 					width: videos.width,
 					height: videos.height,
@@ -432,7 +435,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
-				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
+				.where(and(eq(videos.id, videoId), isNull(videos.deletedAt), isNull(organizations.tombstoneAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
 		return Option.fromNullable(video);
@@ -454,6 +457,48 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
+}
+
+/**
+ * THE role query shared by every admin-shaped gate on this page (canGenerate,
+ * the Hermes dialog) — one copy, not one per gate. True only for an
+ * owner/admin of the organization that owns the video.
+ */
+async function isOrgOwnerOrAdmin(
+	userId: string,
+	orgId: string,
+): Promise<boolean> {
+	const [orgAccess] = await db()
+		.select({
+			ownerId: organizations.ownerId,
+			memberRole: organizationMembers.role,
+		})
+		.from(organizations)
+		.leftJoin(
+			organizationMembers,
+			and(
+				eq(organizationMembers.organizationId, organizations.id),
+				eq(
+					organizationMembers.userId,
+					userId as typeof organizationMembers.$inferSelect.userId,
+				),
+			),
+		)
+		.where(
+			and(
+				eq(organizations.id, orgId as typeof organizations.$inferSelect.id),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(1);
+
+	if (!orgAccess) return false;
+	const role = getEffectiveOrganizationRole({
+		userId,
+		ownerId: orgAccess.ownerId,
+		memberRole: orgAccess.memberRole,
+	});
+	return role === "owner" || role === "admin";
 }
 
 async function AuthorizedContent({
@@ -549,9 +594,23 @@ async function AuthorizedContent({
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
 	const env = serverEnv();
+	// Either paid provider counts as "an AI provider is configured": OpenRouter
+	// serves the same paid leg, so hiding the UI when only it is set would
+	// silently disable a working instance.
+	const paidAiProviderConfigured = hasPaidGeminiKey() || hasOpenRouterKey();
 	const transcriptionGenerationAvailable =
-		Boolean(env.GEMINI_API_KEY) && !rules.settings.disableTranscript;
-	const aiProviderAvailable = Boolean(env.GEMINI_API_KEY);
+		paidAiProviderConfigured && !rules.settings.disableTranscript;
+	const aiProviderAvailable = paidAiProviderConfigured;
+	// CHAT IS A DIFFERENT CAPABILITY (round-18 #3). Transcription and summary
+	// run on either paid provider, but chat first builds a transcript EMBEDDING
+	// index, and embeddings are Google-only (lib/gemini-embed.ts) — the chat
+	// route hard-returns HTTP 500 "No Gemini API key configured" when only
+	// OpenRouter is set. Advertising the chat surface there gives the viewer a
+	// panel where every single message errors, so the flag must require what
+	// chat actually needs rather than inheriting the summary/transcription one.
+	// The video owner's OWN saved Gemini key serves chat too (the route prefers
+	// it over the env key), so it counts — filled in from the owner row below.
+	let aiChatAvailable = hasPaidGeminiKey();
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -559,6 +618,7 @@ async function AuthorizedContent({
 			email: users.email,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			geminiApiKey: users.geminiApiKey,
 		})
 		.from(users)
 		.where(eq(users.id, video.owner.id))
@@ -567,10 +627,10 @@ async function AuthorizedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+		if (!aiChatAvailable && videoOwner.geminiApiKey) {
+			aiChatAvailable = true;
+		}
 	}
-
-	// Manual mode: transcription/AI are only started when the owner clicks
-	// "Generate" (POST /api/videos/[id]/generate). No auto-start on page view.
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	const metadata = currentMetadata;
@@ -580,6 +640,7 @@ async function AuthorizedContent({
 		title: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,
+		aiSummary: metadata.aiSummary || null,
 		aiGenerationStatus,
 	};
 
@@ -694,7 +755,11 @@ async function AuthorizedContent({
 						createdAt: comments.createdAt,
 						updatedAt: comments.updatedAt,
 						parentCommentId: comments.parentCommentId,
-						authorName: users.name,
+						// Guests have no users row; fall back to the stored guest
+						// display name (comments.authorName).
+						authorName: sql<
+							string | null
+						>`COALESCE(${users.name}, ${comments.authorName})`,
 						authorImage: users.image,
 					})
 					.from(comments)
@@ -775,6 +840,33 @@ async function AuthorizedContent({
 		);
 	})();
 
+	// Viewer can trigger manual AI generation if they are the video owner or an org admin/owner,
+	// AND the paid AI actions are gated to admins / admin-granted pro users.
+	const canGenerate = await (async () => {
+		if (!canUseAI(user)) return false;
+		if (!userId) return false;
+		if (userId === video.owner.id) return true;
+		if (!video.orgId) return false;
+		return isOrgOwnerOrAdmin(userId, video.orgId);
+	})();
+
+	// Hermes CRM delivery (ADR 2026-10-08): the "Bu meetingmi? Hermesga
+	// joylaymi?" dialog is for ADMINS of the owning org viewing a
+	// MEETINGS-library video ONLY — no video-owner exception (the ADR says
+	// admins only; the server actions re-check the same rule). This gate only
+	// keeps the UI off everyone else's page.
+	const canManageHermes = await (async () => {
+		if (!userId || !video.orgId) return false;
+		return isOrgOwnerOrAdmin(userId, video.orgId);
+	})();
+
+	const hermesEligible =
+		canManageHermes &&
+		isInMeetingsLibrary({
+			libraryKind: video.libraryKind,
+			source: video.source,
+		});
+
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
 
@@ -842,6 +934,14 @@ async function AuthorizedContent({
 				canManageSharePageBranding={canManageSharePageBranding}
 			/>
 
+			{hermesEligible ? (
+				<HermesMeeting
+					videoId={videoId}
+					initialHermes={metadata.hermes ?? null}
+					transcriptionStatus={video.transcriptionStatus}
+				/>
+			) : null}
+
 			<Share
 				data={videoWithOrganizationInfo}
 				videoSettings={videoWithOrganizationInfo.settings}
@@ -856,7 +956,9 @@ async function AuthorizedContent({
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
+				aiChatAvailable={aiChatAvailable}
 				transcriptionGenerationAvailable={transcriptionGenerationAvailable}
+				canGenerate={canGenerate}
 			/>
 		</div>
 	);

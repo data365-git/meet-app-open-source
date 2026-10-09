@@ -1,0 +1,695 @@
+{
+  "anonText": "data365\nAI bilan klaviatura integratsiyasi va samaradorlik\nhttps://capweb-production-dd85.up.railway.app/s/2t4a58an7acz3bb\nUlashish\nYuklab olish\nA\n\nAdmin\n\n4 days ago\n\nMedia pleyer\nIjro, ovoz va ko'chirish uchun maxsus boshqaruvli video pleyer. Bo'sh tugma — ijro/pauza, ← / → — ko'chirish, ↑ / ↓ — ovoz balandligi.\nVideo optimallashtirilmoqda\n1.2×\n1m 4s\n53s\n0:00\n/\n1:03\nO'zbekcha\nXulosa\nVazifalar\nMatn\nTozalangan matn\nCopy\nTXT\nSRT\n00:00\nKompaniya qiymati va AI integratsiyasi\n00:07\nIshlash prinsipi va foydasi\n00:19\nFikrni ifodalash tezligi\n00:28\nPulli va tekin dasturlar\n00:38\nIngliz tilida demo\n00:54\nXulosa va dastur nomlari\ndata365 AI\nVideo konteksti yuklandi\nSalom! Men bu video haqida hamma narsani bilaman.\nIstalgan narsani so'rang — yoki quyidagilardan birini tanlang.\nXulosa\nVazifalar\nFollow-up xat\nAsosiy fikrlar\nAI javoblari tekshirilishi kerak bo'lishi mumkin\nFaoliyat (0)\nIzoh",
+  "chatPostStatus": 401,
+  "chatPostBody": "{\"error\":\"Unauthorized\"}",
+  "buttons": [
+    {
+      "i": 0,
+      "text": "https://capweb-production-dd85.up.railway.app/s/2t4a58an7acz3bb",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 777.75,
+        "y": 32,
+        "width": 336,
+        "height": 38,
+        "top": 32,
+        "right": 1113.75,
+        "bottom": 70,
+        "left": 777.75
+      }
+    },
+    {
+      "i": 1,
+      "text": "",
+      "aria": "Havolani nusxalash",
+      "title": null,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "i": 2,
+      "text": "Ulashish",
+      "aria": "Ulashish",
+      "title": "Ulashish",
+      "rect": {
+        "x": 1121.75,
+        "y": 34,
+        "width": 98.234375,
+        "height": 34,
+        "top": 34,
+        "right": 1219.984375,
+        "bottom": 68,
+        "left": 1121.75
+      }
+    },
+    {
+      "i": 3,
+      "text": "Ulashish",
+      "aria": "Ulashish",
+      "title": "Ulashish",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "i": 4,
+      "text": "Yuklab olish",
+      "aria": "Videoni yuklab olish",
+      "title": "Videoni yuklab olish",
+      "rect": {
+        "x": 1227.984375,
+        "y": 32,
+        "width": 116.015625,
+        "height": 38,
+        "top": 32,
+        "right": 1344,
+        "bottom": 70,
+        "left": 1227.984375
+      }
+    },
+    {
+      "i": 5,
+      "text": "Video optimallashtirilmoqda",
+      "aria": "data365 tekis ijro va kengroq moslik uchun optimallashtirish ustida ishlayotganda sahifa vaqtincha asl yuklangan faylni ijro etmoqda.",
+      "title": null,
+      "rect": {
+        "x": 109,
+        "y": 161,
+        "width": 166,
+        "height": 30,
+        "top": 161,
+        "right": 275,
+        "bottom": 191,
+        "left": 109
+      }
+    },
+    {
+      "i": 6,
+      "text": "1.2×",
+      "aria": "Ijro tezligini o'zgartirish",
+      "title": null,
+      "rect": {
+        "x": 518.375,
+        "y": 486.5,
+        "width": 67.234375,
+        "height": 24,
+        "top": 486.5,
+        "right": 585.609375,
+        "bottom": 510.5,
+        "left": 518.375
+      }
+    },
+    {
+      "i": 7,
+      "text": "",
+      "aria": "Ijro",
+      "title": null,
+      "rect": {
+        "x": 113,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 145,
+        "bottom": 648,
+        "left": 113
+      }
+    },
+    {
+      "i": 8,
+      "text": "",
+      "aria": "Back 5 seconds",
+      "title": null,
+      "rect": {
+        "x": 153,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 185,
+        "bottom": 648,
+        "left": 153
+      }
+    },
+    {
+      "i": 9,
+      "text": "",
+      "aria": "10 soniya oldinga",
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 225,
+        "bottom": 648,
+        "left": 193
+      }
+    },
+    {
+      "i": 10,
+      "text": "",
+      "aria": "Ovozsiz",
+      "title": null,
+      "rect": {
+        "x": 233,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 265,
+        "bottom": 648,
+        "left": 233
+      }
+    },
+    {
+      "i": 11,
+      "text": "",
+      "aria": "Taglavhalarni yoqish",
+      "title": null,
+      "rect": {
+        "x": 839,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 871,
+        "bottom": 648,
+        "left": 839
+      }
+    },
+    {
+      "i": 12,
+      "text": "",
+      "aria": "Sozlamalar",
+      "title": null,
+      "rect": {
+        "x": 879,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 911,
+        "bottom": 648,
+        "left": 879
+      }
+    },
+    {
+      "i": 13,
+      "text": "",
+      "aria": "Oynali rejimga o'tish",
+      "title": null,
+      "rect": {
+        "x": 919,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 951,
+        "bottom": 648,
+        "left": 919
+      }
+    },
+    {
+      "i": 14,
+      "text": "",
+      "aria": "To'liq ekranga o'tish",
+      "title": null,
+      "rect": {
+        "x": 959,
+        "y": 616,
+        "width": 32,
+        "height": 32,
+        "top": 616,
+        "right": 991,
+        "bottom": 648,
+        "left": 959
+      }
+    },
+    {
+      "i": 15,
+      "text": "O'zbekcha",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 897.6875,
+        "y": 677,
+        "width": 110.3125,
+        "height": 36,
+        "top": 677,
+        "right": 1008,
+        "bottom": 713,
+        "left": 897.6875
+      }
+    },
+    {
+      "i": 16,
+      "text": "Xulosa",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 96,
+        "y": 729,
+        "width": 74,
+        "height": 44,
+        "top": 729,
+        "right": 170,
+        "bottom": 773,
+        "left": 96
+      }
+    },
+    {
+      "i": 17,
+      "text": "Vazifalar",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 174,
+        "y": 729,
+        "width": 77.875,
+        "height": 44,
+        "top": 729,
+        "right": 251.875,
+        "bottom": 773,
+        "left": 174
+      }
+    },
+    {
+      "i": 18,
+      "text": "Matn",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 255.875,
+        "y": 729,
+        "width": 74,
+        "height": 44,
+        "top": 729,
+        "right": 329.875,
+        "bottom": 773,
+        "left": 255.875
+      }
+    },
+    {
+      "i": 19,
+      "text": "Tozalangan matn",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 333.875,
+        "y": 729,
+        "width": 128.625,
+        "height": 44,
+        "top": 729,
+        "right": 462.5,
+        "bottom": 773,
+        "left": 333.875
+      }
+    },
+    {
+      "i": 20,
+      "text": "Copy",
+      "aria": null,
+      "title": "Copy transcript",
+      "rect": {
+        "x": 775.09375,
+        "y": 865,
+        "width": 63.90625,
+        "height": 34,
+        "top": 865,
+        "right": 839,
+        "bottom": 899,
+        "left": 775.09375
+      }
+    },
+    {
+      "i": 21,
+      "text": "TXT",
+      "aria": null,
+      "title": "Download as TXT",
+      "rect": {
+        "x": 845,
+        "y": 865,
+        "width": 58.40625,
+        "height": 34,
+        "top": 865,
+        "right": 903.40625,
+        "bottom": 899,
+        "left": 845
+      }
+    },
+    {
+      "i": 22,
+      "text": "SRT",
+      "aria": null,
+      "title": "Download as SRT",
+      "rect": {
+        "x": 909.40625,
+        "y": 865,
+        "width": 58.59375,
+        "height": 34,
+        "top": 865,
+        "right": 968,
+        "bottom": 899,
+        "left": 909.40625
+      }
+    },
+    {
+      "i": 23,
+      "text": "00:00",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 934,
+        "width": 49,
+        "height": 20,
+        "top": 934,
+        "right": 185,
+        "bottom": 954,
+        "left": 136
+      }
+    },
+    {
+      "i": 24,
+      "text": "Kompaniya qiymati va AI integratsiyasi",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 932,
+        "width": 775,
+        "height": 24,
+        "top": 932,
+        "right": 968,
+        "bottom": 956,
+        "left": 193
+      }
+    },
+    {
+      "i": 25,
+      "text": "00:07",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 982,
+        "width": 49,
+        "height": 20,
+        "top": 982,
+        "right": 185,
+        "bottom": 1002,
+        "left": 136
+      }
+    },
+    {
+      "i": 26,
+      "text": "Ishlash prinsipi va foydasi",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 980,
+        "width": 775,
+        "height": 24,
+        "top": 980,
+        "right": 968,
+        "bottom": 1004,
+        "left": 193
+      }
+    },
+    {
+      "i": 27,
+      "text": "00:19",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 1030,
+        "width": 49,
+        "height": 20,
+        "top": 1030,
+        "right": 185,
+        "bottom": 1050,
+        "left": 136
+      }
+    },
+    {
+      "i": 28,
+      "text": "Fikrni ifodalash tezligi",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 1028,
+        "width": 775,
+        "height": 24,
+        "top": 1028,
+        "right": 968,
+        "bottom": 1052,
+        "left": 193
+      }
+    },
+    {
+      "i": 29,
+      "text": "00:28",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 1078,
+        "width": 49,
+        "height": 20,
+        "top": 1078,
+        "right": 185,
+        "bottom": 1098,
+        "left": 136
+      }
+    },
+    {
+      "i": 30,
+      "text": "Pulli va tekin dasturlar",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 1076,
+        "width": 775,
+        "height": 24,
+        "top": 1076,
+        "right": 968,
+        "bottom": 1100,
+        "left": 193
+      }
+    },
+    {
+      "i": 31,
+      "text": "00:38",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 1126,
+        "width": 49,
+        "height": 20,
+        "top": 1126,
+        "right": 185,
+        "bottom": 1146,
+        "left": 136
+      }
+    },
+    {
+      "i": 32,
+      "text": "Ingliz tilida demo",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 1124,
+        "width": 775,
+        "height": 24,
+        "top": 1124,
+        "right": 968,
+        "bottom": 1148,
+        "left": 193
+      }
+    },
+    {
+      "i": 33,
+      "text": "00:54",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 136,
+        "y": 1174,
+        "width": 49,
+        "height": 20,
+        "top": 1174,
+        "right": 185,
+        "bottom": 1194,
+        "left": 136
+      }
+    },
+    {
+      "i": 34,
+      "text": "Xulosa va dastur nomlari",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 193,
+        "y": 1172,
+        "width": 775,
+        "height": 24,
+        "top": 1172,
+        "right": 968,
+        "bottom": 1196,
+        "left": 193
+      }
+    },
+    {
+      "i": 35,
+      "text": "",
+      "aria": "Yopish",
+      "title": null,
+      "rect": {
+        "x": 1368,
+        "y": 317,
+        "width": 30,
+        "height": 30,
+        "top": 317,
+        "right": 1398,
+        "bottom": 347,
+        "left": 1368
+      }
+    },
+    {
+      "i": 36,
+      "text": "Xulosa",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 1038,
+        "y": 473.15625,
+        "width": 91.9375,
+        "height": 48,
+        "top": 473.15625,
+        "right": 1129.9375,
+        "bottom": 521.15625,
+        "left": 1038
+      }
+    },
+    {
+      "i": 37,
+      "text": "Vazifalar",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 1137.9375,
+        "y": 473.15625,
+        "width": 101.828125,
+        "height": 48,
+        "top": 473.15625,
+        "right": 1239.765625,
+        "bottom": 521.15625,
+        "left": 1137.9375
+      }
+    },
+    {
+      "i": 38,
+      "text": "Follow-up xat",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 1247.765625,
+        "y": 473.15625,
+        "width": 131.171875,
+        "height": 48,
+        "top": 473.15625,
+        "right": 1378.9375,
+        "bottom": 521.15625,
+        "left": 1247.765625
+      }
+    },
+    {
+      "i": 39,
+      "text": "Asosiy fikrlar",
+      "aria": null,
+      "title": null,
+      "rect": {
+        "x": 1038,
+        "y": 529.15625,
+        "width": 126.125,
+        "height": 48,
+        "top": 529.15625,
+        "right": 1164.125,
+        "bottom": 577.15625,
+        "left": 1038
+      }
+    },
+    {
+      "i": 40,
+      "text": "",
+      "aria": "Yuborish",
+      "title": null,
+      "rect": {
+        "x": 1358,
+        "y": 816.25,
+        "width": 36,
+        "height": 36,
+        "top": 816.25,
+        "right": 1394,
+        "bottom": 852.25,
+        "left": 1358
+      }
+    },
+    {
+      "i": 41,
+      "text": "",
+      "aria": "Close AI assistant",
+      "title": null,
+      "rect": {
+        "x": 1352,
+        "y": 912,
+        "width": 62,
+        "height": 62,
+        "top": 912,
+        "right": 1414,
+        "bottom": 974,
+        "left": 1352
+      }
+    },
+    {
+      "i": 42,
+      "text": "Faoliyat (0)\nIzoh",
+      "aria": "Faoliyatni kengaytirish",
+      "title": null,
+      "rect": {
+        "x": 1025,
+        "y": 149,
+        "width": 318,
+        "height": 44,
+        "top": 149,
+        "right": 1343,
+        "bottom": 193,
+        "left": 1025
+      }
+    }
+  ]
+}

@@ -204,7 +204,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getByIdForViewing,
 
 			/*
-			 * Delete a video. Will fail if the user does not have access.
+			 * Soft-delete a video (move to Trash). The row is marked deleted and
+			 * hidden from all reads, but media + uploads are kept for 7 days so it
+			 * can be restored. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
 				const maybeVideo = yield* repo.getById(videoId);
@@ -212,14 +214,47 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* storage.getAccessForVideo(video);
-
 				yield* repo
-					.delete(video.id)
+					.softDelete(video.id)
 					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
 
-				yield* Effect.log(`Deleted video ${video.id}`);
+				yield* Effect.log(`Soft-deleted video ${video.id}`);
+			}),
 
+			/*
+			 * Permanently delete a video and ALL its media (irreversible). Backs the
+			 * recorder's "permanently discard" and any future Trash "delete now".
+			 * Resolves the row even when already soft-deleted. Fails if the user
+			 * does not own it.
+			 */
+			permanentlyDelete: Effect.fn("Videos.permanentlyDelete")(function* (
+				videoId: Video.VideoId,
+			) {
+				const maybeVideo = yield* repo.getByIdIncludingDeleted(videoId);
+				// Idempotent: an already-erased video is the state the caller asked
+				// for, so report success rather than NotFound. A discard can be
+				// queued offline and retried, and a retry of one that already
+				// worked must not surface as a failure.
+				if (Option.isNone(maybeVideo)) {
+					yield* Effect.log(`Video ${videoId} is already permanently deleted`);
+					return;
+				}
+				const [video] = maybeVideo.value;
+
+				// Authorize against the already-fetched video so ownership is
+				// checked even when the row is soft-deleted (policy.isOwner uses
+				// repo.getById which filters out trashed rows and would always deny).
+				// This also ensures storage is not accessed before authz (Finding 3).
+				const currentUser = yield* CurrentUser;
+				if (video.ownerId !== currentUser.id)
+					return yield* Effect.fail(new Policy.PolicyDeniedError());
+
+				const [bucket] = yield* storage.getAccessForVideo(video);
+
+				// Storage FIRST, database LAST. If object deletion fails the row must
+				// survive, so the owner still has a record to retry from; dropping the
+				// row first would strand the media in the bucket with nothing pointing
+				// at it, and nothing left to retry from.
 				const prefix = `${video.ownerId}/${video.id}/`;
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
@@ -231,6 +266,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						})),
 					);
 				}
+
+				yield* repo.delete(video.id);
+
+				yield* Effect.log(`Permanently deleted video ${video.id}`);
 			}),
 
 			/*
@@ -406,7 +445,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
 						orgId: input.orgId,
-						name: `Cap Recording - ${formattedDate}`,
+						name: `data365 Recording - ${formattedDate}`,
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 						source: { type: "webMP4" },
 						bucketId,

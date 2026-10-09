@@ -1,10 +1,36 @@
+import {
+	abortMultipartUpload,
+	CancelledUploadError,
+	completeMultipartUpload,
+	initiateMultipartUpload,
+	MultipartCompletionUncertainError,
+	presignMultipartPart,
+	uploadPartBlob,
+	type MultipartProvider,
+	type UploadedPartPayload as SharedUploadedPartPayload,
+} from "@/utils/multipart-upload";
 import type { UploadStatus } from "../../UploadingContext";
 import type { ChunkUploadState, VideoId } from "./web-recorder-types";
 
-const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
+// Re-exported so existing imports of these from this module (useWebRecorder.ts,
+// tests) keep working — the implementation now lives in the shared multipart
+// module so import/buffered-raw uploads get the same HTTP contract + part-upload
+// primitive as this streaming uploader (WAVE 1.3).
+export { initiateMultipartUpload, MultipartCompletionUncertainError };
+
+// R2 requires every non-trailing multipart part to be the SAME size (and each
+// >= 5 MiB). Stream parts at a fixed size so completeMultipart never trips
+// R2's "All non-trailing parts must have the same length" (InvalidPart) error.
+const STREAM_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const MAX_PART_UPLOAD_ATTEMPTS = 3;
 const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
+// (R11) Hard ceiling on the WHOLE backlog (buffered + in-flight). Hitting
+// MAX_PENDING_UPLOAD_BYTES now applies backpressure instead of killing the
+// recording — a slow uplink or a brief network stall must not destroy a
+// recording that is otherwise fine. Only a backlog this large means the upload
+// genuinely cannot keep up, and failing loudly beats exhausting page memory.
+const MAX_TOTAL_BACKLOG_BYTES = 512 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
@@ -14,11 +40,7 @@ type SetUploadStatus = (status: UploadStatus | undefined) => void;
 
 type ProgressUpdater = (uploaded: number, total: number) => Promise<void>;
 
-interface UploadedPartPayload {
-	partNumber: number;
-	etag: string;
-	size: number;
-}
+type UploadedPartPayload = SharedUploadedPartPayload;
 
 interface MultipartCompletePayload {
 	durationSeconds: number;
@@ -28,163 +50,12 @@ interface MultipartCompletePayload {
 	subpath: string;
 }
 
-class HttpRequestError extends Error {
-	readonly status: number;
-	readonly url: string;
-
-	constructor(url: string, status: number, message: string) {
-		super(`Request to ${url} failed: ${status} ${message}`);
-		this.name = "HttpRequestError";
-		this.status = status;
-		this.url = url;
-	}
-}
-
 export class ProcessingStartError extends Error {
 	constructor() {
 		super("Video uploaded, but processing could not start");
 		this.name = "ProcessingStartError";
 	}
 }
-
-export class MultipartCompletionUncertainError extends Error {
-	constructor(cause?: unknown) {
-		super("Multipart upload completed but confirmation was interrupted", {
-			cause,
-		});
-		this.name = "MultipartCompletionUncertainError";
-	}
-}
-
-class CancelledUploadError extends Error {
-	constructor() {
-		super("Multipart upload was cancelled");
-		this.name = "CancelledUploadError";
-	}
-}
-
-const postJson = async <TResponse>(
-	url: string,
-	body: Record<string, unknown>,
-): Promise<TResponse> => {
-	const response = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		credentials: "same-origin",
-		body: JSON.stringify(body),
-	});
-
-	if (!response.ok) {
-		const message = await response.text();
-		throw new HttpRequestError(url, response.status, message);
-	}
-
-	return (await response.json()) as TResponse;
-};
-
-const normalizeMultipartContentType = (mimeType: string) => {
-	const normalized = mimeType.split(";")[0]?.trim();
-	return normalized || "application/octet-stream";
-};
-
-export const initiateMultipartUpload = async ({
-	videoId,
-	contentType,
-	subpath,
-}: {
-	videoId: VideoId;
-	contentType: string;
-	subpath: string;
-}) => {
-	const result = await postJson<{
-		uploadId: string;
-		provider?: "s3" | "googleDrive";
-	}>("/api/upload/multipart/initiate", {
-		videoId,
-		contentType: normalizeMultipartContentType(contentType),
-		subpath,
-	});
-
-	if (!result.uploadId) {
-		throw new Error("Multipart initiate response missing uploadId");
-	}
-
-	return {
-		uploadId: result.uploadId,
-		provider: result.provider ?? "s3",
-	};
-};
-
-const presignMultipartPart = async (
-	videoId: VideoId,
-	uploadId: string,
-	partNumber: number,
-	subpath: string,
-): Promise<{ url: string; provider: "s3" | "googleDrive" }> => {
-	const result = await postJson<{
-		presignedUrl: string;
-		provider?: "s3" | "googleDrive";
-	}>("/api/upload/multipart/presign-part", {
-		videoId,
-		uploadId,
-		partNumber,
-		subpath,
-	});
-
-	if (!result.presignedUrl) {
-		throw new Error(`Missing presigned URL for part ${partNumber}`);
-	}
-
-	return {
-		url: result.presignedUrl,
-		provider: result.provider ?? "s3",
-	};
-};
-
-const completeMultipartUpload = async (
-	videoId: VideoId,
-	uploadId: string,
-	parts: UploadedPartPayload[],
-	meta: MultipartCompletePayload,
-): Promise<{ processingStarted: boolean }> => {
-	try {
-		const response = await postJson<{
-			success: boolean;
-			processingStarted?: boolean;
-		}>("/api/upload/multipart/complete", {
-			videoId,
-			uploadId,
-			parts,
-			subpath: meta.subpath,
-			durationInSecs: meta.durationSeconds,
-			width: meta.width,
-			height: meta.height,
-			fps: meta.fps,
-		});
-
-		return {
-			processingStarted: response.processingStarted !== false,
-		};
-	} catch (error) {
-		if (error instanceof HttpRequestError && error.status < 500) {
-			throw error;
-		}
-
-		throw new MultipartCompletionUncertainError(error);
-	}
-};
-
-const abortMultipartUpload = async (
-	videoId: VideoId,
-	uploadId: string,
-	subpath: string,
-) => {
-	await postJson<{ success: boolean }>("/api/upload/multipart/abort", {
-		videoId,
-		uploadId,
-		subpath,
-	});
-};
 
 interface FinalizeOptions extends MultipartCompletePayload {
 	finalBlob?: Blob | null;
@@ -222,7 +93,6 @@ export class InstantRecordingUploader {
 	private readonly retryWaiters = new Set<
 		(error: CancelledUploadError) => void
 	>();
-	private readonly stallTimeouts = new Set<number>();
 	private processingStarted = true;
 	private queuedBytes = 0;
 	private readonly partOffsets = new Map<number, number>();
@@ -353,7 +223,7 @@ export class InstantRecordingUploader {
 		this.bufferedChunks.push(blob);
 		this.bufferedBytes += blob.size;
 
-		if (this.bufferedBytes >= MIN_PART_SIZE_BYTES) {
+		if (this.bufferedBytes >= STREAM_PART_SIZE_BYTES) {
 			this.flushBuffer();
 		}
 	}
@@ -364,14 +234,46 @@ export class InstantRecordingUploader {
 			return;
 		}
 
-		if (this.bufferedBytes === 0) return;
-		if (!force && this.bufferedBytes < MIN_PART_SIZE_BYTES) return;
+		// Slice the buffer into fixed STREAM_PART_SIZE_BYTES parts so every
+		// non-trailing part is byte-for-byte the same size (R2 requirement).
+		// The remainder is carried forward; the trailing (smaller) part is only
+		// flushed on force (finalize). Mirrors flushDriveBuffer.
+		while (this.bufferedBytes > 0) {
+			if (!force && this.bufferedBytes < STREAM_PART_SIZE_BYTES) return;
 
-		const chunk = new Blob(this.bufferedChunks, { type: this.mimeType });
-		this.bufferedChunks = [];
-		this.bufferedBytes = 0;
+			const partSize =
+				force && this.bufferedBytes <= STREAM_PART_SIZE_BYTES
+					? this.bufferedBytes
+					: STREAM_PART_SIZE_BYTES;
 
-		this.enqueueUpload(chunk);
+			// (R11) Backpressure, not data loss: when the in-flight queue is full,
+			// leave these bytes buffered and flush them once uploads drain — the
+			// next chunk retries, and finalize loops until the buffer is empty.
+			// Previously this path threw a fatal "Upload could not keep up",
+			// destroying an otherwise-healthy recording on a slow uplink.
+			if (this.pendingUploadBytes + partSize > MAX_PENDING_UPLOAD_BYTES) {
+				if (
+					this.bufferedBytes + this.pendingUploadBytes >
+					MAX_TOTAL_BACKLOG_BYTES
+				) {
+					const error = this.markFatalError(
+						new Error("Upload could not keep up with recording"),
+					);
+					this.onOverflow?.(error);
+					throw error;
+				}
+				return;
+			}
+
+			const { part, remainingChunks, remainingBytes } =
+				this.takeBufferedPart(partSize);
+
+			this.bufferedChunks = remainingChunks;
+			this.bufferedBytes = remainingBytes;
+			this.enqueueUpload(part);
+
+			if (partSize < STREAM_PART_SIZE_BYTES) return;
+		}
 	}
 
 	private flushDriveBuffer(force = false) {
@@ -611,13 +513,6 @@ export class InstantRecordingUploader {
 		}
 	}
 
-	private clearStallTimeouts() {
-		this.stallTimeouts.forEach((timeoutId) => {
-			window.clearTimeout(timeoutId);
-		});
-		this.stallTimeouts.clear();
-	}
-
 	private abortActiveRequests() {
 		const activeRequests = Array.from(this.activeRequests.values());
 		this.activeRequests.clear();
@@ -647,147 +542,109 @@ export class InstantRecordingUploader {
 		this.emitProgress();
 	}
 
-	private uploadBlobWithProgress({
+	// Delegates the raw XHR mechanics (progress + stall-timeout + hard-timeout
+	// + abort) to the shared `uploadPartBlob` primitive (utils/multipart-upload.ts)
+	// — the same one the import/buffered-raw whole-blob uploader uses — so this
+	// class keeps only its own concerns: chunk-state reporting, provider-specific
+	// header/status handling, and ETag interpretation.
+	private async uploadBlobWithProgress({
 		url,
 		provider,
 		partNumber,
 		part,
 	}: {
 		url: string;
-		provider: "s3" | "googleDrive";
+		provider: MultipartProvider;
 		partNumber: number;
 		part: Blob;
 	}): Promise<string> {
-		return new Promise((resolve, reject) => {
-			if (this.cancelled) {
-				reject(new CancelledUploadError());
-				return;
-			}
+		if (this.cancelled) {
+			throw new CancelledUploadError();
+		}
 
-			const xhr = new XMLHttpRequest();
-			xhr.open("PUT", url);
-			xhr.responseType = "text";
-			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
-			let isFinalDrivePart = false;
-			if (provider === "googleDrive") {
-				const start = this.partOffsets.get(partNumber) ?? 0;
-				const end = start + part.size - 1;
-				isFinalDrivePart =
-					this.finalTotalBytes !== null && end + 1 >= this.finalTotalBytes;
-				const total =
-					isFinalDrivePart && this.finalTotalBytes !== null
-						? this.finalTotalBytes.toString()
-						: "*";
-				xhr.setRequestHeader("Content-Range", `bytes ${start}-${end}/${total}`);
-				xhr.setRequestHeader("Content-Type", this.mimeType);
-			}
-			this.activeRequests.set(partNumber, xhr);
-
-			this.updateChunkState(partNumber, {
-				status: "uploading",
-				uploadedBytes: 0,
-				progress: 0,
-			});
-
-			const clearRequest = () => {
-				this.activeRequests.delete(partNumber);
+		let isFinalDrivePart = false;
+		let headers: Record<string, string> | undefined;
+		if (provider === "googleDrive") {
+			const start = this.partOffsets.get(partNumber) ?? 0;
+			const end = start + part.size - 1;
+			isFinalDrivePart =
+				this.finalTotalBytes !== null && end + 1 >= this.finalTotalBytes;
+			const total =
+				isFinalDrivePart && this.finalTotalBytes !== null
+					? this.finalTotalBytes.toString()
+					: "*";
+			headers = {
+				"Content-Range": `bytes ${start}-${end}/${total}`,
+				"Content-Type": this.mimeType,
 			};
-			let stallTimeoutId: number | null = null;
-			const clearStallTimeout = () => {
-				if (stallTimeoutId === null) {
-					return;
-				}
-				window.clearTimeout(stallTimeoutId);
-				this.stallTimeouts.delete(stallTimeoutId);
-				stallTimeoutId = null;
-			};
-			const refreshStallTimeout = () => {
-				clearStallTimeout();
-				const timeoutId = window.setTimeout(() => {
-					this.stallTimeouts.delete(timeoutId);
-					stallTimeoutId = null;
-					xhr.abort();
-				}, PART_UPLOAD_STALL_TIMEOUT_MS);
-				stallTimeoutId = timeoutId;
-				this.stallTimeouts.add(timeoutId);
-			};
-			refreshStallTimeout();
+		}
 
-			xhr.upload.onprogress = (event) => {
-				refreshStallTimeout();
-				const uploaded = event.lengthComputable
-					? event.loaded
-					: Math.min(part.size, event.loaded);
-				const total = event.lengthComputable ? event.total : part.size;
-				const ratio = total > 0 ? Math.min(1, uploaded / total) : 0;
-				this.updateChunkState(partNumber, {
-					status: "uploading",
-					uploadedBytes: uploaded,
-					progress: ratio,
-				});
-			};
-
-			xhr.onload = () => {
-				clearStallTimeout();
-				clearRequest();
-				if (
-					(xhr.status >= 200 && xhr.status < 300) ||
-					(provider === "googleDrive" &&
-						xhr.status === 308 &&
-						!isFinalDrivePart)
-				) {
-					const etagHeader = xhr.getResponseHeader("ETag");
-					const etag =
-						etagHeader?.replace(/"/g, "") ||
-						(provider === "googleDrive" ? `drive-${partNumber}` : "");
-					if (!etag) {
-						this.updateChunkState(partNumber, { status: "error" });
-						reject(new Error(`Missing ETag for part ${partNumber}`));
-						return;
-					}
-					this.updateChunkState(partNumber, {
-						status: "complete",
-						uploadedBytes: part.size,
-						progress: 1,
-					});
-					resolve(etag);
-					return;
-				}
-
-				this.updateChunkState(partNumber, { status: "error" });
-				reject(
-					new Error(
-						`Failed to upload part ${partNumber}: ${xhr.status} ${xhr.statusText}`,
-					),
-				);
-			};
-
-			xhr.onerror = () => {
-				clearStallTimeout();
-				clearRequest();
-				this.updateChunkState(partNumber, { status: "error" });
-				reject(new Error(`Failed to upload part ${partNumber}: network error`));
-			};
-
-			xhr.ontimeout = () => {
-				clearStallTimeout();
-				clearRequest();
-				this.updateChunkState(partNumber, { status: "error" });
-				reject(new Error(`Failed to upload part ${partNumber}: timed out`));
-			};
-
-			xhr.onabort = () => {
-				clearStallTimeout();
-				clearRequest();
-				reject(
-					this.cancelled
-						? new CancelledUploadError()
-						: new Error(`Failed to upload part ${partNumber}: stalled`),
-				);
-			};
-
-			xhr.send(part);
+		this.updateChunkState(partNumber, {
+			status: "uploading",
+			uploadedBytes: 0,
+			progress: 0,
 		});
+
+		try {
+			const { status, statusText, etagHeader } = await uploadPartBlob({
+				url,
+				part,
+				headers,
+				timeoutMs: PART_UPLOAD_REQUEST_TIMEOUT_MS,
+				stallTimeoutMs: PART_UPLOAD_STALL_TIMEOUT_MS,
+				onProgress: (uploaded, total) => {
+					const ratio = total > 0 ? Math.min(1, uploaded / total) : 0;
+					this.updateChunkState(partNumber, {
+						status: "uploading",
+						uploadedBytes: uploaded,
+						progress: ratio,
+					});
+				},
+				isCancelled: () => this.cancelled,
+				onRequestCreated: (xhr) => {
+					this.activeRequests.set(partNumber, xhr);
+				},
+			});
+			this.activeRequests.delete(partNumber);
+
+			if (
+				(status >= 200 && status < 300) ||
+				(provider === "googleDrive" && status === 308 && !isFinalDrivePart)
+			) {
+				const etag =
+					etagHeader?.replace(/"/g, "") ||
+					(provider === "googleDrive" ? `drive-${partNumber}` : "");
+				if (!etag) {
+					this.updateChunkState(partNumber, { status: "error" });
+					throw new Error(`Missing ETag for part ${partNumber}`);
+				}
+				this.updateChunkState(partNumber, {
+					status: "complete",
+					uploadedBytes: part.size,
+					progress: 1,
+				});
+				return etag;
+			}
+
+			this.updateChunkState(partNumber, { status: "error" });
+			throw new Error(`Failed to upload part ${partNumber}: ${status}`);
+		} catch (error) {
+			this.activeRequests.delete(partNumber);
+			if (error instanceof CancelledUploadError) {
+				throw error;
+			}
+			this.updateChunkState(partNumber, { status: "error" });
+			if (error instanceof Error && error.message === "network error") {
+				throw new Error(`Failed to upload part ${partNumber}: network error`);
+			}
+			if (error instanceof Error && error.message === "timed out") {
+				throw new Error(`Failed to upload part ${partNumber}: timed out`);
+			}
+			if (error instanceof Error && error.message === "stalled") {
+				throw new Error(`Failed to upload part ${partNumber}: stalled`);
+			}
+			throw error;
+		}
 	}
 
 	async finalize(options: FinalizeOptions) {
@@ -811,8 +668,14 @@ export class InstantRecordingUploader {
 			this.totalRecordedBytes = options.finalBlob.size;
 		}
 
-		this.flushBuffer(true);
-		await this.waitForPendingUploads();
+		// (R11) flushBuffer can now stop early on backpressure, so keep flushing
+		// and draining until the buffer is fully handed to uploads. Each pass
+		// awaits the in-flight queue, which frees capacity for the next slice;
+		// a genuinely failing part rejects out of waitForPendingUploads.
+		do {
+			this.flushBuffer(true);
+			await this.waitForPendingUploads();
+		} while (this.bufferedBytes > 0);
 
 		if (options.finalBlob && this.parts.length === 0) {
 			await this.uploadFinalBlob(options.finalBlob);
@@ -859,7 +722,6 @@ export class InstantRecordingUploader {
 		this.bufferedBytes = 0;
 		this.clearRetryTimeouts();
 		this.cancelPendingRetryWaiters();
-		this.clearStallTimeouts();
 		this.abortActiveRequests();
 		this.clearChunkStates();
 		const pendingUpload = this.waitForPendingUploads().catch(() => {});

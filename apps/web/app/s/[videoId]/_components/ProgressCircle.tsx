@@ -3,6 +3,8 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
+import { useTranslations } from "next-intl";
+import { processingFailureMessageKey } from "./processing-failure-message";
 import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";
 
 type UploadProgress =
@@ -65,29 +67,41 @@ export function canRetryFailedProcessing(
 export function getUploadFailureMessage(
 	uploadProgress: UploadProgress | null,
 	canRetryProcessing: boolean,
+	t: (key: string) => string,
 ): string {
 	if (uploadProgress?.status === "error") {
-		if (canRetryFailedProcessing(uploadProgress, canRetryProcessing)) {
-			return uploadProgress.errorMessage || "Processing failed.";
-		}
-
-		return (
-			uploadProgress.errorMessage ||
-			"Processing failed. Ask the owner to retry processing or re-upload the recording."
+		// The stored value is an ops TOKEN, never viewer copy (round-20 #1):
+		// known tokens map to their own localized sentence, everything else
+		// falls back to the localized default — nothing renders raw.
+		return t(
+			processingFailureMessageKey(
+				uploadProgress.errorMessage,
+				canRetryFailedProcessing(uploadProgress, canRetryProcessing),
+			),
 		);
 	}
 
-	return "Upload stalled before processing finished. Re-upload the recording to continue.";
+	return t("progressUploadStalled");
 }
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
-const STALE_PROCESSING_START_MS = 90 * SECOND;
+// A freshly-uploaded video sits at progress 0 while it waits for a worker to
+// pick it up; on a busy queue or a large file that wait routinely exceeds a
+// minute. 90s was too eager and flashed a red "processing failed" on videos
+// that were merely queued (real failures still surface immediately via
+// phase === "error"). Give the worker up to 5 minutes to report first progress.
+const STALE_PROCESSING_START_MS = 5 * MINUTE;
 const STALE_PROCESSING_PROGRESS_MS = 10 * MINUTE;
 const STALE_THUMBNAIL_MS = 5 * MINUTE;
 
+// Returns a share-namespace KEY, not a translated sentence (round-21): the
+// value lands in `errorMessage`, which since round-20 carries ONLY
+// tokens/keys for processingFailureMessageKey to translate — one field, one
+// kind of value. Translating here re-created the bare-label defect: the
+// mapper did not recognise the already-localized sentence and discarded it.
 export function getStalledProcessingMessage(input: {
 	phase:
 		| "uploading"
@@ -102,20 +116,20 @@ export function getStalledProcessingMessage(input: {
 
 	if (input.phase === "processing") {
 		if (input.processingProgress === 0 && ageMs > STALE_PROCESSING_START_MS) {
-			return "Video processing did not start. Retry processing.";
+			return "progressDidNotStart";
 		}
 
 		if (ageMs > STALE_PROCESSING_PROGRESS_MS) {
-			return "Video processing stalled. Retry processing.";
+			return "progressStalled";
 		}
 	}
 
 	if (input.phase === "generating_thumbnail" && ageMs > STALE_THUMBNAIL_MS) {
-		return "Video finishing stalled. Retry processing.";
+		return "progressFinishingStalled";
 	}
 
 	if (input.phase === "complete" && ageMs > STALE_THUMBNAIL_MS) {
-		return "Video finishing stalled. Retry processing.";
+		return "progressFinishingStalled";
 	}
 
 	return null;
@@ -126,6 +140,7 @@ export function useUploadProgress(
 	enabled: boolean,
 ): UploadProgress | null {
 	const rpc = useRpcClient();
+	const t = useTranslations("share");
 
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
@@ -234,16 +249,17 @@ const ProgressCircle = ({
 	progressTextClassName?: string;
 	subTextClassName?: string;
 }) => {
+	const t = useTranslations("share");
 	const strokeColor = status === "uploading" ? "#3b82f6" : "#22c55e";
 
 	const getStatusText = () => {
 		switch (status) {
 			case "processing":
-				return "Processing";
+				return t("videoStatusProcessing");
 			case "generating_thumbnail":
-				return "Finishing up";
+				return t("videoStatusFinishing");
 			default:
-				return "Uploading";
+				return t("videoStatusUploading");
 		}
 	};
 

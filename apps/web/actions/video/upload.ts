@@ -3,7 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoUploads } from "@cap/database/schema";
+import {
+	sharedVideos,
+	spaceVideos,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
@@ -19,6 +24,8 @@ import { revalidatePath } from "next/cache";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 import { checkUploadQuota } from "@/lib/storage-quota";
+import { titleOriginMetadata } from "@/lib/title-origin";
+import { resolveVideoFolderAssignment } from "@/lib/video-folder-assignment";
 
 const MAX_S3_DELETE_ATTEMPTS = 3;
 const S3_DELETE_RETRY_BACKOFF_MS = 250;
@@ -211,7 +218,7 @@ export async function createVideoAndGetUploadUrl({
 
 		const videoData = {
 			id: idToUse,
-			name: `Cap ${
+			name: `data365 ${
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
@@ -221,18 +228,48 @@ export async function createVideoAndGetUploadUrl({
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-			...(folderId ? { folderId } : {}),
+			// This path always names by the dated template (no human title
+			// exists here) — machine-derived, so the AI auto-title may replace.
+			metadata: { ...titleOriginMetadata(null) },
 		};
 
-		await db().insert(videos).values(videoData);
+		const folderAssignment = await resolveVideoFolderAssignment({
+			folderId,
+			orgId,
+		});
 
-		if (supportsUploadProgress || fileSize !== undefined)
-			await db()
-				.insert(videoUploads)
-				.values({
+		await db().transaction(async (tx) => {
+			await tx.insert(videos).values({
+				...videoData,
+				...(folderAssignment.type === "video"
+					? { folderId: folderAssignment.folderId }
+					: {}),
+			});
+
+			if (folderAssignment.type === "organization") {
+				await tx.insert(sharedVideos).values({
+					id: nanoId(),
+					videoId: idToUse,
+					folderId: folderAssignment.folderId,
+					organizationId: folderAssignment.organizationId,
+					sharedByUserId: user.id,
+				});
+			} else if (folderAssignment.type === "space") {
+				await tx.insert(spaceVideos).values({
+					id: nanoId(),
+					videoId: idToUse,
+					folderId: folderAssignment.folderId,
+					spaceId: folderAssignment.spaceId,
+					addedById: user.id,
+				});
+			}
+
+			if (supportsUploadProgress || fileSize !== undefined)
+				await tx.insert(videoUploads).values({
 					videoId: idToUse,
 					total: fileSize ?? 0,
 				});
+		});
 
 		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
 			await dub()

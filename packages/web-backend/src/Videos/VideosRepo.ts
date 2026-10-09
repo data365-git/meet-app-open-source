@@ -1,6 +1,6 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Video } from "@cap/web-domain";
+import { Folder, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import type { AnyMySqlInsert } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
@@ -21,28 +21,50 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 *
 		 * The password is returned separately as the `Video` class is client-safe
 		 */
+		const decodeVideoRow = (video: typeof Db.videos.$inferSelect | undefined) =>
+			Option.fromNullable(video).pipe(
+				Option.map(
+					(v) =>
+						[
+							Video.Video.decodeSync({
+								...v,
+								bucketId: v.bucket,
+								storageIntegrationId: v.storageIntegrationId,
+								createdAt: v.createdAt.toISOString(),
+								updatedAt: v.updatedAt.toISOString(),
+								metadata: v.metadata as any,
+							}),
+							Option.fromNullable(v.password),
+						] as const,
+				),
+			);
+
 		const getById = (id: Video.VideoId) =>
+			Effect.gen(function* () {
+				const [video] = yield* db.use((db) =>
+					db
+						.select()
+						.from(Db.videos)
+						.where(
+							Dz.and(Dz.eq(Db.videos.id, id), Dz.isNull(Db.videos.deletedAt)),
+						),
+				);
+
+				return decodeVideoRow(video);
+			});
+
+		/**
+		 * Like `getById` but INCLUDES soft-deleted (trashed) rows. Only for
+		 * trash/purge flows (restore, permanent delete) that must operate on a
+		 * row `getById` intentionally hides.
+		 */
+		const getByIdIncludingDeleted = (id: Video.VideoId) =>
 			Effect.gen(function* () {
 				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
-				return Option.fromNullable(video).pipe(
-					Option.map(
-						(v) =>
-							[
-								Video.Video.decodeSync({
-									...v,
-									bucketId: v.bucket,
-									storageIntegrationId: v.storageIntegrationId,
-									createdAt: v.createdAt.toISOString(),
-									updatedAt: v.updatedAt.toISOString(),
-									metadata: v.metadata as any,
-								}),
-								Option.fromNullable(video?.password),
-							] as const,
-					),
-				);
+				return decodeVideoRow(video);
 			});
 
 		const delete_ = (id: Video.VideoId) =>
@@ -56,6 +78,15 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							.where(Dz.eq(Db.videoUploads.videoId, id)),
 					]);
 				});
+			});
+
+		/** Soft delete: mark the row trashed; media + uploads are kept until purge. */
+		const softDelete = (id: Video.VideoId) =>
+			db.use(async (db) => {
+				await db
+					.update(Db.videos)
+					.set({ deletedAt: new Date() })
+					.where(Dz.eq(Db.videos.id, id));
 			});
 
 		const create = (data: CreateVideoInput) =>
@@ -80,13 +111,35 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							duration,
 							password,
 						} = data;
+						const requestedFolderId = Option.getOrNull(
+							folderId ?? Option.none(),
+						);
+						const [folder] = requestedFolderId
+							? await db
+									.select({
+										spaceId: Db.folders.spaceId,
+									})
+									.from(Db.folders)
+									.where(
+										Dz.and(
+											Dz.eq(Db.folders.id, requestedFolderId),
+											Dz.eq(Db.folders.organizationId, orgId),
+										),
+									)
+									.limit(1)
+							: [];
+						const folderAssignment = Folder.resolveVideoFolderAssignment({
+							folderId: requestedFolderId,
+							folderSpaceId: folder?.spaceId ?? null,
+							organizationId: orgId,
+						});
 
 						// The DB `source` column models the `extensionWeb` variant with
 						// extra fields (`context`, `meetingId`, `sourceUrl`) that the
 						// client-safe domain `Video.source` schema does not carry. Map the
 						// domain value onto the DB shape explicitly so the variant that
 						// needs `context` is constructed with a valid value.
-						const dbSource: typeof Db.videos.$inferInsert["source"] =
+						const dbSource: (typeof Db.videos.$inferInsert)["source"] =
 							source.type === "extensionWeb"
 								? { type: "extensionWeb", context: "instruction" }
 								: { type: source.type };
@@ -108,7 +161,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 									transcriptionStatus: Option.getOrNull(
 										transcriptionStatus ?? Option.none(),
 									),
-									folderId: Option.getOrNull(folderId ?? Option.none()),
+									folderId:
+										folderAssignment.type === "video"
+											? folderAssignment.folderId
+											: null,
 									width: Option.getOrNull(width ?? Option.none()),
 									height: Option.getOrNull(height ?? Option.none()),
 									duration: Option.getOrNull(duration ?? Option.none()),
@@ -116,6 +172,32 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 								},
 							]),
 						];
+
+						if (folderAssignment.type === "organization") {
+							promises.push(
+								db.insert(Db.sharedVideos).values([
+									{
+										id: nanoId(),
+										videoId: id,
+										folderId: folderAssignment.folderId,
+										organizationId: folderAssignment.organizationId,
+										sharedByUserId: ownerId,
+									},
+								]),
+							);
+						} else if (folderAssignment.type === "space") {
+							promises.push(
+								db.insert(Db.spaceVideos).values([
+									{
+										id: nanoId(),
+										videoId: id,
+										folderId: folderAssignment.folderId,
+										spaceId: folderAssignment.spaceId,
+										addedById: ownerId,
+									},
+								]),
+							);
+						}
 
 						if (data.importSource)
 							promises.push(
@@ -136,7 +218,13 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, delete: delete_, create };
+		return {
+			getById,
+			getByIdIncludingDeleted,
+			softDelete,
+			delete: delete_,
+			create,
+		};
 	}),
 	dependencies: [Database.Default],
 }) {}

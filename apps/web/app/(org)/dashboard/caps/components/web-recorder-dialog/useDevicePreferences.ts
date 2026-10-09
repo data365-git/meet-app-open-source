@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
 const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
@@ -21,7 +21,12 @@ export const useDevicePreferences = ({
 	const [rememberDevices, setRememberDevices] = useState(false);
 	const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
 	const [selectedMicId, setSelectedMicId] = useState<string | null>(null);
-	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
+	// Default system audio ON so screen recordings capture audio and stay
+	// transcribable — a silent recording later fails with NO_AUDIO. Users can
+	// still toggle it off. The MIC also auto-selects the first device on open
+	// (see the effect below) so a teacher narrating a lesson never records a
+	// silent video by forgetting to pick a mic.
+	const [systemAudioEnabled, setSystemAudioEnabled] = useState(true);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -34,8 +39,13 @@ export const useDevicePreferences = ({
 			const storedSystemAudio = window.localStorage.getItem(
 				SYSTEM_AUDIO_ENABLED_KEY,
 			);
+			// Restore BOTH saved values explicitly — the default is now `true`, so
+			// a saved "false" (user turned it off) must be honoured, otherwise the
+			// default silently turns System Audio back on next session.
 			if (storedSystemAudio === "true") {
 				setSystemAudioEnabled(true);
+			} else if (storedSystemAudio === "false") {
+				setSystemAudioEnabled(false);
 			}
 		} catch (error) {
 			console.error("Failed to load recorder preferences", error);
@@ -78,6 +88,23 @@ export const useDevicePreferences = ({
 		selectedCameraId,
 		selectedMicId,
 	]);
+
+	// Default the microphone ON (Loom-style narration): auto-select the first
+	// available mic once when the dialog opens, if nothing is selected yet (and
+	// no remembered device restored one). The user can still pick "No
+	// microphone" afterward — we only auto-select once per open.
+	const didAutoSelectMic = useRef(false);
+	useEffect(() => {
+		if (!open) {
+			didAutoSelectMic.current = false;
+			return;
+		}
+		const firstMic = availableMics[0];
+		if (!didAutoSelectMic.current && selectedMicId === null && firstMic) {
+			didAutoSelectMic.current = true;
+			setSelectedMicId(firstMic.deviceId);
+		}
+	}, [open, availableMics, selectedMicId]);
 
 	const handleCameraChange = (cameraId: string | null) => {
 		setSelectedCameraId(cameraId);

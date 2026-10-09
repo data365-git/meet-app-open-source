@@ -3,6 +3,8 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { LoginForm } from "./form";
 
 export const dynamic = "force-dynamic";
@@ -20,16 +22,21 @@ export default async function LoginPage(props: {
 		const next = typeof sp.next === "string" ? sp.next : null;
 		redirect(next && isSafeRelativePath(next) ? next : "/dashboard");
 	}
+	const t = await getTranslations("common");
 	return (
-		<div className="flex relative justify-center items-center w-full h-screen bg-gray-2">
-			<div className="flex absolute top-10 left-10 gap-2 justify-center items-center transition-opacity hover:opacity-75">
+		<div className="flex min-h-svh w-full flex-col bg-gray-2 px-4 py-4 sm:relative sm:items-center sm:justify-center sm:px-6 sm:py-10">
+			<Link
+				className="mb-6 inline-flex min-h-[44px] w-fit items-center gap-2 rounded-lg text-gray-12 transition-opacity hover:opacity-75 active:opacity-75 focus-visible:ring-2 focus-visible:ring-blue-500 sm:absolute sm:left-10 sm:top-10 sm:mb-0"
+				href="/"
+			>
 				<FontAwesomeIcon
 					className="opacity-75 size-3 text-gray-12"
 					icon={faArrowLeft}
 				/>
-				<Link className="text-gray-12" href="/">
-					Home
-				</Link>
+				<span>{t("backHome")}</span>
+			</Link>
+			<div className="mb-6 flex w-full justify-end sm:absolute sm:right-10 sm:top-10 sm:mb-0 sm:w-auto">
+				<LocaleSwitcher />
 			</div>
 			<LoginForm />
 		</div>

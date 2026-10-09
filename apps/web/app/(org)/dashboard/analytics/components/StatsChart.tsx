@@ -1,6 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cloneElement, type SVGProps, useMemo, useRef, useState } from "react";
 import {
 	CapIcon,
@@ -40,6 +41,7 @@ export default function StatsBox({
 	isLoading,
 	capId,
 }: StatsChartProps) {
+	const t = useTranslations("analytics");
 	const [selectedBoxes, setSelectedBoxes] = useState<Set<boxes>>(
 		new Set(["views", "comments", "reactions"]),
 	);
@@ -83,7 +85,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("views")}
 							isSelected={selectedBoxes.has("views")}
-							title="Views"
+							title={t("metrics.views")}
 							value={formattedCounts.views}
 							metric="views"
 							onMouseEnter={() => viewsBoxRef.current?.startAnimation()}
@@ -93,7 +95,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("comments")}
 							isSelected={selectedBoxes.has("comments")}
-							title="Comments"
+							title={t("metrics.comments")}
 							value={formattedCounts.comments}
 							metric="comments"
 							onMouseEnter={() => chatsBoxRef.current?.startAnimation()}
@@ -103,7 +105,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("reactions")}
 							isSelected={selectedBoxes.has("reactions")}
-							title="Reactions"
+							title={t("metrics.reactions")}
 							value={formattedCounts.reactions}
 							metric="reactions"
 							onMouseEnter={() => reactionsBoxRef.current?.startAnimation()}
@@ -114,7 +116,7 @@ export default function StatsBox({
 							<StatBox
 								onClick={() => toggleHandler("caps")}
 								isSelected={selectedBoxes.has("caps")}
-								title="Caps"
+								title={t("metrics.caps")}
 								value={formattedCounts.caps}
 								metric="caps"
 								onMouseEnter={() => capsBoxRef.current?.startAnimation()}

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data365 — serverga ko'chirish qo'llanmasi</title>
+<style>
+	:root{
+		--bg:#fbfbfa; --card:#fff; --ink:#16181d; --muted:#61656e; --line:#e6e6e3;
+		--accent:#2f6f4e; --accent-soft:#eaf3ee; --warn:#8a5a00; --warn-soft:#fdf5e6;
+		--code-bg:#14161a; --code-ink:#e8eaed;
+	}
+	@media (prefers-color-scheme: dark){
+		:root{
+			--bg:#0f1114; --card:#16191e; --ink:#e9ebee; --muted:#9aa0aa; --line:#262a31;
+			--accent:#6cc39a; --accent-soft:#16241d; --warn:#e0b25e; --warn-soft:#241d10;
+			--code-bg:#0a0c0f; --code-ink:#e8eaed;
+		}
+	}
+	*{box-sizing:border-box}
+	body{
+		margin:0; background:var(--bg); color:var(--ink);
+		font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+		-webkit-font-smoothing:antialiased;
+	}
+	.wrap{max-width:760px; margin:0 auto; padding:40px 20px 80px}
+	header{margin-bottom:40px}
+	.eyebrow{
+		font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+		color:var(--accent); font-weight:600; margin:0 0 10px
+	}
+	h1{font-size:30px; line-height:1.25; margin:0 0 12px; font-weight:600; letter-spacing:-.01em}
+	.lede{color:var(--muted); margin:0; font-size:17px}
+	.card{
+		background:var(--card); border:1px solid var(--line); border-radius:14px;
+		padding:24px; margin:18px 0;
+	}
+	.step{display:flex; gap:16px; align-items:flex-start}
+	.num{
+		flex:0 0 30px; height:30px; border-radius:50%; background:var(--accent-soft);
+		color:var(--accent); font-weight:700; font-size:14px;
+		display:flex; align-items:center; justify-content:center; margin-top:2px;
+	}
+	.step h2{font-size:19px; margin:0 0 6px; font-weight:600; letter-spacing:-.01em}
+	.step .why{color:var(--muted); font-size:15px; margin:0 0 14px}
+	.body{flex:1; min-width:0}
+	ol.inner{margin:12px 0 0; padding-left:20px}
+	ol.inner li{margin-bottom:8px}
+	pre{
+		background:var(--code-bg); color:var(--code-ink); padding:14px 16px;
+		border-radius:10px; overflow-x:auto; font-size:14px; margin:12px 0 0;
+		font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+	}
+	.copywrap{position:relative}
+	button.copy{
+		position:absolute; top:10px; right:10px; background:rgba(255,255,255,.1);
+		color:#e8eaed; border:1px solid rgba(255,255,255,.2); border-radius:7px;
+		padding:5px 11px; font-size:12px; cursor:pointer; font-family:inherit;
+	}
+	button.copy:hover{background:rgba(255,255,255,.2)}
+	.note{
+		background:var(--accent-soft); border-left:3px solid var(--accent);
+		padding:14px 16px; border-radius:0 10px 10px 0; margin:16px 0; font-size:15px;
+	}
+	.warnbox{
+		background:var(--warn-soft); border-left:3px solid var(--warn);
+		padding:14px 16px; border-radius:0 10px 10px 0; margin:16px 0; font-size:15px;
+	}
+	.check{display:flex; gap:11px; align-items:flex-start; margin:11px 0; cursor:pointer}
+	.check input{margin-top:5px; width:17px; height:17px; accent-color:var(--accent); flex:none}
+	.check span{font-size:15px}
+	.check input:checked + span{color:var(--muted); text-decoration:line-through}
+	.progress{
+		position:sticky; bottom:0; background:var(--card); border:1px solid var(--line);
+		border-radius:12px; padding:14px 18px; margin-top:26px;
+		display:flex; justify-content:space-between; align-items:center; gap:14px;
+		box-shadow:0 -2px 16px rgba(0,0,0,.06); font-size:15px;
+	}
+	.bar{flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden}
+	.bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .25s}
+	footer{margin-top:44px; padding-top:22px; border-top:1px solid var(--line); color:var(--muted); font-size:14px}
+	strong{font-weight:600}
+	code.inline{
+		background:var(--accent-soft); color:var(--accent); padding:2px 6px;
+		border-radius:5px; font-size:14px; font-family:ui-monospace,Menlo,Consolas,monospace;
+	}
+	table{width:100%; border-collapse:collapse; margin-top:14px; font-size:15px}
+	td{padding:9px 0; border-bottom:1px solid var(--line); vertical-align:top}
+	td:first-child{color:var(--muted); width:38%; padding-right:14px}
+	tr:last-child td{border-bottom:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+	<p class="eyebrow">Data365 · ko'chirish</p>
+	<h1>Ilovani sizning serveringizga ko'chiramiz</h1>
+	<p class="lede">
+		Bu sahifa siz uchun. Texnik ish bizda — sizdan uchta narsa va bir nechta
+		tasdiq kerak, xolos. Hech qayerga shoshilmang: har bir qadamni bajarib
+		bo'lgach, belgilab qo'ying.
+	</p>
+</header>
+
+<div class="note">
+	<strong>Avval eng muhimi.</strong> Hozirgi serverdagi hech narsa o'chirilmaydi.
+	Yangi joyda <em>har bir yozuv</em> ochilayotgani bittalab isbotlanmaguncha,
+	eski server ham, eski videolar ham joyida turadi. O'chirish kerak bo'lganda
+	sizdan alohida so'raymiz.
+</div>
+
+<!-- 1 -->
+<div class="card">
+	<div class="step">
+		<div class="num">1</div>
+		<div class="body">
+			<h2>Serverni tekshiramiz</h2>
+			<p class="why">
+				Serveringizni hali ko'rmaganmiz. Avval uni <strong>o'qib</strong> chiqamiz —
+				quvvati yetadimi, joy bormi, boshqa nima ishlayapti. Shu javoblarsiz
+				keyingi qadamni to'g'ri rejalashtirib bo'lmaydi.
+			</p>
+			<p>
+				Biz bilan birga <code class="inline">01-server-check.sh</code> faylini oldingiz.
+				Uni serverga qo'ying va quyidagini bajaring:
+			</p>
+			<div class="copywrap">
+				<pre id="c1">bash 01-server-check.sh</pre>
+				<button class="copy" data-for="c1">nusxa</button>
+			</div>
+			<div class="note">
+				<strong>Bu skript serverga hech narsa qilmaydi.</strong> Hech narsa o'rnatmaydi,
+				o'chirmaydi va to'xtatmaydi — u faqat ma'lumot o'qiydi va ekranga hisobot
+				chiqaradi. Ishonch hosil qilish uchun faylni oldin oddiy matn ko'rinishida
+				o'zingiz o'qib chiqishingiz mumkin, biz buni tavsiya qilamiz.
+			</div>
+			<p style="margin-bottom:0">
+				Oxirida <strong>«NUSXALASH SHU YERDAN BOSHLANADI»</strong> deb yozilgan qismni
+				nusxalab bizga yuboring.
+			</p>
+			<label class="check"><input type="checkbox"><span>Tekshiruvni bajardim va natijani yubordim</span></label>
+		</div>
+	</div>
+</div>
+
+<!-- 2 -->
+<div class="card">
+	<div class="step">
+		<div class="num">2</div>
+		<div class="body">
+			<h2>Videolar uchun ombor ochasiz (Cloudflare R2)</h2>
+			<p class="why">
+				Videolar serverda emas, alohida omborda saqlanadi — server yiqilsa ham
+				videolar tirik qoladi. Ombor sizning nomingizda bo'lishi kerak, aks holda
+				u bizning hisobimizga bog'liq qolaveradi.
+			</p>
+			<ol class="inner">
+				<li><strong>cloudflare.com</strong> — ro'yxatdan o'ting (bepul).</li>
+				<li>Chap menyudan <strong>R2</strong> bo'limini oching.</li>
+				<li><strong>Create bucket</strong> → nomi: <code class="inline">ustoz-videos</code></li>
+				<li>So'ng <strong>Manage API tokens</strong> → <strong>Create API token</strong>
+					→ ruxsat: <strong>Object Read &amp; Write</strong>.</li>
+				<li>Chiqqan <strong>ikkita kalitni</strong> (Access Key ID va Secret Access Key)
+					saqlab qo'ying — Secret faqat bir marta ko'rsatiladi.</li>
+			</ol>
+			<div class="warnbox">
+				<strong>Kalitlarni oddiy xabarda yubormang.</strong> Parol menejeri orqali yoki
+				biz aytadigan xavfsiz usulda yuboring. Kalit — bu eshikning kaliti.
+			</div>
+			<label class="check"><input type="checkbox"><span>Bucket ochildi va ikkala kalit menda bor</span></label>
+		</div>
+	</div>
+</div>
+
+<!-- 3 -->
+<div class="card">
+	<div class="step">
+		<div class="num">3</div>
+		<div class="body">
+			<h2>Sun'iy intellekt kaliti (Gemini)</h2>
+			<p class="why">
+				Uchrashuvlarni matnga aylantirish va qisqacha xulosa yozish shu kalit orqali
+				ishlaydi. Kalit sizniki bo'lgach, bu xarajat ham to'g'ridan-to'g'ri sizga
+				o'tadi va biz orada turmaymiz.
+			</p>
+			<ol class="inner">
+				<li><strong>aistudio.google.com/app/apikey</strong> manziliga kiring.</li>
+				<li><strong>Create API key</strong> tugmasini bosing.</li>
+				<li>Chiqqan kalitni saqlang.</li>
+			</ol>
+			<table>
+				<tr><td>Haqiqiy xarajat</td><td>O'lchangan: o'tgan oy <strong>$7.27</strong>, bu oy 10 kunda <strong>$1.45</strong></td></tr>
+				<tr><td>Bepul qism</td><td>Kuniga taxminan bitta qisqa yozuv bepul chiqadi, qolgani pullik</td></tr>
+				<tr><td>Tejash kerak bo'lsa</td><td>«Arzon rejim» bor: imkon qadar bepul limitdan foydalanadi, u tugasa pullik bilan davom etadi, bepul limit qaytishi bilan yana bepulga o'tadi — kutish yo'q</td></tr>
+			</table>
+			<label class="check"><input type="checkbox"><span>Gemini kaliti tayyor</span></label>
+		</div>
+	</div>
+</div>
+
+<!-- 4 -->
+<div class="card">
+	<div class="step">
+		<div class="num">4</div>
+		<div class="body">
+			<h2>Serverga kirish huquqi</h2>
+			<p class="why">
+				Ilovani o'rnatish uchun serverga bir marta kirishimiz kerak. O'rnatib
+				bo'lgach, kirish huquqini bemalol qaytarib olishingiz mumkin —
+				bizga doimiy kirish kerak emas.
+			</p>
+			<ol class="inner">
+				<li>Serverning <strong>IP manzili</strong>.</li>
+				<li>Kirish usuli: <strong>SSH kaliti</strong> (ma'qulroq) yoki root parol.</li>
+			</ol>
+			<div class="warnbox">
+				<strong>Agar serverda boshqa loyihalar ishlayotgan bo'lsa</strong>, buni oldindan
+				ayting. Biz ularga tegmaymiz, lekin bilib turishimiz kerak — 1-qadamdagi
+				tekshiruv aynan shuni ham aniqlaydi.
+			</div>
+			<label class="check"><input type="checkbox"><span>Kirish ma'lumotlari tayyor</span></label>
+		</div>
+	</div>
+</div>
+
+<!-- 5 -->
+<div class="card">
+	<div class="step">
+		<div class="num">5</div>
+		<div class="body">
+			<h2>Qolganini biz qilamiz</h2>
+			<p class="why">Bu qadamda sizdan hech narsa talab qilinmaydi — faqat xabardor bo'ling.</p>
+			<table>
+				<tr><td>Ilovani o'rnatish</td><td>Server sozlanadi, ilova ishga tushiriladi</td></tr>
+				<tr><td>Ma'lumotlar</td><td>12 ta yozuv (jami 7 soat 40 daqiqa), 3 foydalanuvchi, 2 papka, 11 izoh ko'chiriladi</td></tr>
+				<tr><td>Videolar</td><td>0.49 GB yangi omboringizga ko'chiriladi va <strong>har biri bittalab ochib tekshiriladi</strong></td></tr>
+				<tr><td>Sayt manzili</td><td><code class="inline">data365.duckdns.org</code> — <strong>o'zgarmaydi</strong></td></tr>
+				<tr><td>Brauzer kengaytmasi</td><td><strong>Qayta o'rnatish shart emas</strong> — manzil o'zgarmagani uchun</td></tr>
+				<tr><td>Eski havolalar</td><td>Avval tarqatilgan share-linklar <strong>ishlayveradi</strong></td></tr>
+				<tr><td>Qo'llanma</td><td>Deploy va rollback qo'llanmasi yangi serverga moslab qayta yoziladi</td></tr>
+			</table>
+		</div>
+	</div>
+</div>
+
+<div class="progress">
+	<span id="ptext">0 / 4 bajarildi</span>
+	<span class="bar"><i id="pbar"></i></span>
+</div>
+
+<footer>
+	Savol tug'ilsa — hech narsani taxmin qilib bajarmang, bizdan so'rang.
+	Noto'g'ri bosilgan tugmani orqaga qaytarish har doim ham oson bo'lmaydi,
+	so'rash esa har doim oson.
+</footer>
+
+</div>
+<script>
+	document.querySelectorAll("button.copy").forEach(function (b) {
+		b.addEventListener("click", function () {
+			var el = document.getElementById(b.dataset.for);
+			navigator.clipboard.writeText(el.textContent.trim()).then(function () {
+				var old = b.textContent;
+				b.textContent = "nusxalandi";
+				setTimeout(function () { b.textContent = old; }, 1600);
+			});
+		});
+	});
+
+	var boxes = document.querySelectorAll(".check input");
+	var bar = document.getElementById("pbar");
+	var txt = document.getElementById("ptext");
+
+	function save() {
+		var state = [];
+		boxes.forEach(function (b) { state.push(b.checked); });
+		try { localStorage.setItem("data365-migration", JSON.stringify(state)); } catch (e) {}
+	}
+	function render() {
+		var done = 0;
+		boxes.forEach(function (b) { if (b.checked) done++; });
+		bar.style.width = (done / boxes.length * 100) + "%";
+		txt.textContent = done === boxes.length
+			? "Hammasi tayyor — bizga xabar bering"
+			: done + " / " + boxes.length + " bajarildi";
+	}
+	try {
+		var saved = JSON.parse(localStorage.getItem("data365-migration") || "[]");
+		boxes.forEach(function (b, i) { if (saved[i]) b.checked = true; });
+	} catch (e) {}
+	boxes.forEach(function (b) {
+		b.addEventListener("change", function () { save(); render(); });
+	});
+	render();
+</script>
+</body>
+</html>

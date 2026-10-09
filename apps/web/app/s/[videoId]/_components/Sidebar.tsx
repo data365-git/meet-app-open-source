@@ -5,6 +5,7 @@ import { Comment } from "@cap/web-domain";
 import { faComment, faEye, faSmile } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
 	forwardRef,
 	Suspense,
@@ -21,15 +22,7 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
 import type { VideoData } from "../types";
 import { AuthOverlay } from "./AuthOverlay";
-import { MeetingCostPanel } from "./panels/MeetingCostPanel";
 import { Comments } from "./tabs/Activity/Comments";
-
-type AiGenerationStatus =
-	| "QUEUED"
-	| "PROCESSING"
-	| "COMPLETE"
-	| "ERROR"
-	| "SKIPPED";
 
 interface SidebarProps {
 	data: VideoData;
@@ -42,13 +35,6 @@ interface SidebarProps {
 	onSeek?: (time: number) => void;
 	videoSettings?: OrganizationSettings | null;
 	videoId: Video.VideoId;
-	aiData?: {
-		title?: string | null;
-		summary?: string | null;
-		chapters?: { title: string; start: number }[] | null;
-		aiGenerationStatus?: AiGenerationStatus | null;
-	} | null;
-	aiGenerationEnabled?: boolean;
 	disableReactions?: boolean;
 }
 
@@ -72,6 +58,7 @@ const SidebarAnalytics = ({
 	comments: CommentType[];
 	isOwner: boolean;
 }) => {
+	const t = useTranslations("share");
 	const [viewCount, setViewCount] = useState(
 		views instanceof Promise ? use(views) : views,
 	);
@@ -92,7 +79,10 @@ const SidebarAnalytics = ({
 	);
 
 	return (
-		<div className="flex flex-wrap gap-4 items-center justify-between px-4 py-3 border-b border-gray-5">
+		<div
+			className="flex flex-wrap gap-4 items-center justify-between px-4 py-3"
+			style={{ borderBottom: "1px solid var(--gray-4)" }}
+		>
 			<div className="flex gap-4 items-center">
 				<div className="flex gap-2 items-center">
 					<FontAwesomeIcon className="text-gray-8 size-4" icon={faEye} />
@@ -110,9 +100,10 @@ const SidebarAnalytics = ({
 			{isOwner && (
 				<Link
 					href={`/dashboard/analytics?capId=${videoId}`}
-					className="text-xs text-purple-600 hover:underline"
+					className="text-xs hover:underline"
+					style={{ color: "var(--blue-11)" }}
 				>
-					View analytics
+					{t("viewAnalytics")}
 				</Link>
 			)}
 		</div>
@@ -126,14 +117,23 @@ const ReactionsBlock = ({
 	reactions: Record<string, number>;
 	onReact: (emoji: string) => void;
 }) => (
-	<div className="flex flex-wrap gap-2 p-4 border-t border-gray-5">
+	<div
+		className="grid grid-cols-3 gap-1.5 p-4 pb-24 sm:grid-cols-6 sm:pb-4"
+		style={{ borderTop: "1px solid var(--gray-4)" }}
+	>
 		{REACTIONS.map(({ emoji, label }) => (
 			<button
 				key={emoji}
 				type="button"
 				aria-label={label}
 				onClick={() => onReact(emoji)}
-				className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-5 bg-gray-1 hover:bg-gray-3 transition-colors text-sm font-emoji"
+				className="flex items-center justify-center gap-1 rounded-full transition-colors text-sm font-emoji"
+				style={{
+					padding: "6px 4px",
+					background: "var(--gray-2)",
+					border: "1px solid var(--gray-4)",
+					borderRadius: "999px",
+				}}
 			>
 				<span role="img" aria-label={label}>
 					{emoji}
@@ -148,6 +148,9 @@ const ReactionsBlock = ({
 	</div>
 );
 
+// Comments/activity content for the share panel's "Izohlar" tab. The outer
+// card chrome lives in SharePanel; this renders the analytics row, comment
+// thread, and reactions.
 export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
 		{
@@ -164,8 +167,19 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		},
 		ref,
 	) => {
+		const t = useTranslations("share");
 		const user = useCurrentUser();
 		const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+
+		// Guest name — shared localStorage key "365_guest_name" mirrors Comments.tsx.
+		const [guestName, setGuestName] = useState<string>(() => {
+			if (typeof window === "undefined") return "";
+			try {
+				return localStorage.getItem("365_guest_name") ?? "";
+			} catch {
+				return "";
+			}
+		});
 
 		const isOwner = Boolean(user?.id === data.owner.id);
 		const isOwnerOrMember = Boolean(
@@ -190,7 +204,56 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		const handleEmojiReact = async (emoji: string) => {
 			if (!canReact) return;
 			if (!user) {
-				setShowAuthOverlay(true);
+				let theName = guestName.trim();
+				if (!theName) {
+					const prompted = window.prompt(t("enterNameToReact"));
+					if (!prompted || !prompted.trim()) return;
+					theName = prompted.trim().slice(0, 50);
+					setGuestName(theName);
+					try {
+						localStorage.setItem("365_guest_name", theName);
+					} catch {
+						// ignore
+					}
+				}
+				// Guest reaction path
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
+				const currentTime = videoElement?.currentTime ?? 0;
+				const optimisticComment: CommentType = {
+					id: Comment.CommentId.make(`temp-emoji-${Date.now()}`),
+					authorId: null,
+					authorName: theName,
+					authorImage: null,
+					content: emoji,
+					createdAt: new Date(),
+					videoId: data.id,
+					parentCommentId: Comment.CommentId.make(""),
+					type: "emoji",
+					timestamp: currentTime,
+					updatedAt: new Date(),
+					sending: true,
+				};
+				startTransition(() => {
+					setOptimisticComments(optimisticComment);
+				});
+				try {
+					const result = await newComment({
+						content: emoji,
+						videoId: data.id,
+						authorImage: null,
+						parentCommentId: Comment.CommentId.make(""),
+						type: "emoji",
+						timestamp: currentTime,
+						guestName: theName,
+					});
+					startTransition(() => {
+						handleCommentSuccess(result);
+					});
+				} catch (error) {
+					console.error("Error posting reaction:", error);
+				}
 				return;
 			}
 			const videoElement = document.querySelector("video") as HTMLVideoElement;
@@ -233,68 +296,44 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		};
 
 		return (
-			<div
-				className="flex flex-col gap-3"
-				style={{ width: "320px", position: "sticky", top: "1rem" }}
-			>
-				<div
-					style={{
-						borderRadius: "14px",
-						background: "linear-gradient(135deg, #f5f3ff 0%, #f7f9fc 100%)",
-						border: "1px solid rgba(124, 58, 237, .15)",
-						boxShadow:
-							"0 1px 2px rgba(15,23,42,.06), 0 2px 6px rgba(15,23,42,.07)",
-						backdropFilter: "blur(8px)",
-						WebkitBackdropFilter: "blur(8px)",
-						overflow: "hidden",
-					}}
-				>
-					<MeetingCostPanel videoId={data.id} />
-				</div>
-
-				<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden flex flex-col">
-					<div className="flex items-center px-4 py-3 border-b border-gray-5">
-						<span className="text-sm font-semibold text-gray-12">Comments</span>
-					</div>
-
-					{user && isOwnerOrMember && (
-						<Suspense fallback={null}>
-							<SidebarAnalytics
-								videoId={data.id}
-								views={views}
-								comments={optimisticComments}
-								isOwner={isOwner}
-							/>
-						</Suspense>
-					)}
-
-					<div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-						<Comments
-							ref={ref}
-							handleCommentSuccess={handleCommentSuccess}
-							optimisticComments={optimisticComments}
-							setOptimisticComments={setOptimisticComments}
-							setComments={setCommentsData}
-							videoId={videoId}
-							setShowAuthOverlay={setShowAuthOverlay}
-							onSeek={onSeek}
-							commentsDisabled={commentsDisabled}
-							videoOwnerId={data.owner.id}
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+				{user && isOwnerOrMember && (
+					<Suspense fallback={null}>
+						<SidebarAnalytics
+							videoId={data.id}
+							views={views}
+							comments={optimisticComments}
+							isOwner={isOwner}
 						/>
-					</div>
+					</Suspense>
+				)}
 
-					{canReact && (
-						<ReactionsBlock
-							reactions={reactionsByEmoji}
-							onReact={handleEmojiReact}
-						/>
-					)}
-
-					<AuthOverlay
-						isOpen={showAuthOverlay}
-						onClose={() => setShowAuthOverlay(false)}
+				<div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+					<Comments
+						ref={ref}
+						handleCommentSuccess={handleCommentSuccess}
+						optimisticComments={optimisticComments}
+						setOptimisticComments={setOptimisticComments}
+						setComments={setCommentsData}
+						videoId={videoId}
+						setShowAuthOverlay={setShowAuthOverlay}
+						onSeek={onSeek}
+						commentsDisabled={commentsDisabled}
+						videoOwnerId={data.owner.id}
 					/>
 				</div>
+
+				{canReact && (
+					<ReactionsBlock
+						reactions={reactionsByEmoji}
+						onReact={handleEmojiReact}
+					/>
+				)}
+
+				<AuthOverlay
+					isOpen={showAuthOverlay}
+					onClose={() => setShowAuthOverlay(false)}
+				/>
 			</div>
 		);
 	},

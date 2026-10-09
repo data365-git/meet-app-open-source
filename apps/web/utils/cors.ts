@@ -1,5 +1,10 @@
 import { buildEnv } from "@cap/env";
 
+// SECURITY (S1, 2026-07-21): cap.so / cap.link removed — this fork is
+// self-hosted and does not control those domains. This list feeds
+// HttpApiBuilder.middlewareCors({ allowedOrigins, credentials: true }) in
+// lib/server.ts, so anything added here can read cookie-authenticated
+// responses. Keep it a strict allowlist, never a wildcard.
 export const allowedOrigins = [
 	buildEnv.NEXT_PUBLIC_WEB_URL,
 	"http://localhost:3001",
@@ -7,33 +12,4 @@ export const allowedOrigins = [
 	"tauri://localhost",
 	"http://tauri.localhost",
 	"https://tauri.localhost",
-	"https://cap.so",
-	"https://www.cap.so",
-	"https://cap.link",
-	"https://www.cap.link",
 ];
-
-export function getCorsHeaders(origin: string | null, originalOrigin: string) {
-	return {
-		"Access-Control-Allow-Origin":
-			origin && allowedOrigins.includes(origin)
-				? origin
-				: allowedOrigins.includes(originalOrigin)
-					? originalOrigin
-					: "null",
-		"Access-Control-Allow-Credentials": "true",
-	};
-}
-
-export function getOptionsHeaders(
-	origin: string | null,
-	originalOrigin: string,
-	methods = "GET, OPTIONS",
-) {
-	return {
-		...getCorsHeaders(origin, originalOrigin),
-		"Access-Control-Allow-Methods": methods,
-		"Access-Control-Allow-Headers":
-			"Content-Type, Authorization, sentry-trace, baggage",
-	};
-}

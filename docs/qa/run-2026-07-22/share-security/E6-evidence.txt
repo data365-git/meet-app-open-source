@@ -1,0 +1,34 @@
+FLOW E - E6 EVIDENCE - 2026-07-22 (storageMissing -> truthful message)
+
+CONTEXT: while sourcing a "real share id" for Flow A (G1-G3), all 3 fixture
+publicCompleteVideoIds (15xgcytw49pmrj8, aydm0823n9f20s4, bbzt2424z6vvy6t)
+turned out to have `metadata.storageMissing = true` in the DB (read-only
+SELECT, see docs/qa/run-2026-07-22/share-security/G1-G3-evidence.txt for the
+full query+result). This gave 3 live, real E6 subjects for free.
+
+Live behavior (all 3 ids, confirmed via get_page_text + a DOM inspection via
+JS on bbzt2424z6vvy6t):
+  - Page: 200, tabs (Xulosa/Vazifalar/Transkript/Matn) render fine, full
+    transcript/summary/chapters content is present and readable (that part
+    of the AI data is NOT gated by storage availability).
+  - The video PLAYER area (a fixed h-[190px]/[210px] black rounded box)
+    contains a warning-triangle icon + "Bu yozuv topilmadi" +
+    "Iltimos, administratoringizga murojaat qiling." (= "This recording was
+    not found" / "Please contact your admin") -- NO `<video>` element is
+    rendered at all (document.querySelectorAll('video').length === 0).
+  - No console errors, no crash, no infinite spinner.
+  - Confirmed these are the app's dedicated i18n keys for this exact case
+    (not a generic error): `storageMissingTitle`/`storageMissingDesc` in the
+    share translation bundle (seen in the page's embedded messages JSON),
+    matching the displayed strings exactly.
+
+STATUS: PASS -- matches the plan's expectation exactly: "A truthful
+'recording unavailable, contact admin' message (C3 fix), not a silent
+broken player." All 3 storageMissing videos handled gracefully and
+consistently, no silent broken player.
+
+FLAG (should, not blocker, cross-referenced from G1-G3-evidence.txt): of the
+8 COMPLETE videos on prod, 7 have storageMissing=true and only 1
+(t91bnh582gnhgy8) has working media. That's a real content-loss concern for
+the IT team's existing recordings library, worth the owner's attention
+separately from this UI-robustness check (which itself passes).

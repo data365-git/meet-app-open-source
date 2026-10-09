@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 
 type CameraPreviewSize = "sm" | "lg";
 type CameraPreviewShape = "round" | "square" | "full";
@@ -29,6 +30,7 @@ type AutoPictureInPictureVideo = HTMLVideoElement & {
 
 const WINDOW_PADDING = 20;
 const BAR_HEIGHT = 52;
+const DRAG_THRESHOLD = 5;
 
 const getPreviewMetrics = (
 	previewSize: CameraPreviewSize,
@@ -77,12 +79,17 @@ const getPreviewMetrics = (
 interface CameraPreviewWindowProps {
 	cameraId: string;
 	onClose: () => void;
+	onStreamChange?: (stream: MediaStream | null) => void;
+	hidden?: boolean;
 }
 
 export const CameraPreviewWindow = ({
 	cameraId,
 	onClose,
+	onStreamChange,
+	hidden = false,
 }: CameraPreviewWindowProps) => {
+	const t = useTranslations("recorder");
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
 	const [shape, setShape] = useState<CameraPreviewShape>("round");
 	const [mirrored, setMirrored] = useState(false);
@@ -98,7 +105,11 @@ export const CameraPreviewWindow = ({
 		useState<VideoDimensions | null>(null);
 	const [mounted, setMounted] = useState(false);
 	const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
+	const [isControlsVisible, setIsControlsVisible] = useState(false);
 	const autoPictureInPictureRef = useRef(false);
+	const dragPointerStartRef = useRef<{ x: number; y: number } | null>(null);
+	const hasMovedDuringDragRef = useRef(false);
+	const suppressNextClickRef = useRef(false);
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
 	const canUseAutoPiPAttribute = useMemo(() => {
@@ -182,6 +193,7 @@ export const CameraPreviewWindow = ({
 				if (videoRef.current) {
 					videoRef.current.srcObject = stream;
 				}
+				onStreamChange?.(stream);
 			} catch (err) {
 				console.error("Failed to start camera", err);
 			}
@@ -196,8 +208,9 @@ export const CameraPreviewWindow = ({
 				});
 				streamRef.current = null;
 			}
+			onStreamChange?.(null);
 		};
-	}, [cameraId]);
+	}, [cameraId, onStreamChange]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
@@ -231,6 +244,8 @@ export const CameraPreviewWindow = ({
 			e.stopPropagation();
 			e.preventDefault();
 			setIsDragging(true);
+			dragPointerStartRef.current = { x: e.clientX, y: e.clientY };
+			hasMovedDuringDragRef.current = false;
 			setDragStart({
 				x: e.clientX - (position?.x || 0),
 				y: e.clientY - (position?.y || 0),
@@ -239,9 +254,50 @@ export const CameraPreviewWindow = ({
 		[position],
 	);
 
+	const handleTouchStartDrag = useCallback(
+		(e: React.TouchEvent) => {
+			if ((e.target as HTMLElement).closest("[data-controls]")) {
+				return;
+			}
+			const touch = e.touches[0];
+			if (!touch) return;
+			e.stopPropagation();
+			setIsDragging(true);
+			dragPointerStartRef.current = { x: touch.clientX, y: touch.clientY };
+			hasMovedDuringDragRef.current = false;
+			setDragStart({
+				x: touch.clientX - (position?.x || 0),
+				y: touch.clientY - (position?.y || 0),
+			});
+		},
+		[position],
+	);
+
+	const hasMovedPastDragThreshold = useCallback(
+		(clientX: number, clientY: number) => {
+			const start = dragPointerStartRef.current;
+			if (!start) return true;
+
+			const deltaX = clientX - start.x;
+			const deltaY = clientY - start.y;
+
+			if (
+				!hasMovedDuringDragRef.current &&
+				Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD
+			) {
+				return false;
+			}
+
+			hasMovedDuringDragRef.current = true;
+			return true;
+		},
+		[],
+	);
+
 	const handleMouseMove = useCallback(
 		(e: MouseEvent) => {
 			if (!isDragging) return;
+			if (!hasMovedPastDragThreshold(e.clientX, e.clientY)) return;
 
 			const newX = e.clientX - dragStart.x;
 			const newY = e.clientY - dragStart.y;
@@ -256,10 +312,53 @@ export const CameraPreviewWindow = ({
 				y: Math.max(0, Math.min(newY, maxY)),
 			});
 		},
-		[isDragging, dragStart, size, shape, videoDimensions],
+		[
+			isDragging,
+			dragStart,
+			size,
+			shape,
+			videoDimensions,
+			hasMovedPastDragThreshold,
+		],
+	);
+
+	const handleTouchMoveDrag = useCallback(
+		(e: TouchEvent) => {
+			if (!isDragging) return;
+			const touch = e.touches[0];
+			if (!touch) return;
+			if (!hasMovedPastDragThreshold(touch.clientX, touch.clientY)) return;
+			e.preventDefault();
+
+			const newX = touch.clientX - dragStart.x;
+			const newY = touch.clientY - dragStart.y;
+
+			const metrics = getPreviewMetrics(size, shape, videoDimensions);
+			const totalHeight = metrics.height + BAR_HEIGHT;
+			const maxX = Math.max(0, window.innerWidth - metrics.width);
+			const maxY = Math.max(0, window.innerHeight - totalHeight);
+
+			setPosition({
+				x: Math.max(0, Math.min(newX, maxX)),
+				y: Math.max(0, Math.min(newY, maxY)),
+			});
+		},
+		[
+			isDragging,
+			dragStart,
+			size,
+			shape,
+			videoDimensions,
+			hasMovedPastDragThreshold,
+		],
 	);
 
 	const handleMouseUp = useCallback(() => {
+		if (hasMovedDuringDragRef.current) {
+			suppressNextClickRef.current = true;
+		}
+		dragPointerStartRef.current = null;
+		hasMovedDuringDragRef.current = false;
 		setIsDragging(false);
 	}, []);
 
@@ -267,12 +366,16 @@ export const CameraPreviewWindow = ({
 		if (isDragging) {
 			window.addEventListener("mousemove", handleMouseMove);
 			window.addEventListener("mouseup", handleMouseUp);
+			window.addEventListener("touchmove", handleTouchMoveDrag, { passive: false });
+			window.addEventListener("touchend", handleMouseUp);
 			return () => {
 				window.removeEventListener("mousemove", handleMouseMove);
 				window.removeEventListener("mouseup", handleMouseUp);
+				window.removeEventListener("touchmove", handleTouchMoveDrag);
+				window.removeEventListener("touchend", handleMouseUp);
 			};
 		}
-	}, [isDragging, handleMouseMove, handleMouseUp]);
+	}, [isDragging, handleMouseMove, handleMouseUp, handleTouchMoveDrag]);
 
 	const handleClose = useCallback(async () => {
 		if (
@@ -459,11 +562,27 @@ export const CameraPreviewWindow = ({
 				width: `${metrics.width}px`,
 				height: `${totalHeight}px`,
 				borderRadius,
+				// Camera off during recording: hide the bubble entirely instead of
+				// showing a black (muted-track) circle. Stay mounted so the stream
+				// stays alive and toggling the camera back on restores the preview.
+				display: hidden ? "none" : undefined,
 			}}
 			onMouseDown={(e) => {
 				e.stopPropagation();
 				e.preventDefault();
 				handleMouseDown(e);
+			}}
+			onTouchStart={(e) => {
+				handleTouchStartDrag(e);
+			}}
+			onClick={(e) => {
+				if (suppressNextClickRef.current) {
+					suppressNextClickRef.current = false;
+					return;
+				}
+				if (!(e.target as HTMLElement).closest("[data-controls]")) {
+					setIsControlsVisible((v) => !v);
+				}
 			}}
 		>
 			<div
@@ -474,9 +593,14 @@ export const CameraPreviewWindow = ({
 					<div className="flex flex-row justify-center items-center">
 						<div
 							data-controls
-							className="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10 pointer-events-auto"
+							className={clsx(
+								"flex flex-row gap-[0.25rem] p-[0.25rem] rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10 pointer-events-auto",
+								isControlsVisible
+									? "opacity-100 translate-y-0"
+									: "opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0",
+							)}
 							role="toolbar"
-							aria-label="Camera preview controls"
+							aria-label={t("cameraPreviewControls")}
 							onMouseDown={(e) => e.stopPropagation()}
 							onClick={(e) => e.stopPropagation()}
 							onKeyDown={(e) => {
@@ -608,15 +732,15 @@ export const CameraPreviewWindow = ({
 					{isPictureInPictureSupported && isInPictureInPicture && (
 						<div className="absolute inset-0 flex items-center justify-center z-10">
 							<div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 text-xs font-medium text-white/90 shadow-sm backdrop-blur-md whitespace-nowrap transition-all duration-300 ease-out">
-								<span>Picture in Picture active</span>
+								<span>{t("pictureInPictureActive")}</span>
 								<button
 									type="button"
 									onClick={(e) => {
 										e.stopPropagation();
 										handleTogglePictureInPicture();
 									}}
-									className="flex items-center justify-center size-4 rounded-full hover:bg-white/20 transition-colors"
-									aria-label="Exit Picture in Picture"
+									className="flex items-center justify-center size-4 rounded-full hover:bg-white/20 transition-colors p-4 -m-4 box-content"
+									aria-label={t("exitPictureInPicture")}
 								>
 									<X className="size-3" />
 								</button>

@@ -1,6 +1,6 @@
 import type { ExtensionSettings } from "../background/state";
 
-const DEFAULT_API_BASE_URL = "https://web-production-e6fe4.up.railway.app";
+import { DEFAULT_API_BASE_URL } from "../shared/config";
 
 function sendMessage(message: Record<string, unknown>): Promise<unknown> {
 	return new Promise((resolve, reject) => {
@@ -245,8 +245,8 @@ function buildAccountSection(
 	apiBaseUrlInput.id = "apiBaseUrl";
 	apiBaseUrlInput.className = "text-input";
 	apiBaseUrlInput.value = settings.apiBaseUrl || DEFAULT_API_BASE_URL;
-	apiBaseUrlInput.placeholder = "https://your-cap-instance.com";
-	container.appendChild(fieldGroup("Cap Server URL", apiBaseUrlInput));
+	apiBaseUrlInput.placeholder = "https://your-data365-instance.com";
+	container.appendChild(fieldGroup("data365 Server URL", apiBaseUrlInput));
 
 	const apiKeyWrapper = document.createElement("div");
 	apiKeyWrapper.className = "input-with-button";
@@ -256,7 +256,7 @@ function buildAccountSection(
 	apiKeyInput.id = "apiKey";
 	apiKeyInput.className = "text-input";
 	apiKeyInput.value = settings.apiKey || "";
-	apiKeyInput.placeholder = "Paste your Cap API key";
+	apiKeyInput.placeholder = "Paste your data365 API key";
 
 	const showHideBtn = document.createElement("button");
 	showHideBtn.type = "button";
@@ -284,21 +284,26 @@ function buildAccountSection(
 		}
 		saveConnectBtn.disabled = true;
 		const baseUrl = apiBaseUrlInput.value.trim() || DEFAULT_API_BASE_URL;
-		await saveSettings({
-			apiKey: key,
-			apiBaseUrl: baseUrl,
-		});
+		// Fix #5: validate FIRST — only persist the apiKey on success
 		try {
-			const res = await fetch(`${baseUrl}/api/status`, {
+			const res = await fetch(`${baseUrl}/api/extension/me`, {
 				headers: { Authorization: `Bearer ${key}` },
 			});
 			if (res.ok) {
+				await saveSettings({ apiKey: key, apiBaseUrl: baseUrl });
 				showToast("Connected ✓");
 			} else {
-				showToast("Key saved, but couldn't verify — check the key");
+				// Persist the base URL alone (user may have changed it) but NOT the bad key
+				await saveSettings({ apiBaseUrl: baseUrl });
+				showToast(
+					res.status === 401
+						? "Key not accepted — check the key"
+						: `Server error (${res.status}) — check the key`,
+				);
 			}
 		} catch {
-			showToast("Key saved, but couldn't verify — check the key");
+			await saveSettings({ apiBaseUrl: baseUrl });
+			showToast("Can't reach the server — check the URL");
 		} finally {
 			saveConnectBtn.disabled = false;
 		}
@@ -338,13 +343,26 @@ function buildAccountSection(
 		const key = apiKeyInput.value.trim();
 
 		try {
-			const res = await fetch(`${baseUrl}/api/status`, {
+			const res = await fetch(`${baseUrl}/api/extension/me`, {
 				headers: key ? { Authorization: `Bearer ${key}` } : {},
 			});
 			if (res.ok) {
 				connectionStatus.className =
 					"connection-status connection-status--success";
-				connectionStatus.textContent = "✓ Connected";
+				let label = "✓ Connected";
+				try {
+					const data = (await res.json()) as Record<string, unknown>;
+					const identity =
+						typeof data.name === "string" && data.name
+							? data.name
+							: typeof data.email === "string" && data.email
+								? data.email
+								: null;
+					if (identity) label = `✓ Connected as ${identity}`;
+				} catch {
+					// ignore JSON parse errors — label stays "✓ Connected"
+				}
+				connectionStatus.textContent = label;
 			} else {
 				connectionStatus.className =
 					"connection-status connection-status--error";
@@ -361,12 +379,23 @@ function buildAccountSection(
 	const signInBtn = document.createElement("button");
 	signInBtn.type = "button";
 	signInBtn.className = "btn btn--secondary";
-	signInBtn.textContent = "Sign in with Cap";
+	signInBtn.textContent = "Sign in with data365";
 	signInBtn.addEventListener("click", () => {
-		const baseUrl = apiBaseUrlInput.value.trim() || DEFAULT_API_BASE_URL;
-		const extensionId = chrome.runtime.id;
-		chrome.tabs.create({
-			url: `${baseUrl}/extension/callback?extensionId=${extensionId}`,
+		signInBtn.disabled = true;
+		showToast("Opening sign-in…");
+		chrome.runtime.sendMessage({ type: "START_SIGNIN" }, (resp) => {
+			signInBtn.disabled = false;
+			if (chrome.runtime.lastError) {
+				showToast("Sign-in error — try again");
+				return;
+			}
+			const r = (resp ?? {}) as { ok?: boolean; error?: string };
+			if (r.ok) {
+				showToast("Connected ✓");
+				location.reload();
+			} else {
+				showToast(r.error ? `Sign-in failed: ${r.error}` : "Sign-in failed — paste key below");
+			}
 		});
 	});
 
@@ -396,34 +425,39 @@ async function buildRecordingSection(
 		showToast("Saved");
 	});
 
-	const cameraToggleEl = createToggle("cameraOverlay", settings.cameraOverlay);
-	const cameraInput = cameraToggleEl.querySelector("input") as HTMLInputElement;
-
-	const cameraRow = document.createElement("div");
-	cameraRow.className = "toggle-row";
-
-	const cameraTextBlock = document.createElement("div");
-	const cameraLabel = document.createElement("span");
-	cameraLabel.className = "field-label";
-	cameraLabel.textContent = "Camera overlay";
-	const cameraDesc = document.createElement("p");
-	cameraDesc.className = "field-description";
-	cameraDesc.textContent =
-		"Show your camera in a small overlay while recording";
-	cameraTextBlock.appendChild(cameraLabel);
-	cameraTextBlock.appendChild(cameraDesc);
-
-	cameraRow.appendChild(cameraTextBlock);
-	cameraRow.appendChild(cameraToggleEl);
-	const cameraGroup = document.createElement("div");
-	cameraGroup.className = "field-group";
-	cameraGroup.appendChild(cameraRow);
-	container.appendChild(cameraGroup);
-
-	cameraInput.addEventListener("change", async () => {
-		await saveSettings({ cameraOverlay: cameraInput.checked });
-		showToast("Saved");
-	});
+	// Camera overlay toggle: HIDDEN (R4) — nothing in the recording pipeline
+	// (recorder/offscreen recorder/service worker) ever reads cameraOverlay,
+	// so this control did nothing. Keeping the setting field itself untouched;
+	// just not rendering the dead UI. See CLAUDE.md R4.
+	//
+	// const cameraToggleEl = createToggle("cameraOverlay", settings.cameraOverlay);
+	// const cameraInput = cameraToggleEl.querySelector("input") as HTMLInputElement;
+	//
+	// const cameraRow = document.createElement("div");
+	// cameraRow.className = "toggle-row";
+	//
+	// const cameraTextBlock = document.createElement("div");
+	// const cameraLabel = document.createElement("span");
+	// cameraLabel.className = "field-label";
+	// cameraLabel.textContent = "Camera overlay";
+	// const cameraDesc = document.createElement("p");
+	// cameraDesc.className = "field-description";
+	// cameraDesc.textContent =
+	// 	"Show your camera in a small overlay while recording";
+	// cameraTextBlock.appendChild(cameraLabel);
+	// cameraTextBlock.appendChild(cameraDesc);
+	//
+	// cameraRow.appendChild(cameraTextBlock);
+	// cameraRow.appendChild(cameraToggleEl);
+	// const cameraGroup = document.createElement("div");
+	// cameraGroup.className = "field-group";
+	// cameraGroup.appendChild(cameraRow);
+	// container.appendChild(cameraGroup);
+	//
+	// cameraInput.addEventListener("change", async () => {
+	// 	await saveSettings({ cameraOverlay: cameraInput.checked });
+	// 	showToast("Saved");
+	// });
 
 	const captureModeGroup = document.createElement("div");
 	captureModeGroup.className = "field-group";
@@ -519,7 +553,7 @@ function buildMeetSection(
 	const warningBox = document.createElement("div");
 	warningBox.className = "warning-box";
 	warningBox.textContent =
-		"Auto-recording will start a 5-second countdown when you join a Google Meet call. Make sure participants have consented to being recorded. Cap will never start recording without showing this countdown. You can cancel during the countdown.";
+		"Auto-recording will start a 5-second countdown when you join a Google Meet call. Make sure participants have consented to being recorded. data365 will never start recording without showing this countdown. You can cancel during the countdown.";
 	warningBox.style.display = settings.autoRecordOnMeet ? "block" : "none";
 	autoRecordGroup.appendChild(warningBox);
 	container.appendChild(autoRecordGroup);
@@ -608,7 +642,7 @@ function buildAboutSection(
 
 	const version = document.createElement("p");
 	version.className = "about-version";
-	version.textContent = "Cap Recorder v0.1.0";
+	version.textContent = "data365 Recorder v0.1.0";
 	container.appendChild(version);
 
 	const links = document.createElement("div");
@@ -618,7 +652,7 @@ function buildAboutSection(
 
 	const linkDefs: Array<{ label: string; href: string }> = [
 		{ label: "Extension page", href: `${baseUrl}/extension/install` },
-		{ label: "Cap Dashboard", href: `${baseUrl}/dashboard` },
+		{ label: "data365 Dashboard", href: `${baseUrl}/dashboard` },
 		{
 			label: "Report an issue",
 			href: "https://github.com/CapSoftware/Cap/issues",
@@ -639,7 +673,7 @@ function buildAboutSection(
 
 	const tagline = document.createElement("p");
 	tagline.className = "about-tagline";
-	tagline.textContent = "Cap is the open-source Loom alternative";
+	tagline.textContent = "data365 — screen recording for instruction";
 	container.appendChild(tagline);
 }
 
@@ -676,7 +710,10 @@ async function init(): Promise<void> {
 	}
 
 	saveOnBlur(apiBaseUrlInput, "apiBaseUrl");
-	saveOnBlur(apiKeyInput, "apiKey");
+	// NOTE: the API key is intentionally NOT blur-saved. It is persisted only
+	// through "Save & Connect" (which validates via /api/extension/me first) or
+	// the OAuth CAP_EXTENSION_TOKEN message — so a mistyped/invalid key can't
+	// silently masquerade as "signed in".
 
 	chrome.runtime.onMessage.addListener((message: unknown) => {
 		if (

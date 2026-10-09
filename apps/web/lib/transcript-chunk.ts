@@ -1,3 +1,5 @@
+import { normalizeWebVttVoiceText } from "@/lib/transcript-vtt";
+
 interface VttCue {
 	startMs: number;
 	endMs: number;
@@ -37,6 +39,21 @@ function parseTimestampMs(ts: string): number {
 	);
 }
 
+function extractSpeaker(rawText: string): { speaker: string | null; text: string } {
+	const normalized = normalizeWebVttVoiceText(rawText);
+	if (normalized.text !== rawText || normalized.speaker) return normalized;
+
+	const colonMatch = rawText.match(/^([^:]{1,30}):\s+(.+)$/);
+	if (colonMatch) {
+		return {
+			speaker: colonMatch[1]?.trim() ?? null,
+			text: colonMatch[2]?.trim() ?? rawText,
+		};
+	}
+
+	return { speaker: null, text: rawText };
+}
+
 function parseVttCues(vttContent: string): VttCue[] {
 	const cues: VttCue[] = [];
 	const blocks = vttContent
@@ -65,13 +82,7 @@ function parseVttCues(vttContent: string): VttCue[] {
 		const rawText = textLines.join(" ").trim();
 		if (!rawText) continue;
 
-		let speaker: string | null = null;
-		let text = rawText;
-		const speakerMatch = rawText.match(/^<v\s+([^>]+)>(.*)/);
-		if (speakerMatch) {
-			speaker = speakerMatch[1]?.trim() ?? null;
-			text = speakerMatch[2]?.replace(/<\/v>/, "").trim() ?? rawText;
-		}
+		const { speaker, text } = extractSpeaker(rawText);
 
 		cues.push({
 			startMs: parseTimestampMs(startStr),
@@ -95,10 +106,15 @@ export function chunkTranscript(vttContent: string): TranscriptChunk[] {
 	function flushChunk() {
 		if (currentCues.length === 0) return;
 
-		const text = currentCues.map((c) => c.text).join(" ");
 		const speakers = [
 			...new Set(currentCues.map((c) => c.speaker).filter(Boolean)),
 		];
+		const text =
+			speakers.length > 1
+				? currentCues
+						.map((c) => (c.speaker ? `${c.speaker}: ${c.text}` : c.text))
+						.join(" ")
+				: currentCues.map((c) => c.text).join(" ");
 
 		const firstCue = currentCues[0];
 		const lastCue = currentCues[currentCues.length - 1];

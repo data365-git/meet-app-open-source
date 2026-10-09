@@ -1,0 +1,29 @@
+HTTP/1.1 302 Found
+Access-Control-Allow-Credentials: true
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 10:57:32 GMT
+Location: https://f2efd485903c9b8e769e4a709702c47e.r2.cloudflarestorage.com/ustoz-videos/25s3fqp7e7vc5p0/bbzt2424z6vvy6t/raw-upload.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=b2ff6971771cef25cc19233432429205%2F20260722%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260722T105732Z&X-Amz-Expires=3600&X-Amz-Signature=079514e29618aa6b515be2b7a0ef011e14e80c70abda0735a906b9dfab06111b&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+
+====
+HTTP/1.1 302 Found
+Access-Control-Allow-Credentials: true
+Alt-Svc: h3=":443"; ma=2592000
+Content-Security-Policy: frame-ancestors 'self'
+Date: Wed, 22 Jul 2026 10:57:33 GMT
+Location: https://f2efd485903c9b8e769e4a709702c47e.r2.cloudflarestorage.com/ustoz-videos/25s3fqp7e7vc5p0/j1q9mjg8kewr2en/raw-upload.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=b2ff6971771cef25cc19233432429205%2F20260722%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260722T105733Z&X-Amz-Expires=3600&X-Amz-Signature=76fd6d26f30a320808984fed2307c7a844c9d01839e5243ed2c164644568f885&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject
+Permissions-Policy: geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), idle-detection=(), browsing-topics=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=86400
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Transfer-Encoding: chunked
+

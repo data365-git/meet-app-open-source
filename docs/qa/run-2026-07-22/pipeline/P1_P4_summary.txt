@@ -1,0 +1,56 @@
+Flow P -- P1-P4: read existing AI results on 3 COMPLETE videos, 2026-07-22
+Sample (from fixtures.publicCompleteVideoIds): 15xgcytw49pmrj8, aydm0823n9f20s4, bbzt2424z6vvy6t
+Method: curl the public /s/<id> share page (200, no auth needed since public=1) and read the
+RSC-embedded metadata.aiSummary JSON payload (raw HTML saved alongside: P1_<id>.html); cross-
+checked one video (15xgcytw49pmrj8) live in the Browser pane (accessibility tree + get_page_text)
+to confirm the rendered Xulosa/Vazifalar/Transkript/Matn tabs match the embedded JSON.
+
+=== 15xgcytw49pmrj8 -- HTTP 200 ===
+overview: "Ushbu darsda qomusiylik tushunchasining mohiyati, ilmlarning bo'linishi va har bir
+  sohadagi eng muhim fundamental qonuniyatlarni bilishning ahamiyati tushuntiriladi." (uz, coherent,
+  not the failure placeholder)
+chapters: [{start:0,"Kirish va dars maqsadi"}, {start:26,"Qomusiylik tushunchasi va mental
+  modellar"}] -- 2 chapters, real timestamps, titles describe actual content.
+tasks: [{title:"Qomusiylik darslari bo'yicha savollarga javob berish", assignee:"Spiker",
+  category:"Strategiya", deadline:"2024-07-10", priority:"high"}] -- well-formed, valid enum.
+Transcript (raw, "Transkript" tab): fine-grained ~4-8s ASR segments 00:00->01:15+, coherent uz,
+  TXT/SRT export present, no mojibake.
+Refined transcript ("Matn" tab): chaptered paragraphs, chapter titles/timestamps (00:00, 00:26)
+  exactly match aiSummary.chapters. Confirmed live in Browser pane.
+Note: this video's `videos.metadata.storageMissing = true` -- the video FILE itself is gone from
+storage (share page shows "Bu yozuv topilmadi / administratoringizga murojaat qiling" where the
+player would be), but this does NOT block reading any of the AI tabs, which is what P1-P4 test.
+This is the honest storageMissing UI (matches E6's expected behavior), out of Flow P's own scope
+-- flagging for the aggregator since it affects Flow A/E (G1/G2/E6), not this flow's verdict.
+
+=== aydm0823n9f20s4 -- HTTP 200 ===
+overview: "Uchrashuvda video pleyerning full ko'rinishi va foydalanuvchi uchun qulaylik yaratuvchi
+  PIP funksiyasi tahlil qilindi." (uz, coherent, on-topic)
+chapters: [{start:0,"Full ko'rinish va Timeline"}, {start:11,"PIP (Picture-in-Picture) rejimi"}]
+tasks: [{title:"Timeline va full rejimni to'g'rilash", assignee:"Boshqa", category:"Texnik",
+  deadline:"2024-05-22", priority:"high"}, {title:"PIP rejimini sozlash", assignee:"Boshqa", ...}]
+  -- well-formed, matches a short internal dev-feedback recording.
+Also storageMissing=true (video file gone; AI tabs unaffected).
+
+=== bbzt2424z6vvy6t -- HTTP 200 (this is the longest/richest sample, ~116 min meeting) ===
+overview: "Jamoa Sotuv AI loyihasining joriy holatini tahlil qildi. Dashboardlardagi vizual va
+  texnik buglarni tuzatish, AI tahlilchi uchun aniq frameworklar yaratish va Sot AI brendi ostida
+  mahsulotni launch qilish masalalari kelishib olindi..." (uz, coherent, substantive real-meeting
+  content, not generic filler)
+chapters: [{start:0,"Dashboard va mini dashboard tahlili"}, {start:840,"Platforma impactini
+  o'lchash va declaration pack"}, {start:1600,...}] -- spread across the meeting, NOT clustered
+  at 0s only.
+tasks: named real assignees ("Abdulla", "Qobiljon") with concrete deadlines/priority -- reads as
+  genuinely extracted from the conversation, not hallucinated boilerplate.
+refinedTranscript: chaptered paragraphs present, coherent uz, mirrors aiSummary.chapters
+  (title "Dashboard va Metabase Tahlili" at startSec 0).
+Also storageMissing=true.
+
+VERDICT: P1 pass, P2 pass, P3 pass, P4 pass across all 3 sampled videos. No empty tabs, no
+failure placeholder, no wrong-language content, no hallucination signs (tasks/chapters map to
+plausible meeting content), no mojibake in uz script.
+
+CAVEAT (per plan's own header on Flow P): this reads OLD-build stored results -- it does NOT
+prove the pipeline works end-to-end on build 201165f. Fresh-pipeline proof is O8 (real meeting)
+and T1 (the one budgeted re-transcribe), neither of which this agent ran (T/O are out of Flow P's
+scope for this run).

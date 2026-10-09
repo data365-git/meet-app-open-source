@@ -14,6 +14,10 @@ export default getRequestConfig(async () => {
 
 	return {
 		locale,
+		// Explicit reference values silence next-intl's ENVIRONMENT_FALLBACK
+		// console.error from format.relativeTime()/date formatting.
+		timeZone: "Asia/Tashkent",
+		now: new Date(),
 		messages: (await import(`../messages/${locale}.json`)).default,
 	};
 });

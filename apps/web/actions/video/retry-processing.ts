@@ -5,7 +5,6 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { start } from "workflow/api";
 import {
 	setVideoProcessingError,
 	startVideoProcessingWorkflow,
@@ -90,29 +89,16 @@ export async function retryVideoProcessing({
 			})
 			.where(eq(videoUploads.videoId, videoId));
 
-		try {
-			await start(importLoomVideoWorkflow, [
-				{
-					videoId,
-					userId: user.id,
-					rawFileKey: upload.rawFileKey,
-					bucketId: video.bucket ?? null,
-					loomDownloadUrl: "",
-					loomVideoId: importedVideo.sourceId,
-				},
-			]);
-		} catch (error) {
-			const normalizedError =
-				error instanceof Error
-					? error
-					: new Error("Loom import could not restart");
-			await setVideoProcessingError(
-				videoId,
-				"Loom import could not restart.",
-				normalizedError,
-			);
-			throw normalizedError;
-		}
+		importLoomVideoWorkflow({
+			videoId,
+			userId: user.id,
+			rawFileKey: upload.rawFileKey,
+			bucketId: video.bucket ?? null,
+			loomDownloadUrl: "",
+			loomVideoId: importedVideo.sourceId,
+		}).catch((err) => {
+			console.error("[retryVideoProcessing] Inline workflow failed", err);
+		});
 
 		return { success: true, status: "started" };
 	}
@@ -125,6 +111,11 @@ export async function retryVideoProcessing({
 		processingMessage: "Retrying video processing...",
 		startFailureMessage: "Video processing could not restart.",
 		forceRestart: shouldForceRetryProcessing(upload),
+		// Same guard-leak fix as the initial trigger paths: force the "trust the
+		// phase, not the byte count" signal for the guard in lib/transcribe.ts
+		// while processVideoWorkflow re-runs, regardless of whichever mode the
+		// original (possibly stale) row had.
+		mode: "multipart",
 	});
 
 	return { success: true, status };

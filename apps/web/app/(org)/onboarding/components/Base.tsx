@@ -4,6 +4,7 @@ import { LogoBadge } from "@cap/ui";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 
 export const Base = ({
@@ -19,16 +20,17 @@ export const Base = ({
 	descriptionClassName?: string;
 	hideBackButton?: boolean;
 }) => {
+	const t = useTranslations("onboarding");
 	const router = useRouter();
 	return (
 		<div className="relative w-[calc(100%-2%)] z-10 space-y-7 p-7 max-w-[472px] bg-gray-2 border border-gray-4 rounded-2xl">
 			{!hideBackButton && (
 				<div
 					onClick={() => router.back()}
-					className="absolute overflow-hidden flex top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
+					className="absolute overflow-hidden flex top-5 rounded-lg left-5 z-20 hover:bg-gray-1 active:bg-gray-1 gap-2 items-center min-h-[44px] py-2.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
 				>
 					<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-					<p className="text-xs text-inherit">Back</p>
+					<p className="text-xs text-inherit">{t("back")}</p>
 				</div>
 			)}
 			<a href="/">

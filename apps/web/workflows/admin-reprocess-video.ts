@@ -3,6 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { FatalError } from "workflow";
 
 interface AdminReprocessVideoWorkflowPayload {
@@ -55,7 +56,9 @@ async function setReprocessError(
 			phase: "error",
 			processingProgress: 0,
 			processingMessage: "Admin reprocess failed",
-			processingError: errorMessage,
+			// Allowlist token only — the raw message can carry a presigned
+			// URL and this field reaches every share-page viewer (round-18).
+			processingError: persistableProcessingError(errorMessage),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));

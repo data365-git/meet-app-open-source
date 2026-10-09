@@ -61,7 +61,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 			<div>
 				<div className="flex flex-wrap gap-2 items-center mb-10">
 					<NewSubfolderButton parentFolderId={folderId} />
-					<UploadCapButton size="sm" />
+					<UploadCapButton size="sm" folderId={folderId} />
 					<WebRecorderDialog />
 					<CollectionShareControl
 						kind="folder"

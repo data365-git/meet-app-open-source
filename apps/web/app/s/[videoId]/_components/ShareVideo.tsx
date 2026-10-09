@@ -1,30 +1,44 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { ShareLanguage } from "@cap/database/types";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { isAiStatusTerminal, useAiStatus } from "hooks/use-ai-status";
+import { useAiTranslation } from "hooks/use-ai-translation";
 import { useTranscript } from "hooks/use-transcript";
 import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
 	forwardRef,
+	startTransition,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
+import { getTranscript } from "@/actions/videos/get-transcript";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+	isAiRequestPending,
+	pollAuthoritativeValue,
+} from "@/lib/ai-request-pending";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { AIChatPopup } from "./AIChatPopup";
 import { AIFab } from "./AIFab";
-import { BelowVideoTabs } from "./BelowVideoTabs";
-import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
-import { CapAudioPlayer } from "./CapAudioPlayer";
+import { useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
-import { GenerateStrip } from "./GenerateStrip";
+import { DockableVideo } from "./DockableVideo";
+import { GenerateAiPanel } from "./GenerateAiPanel";
+import { detectShareLanguage } from "./LanguagePicker";
+import { MeetingCostPanel, costQueryKey } from "./panels/MeetingCostPanel";
 import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
@@ -35,10 +49,20 @@ import { SummaryPanel } from "./panels/SummaryPanel";
 import { TasksPanel } from "./panels/TasksPanel";
 import { TranscriptPanel } from "./panels/TranscriptPanel";
 import {
+	aiGenerationErrorKindForPage,
+	formatTranscriptGapRanges,
+} from "./transcription-error-message";
+// Pure constants/helpers only (the module imports nothing but a type) — the
+// retry-ladder ceiling must not be duplicated client-side.
+import { MAX_QUOTA_RETRY_ATTEMPTS } from "@/app/api/cron/recover-stale-ai-jobs/stale-job-helpers";
+import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
+	StorageMissingOverlay,
 } from "./RecordingInProgress";
-import { formatChaptersAsVTT } from "./utils/transcript-utils";
+import { SharePanel } from "./SharePanel";
+import { toStandardWebVtt } from "./utils/caption-vtt";
+import { clampStartSec, formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -65,13 +89,25 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
-		transcriptionProgress?: number | null;
 		canRetryProcessing?: boolean;
+		canReplaceWithAudio?: boolean;
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
+		canGenerate?: boolean;
+		/** Whether the AI chat surface (FAB + popup) may be shown at all. Chat
+		 * needs a GEMINI key specifically — its transcript index is built with
+		 * Google-only embeddings — so on an OpenRouter-only instance the route
+		 * answers HTTP 500 to every message. Rendering the entry point there
+		 * advertises a feature that cannot work; default true keeps every
+		 * existing caller unchanged. */
+		aiChatAvailable?: boolean;
+		/** Owner/member-only cost card rendered above the share panel. */
+		showCostPanel?: boolean;
+		/** Comments/activity content for the panel's "Izohlar" tab. */
+		commentsPanel?: React.ReactNode;
 	}
 >(
 	(
@@ -84,28 +120,44 @@ export const ShareVideo = forwardRef<
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
 			aiGenerationStatus,
-			transcriptionProgress,
 			canRetryProcessing,
+			canReplaceWithAudio,
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
 			recordingStopped = false,
 			defaultPlaybackSpeed,
+			canGenerate = false,
+			aiChatAvailable = true,
+			showCostPanel,
+			commentsPanel,
 		},
 		ref,
 	) => {
+		const t = useTranslations("share");
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
+		const searchParams = useSearchParams();
+		// Wave 2.5: the inline chat variant was deleted (SharePanel.tsx). The
+		// modal (AIFab + AIChatPopup) is now the only chat surface — no more
+		// `?variant=` branching. Without this, `?variant=inline` was a live URL
+		// that rendered NO chat at all: SharePanel had dropped its inline chat
+		// and this file still hid the modal one for that variant.
+
+		const safeChapters = useMemo(
+			() =>
+				chapters.map((c) => ({
+					...c,
+					start: clampStartSec(c.start, data.duration ?? undefined),
+				})),
+			[chapters, data.duration],
+		);
 		const handleUploadComplete = useCallback(() => {
 			router.refresh();
 		}, [router]);
 
 		const captionContext = useCaptionContext();
-
-		const handleCaptionLanguageChange = (language: string) => {
-			captionContext.setSelectedLanguage(language as CaptionLanguage);
-		};
 
 		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
@@ -117,18 +169,323 @@ export const ShareVideo = forwardRef<
 		const [confirmStoppedError, setConfirmStoppedError] = useState<
 			string | null
 		>(null);
-		const [aiChatOpen, setAiChatOpen] = useState(false);
 		const [currentTime, setCurrentTime] = useState(0);
+		const [aiChatOpen, setAiChatOpen] = useState(false);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
 		);
 
-		const { data: transcriptContent, error: transcriptError } = useTranscript(
+		const { data: transcript, error: transcriptError } = useTranscript(
 			data.id,
 			data.transcriptionStatus,
 		);
+
+		const [selectedLanguage, setSelectedLanguage] = useState<
+			"base" | ShareLanguage
+		>(data.metadata?.preferredLanguage ?? "base");
+		const [generatingLanguage, setGeneratingLanguage] =
+			useState<ShareLanguage | null>(null);
+		const [activeTranscriptVtt, setActiveTranscriptVtt] = useState<
+			string | null
+		>(null);
+		const translationGeneratedRef = useRef(false);
+
+		const [optimisticAiStatus, setOptimisticAiStatus] =
+			useState<AiGenerationStatus | null>(null);
+		// A banked request (the press was recorded while the upload was still
+		// processing) has no status yet, so the old QUEUED/PROCESSING-only
+		// condition never started the poll — the page sat on the start button
+		// until a manual reload. Derive the same "pending" fact the poll
+		// returns from the server-rendered metadata for this first paint.
+		const serverAiPending = isAiRequestPending({
+			transcriptionStatus: data.transcriptionStatus as
+				| "PROCESSING"
+				| "COMPLETE"
+				| "ERROR"
+				| "SKIPPED"
+				| "NO_AUDIO"
+				| null,
+			aiGenerationStatus,
+			aiStartPendingUpload: data.metadata?.aiStartPendingUpload ?? null,
+		});
+		// A banked request may only start the poll for someone who can actually
+		// read it. `/api/video/ai` answers 401 to a public share-link viewer and
+		// the hook throws on a non-OK response, so `data` would stay undefined
+		// forever and the refetch interval would never reach a stop condition —
+		// an endless retry loop for as long as the tab is open. This gate is a
+		// SEPARATE expression from the panel's own `canGenerate` check; fixing
+		// one does not fix the other.
+		// A genuinely running job is polled for ANYONE the route will answer —
+		// gating this arm on `canGenerate` was too strict, because that flag also
+		// requires `isAdmin`, while `/api/video/ai` answers the video's own owner
+		// and any org owner/admin. A non-admin owner therefore lost live updates
+		// and had to reload to see their own summary appear. What stops a viewer
+		// who may NOT read it is the poll's own stop condition: 401/403 is a
+		// permanent failure, so it fires once and retires.
+		// The banked-marker arm stays gated — that marker is the owner's own
+		// pending press and means nothing to a visitor.
+		// The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B):
+		// `videoUploads` is already deleted by the time this runs, so
+		// `metadata.processingStage` is the only signal — seed the same poll
+		// this AI status already uses from it, mirroring the CapCard gate.
+		const serverProcessingStage = data.metadata?.processingStage ?? null;
+		const [aiPollEnabled, setAiPollEnabled] = useState(
+			aiGenerationStatus === "QUEUED" ||
+				aiGenerationStatus === "PROCESSING" ||
+				(canGenerate && serverAiPending) ||
+				serverProcessingStage != null,
+		);
+		const aiStatusQuery = useAiStatus(data.id, aiPollEnabled);
+		const queryClient = useQueryClient();
+		const aiRefreshedRef = useRef(false);
+		const aiTranslationQuery = useAiTranslation(
+			data.id,
+			generatingLanguage,
+			generatingLanguage !== null,
+		);
+
+		const handleAiStarted = useCallback(() => {
+			aiRefreshedRef.current = false;
+			// Drop the PREVIOUS run's cached body before re-enabling the poll.
+			// Without this, react-query serves the finished run's
+			// `{hasContent: true, aiGenerationStatus: "COMPLETE"}` on the very next
+			// render, `isAiStatusTerminal` reads it as terminal, and the effect
+			// below switches the poll straight back off — so a re-analysis press
+			// shows nothing at all until a manual reload, which is the exact bug
+			// this commit exists to remove.
+			queryClient.removeQueries({ queryKey: ["ai-status", data.id] });
+			setOptimisticAiStatus("QUEUED");
+			setAiPollEnabled(true);
+		}, [queryClient, data.id]);
+
+		const handleGenerateTranslation = useCallback(
+			async (lang: ShareLanguage) => {
+				translationGeneratedRef.current = false;
+				setGeneratingLanguage(lang);
+				try {
+					const res = await fetch("/api/video/ai/translate", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ videoId: data.id, language: lang }),
+					});
+					if (!res.ok) {
+						setGeneratingLanguage(null);
+						toast.error(t("translationError"));
+					}
+				} catch {
+					setGeneratingLanguage(null);
+					toast.error(t("translationError"));
+				}
+			},
+			[data.id, t],
+		);
+
+		// Stop polling + pull server-rendered content once generation reaches a terminal state.
+		useEffect(() => {
+			const d = aiStatusQuery.data;
+			if (!d || !aiPollEnabled) return;
+			// Same rule the poll interval uses (one source, no drifting twin):
+			// old content present while a NEW run is QUEUED/PROCESSING is not
+			// terminal — treating it as terminal stopped the poll mid-run.
+			// `isAiStatusTerminal` itself now also requires the optimize/save
+			// stage to be cleared (FINDING 2) and, when there was never an AI
+			// run and no banked request, treats a cleared stage as terminal too
+			// (FINDING 3) — otherwise a share-link visitor with no AI run polls
+			// forever, since none of the AI-terminal branches ever fire.
+			const terminal = isAiStatusTerminal(d);
+			if (terminal && !aiRefreshedRef.current) {
+				aiRefreshedRef.current = true;
+				setAiPollEnabled(false);
+				setOptimisticAiStatus(null);
+				router.refresh();
+				queryClient.invalidateQueries({ queryKey: costQueryKey(data.id) });
+			}
+		}, [aiStatusQuery.data, aiPollEnabled, router, queryClient, data.id]);
+
+		useEffect(() => {
+			if (!generatingLanguage) return;
+			const d = aiTranslationQuery.data;
+			if (!d) return;
+			const lang = generatingLanguage;
+			if (d.status === "ERROR") {
+				setGeneratingLanguage(null);
+				toast.error(t("translationError"));
+				return;
+			}
+			const terminal = d.hasContent || d.status === "COMPLETE";
+			if (terminal && !translationGeneratedRef.current) {
+				translationGeneratedRef.current = true;
+				router.refresh();
+				setSelectedLanguage(lang);
+				setGeneratingLanguage(null);
+			}
+		}, [aiTranslationQuery.data, generatingLanguage, router, t]);
+
+		// Clear optimistic state when the server prop settles to a terminal status.
+		useEffect(() => {
+			if (
+				aiGenerationStatus === "COMPLETE" ||
+				aiGenerationStatus === "ERROR" ||
+				aiGenerationStatus === "SKIPPED"
+			) {
+				setOptimisticAiStatus(null);
+			}
+		}, [aiGenerationStatus]);
+
+		const effectiveAiStatus =
+			aiStatusQuery.data?.aiGenerationStatus ??
+			optimisticAiStatus ??
+			aiGenerationStatus;
+
+		// Live transcription status: the poll now carries it, so a job that has
+		// really started stops looking "not started" between page loads. The
+		// server-rendered prop is only the fallback until the first poll lands.
+		const effectiveTranscriptionStatus =
+			aiStatusQuery.data?.transcriptionStatus ??
+			(data.transcriptionStatus as
+				| "PROCESSING"
+				| "COMPLETE"
+				| "ERROR"
+				| "SKIPPED"
+				| "NO_AUDIO"
+				| null
+				| undefined);
+
+		// Server-backed "the press is banked / not yet claimed". Unlike the
+		// optimistic QUEUED above it survives remounts, and it is cleared by the
+		// server the moment the row is claimed, fails, or completes.
+		const effectiveAiRequestPending =
+			aiStatusQuery.data?.aiRequestPending ?? serverAiPending;
+
+		const effectiveAiProcessingStep =
+			aiStatusQuery.data?.aiProcessingStep ??
+			data.metadata?.aiProcessingStep ??
+			null;
+		const effectiveAiProcessingSubStep =
+			aiStatusQuery.data?.aiProcessingSubStep ??
+			data.metadata?.aiProcessingSubStep ??
+			null;
+		const effectiveProcessingStage = pollAuthoritativeValue(
+			!!aiStatusQuery.data,
+			aiStatusQuery.data?.processingStage ?? null,
+			serverProcessingStage,
+		);
+		const effectiveProcessingPercent = pollAuthoritativeValue(
+			!!aiStatusQuery.data,
+			aiStatusQuery.data?.processingPercent ?? null,
+			data.metadata?.processingPercent ?? null,
+		);
+		// Read from the server prop. ERROR is terminal, so this is correct on any
+		// load; a failure that lands while the page is already open shows the
+		// generic message until the next navigation (the /api/video/ai poll has
+		// three response shapes and is 401 for public viewers — not worth
+		// threading the code through for that window).
+		const effectiveTranscriptionErrorCode =
+			data.metadata?.transcriptionError?.code ?? null;
+
+		// Honest AI status (owner order 2026-09-25: "pul tugasa pul tugadi
+		// desin — nima muammoligini va aniq statusni ko'rsatsin"). All
+		// terminal-state facts come from the server-rendered metadata, same
+		// source as effectiveTranscriptionErrorCode above.
+		const effectiveQuotaRetriesExhausted =
+			effectiveTranscriptionErrorCode === "QUOTA" &&
+			(data.metadata?.quotaRetryAttempts ?? 0) >=
+				MAX_QUOTA_RETRY_ATTEMPTS;
+		const effectiveAiGenerationErrorCode =
+			effectiveAiStatus === "ERROR"
+				? aiGenerationErrorKindForPage(data.metadata)
+				: null;
+
+		// ERROR stops the poll, so an open page would keep saying "retrying
+		// (n/3)" after the cron's ladder is spent or its retry succeeded.
+		// While the retrying line is on screen, re-read the server every 60 s.
+		const transientRetryPending =
+			effectiveAiGenerationErrorCode === "TRANSIENT" &&
+			(data.metadata?.aiTransientRetryAttempts ?? 0) < 3;
+		useEffect(() => {
+			if (!transientRetryPending) return;
+			const id = setInterval(() => router.refresh(), 60_000);
+			return () => clearInterval(id);
+		}, [transientRetryPending, router]);
+		// When that refresh shows the cron's re-kick (server prop ERROR ->
+		// QUEUED/PROCESSING), resume the live poll exactly as a Retry press
+		// does - otherwise the interval stops and the spinner never ends.
+		// Transition-only, so a stale mount-time QUEUED never re-arms a
+		// poll that just went terminal.
+		const prevServerAiStatusRef = useRef(aiGenerationStatus);
+		useEffect(() => {
+			const prev = prevServerAiStatusRef.current;
+			prevServerAiStatusRef.current = aiGenerationStatus;
+			if (
+				prev === "ERROR" &&
+				(aiGenerationStatus === "QUEUED" ||
+					aiGenerationStatus === "PROCESSING") &&
+				!aiPollEnabled
+			) {
+				handleAiStarted();
+			} else if (
+				prev === "ERROR" &&
+				(aiGenerationStatus === "COMPLETE" || aiGenerationStatus === "SKIPPED")
+			) {
+				// A re-kick finished between two refreshes: drop the cached
+				// ERROR poll body so the fresh server status is what renders.
+				queryClient.resetQueries({ queryKey: ["ai-status", data.id] });
+			}
+		}, [
+			aiGenerationStatus,
+			aiPollEnabled,
+			handleAiStarted,
+			queryClient,
+			data.id,
+		]);
+
+		// Mirrors GenerateAiPanel's `isRunning` predicate so SharePanel can lock
+		// the other tabs / AI input while transcription or AI generation is busy.
+		const aiProcessing =
+			effectiveTranscriptionStatus === "PROCESSING" ||
+			effectiveAiStatus === "QUEUED" ||
+			effectiveAiStatus === "PROCESSING";
+
+		// AI GENERATION (summary/tasks/refined) is finished — lets SharePanel keep
+		// the Tasks/Refined tabs reachable independently of the transcript.
+		const aiContentReady =
+			effectiveAiStatus === "COMPLETE" || effectiveAiStatus === "SKIPPED";
+
+		// Whether the AI chat can actually answer questions: mirrors what
+		// `ensureTranscriptIndex` (chat/route.ts) requires — a non-empty
+		// transcript. When false, the ask box is disabled with a friendly note
+		// instead of sending and surfacing the raw "index is not ready" error.
+		const transcriptReady =
+			data.transcriptionStatus === "COMPLETE" &&
+			!!(transcript?.content && transcript.content.trim().length > 0);
+
+		// NOTE (Wave 2.1): a periodic `router.refresh()` used to live here to keep
+		// GenerateAiPanel's fine per-chunk summary/refine counter
+		// (`aiStageChunksCompleted/Total`) live, because that data only lived in
+		// `data.metadata` (server-rendered, stale until a full round-trip). Now
+		// that `/api/video/ai` (the `aiStatusQuery` poll above, already running
+		// every 4s while `aiPollEnabled`) returns those same fields directly, the
+		// panel sources them straight from the poll (see `aiStatusQuery.data?.*`
+		// below) and the periodic refresh was removed — nothing else depended on
+		// it (checked: the other `router.refresh()` calls in this file are each
+		// one-shot, tied to a distinct terminal/complete event, not to this
+		// interval).
+
+		// "chala" (incomplete-looking) analysis: empty-but-complete, or refined
+		// sections fewer than summary chapters (misaligned old-data case).
+		const aiIncomplete = useMemo(() => {
+			const ai = data.metadata?.aiSummary;
+			if (!ai) return false;
+			const chapters = ai.chapters?.length ?? 0;
+			const refined = ai.refinedTranscript?.chapters?.length ?? 0;
+			const hasContent =
+				(ai.overview?.trim()?.length ?? 0) > 0 ||
+				(ai.topics?.length ?? 0) > 0 ||
+				chapters > 0;
+			return !hasContent || (chapters > 0 && refined > 0 && refined < chapters);
+		}, [data.metadata?.aiSummary, effectiveAiStatus]);
 
 		// Handle comments data
 		useEffect(() => {
@@ -154,27 +511,135 @@ export const ShareVideo = forwardRef<
 			}
 		};
 
-		useEffect(() => {
-			const video = videoRef.current;
-			if (!video) return;
-			const onTimeUpdate = () => setCurrentTime(video.currentTime);
-			video.addEventListener("timeupdate", onTimeUpdate);
-			return () => video.removeEventListener("timeupdate", onTimeUpdate);
-		}, []);
+		// Panels (transcript/refined/summary chapters) jump AND start playback.
+		const handleSeekAndPlay = (time: number) => {
+			handleSeek(time);
+			videoRef.current?.play()?.catch(() => {});
+		};
 
 		useEffect(() => {
-			if (transcriptContent) {
-				captionContext.setOriginalVttContent(transcriptContent);
-			} else if (transcriptError) {
+			// The <video> mounts inside CapVideoPlayer AFTER this effect first
+			// runs, so retry until the ref is populated — otherwise currentTime
+			// never follows playback (karaoke/active-chapter follow stays frozen).
+			//
+			// T6 (resume position): also persist currentTime to localStorage
+			// (throttled ~5s + on pause/beforeunload) keyed by videoId, and
+			// restore it once on loadedmetadata — unless a `?t=` deep-link is
+			// present (Share.tsx owns that seek) or the saved time is within
+			// ~10s of the end.
+			let attached: HTMLVideoElement | null = null;
+			let raf = 0;
+			const resumeKey = `data365:resume:${data.id}`;
+			const hasDeepLink = searchParams.has("t");
+			let restoredOnce = false;
+			let lastSavedAt = 0;
+
+			const saveResumeTime = (time: number) => {
+				try {
+					window.localStorage.setItem(resumeKey, String(Math.floor(time)));
+				} catch {
+					// ignore (storage disabled/full)
+				}
+			};
+
+			const onTimeUpdate = () => {
+				const video = videoRef.current;
+				if (!video) return;
+				setCurrentTime(video.currentTime);
+				const now = Date.now();
+				if (now - lastSavedAt >= 5000) {
+					lastSavedAt = now;
+					saveResumeTime(video.currentTime);
+				}
+			};
+
+			const onPause = () => {
+				if (videoRef.current) saveResumeTime(videoRef.current.currentTime);
+			};
+
+			const onBeforeUnload = () => {
+				if (videoRef.current) saveResumeTime(videoRef.current.currentTime);
+			};
+
+			const onLoadedMetadata = () => {
+				const video = videoRef.current;
+				if (!video || restoredOnce || hasDeepLink) return;
+				restoredOnce = true;
+				try {
+					const raw = window.localStorage.getItem(resumeKey);
+					if (!raw) return;
+					const saved = Number(raw);
+					if (!Number.isFinite(saved) || saved <= 0) return;
+					const duration =
+						Number.isFinite(video.duration) && video.duration > 0
+							? video.duration
+							: (data.duration ?? 0);
+					if (duration > 0 && saved >= duration - 10) return;
+					video.currentTime = saved;
+				} catch {
+					// ignore
+				}
+			};
+
+			const attach = () => {
+				const video = videoRef.current;
+				if (!video) {
+					raf = requestAnimationFrame(attach);
+					return;
+				}
+				attached = video;
+				video.addEventListener("timeupdate", onTimeUpdate);
+				video.addEventListener("pause", onPause);
+				video.addEventListener("loadedmetadata", onLoadedMetadata);
+				if (video.readyState >= 1) onLoadedMetadata();
+				window.addEventListener("beforeunload", onBeforeUnload);
+			};
+			attach();
+			return () => {
+				cancelAnimationFrame(raf);
+				attached?.removeEventListener("timeupdate", onTimeUpdate);
+				attached?.removeEventListener("pause", onPause);
+				attached?.removeEventListener("loadedmetadata", onLoadedMetadata);
+				window.removeEventListener("beforeunload", onBeforeUnload);
+			};
+		}, [data.id, data.duration, searchParams]);
+
+		useEffect(() => {
+			if (selectedLanguage === "base") {
+				setActiveTranscriptVtt(null);
+				return;
+			}
+			let cancelled = false;
+			startTransition(() => {
+				getTranscript(data.id, selectedLanguage).then((result) => {
+					if (cancelled) return;
+					if (result.success && result.content) {
+						setActiveTranscriptVtt(result.content);
+					}
+				});
+			});
+			return () => {
+				cancelled = true;
+			};
+		}, [data.id, selectedLanguage]);
+
+		useEffect(() => {
+			const vttContent =
+				selectedLanguage === "base" ? transcript?.content : activeTranscriptVtt;
+			if (vttContent) {
+				captionContext.setOriginalVttContent(vttContent);
+			} else if (selectedLanguage === "base" && transcriptError) {
 				console.error(
 					"[Transcript] Transcript error from React Query:",
 					transcriptError.message,
 				);
 			}
 		}, [
-			transcriptContent,
+			transcript,
 			transcriptError,
 			captionContext.setOriginalVttContent,
+			selectedLanguage,
+			activeTranscriptVtt,
 		]);
 
 		useEffect(() => {
@@ -191,7 +656,9 @@ export const ShareVideo = forwardRef<
 			}
 
 			if (data.transcriptionStatus === "COMPLETE" && vttContent) {
-				const blob = new Blob([vttContent], { type: "text/vtt" });
+				const blob = new Blob([toStandardWebVtt(vttContent)], {
+					type: "text/vtt",
+				});
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
 					if (prev) {
@@ -218,7 +685,7 @@ export const ShareVideo = forwardRef<
 
 		useEffect(() => {
 			if (chapters?.length > 0) {
-				const vttContent = formatChaptersAsVTT(chapters);
+				const vttContent = formatChaptersAsVTT(safeChapters);
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setChaptersUrl((prev) => {
@@ -238,7 +705,7 @@ export const ShareVideo = forwardRef<
 				}
 				return null;
 			});
-		}, [chapters]);
+		}, [safeChapters, chapters?.length]);
 
 		const isSegmentsSource = data.source.type === "desktopSegments";
 		const previousSegmentUploadProgressRef = useRef(segmentUploadProgress);
@@ -274,9 +741,7 @@ export const ShareVideo = forwardRef<
 				router.refresh();
 			} catch (error) {
 				setConfirmStoppedError(
-					error instanceof Error
-						? error.message
-						: "Recording could not be finalized",
+					error instanceof Error ? error.message : t("recordingFinalizeFailed"),
 				);
 			} finally {
 				setIsConfirmingStopped(false);
@@ -344,25 +809,41 @@ export const ShareVideo = forwardRef<
 			userConfirmedStopped,
 		]);
 
+		const available: ShareLanguage[] = (
+			Object.keys(data.metadata?.aiSummaryByLanguage ?? {}) as ShareLanguage[]
+		).filter((lang) => !!data.metadata?.aiSummaryByLanguage?.[lang]);
+
+		// Detect from the BASE summary (not activeAiSummary) so the base label
+		// never changes when the user switches to a translated language.
+		const baseLanguage = useMemo(
+			() =>
+				data.metadata?.aiBaseLanguage ??
+				detectShareLanguage(data.metadata?.aiSummary?.overview),
+			[data.metadata?.aiBaseLanguage, data.metadata?.aiSummary?.overview],
+		);
+
 		// All source types use the native <video> player via the mp4 playlist endpoint.
 		// The /api/playlist?videoType=mp4 route returns a signed redirect to result.mp4.
 		const videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 		const rawFallbackSrc =
-			data.source.type === "webMP4" ||
-			data.source.type === "webAudio" ||
-			data.source.type === "extensionWeb"
+			data.source.type === "webMP4" || data.source.type === "extensionWeb"
 				? `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=raw-preview`
 				: undefined;
 		const enableCrossOrigin = true;
-		const isWebAudio = data.source.type === "webAudio";
 
-		return (
+		const playerBlock = (
 			<>
 				<div
-					className="relative h-full"
+					className={`relative overflow-hidden rounded-2xl border border-gray-5 bg-gray-1 ${
+						data.metadata?.isAudio
+							? "h-[190px] sm:h-[210px]"
+							: "aspect-video"
+					}`}
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
-					{isActivelyRecording ? (
+					{data.metadata?.storageMissing ? (
+						<StorageMissingOverlay className="h-full" />
+					) : isActivelyRecording ? (
 						<div className="relative h-full overflow-hidden rounded-xl bg-black">
 							<CapVideoPlayer
 								videoId={data.id}
@@ -379,6 +860,8 @@ export const ShareVideo = forwardRef<
 								enableCrossOrigin={enableCrossOrigin}
 								hasActiveUpload={data.hasActiveUpload}
 								autoplay
+								isAudio={data.metadata?.isAudio}
+								videoName={data.name}
 							/>
 							<div className="absolute inset-0 z-20">
 								<RecordingInProgressOverlay
@@ -392,14 +875,6 @@ export const ShareVideo = forwardRef<
 						</div>
 					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
-					) : isWebAudio ? (
-						<CapAudioPlayer
-							videoSrc={rawFallbackSrc ?? videoSrc}
-							videoRef={videoRef}
-							duration={data.duration}
-							chapters={data.metadata?.aiSummary?.chapters ?? []}
-							title={data.name}
-						/>
 					) : (
 						<CapVideoPlayer
 							videoId={data.id}
@@ -428,22 +903,44 @@ export const ShareVideo = forwardRef<
 								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
-							captionLanguage={captionContext.selectedLanguage}
-							onCaptionLanguageChange={handleCaptionLanguageChange}
-							availableCaptions={captionContext.availableTranslations}
-							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
+							canReplaceWithAudio={canReplaceWithAudio}
 							chapters={
 								areChaptersDisabled
 									? []
-									: chapters.map((ch) => ({
+									: safeChapters.map((ch) => ({
 											startSec: ch.start,
 											title: ch.title,
 										}))
 							}
+							isAudio={data.metadata?.isAudio}
+							videoName={data.name}
+							transcriptLanguages={{
+								baseLanguage,
+								available,
+								selected: selectedLanguage,
+								onSelect: setSelectedLanguage,
+								canGenerate,
+								generatingLanguage,
+								onGenerate: handleGenerateTranslation,
+							}}
 						/>
 					)}
+					{!data.metadata?.storageMissing &&
+						!isActivelyRecording &&
+						!isProcessingInProgress &&
+						effectiveProcessingStage && (
+							<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30 rounded-md bg-black/60 px-2 py-1">
+								<Loader2Icon className="size-3.5 animate-spin text-white" />
+								<span className="text-sm font-semibold text-white">
+									{effectiveProcessingStage === "saving"
+										? t("processingStageSaving")
+										: t("processingStageOptimizing")}
+									{effectiveProcessingPercent != null &&
+										` · ${effectiveProcessingPercent}%`}
+								</span>
+							</div>
+						)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
 							<div className="flex items-center gap-1.5">
@@ -459,18 +956,18 @@ export const ShareVideo = forwardRef<
 										<CheckCircle2 className="size-3" />
 									)}
 									{isConfirmingStopped
-										? "Marking as completed..."
-										: "Mark video as completed"}
+										? t("markingAsCompleted")
+										: t("markAsCompleted")}
 								</button>
 								<TooltipPrimitive.Provider delayDuration={150}>
 									<Tooltip
 										position="top"
 										className="max-w-[260px] items-start text-left leading-relaxed"
-										content="We didn't receive confirmation that this recording finished uploading. Mark it as completed to publish what's been uploaded. Next time, keep the desktop app open after you stop recording until the video loads here, so all files finish uploading."
+										content={t("markCompletedTooltip")}
 									>
 										<button
 											type="button"
-											aria-label="Why this recording needs to be marked as completed"
+											aria-label={t("markCompletedAriaLabel")}
 											className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
 										>
 											<Info className="size-3.5" />
@@ -485,99 +982,274 @@ export const ShareVideo = forwardRef<
 							)}
 						</div>
 					)}
+					{!data.owner.isPro && (
+						<div className="absolute top-4 left-4 z-30">
+							<button
+								type="button"
+								className="block"
+								onClick={(e) => {
+									e.stopPropagation();
+									setUpgradeModalOpen(true);
+								}}
+							>
+								<div className="relative">
+									<div className="opacity-50 transition-opacity hover:opacity-100 peer">
+										<Logo className="w-auto h-4 sm:h-8" white={true} />
+									</div>
+
+									<div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
+										<p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
+											{t("removeWatermark")}
+										</p>
+									</div>
+								</div>
+							</button>
+						</div>
+					)}
 				</div>
 
-				{!data.owner.isPro && (
-					<div className="absolute top-4 left-4 z-30">
-						<button
-							type="button"
-							className="block"
-							onClick={(e) => {
-								e.stopPropagation();
-								setUpgradeModalOpen(true);
-							}}
-						>
-							<div className="relative">
-								<div className="opacity-50 transition-opacity hover:opacity-100 peer">
-									<Logo className="w-auto h-4 sm:h-8" white={true} />
-								</div>
-
-								<div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
-									<p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-										Remove watermark
-									</p>
-								</div>
-							</div>
-						</button>
-					</div>
-				)}
 				<UpgradeModal
 					open={upgradeModalOpen}
 					onOpenChange={setUpgradeModalOpen}
 				/>
+			</>
+		);
 
-				{Boolean(canRetryProcessing) && (
-					<GenerateStrip
-						videoId={data.id}
-						transcriptionStatus={data.transcriptionStatus ?? undefined}
-						aiGenerationStatus={aiGenerationStatus ?? undefined}
-						hasAiContent={Boolean(
-							data.metadata?.aiSummary || data.metadata?.summary,
-						)}
-					/>
-				)}
+		const activeAiSummary =
+			selectedLanguage !== "base"
+				? (data.metadata?.aiSummaryByLanguage?.[selectedLanguage] ??
+					data.metadata?.aiSummary)
+				: data.metadata?.aiSummary;
 
-				<div className="mt-4">
-					<BelowVideoTabs
-						summary={
-							<SummaryPanel
-								transcriptionStatus={data.transcriptionStatus ?? undefined}
-								aiGenerationStatus={aiGenerationStatus ?? undefined}
-								data={{
-									duration: data.duration ?? undefined,
-									aiSummary: data.metadata?.aiSummary ?? undefined,
-									speakerCount: undefined,
-								}}
-								onVideoJump={handleSeek}
-							/>
-						}
-						tasks={
-							<TasksPanel
+		// Stable identity for the tasks array so TasksPanel's `initialTasks`
+		// re-sync effect does NOT fire on every parent re-render (currentTime
+		// updates many times/sec during playback) and clobber an in-flight
+		// optimistic checkbox toggle. Only changes when the summary actually changes.
+		const activeTasks = useMemo(
+			() => activeAiSummary?.tasks ?? [],
+			[activeAiSummary],
+		);
+
+		const hasCleanTranscript =
+			(activeAiSummary?.refinedTranscript?.chapters?.length ?? 0) > 0;
+
+		// Chapter group headers in the raw-transcript tab: use the TRANSLATED
+		// chapter titles when a non-base language is selected (so the headers match
+		// the translated cue text + the rest of the analysis), else the base ones.
+		const transcriptChapters = useMemo(
+			() =>
+				selectedLanguage !== "base" &&
+				(activeAiSummary?.chapters?.length ?? 0) > 0
+					? (activeAiSummary?.chapters ?? []).map((c) => ({
+							startSec: clampStartSec(c.startSec, data.duration ?? undefined),
+							title: c.title,
+						}))
+					: safeChapters.map((c) => ({ startSec: c.start, title: c.title })),
+			[selectedLanguage, activeAiSummary, safeChapters, data.duration],
+		);
+
+		return (
+			<>
+				<div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.55fr_1fr] lg:items-start lg:gap-6">
+					{/* All widths: video on top, AI panel right below it — one normal
+					    full-page scroll (owner spec 2026-07-14, restores the
+					    pre-3c3d78a arrangement). Desktop's right sidebar holds only
+					    the light cost + comments cards. */}
+					<div className="flex min-w-0 flex-col gap-3">
+						<div className="min-w-0">
+							<DockableVideo isAudio={data.metadata?.isAudio} title={data.name}>
+								{playerBlock}
+							</DockableVideo>
+						</div>
+						<div className="min-w-0">
+							<SharePanel
 								videoId={data.id}
-								transcriptionStatus={data.transcriptionStatus ?? undefined}
-								aiGenerationStatus={aiGenerationStatus ?? undefined}
-								tasks={data.metadata?.aiSummary?.tasks ?? []}
-							/>
-						}
-						transcript={
-							<TranscriptPanel
-								transcriptContent={transcriptContent ?? undefined}
-								currentTime={currentTime}
-								onVideoJump={handleSeek}
-							/>
-						}
-						refined={
-							<RefinedTranscriptPanel
-								transcriptionStatus={data.transcriptionStatus ?? undefined}
-								aiGenerationStatus={aiGenerationStatus ?? undefined}
-								currentTime={currentTime}
-								refinedTranscript={
-									data.metadata?.aiSummary?.refinedTranscript ?? undefined
+								onVideoJump={handleSeekAndPlay}
+								processing={aiProcessing}
+								transcriptReady={transcriptReady}
+								aiContentReady={aiContentReady}
+								summary={
+									<>
+										<GenerateAiPanel
+											videoId={data.id}
+											canGenerate={canGenerate}
+											transcriptionStatus={effectiveTranscriptionStatus}
+											aiGenerationStatus={effectiveAiStatus}
+											aiRequestPending={effectiveAiRequestPending}
+											aiProcessingStep={effectiveAiProcessingStep}
+											aiProcessingSubStep={effectiveAiProcessingSubStep}
+											transcriptionErrorCode={effectiveTranscriptionErrorCode}
+											quotaRetriesExhausted={effectiveQuotaRetriesExhausted}
+											aiQuotaWaiting={!!data.metadata?.aiQuotaWaiting}
+											aiGenerationErrorCode={effectiveAiGenerationErrorCode}
+											// TRANSIENT ladder depth, same server-rendered source
+											// as the error code itself (ERROR is terminal; a
+											// fresh failure between polls shows the previous
+											// count until the next navigation, same documented
+											// caveat as the code above).
+											aiTransientRetryAttempts={
+												data.metadata?.aiTransientRetryAttempts ?? 0
+											}
+											// The durable "this run includes AI" fact, for the stepper after a remount.
+											aiGenerationRequested={
+												aiStatusQuery.data?.aiGenerationRequested ??
+												typeof data.metadata?.aiGenerationRequestedAt === "string"
+											}
+											aiIncomplete={aiIncomplete}
+											duration={data.duration}
+											transcriptionChunksCompleted={
+												transcript?.progress?.completed ??
+												aiStatusQuery.data?.transcriptionChunksCompleted ??
+												data.metadata?.transcriptionChunksCompleted
+											}
+											transcriptionChunksTotal={
+												transcript?.progress?.total ??
+												aiStatusQuery.data?.transcriptionChunksTotal ??
+												data.metadata?.transcriptionChunksTotal
+											}
+											aiStageChunksCompleted={
+												aiStatusQuery.data?.aiStageChunksCompleted ??
+												data.metadata?.aiStageChunksCompleted
+											}
+											aiStageChunksTotal={
+												aiStatusQuery.data?.aiStageChunksTotal ??
+												data.metadata?.aiStageChunksTotal
+											}
+											processingStartedAt={data.metadata?.processingStartedAt}
+											aiProcessingStartedAt={
+												data.metadata?.aiProcessingStartedAt
+											}
+											onStarted={handleAiStarted}
+										/>
+										{!aiProcessing && (
+											<SummaryPanel
+												data={{
+													duration: data.duration ?? undefined,
+													aiSummary: activeAiSummary ?? undefined,
+													speakerCount: undefined,
+												}}
+												onVideoJump={handleSeekAndPlay}
+											/>
+										)}
+									</>
 								}
-								onVideoJump={handleSeek}
+								tasks={
+									<div>
+										<p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-10">
+											{t("tabTasks")} · {activeTasks.length}
+										</p>
+										<TasksPanel
+											videoId={data.id}
+											tasks={activeTasks}
+											canEdit={canGenerate}
+										/>
+									</div>
+								}
+								transcript={
+									<>
+										{transcript?.partial &&
+											(transcript.progress?.total ?? 0) > 0 && (
+												<div className="mb-2 inline-flex items-center rounded-full border border-amber-6 bg-amber-3 px-3 py-1 text-xs font-medium text-amber-11">
+													{t("transcribingProgress", {
+														completed: transcript.progress?.completed ?? 0,
+														total: transcript.progress?.total ?? 0,
+													})}
+												</div>
+											)}
+										{(
+											selectedLanguage === "base"
+												? transcript?.content
+												: activeTranscriptVtt
+										) ? (
+											<TranscriptPanel
+												transcriptContent={
+													(selectedLanguage === "base"
+														? transcript?.content
+														: activeTranscriptVtt) ?? undefined
+												}
+												currentTime={currentTime}
+												onVideoJump={handleSeekAndPlay}
+												duration={data.duration}
+												chapters={transcriptChapters}
+												videoTitle={data.name}
+											/>
+										) : hasCleanTranscript ? (
+											<div className="rounded-xl border border-blue-6 bg-blue-3 px-4 py-5">
+												<p className="text-sm font-semibold text-gray-12">
+													{t("rawTranscriptUnavailable")}
+												</p>
+												<p className="mt-1 text-sm leading-relaxed text-gray-11">
+													{t("cleanTranscriptReady")}
+												</p>
+											</div>
+										) : (
+											<TranscriptPanel
+												transcriptContent={undefined}
+												currentTime={currentTime}
+												onVideoJump={handleSeekAndPlay}
+												duration={data.duration}
+												chapters={transcriptChapters}
+												videoTitle={data.name}
+											/>
+										)}
+										{/* S3 (owner order 2026-09-25): a COMPLETE transcript with
+										    recorded gaps must say WHERE text is missing — a silent
+										    hole reads as "done", which is the lie this whole change
+										    exists to remove. */}
+										{effectiveTranscriptionStatus === "COMPLETE" &&
+										(data.metadata?.transcriptionGaps?.length ?? 0) > 0 && (
+											<p className="mt-2 text-xs text-gray-10">
+												{t("aiTranscriptGaps", {
+													ranges: formatTranscriptGapRanges(
+														data.metadata?.transcriptionGaps ?? [],
+													),
+												})}
+											</p>
+										)}
+									</>
+								}
+								refined={
+									<RefinedTranscriptPanel
+										refinedTranscript={
+											activeAiSummary?.refinedTranscript ?? undefined
+										}
+										onVideoJump={handleSeekAndPlay}
+										duration={data.duration}
+										currentTime={currentTime}
+										videoTitle={data.name}
+									/>
+								}
 							/>
-						}
-					/>
-				</div>
+						</div>
+					</div>
 
-				<div className={`ai-aura${aiChatOpen ? " show" : ""}`} />
-				<AIChatPopup
-					videoId={data.id}
-					onVideoJump={handleSeek}
-					onClose={() => setAiChatOpen(false)}
-					isOpen={aiChatOpen}
-				/>
-				<AIFab onClick={() => setAiChatOpen((v) => !v)} isOpen={aiChatOpen} />
+					<div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+						{showCostPanel && (
+							<MeetingCostPanel videoId={data.id} running={aiPollEnabled} />
+						)}
+						{commentsPanel}
+					</div>
+				</div>
+				{/* Wave 2.5: the modal (AIFab + AIChatPopup) is the only chat surface
+			    now. The old `.ai-aura` glow is gone with it — the owner's redesign
+			    drops it deliberately for a calmer surface, and ai-chat.css no
+			    longer styles it. */}
+				{aiChatAvailable && (
+					<>
+						<AIChatPopup
+							videoId={data.id}
+							onVideoJump={handleSeekAndPlay}
+							onClose={() => setAiChatOpen(false)}
+							isOpen={aiChatOpen}
+							processing={aiProcessing}
+							transcriptReady={transcriptReady}
+						/>
+						<AIFab
+							onClick={() => setAiChatOpen((v) => !v)}
+							isOpen={aiChatOpen}
+						/>
+					</>
+				)}
 			</>
 		);
 	},

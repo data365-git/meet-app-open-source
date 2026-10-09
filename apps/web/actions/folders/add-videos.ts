@@ -6,11 +6,12 @@ import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
 	sharedVideos,
+	spaces,
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function addVideosToFolder(
@@ -30,26 +31,41 @@ export async function addVideosToFolder(
 		}
 
 		const [folder] = await db()
-			.select({ id: folders.id, spaceId: folders.spaceId })
+			.select({
+				id: folders.id,
+				spaceId: folders.spaceId,
+				organizationId: folders.organizationId,
+			})
 			.from(folders)
 			.where(eq(folders.id, folderId));
 
-		if (!folder) {
+		if (!folder || folder.organizationId !== user.activeOrganizationId) {
 			throw new Error("Folder not found");
+		}
+
+		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
+
+		if (!isAllSpacesEntry) {
+			const [space] = await db()
+				.select({ organizationId: spaces.organizationId })
+				.from(spaces)
+				.where(eq(spaces.id, spaceId));
+
+			if (!space || space.organizationId !== user.activeOrganizationId) {
+				throw new Error("Space not found");
+			}
 		}
 
 		const userVideos = await db()
 			.select({ id: videos.id })
 			.from(videos)
-			.where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds)));
+			.where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds), isNull(videos.deletedAt)));
 
 		const validVideoIds = userVideos.map((v) => v.id);
 
 		if (validVideoIds.length === 0) {
 			throw new Error("No valid videos found");
 		}
-
-		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
 
 		//if we're adding videos to a folder from Caps page, then insert the videos into the folder
 		if (isAllSpacesEntry && folder.spaceId) {

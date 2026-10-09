@@ -11,6 +11,7 @@ import clsx from "clsx";
 import { CameraIcon, CameraOffIcon } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import { useMediaPermission } from "./useMediaPermission";
 import { NO_CAMERA, NO_CAMERA_VALUE } from "./web-recorder-constants";
 
@@ -35,6 +36,7 @@ export const CameraSelector = ({
 	onCameraChange,
 	onRefreshDevices,
 }: CameraSelectorProps) => {
+	const t = useTranslations("recorder");
 	const cameraEnabled = selectedCameraId !== null;
 	const { state: permissionState, requestPermission } = useMediaPermission(
 		"camera",
@@ -48,13 +50,13 @@ export const CameraSelector = ({
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 
 	const statusPillClassName = clsx(
-		"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)]",
+		"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)] py-[0.6875rem] -my-[0.6875rem]",
 		statusPillDisabled ? "cursor-default" : "cursor-pointer",
 		shouldRequestPermission
-			? "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]"
+			? "bg-[var(--blue-3)] text-[var(--blue-11)] dark:bg-[var(--blue-4)] dark:text-[var(--blue-12)] hover:bg-[var(--blue-4)] dark:hover:bg-[var(--blue-5)]"
 			: cameraEnabled
 				? "bg-[var(--blue-3)] text-[var(--blue-11)] dark:bg-[var(--blue-4)] dark:text-[var(--blue-12)] hover:bg-[var(--blue-4)] dark:hover:bg-[var(--blue-5)]"
-				: "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]",
+				: "bg-[var(--gray-3)] text-[var(--gray-11)] dark:bg-[var(--gray-4)] dark:text-[var(--gray-12)]",
 	);
 
 	const handleStatusPillClick = async (
@@ -71,7 +73,7 @@ export const CameraSelector = ({
 				}
 			} catch (error) {
 				console.error("Camera permission request failed", error);
-				toast.error("Unable to access your camera. Check browser permissions.");
+				toast.error(t("cameraError"))
 			}
 
 			return;
@@ -107,7 +109,7 @@ export const CameraSelector = ({
 				<div className="relative w-full">
 					<SelectTrigger
 						className={clsx(
-							"relative flex flex-row items-center h-[2rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
+							"relative flex flex-row items-center h-[2.75rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-xl w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
 							disabled || shouldRequestPermission
 								? "cursor-default"
 								: undefined,
@@ -146,10 +148,10 @@ export const CameraSelector = ({
 						onKeyDown={handleStatusPillKeyDown}
 					>
 						{shouldRequestPermission
-							? "Request permission"
+							? t("requestPermission")
 							: cameraEnabled
-								? "On"
-								: "Off"}
+								? t("statusOn")
+								: t("statusOff")}
 					</button>
 				</div>
 				<SelectContent className="z-[502]">
@@ -163,7 +165,7 @@ export const CameraSelector = ({
 						<SelectItem key={camera.deviceId} value={camera.deviceId}>
 							<span className="flex items-center gap-2 truncate">
 								<CameraIcon className="size-4 text-gray-11" />
-								{camera.label?.trim() || `Camera ${index + 1}`}
+								{camera.label?.trim() || t("cameraFallback", { n: index + 1 })}
 							</span>
 						</SelectItem>
 					))}

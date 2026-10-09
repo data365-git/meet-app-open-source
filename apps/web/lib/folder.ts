@@ -47,8 +47,19 @@ export const getFolderBreadcrumb = Effect.fn(function* (
 		color: "normal" | "blue" | "red" | "yellow";
 	}> = [];
 	let currentFolderId = folderId;
+	// A folder tree can only become cyclic through a race — two people moving
+	// A into B and B into A at the same instant both pass the ancestor check,
+	// because that check and the write are not one transaction. It is rare and
+	// it is unrecoverable without hand-editing the database, because THIS walk
+	// is what every folder page runs: without a guard it queries forever and
+	// hangs the whole subtree. The guard costs one Set and degrades a cycle to
+	// a truncated breadcrumb instead of a dead page.
+	const visited = new Set<string>();
 
 	while (currentFolderId) {
+		if (visited.has(currentFolderId)) break;
+		visited.add(currentFolderId);
+
 		const folder = yield* getFolderById(currentFolderId);
 		if (!folder) break;
 
@@ -189,6 +200,9 @@ export const getVideosByFolderId = Effect.fn(function* (
 				source: videos.source,
 				isScreenshot: videos.isScreenshot,
 				duration: videos.duration,
+				// F1 (2026-10-07 review): lets the bulk-AI planner pre-skip
+				// finished transcripts (same reason as caps/page.tsx).
+				transcriptionStatus: videos.transcriptionStatus,
 				settings: videos.settings,
 				orgId: videos.orgId,
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
@@ -234,13 +248,15 @@ export const getVideosByFolderId = Effect.fn(function* (
 					? and(
 							eq(spaceVideos.folderId, folderId),
 							isNull(organizations.tombstoneAt),
+							isNull(videos.deletedAt),
 						)
 					: root.variant === "org"
 						? and(
 								eq(sharedVideos.folderId, folderId),
 								isNull(organizations.tombstoneAt),
+								isNull(videos.deletedAt),
 							)
-						: eq(videos.folderId, folderId),
+						: and(eq(videos.folderId, folderId), isNull(videos.deletedAt)),
 			)
 			.groupBy(
 				videos.id,
@@ -252,6 +268,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.source,
 				videos.isScreenshot,
 				videos.duration,
+				videos.transcriptionStatus,
 				videos.settings,
 				videos.orgId,
 				videos.password,
@@ -344,6 +361,10 @@ export const getVideosByFolderId = Effect.fn(function* (
 					inheritedSpaceSettings: rules.inheritedSettings,
 					settings: video.settings,
 					hasActiveUpload: video.hasActiveUpload,
+					// Selected above; the bulk-AI dialog needs it for the price estimate.
+					duration: video.duration ?? null,
+					// Selected above (F1): pre-skip finished transcripts.
+					transcriptionStatus: video.transcriptionStatus ?? null,
 					foldersData: [], // Empty array since videos in a folder don't need folder data
 				};
 			}),

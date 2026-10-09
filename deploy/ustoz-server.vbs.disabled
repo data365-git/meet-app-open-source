@@ -1,0 +1,1 @@
+CreateObject("Wscript.Shell").Run "cmd /c ""D:\vibecoding\ustoz-github\deploy\start-ustoz-server.cmd""", 0, False

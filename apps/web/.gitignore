@@ -38,3 +38,12 @@ pnpm-lock.yaml
 # Playwright
 test-results/
 playwright-report/
+
+# Playwright storageState: a REAL signed-in admin session, reusable as a
+# credential by anyone who obtains the file. It was untracked but unignored,
+# i.e. one `git add .` from being committed to a repo history that cannot be
+# rewritten. Flagged by an independent live QA 2026-07-18.
+.auth/
+
+# Local scratch produced by QA/debug runs — never part of the app.
+scratchpad/

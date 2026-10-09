@@ -3,7 +3,6 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
-	importedVideos,
 	organizationMembers,
 	organizations,
 	users,
@@ -13,7 +12,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
@@ -22,7 +21,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
-import { decodeStorageVideo } from "@/lib/video-storage";
+import { titleOriginMetadata } from "@/lib/title-origin";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -205,9 +204,14 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
-			const metadata: VideoMetadata | undefined = name
-				? { sourceName: name }
-				: undefined;
+			// A client-provided name may be human-typed — only the dated fallback
+			// template is machine-derived and eligible for AI renaming. (When the
+			// name IS the machine window title, the existing title===sourceName
+			// rule in shouldReplaceVideoTitle still allows the rename.)
+			const metadata: VideoMetadata = {
+				...(name ? { sourceName: name } : {}),
+				...titleOriginMetadata(name),
+			};
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,
@@ -342,42 +346,39 @@ app.delete(
 		const user = c.get("user");
 
 		try {
+			// Read before the delete, solely so the Google Drive storage-quota
+			// cache can be invalidated afterwards. Absence is NOT a 404 here:
+			// `permanentlyDelete` is idempotent, so a retry of an already-erased
+			// video must succeed.
 			const [result] = await db()
-				.select({ video: videos })
+				.select({ storageIntegrationId: videos.storageIntegrationId })
 				.from(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
-			if (!result)
+			// Storage first, database last, idempotent — the same machinery as
+			// /api/video/delete-permanent. A non-owner fails PolicyDenied, which
+			// maps to the same 404 an absent video used to get, so existence
+			// still leaks nothing.
+			const denied = await Effect.gen(function* () {
+				const videosService = yield* Videos;
+				yield* videosService.permanentlyDelete(videoId);
+				return false;
+			}).pipe(
+				Effect.catchTag("PolicyDenied", () => Effect.succeed(true)),
+				Effect.provide(makeCurrentUserLayer(user)),
+				runPromise,
+			);
+
+			if (denied)
 				return c.json(
 					{ error: true, message: "Video not found" },
 					{ status: 404 },
 				);
 
-			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-			await db().delete(importedVideos).where(eq(importedVideos.id, videoId));
-
-			await db()
-				.delete(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
-
-			await Effect.gen(function* () {
-				const video = decodeStorageVideo(result.video);
-				const [bucket] = yield* Storage.getAccessForVideo(video);
-
-				const listedObjects = yield* bucket.listObjects({
-					prefix: `${user.id}/${videoId}/`,
-				});
-
-				if (listedObjects.Contents)
-					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content) => ({
-							Key: content.Key,
-						})),
-					);
-			}).pipe(runPromise);
-			await invalidateGoogleDriveStorageQuotaCache(
-				result.video.storageIntegrationId,
-			);
+			if (result)
+				await invalidateGoogleDriveStorageQuotaCache(
+					result.storageIntegrationId,
+				);
 
 			return c.json(true);
 		} catch (error) {

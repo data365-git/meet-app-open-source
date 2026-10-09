@@ -40,7 +40,6 @@ const options: Array<{
 	label: string;
 	value: BooleanOrganizationSettingKey;
 	description: string;
-	pro?: boolean;
 }> = [
 	{
 		label: "Enable comments",
@@ -51,7 +50,6 @@ const options: Array<{
 		label: "Enable summary",
 		value: "disableSummary",
 		description: "Show AI-generated summary (requires transcript)",
-		pro: true,
 	},
 	{
 		label: "Enable captions",
@@ -62,7 +60,6 @@ const options: Array<{
 		label: "Enable chapters",
 		value: "disableChapters",
 		description: "Show AI-generated chapters (requires transcript)",
-		pro: true,
 	},
 	{
 		label: "Enable reactions",
@@ -73,13 +70,6 @@ const options: Array<{
 		label: "Enable transcript",
 		value: "disableTranscript",
 		description: "Enabling this also allows chapters and summary",
-		pro: true,
-	},
-	{
-		label: "Show Cap logo",
-		value: "hideShareableLinkCapLogo",
-		description: "Show Cap branding at the top of shareable links",
-		pro: true,
 	},
 ];
 
@@ -99,7 +89,7 @@ const mergeSettings = (
 });
 
 const CapSettingsCard = () => {
-	const { user, organizationSettings } = useDashboardContext();
+	const { organizationSettings } = useDashboardContext();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
 		useState<OrganizationSettings>(initialSettings);
@@ -181,8 +171,8 @@ const CapSettingsCard = () => {
 						if (changedKey === "hideShareableLinkCapLogo") {
 							toast.success(
 								debouncedUpdateSettings[changedKey]
-									? "Cap logo hidden"
-									: "Cap logo shown",
+									? "data365 logo hidden"
+									: "data365 logo shown",
 							);
 						} else {
 							const isDisabled = Boolean(debouncedUpdateSettings[changedKey]);
@@ -250,7 +240,7 @@ const CapSettingsCard = () => {
 	return (
 		<Card className="flex relative flex-col flex-1 gap-6 w-full min-h-fit">
 			<CardHeader>
-				<CardTitle>Cap Settings</CardTitle>
+				<CardTitle>Recording Settings</CardTitle>
 				<CardDescription>
 					Enable or disable specific settings for your organization. These
 					settings will be applied as defaults for new caps.
@@ -261,27 +251,19 @@ const CapSettingsCard = () => {
 				{options.map((option) => (
 					<div
 						key={option.value}
-						className="flex gap-10 justify-between items-center p-4 text-left rounded-xl border transition-colors bg-gray-2 min-w-fit border-gray-3"
+						className="flex gap-10 justify-between items-center p-4 min-h-[44px] text-left rounded-xl border transition-colors bg-gray-2 min-w-fit border-gray-3"
 					>
-						<div
-							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
-						>
+						<div className="flex flex-col flex-1">
 							<div className="flex gap-1.5 items-center">
 								<p className="text-sm text-gray-12">{option.label}</p>
-								{option.pro && (
-									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-										Pro
-									</p>
-								)}
 							</div>
 							<p className="text-xs text-gray-10">{option.description}</p>
 						</div>
 						<Switch
 							disabled={
-								(option.pro && !user.isPro) ||
-								((option.value === "disableSummary" ||
+								(option.value === "disableSummary" ||
 									option.value === "disableChapters") &&
-									settings?.disableTranscript)
+								settings?.disableTranscript
 							}
 							onCheckedChange={() => {
 								handleToggle(option.value);
@@ -327,20 +309,16 @@ const CapSettingsCard = () => {
 				<div className="flex flex-col flex-1 gap-1">
 					<div className="flex gap-1.5 items-center">
 						<p className="text-sm text-gray-12">AI generation language</p>
-						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-							Pro
-						</p>
 					</div>
 					<p className="text-xs text-gray-10">
 						Set the language used for transcripts, titles, summaries, and
 						chapters.
 					</p>
 				</div>
-				<div className="relative w-full sm:w-auto" ref={languageMenuRef}>
+				<div className="relative overflow-visible w-full sm:w-auto" ref={languageMenuRef}>
 					<button
 						onClick={() => setShowLanguageMenu((value) => !value)}
-						disabled={!user.isPro}
-						className="flex items-center gap-1.5 px-2.5 py-1.5 w-full justify-between text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:min-w-40"
+						className="flex items-center gap-1.5 px-2.5 py-1.5 w-full justify-between text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 transition-colors sm:min-w-40"
 						type="button"
 					>
 						<span className="flex items-center gap-1.5 text-gray-12">

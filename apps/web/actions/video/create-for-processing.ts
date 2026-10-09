@@ -3,7 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoUploads } from "@cap/database/schema";
+import {
+	sharedVideos,
+	spaceVideos,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
@@ -17,6 +22,9 @@ import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
+import { titleOriginMetadata } from "@/lib/title-origin";
+import { titleFromFileName } from "@/lib/video-title";
+import { resolveVideoFolderAssignment } from "@/lib/video-folder-assignment";
 
 export interface CreateForProcessingResult {
 	id: Video.VideoId;
@@ -30,69 +38,24 @@ export interface CreateForProcessingResult {
 	} | null;
 }
 
-// Map an uploaded file's extension/MIME to a stored extension + content type.
-// Supports video and audio; falls back to mp4 for unknown types (legacy-safe).
-function resolveMedia(
-	fileName?: string,
-	mimeType?: string,
-): { ext: string; contentType: string } {
-	const extToType: Record<string, string> = {
-		mp4: "video/mp4",
-		mov: "video/quicktime",
-		webm: "video/webm",
-		mkv: "video/x-matroska",
-		avi: "video/x-msvideo",
-		m4v: "video/x-m4v",
-		mp3: "audio/mpeg",
-		m4a: "audio/mp4",
-		wav: "audio/wav",
-		aac: "audio/aac",
-		ogg: "audio/ogg",
-	};
-
-	const name = (fileName ?? "").toLowerCase();
-	const dot = name.lastIndexOf(".");
-	const ext = dot >= 0 ? name.slice(dot + 1) : "";
-	if (ext && extToType[ext]) {
-		return { ext, contentType: extToType[ext] };
-	}
-
-	const mimeToExt: Record<string, string> = {
-		"video/mp4": "mp4",
-		"video/quicktime": "mov",
-		"video/webm": "webm",
-		"video/x-matroska": "mkv",
-		"audio/mpeg": "mp3",
-		"audio/mp4": "m4a",
-		"audio/x-m4a": "m4a",
-		"audio/wav": "wav",
-		"audio/x-wav": "wav",
-		"audio/aac": "aac",
-		"audio/ogg": "ogg",
-		"audio/webm": "webm",
-	};
-	const mime = (mimeType ?? "").toLowerCase();
-	if (mime && mimeToExt[mime]) {
-		return { ext: mimeToExt[mime], contentType: mime };
-	}
-
-	return { ext: "mp4", contentType: "video/mp4" };
-}
-
 export async function createVideoForServerProcessing({
 	duration,
 	resolution,
 	folderId,
 	orgId,
+	isAudio,
+	mimeType,
 	fileName,
-	contentType: fileContentType,
 }: {
 	duration?: number;
 	resolution?: string;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
+	isAudio?: boolean;
+	mimeType?: string;
+	/** The name of the file the user chose, e.g. "Bitrix24 meeting.mp4". Used as
+	 *  the recording's starting title. Untrusted client input — sanitised below. */
 	fileName?: string;
-	contentType?: string;
 }): Promise<CreateForProcessingResult> {
 	const user = await getCurrentUser();
 
@@ -106,16 +69,27 @@ export async function createVideoForServerProcessing({
 
 	const videoId = Video.VideoId.make(nanoId());
 
+	// The user's own file name (sanitised) — null when absent/empty, in which
+	// case the dated template below names the video and gets the machine mark.
+	const humanChosenTitle = titleFromFileName(fileName);
+
 	const date = new Date();
 	const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
 		month: "long",
 	})} ${date.getFullYear()}`;
 
-	const { ext, contentType } = resolveMedia(fileName, fileContentType);
-	// Tag audio uploads with a distinct source type so the app can separate
-	// audio from video (badge, audio player) — matches v2's `webAudio`.
-	const isAudio = contentType.startsWith("audio/");
-	const rawFileKey = `${user.id}/${videoId}/raw-upload.${ext}`;
+	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
+
+	// Storage key/pathway stays the video-shaped "raw-upload.mp4" for both media
+	// types — the S3 object's Content-Type metadata (below) carries the real
+	// audio format; downstream raw-file lookups (video-proxy, playlist,
+	// transcribe) only recognize the .mp4/.webm raw-upload keys, so an
+	// audio-specific extension here would break those fallbacks.
+	const contentType = isAudio
+		? mimeType?.startsWith("audio/")
+			? mimeType
+			: "audio/mpeg"
+		: "video/mp4";
 
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
@@ -132,26 +106,59 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
+	const folderAssignment = await resolveVideoFolderAssignment({
+		folderId,
+		orgId,
+	});
+
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+			name:
+				humanChosenTitle ??
+				`data365 ${isAudio ? "Audio " : ""}Upload - ${formattedDate}`,
 			ownerId: user.id,
 			orgId,
-			source: { type: (isAudio ? "webAudio" : "webMP4") as const },
+			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-			...(folderId ? { folderId } : {}),
+			// The file name the user picked is the USER'S title — only the dated
+			// fallback template is machine-derived and eligible for AI renaming.
+			metadata: {
+				...titleOriginMetadata(humanChosenTitle),
+				...(isAudio ? { isAudio: true } : {}),
+			},
+			...(folderAssignment.type === "video"
+				? { folderId: folderAssignment.folderId }
+				: {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		mode: "singlepart",
-		phase: "uploading",
-		processingProgress: 0,
-		rawFileKey,
+		if (folderAssignment.type === "organization") {
+			await tx.insert(sharedVideos).values({
+				id: nanoId(),
+				videoId,
+				folderId: folderAssignment.folderId,
+				organizationId: folderAssignment.organizationId,
+				sharedByUserId: user.id,
+			});
+		} else if (folderAssignment.type === "space") {
+			await tx.insert(spaceVideos).values({
+				id: nanoId(),
+				videoId,
+				folderId: folderAssignment.folderId,
+				spaceId: folderAssignment.spaceId,
+				addedById: user.id,
+			});
+		}
+
+		await tx.insert(videoUploads).values({
+			videoId,
+			mode: "singlepart",
+			phase: "uploading",
+			processingProgress: 0,
+			rawFileKey,
+		});
 	});
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
@@ -167,7 +174,12 @@ export async function createVideoForServerProcessing({
 	}
 
 	revalidatePath("/dashboard/caps");
-	revalidatePath("/dashboard/folder");
+	// `revalidatePath` matches LITERALLY unless the route pattern is given with
+	// its type. "/dashboard/folder" therefore matched nothing — the pages that
+	// actually list a folder's videos are the dynamic `/dashboard/folder/[id]`,
+	// so an upload made inside a folder never invalidated the view it landed
+	// in. "/dashboard/caps" works only because that path IS its route.
+	revalidatePath("/dashboard/folder/[id]", "page");
 	revalidatePath("/dashboard/spaces");
 
 	return {

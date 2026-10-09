@@ -6,6 +6,7 @@ import {
 	faMobileScreen,
 	faRecordVinyl,
 } from "@fortawesome/free-solid-svg-icons";
+import { useTranslations } from "next-intl";
 import type { BreakdownRow } from "../types";
 import OtherStatBox from "./OtherStatBox";
 import TableCard, {
@@ -120,38 +121,63 @@ const osNameToKey = (name: string): OSRowData["os"] => {
 };
 
 export default function OtherStats({ data, isLoading }: OtherStatsProps) {
+	const t = useTranslations("analytics");
 	return (
 		<div className="grid grid-cols-1 gap-8 w-full xl:grid-cols-4">
-			<OtherStatBox className="col-span-2" title="Geography" icon={faGlobe}>
+			<OtherStatBox
+				className="col-span-2"
+				title={t("sections.geography")}
+				icon={faGlobe}
+			>
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
-						title="Countries"
-						columns={["Country", "Views", "Percentage"]}
+						title={t("tables.countries")}
+						columns={[
+							t("columns.country"),
+							t("columns.views"),
+							t("columns.percentage"),
+						]}
 						rows={data.countries.map(toCountryRow)}
 						type="country"
 						isLoading={isLoading}
 					/>
 					<TableCard
-						title="Cities"
-						columns={["City", "Views", "Percentage"]}
+						title={t("tables.cities")}
+						columns={[
+							t("columns.city"),
+							t("columns.views"),
+							t("columns.percentage"),
+						]}
 						rows={data.cities.map(toCityRow)}
 						type="city"
 						isLoading={isLoading}
 					/>
 				</div>
 			</OtherStatBox>
-			<OtherStatBox className="col-span-2" title="Software" icon={faDesktop}>
+			<OtherStatBox
+				className="col-span-2"
+				title={t("sections.software")}
+				icon={faDesktop}
+			>
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
-						title="Browsers"
-						columns={["Browser", "Views", "Percentage"]}
+						title={t("tables.browsers")}
+						columns={[
+							t("columns.browser"),
+							t("columns.views"),
+							t("columns.percentage"),
+						]}
 						rows={data.browsers.map(toBrowserRow)}
 						type="browser"
 						isLoading={isLoading}
 					/>
 					<TableCard
-						title="Operating Systems"
-						columns={["Operating System", "Views", "Percentage"]}
+						title={t("tables.operatingSystems")}
+						columns={[
+							t("columns.operatingSystem"),
+							t("columns.views"),
+							t("columns.percentage"),
+						]}
 						rows={data.operatingSystems.map(toOSRow)}
 						type="os"
 						isLoading={isLoading}
@@ -160,13 +186,17 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 			</OtherStatBox>
 			<OtherStatBox
 				className="col-span-2"
-				title="Devices"
+				title={t("sections.devices")}
 				icon={faMobileScreen}
 			>
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
-						title="Device Type"
-						columns={["Device", "Views", "Percentage"]}
+						title={t("tables.deviceType")}
+						columns={[
+							t("columns.device"),
+							t("columns.views"),
+							t("columns.percentage"),
+						]}
 						rows={data.deviceTypes.map((device) => ({
 							device: deviceMap[device.name.toLowerCase()] ?? "desktop",
 							name: device.name,
@@ -183,13 +213,17 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 			{data.topCaps && data.topCaps.length > 0 && (
 				<OtherStatBox
 					className="col-span-2"
-					title="Top Caps"
+					title={t("sections.topCaps")}
 					icon={faRecordVinyl}
 				>
 					<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 						<TableCard
-							title="Caps"
-							columns={["Name", "Views", "Percentage"]}
+							title={t("tables.caps")}
+							columns={[
+								t("columns.name"),
+								t("columns.views"),
+								t("columns.percentage"),
+							]}
 							rows={data.topCaps.map(toCapRow)}
 							type="cap"
 							isLoading={isLoading}

@@ -21,7 +21,6 @@ import {
 	DownloadIcon,
 	FastForwardIcon,
 	GaugeIcon,
-	GlobeIcon,
 	Loader2Icon,
 	Maximize2Icon,
 	Minimize2Icon,
@@ -29,6 +28,7 @@ import {
 	PictureInPicture2Icon,
 	PictureInPictureIcon,
 	PlayIcon,
+	PlusIcon,
 	RefreshCcwIcon,
 	RepeatIcon,
 	RewindIcon,
@@ -51,16 +51,23 @@ import {
 	useMediaFullscreenRef,
 	useMediaRef,
 } from "media-chrome/react/media-store";
+import { useTranslations } from "next-intl";
 import * as React from "react";
 import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import { lockLandscape, unlockOrientation } from "../utils/orientation-lock";
 import {
 	formatPlaybackDuration,
 	normalizePlaybackSpeed,
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
+import {
+	ALL_LANGUAGES,
+	LANGUAGE_LABELS,
+	type TranscriptLanguageOptions,
+} from "../LanguagePicker";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
@@ -339,6 +346,7 @@ function MediaPlayerRoot(props: MediaPlayerRootProps) {
 }
 
 function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		onPlay,
 		onPause,
@@ -392,6 +400,23 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 
 	const [mounted, setMounted] = React.useState(false);
 	React.useLayoutEffect(() => setMounted(true), []);
+
+	// Mobile fullscreen → landscape (like YouTube). Only on touch/small
+	// viewports; desktop fullscreen keeps its natural orientation. iOS Safari
+	// ignores lock() — see orientation-lock.ts.
+	React.useEffect(() => {
+		const isMobileContext =
+			(typeof matchMedia === "function" &&
+				matchMedia("(pointer: coarse)").matches) ||
+			(typeof window !== "undefined" && window.innerWidth < 1024);
+		if (!isMobileContext) return;
+		if (isFullscreen) {
+			lockLandscape();
+		} else {
+			unlockOrientation();
+		}
+		return () => unlockOrientation();
+	}, [isFullscreen]);
 
 	const portalContainer = mounted
 		? isFullscreen
@@ -885,12 +910,10 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					)}
 				>
 					<span id={labelId} className="sr-only">
-						{label ?? "Media player"}
+						{label ?? t("label")}
 					</span>
 					<span id={descriptionId} className="sr-only">
-						{isVideo
-							? "Video player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."
-							: "Audio player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, Shift + arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."}
+						{isVideo ? t("videoDescription") : t("audioDescription")}
 					</span>
 					{children}
 					<MediaPlayerVolumeIndicator />
@@ -1111,6 +1134,7 @@ interface MediaPlayerErrorProps extends React.ComponentProps<"div"> {
 }
 
 function MediaPlayerError(props: MediaPlayerErrorProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		error: errorProp,
 		label,
@@ -1178,35 +1202,32 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 	const errorLabel = React.useMemo(() => {
 		if (label) return label;
 
-		if (!error) return "Playback Error";
+		if (!error) return t("playbackError");
 
 		const labelMap: Record<number, string> = {
-			[MediaError.MEDIA_ERR_ABORTED]: "Playback Interrupted",
-			[MediaError.MEDIA_ERR_NETWORK]: "Connection Problem",
-			[MediaError.MEDIA_ERR_DECODE]: "Media Error",
-			[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED]: "Unsupported Format",
+			[MediaError.MEDIA_ERR_ABORTED]: t("playbackInterrupted"),
+			[MediaError.MEDIA_ERR_NETWORK]: t("connectionProblem"),
+			[MediaError.MEDIA_ERR_DECODE]: t("mediaError"),
+			[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED]: t("unsupportedFormat"),
 		};
 
-		return labelMap[error.code] ?? "Playback Error";
-	}, [label, error]);
+		return labelMap[error.code] ?? t("playbackError");
+	}, [label, error, t]);
 
 	const errorDescription = React.useMemo(() => {
 		if (description) return description;
 
-		if (!error) return "An unknown error occurred";
+		if (!error) return t("unknownError");
 
 		const descriptionMap: Record<number, string> = {
-			[MediaError.MEDIA_ERR_ABORTED]: "Media playback was aborted",
-			[MediaError.MEDIA_ERR_NETWORK]:
-				"A network error occurred while loading the media",
-			[MediaError.MEDIA_ERR_DECODE]:
-				"An error occurred while decoding the media",
-			[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED]:
-				"The media format is not supported",
+			[MediaError.MEDIA_ERR_ABORTED]: t("errorAborted"),
+			[MediaError.MEDIA_ERR_NETWORK]: t("errorNetwork"),
+			[MediaError.MEDIA_ERR_DECODE]: t("errorDecode"),
+			[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED]: t("errorSrcNotSupported"),
 		};
 
-		return descriptionMap[error.code] ?? "An unknown error occurred";
-	}, [description, error]);
+		return descriptionMap[error.code] ?? t("unknownError");
+	}, [description, error, t]);
 
 	if (!error) return null;
 
@@ -1249,7 +1270,7 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 							) : (
 								<RefreshCcwIcon className="size-3.5" />
 							)}
-							Try again
+							{t("tryAgain")}
 						</Button>
 						<Button
 							variant="outline"
@@ -1262,7 +1283,7 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 							) : (
 								<RotateCcwIcon className="size-3.5" />
 							)}
-							Reload page
+							{t("reloadPage")}
 						</Button>
 					</div>
 				</div>
@@ -1277,6 +1298,7 @@ interface MediaPlayerVolumeIndicatorProps
 }
 
 function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
+	const t = useTranslations("mediaPlayer");
 	const { asChild, className, ...indicatorProps } = props;
 
 	const mediaVolume = useMediaSelector(selectVolume);
@@ -1298,7 +1320,7 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 	return (
 		<VolumeIndicatorPrimitive
 			aria-live="polite"
-			aria-label={`Volume ${mediaMuted ? "muted" : `${volumePercentage}%`}`}
+			aria-label={mediaMuted ? t("volumeMuted") : t("volumePercent", { percent: volumePercentage })}
 			data-slot="media-player-volume-indicator"
 			{...indicatorProps}
 			className={cn(
@@ -1316,7 +1338,7 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 						<Volume1Icon className="size-6" />
 					)}
 					<span className="text-sm font-medium tabular-nums">
-						{mediaMuted ? "Muted" : `${volumePercentage}%`}
+						{mediaMuted ? t("muted") : `${volumePercentage}%`}
 					</span>
 				</div>
 				<div className="flex gap-1 items-center">
@@ -1370,6 +1392,7 @@ function MediaPlayerControlsOverlay(props: MediaPlayerControlsOverlayProps) {
 interface MediaPlayerPlayProps extends React.ComponentProps<typeof Button> {}
 
 function MediaPlayerPlay(props: MediaPlayerPlayProps) {
+	const t = useTranslations("mediaPlayer");
 	const { asChild, children, className, disabled, ...playButtonProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerPlay");
@@ -1395,13 +1418,13 @@ function MediaPlayerPlay(props: MediaPlayerPlayProps) {
 
 	return (
 		<MediaPlayerTooltip
-			tooltip={mediaPaused ? "Play" : "Pause"}
+			tooltip={mediaPaused ? t("play") : t("pause")}
 			shortcut="Space"
 		>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={mediaPaused ? "Play" : "Pause"}
+				aria-label={mediaPaused ? t("play") : t("pause")}
 				aria-pressed={!mediaPaused}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-play-button"
@@ -1428,6 +1451,7 @@ interface MediaPlayerSeekBackwardProps
 }
 
 function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		seconds = SEEK_STEP_SHORT,
 		asChild,
@@ -1459,13 +1483,13 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
 
 	return (
 		<MediaPlayerTooltip
-			tooltip={`Back ${seconds}s`}
+			tooltip={t("backSeconds", { seconds })}
 			shortcut={context.isVideo ? ["←"] : ["Shift ←"]}
 		>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={`Back ${seconds} seconds`}
+				aria-label={t("backSecondsLabel", { seconds })}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-seek-backward"
 				disabled={isDisabled}
@@ -1487,6 +1511,7 @@ interface MediaPlayerSeekForwardProps
 }
 
 function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		seconds = SEEK_STEP_LONG,
 		asChild,
@@ -1521,13 +1546,13 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
 
 	return (
 		<MediaPlayerTooltip
-			tooltip={`Forward ${seconds}s`}
+			tooltip={t("forwardSeconds", { seconds })}
 			shortcut={context.isVideo ? ["→"] : ["Shift →"]}
 		>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={`Forward ${seconds} seconds`}
+				aria-label={t("forwardSecondsLabel", { seconds })}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-seek-forward"
 				disabled={isDisabled}
@@ -1565,6 +1590,7 @@ interface MediaPlayerSeekProps
 }
 
 function MediaPlayerSeek(props: MediaPlayerSeekProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		withTime = false,
 		withoutChapter = false,
@@ -2296,7 +2322,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 										) : (
 											<img
 												src={thumbnail.src}
-												alt={`Preview at ${hoverTime}`}
+												alt={t("previewAt", { time: hoverTime })}
 												className="object-cover size-full"
 											/>
 										)}
@@ -2352,6 +2378,7 @@ interface MediaPlayerVolumeProps
 }
 
 function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		asChild,
 		expandable = false,
@@ -2452,12 +2479,12 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 				className,
 			)}
 		>
-			<MediaPlayerTooltip tooltip="Volume" shortcut="M">
+			<MediaPlayerTooltip tooltip={t("volume")} shortcut="M">
 				<PlayerButton
 					id={volumeTriggerId}
 					type="button"
 					aria-controls={`${context.mediaId} ${sliderId}`}
-					aria-label={displayMuted ? "Unmute" : "Mute"}
+					aria-label={displayMuted ? t("unmute") : t("mute")}
 					aria-pressed={displayMuted}
 					data-slot="media-player-volume-trigger"
 					data-state={displayMuted ? "on" : "off"}
@@ -2479,7 +2506,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 			<SliderPrimitive.Root
 				id={sliderId}
 				aria-controls={context.mediaId}
-				aria-valuetext={`${Math.round(effectiveVolume * 100)}% volume`}
+				aria-valuetext={t("volumeValueText", { percent: Math.round(effectiveVolume * 100) })}
 				data-slider=""
 				data-slot="media-player-volume"
 				{...volumeProps}
@@ -2621,6 +2648,7 @@ interface MediaPlayerPlaybackSpeedProps
 }
 
 function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		open,
 		defaultOpen,
@@ -2666,7 +2694,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
 			defaultOpen={defaultOpen}
 			onOpenChange={onOpenChange}
 		>
-			<MediaPlayerTooltip tooltip="Playback speed" shortcut={["<", ">"]}>
+			<MediaPlayerTooltip tooltip={t("playbackSpeed")} shortcut={["<", ">"]}>
 				<DropdownMenuTrigger asChild>
 					<PlayerButton
 						type="button"
@@ -2715,6 +2743,7 @@ interface MediaPlayerPlaybackSpeedDialProps {
 function MediaPlayerPlaybackSpeedDial(
 	props: MediaPlayerPlaybackSpeedDialProps,
 ) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		defaultSpeed,
 		fallbackDuration,
@@ -2883,8 +2912,8 @@ function MediaPlayerPlaybackSpeedDial(
 												transition={{ duration: 0.13, ease: "easeOut" }}
 												whileTap={{ scale: 0.96 }}
 												onClick={() => setPinned(true)}
-												aria-label="Change playback speed"
-												className="flex gap-1 sm:gap-2 items-center px-1 sm:px-2"
+												aria-label={t("changePlaybackSpeed")}
+												className="flex min-h-11 gap-1 sm:gap-2 items-center justify-center px-1 sm:px-2"
 											>
 												<GaugeIcon className="size-3 sm:size-4 text-white/80" />
 												<span className="text-xs sm:text-base font-semibold tabular-nums">
@@ -2931,6 +2960,7 @@ function MediaPlayerPlaybackSpeedDial(
 interface MediaPlayerLoopProps extends React.ComponentProps<typeof Button> {}
 
 function MediaPlayerLoop(props: MediaPlayerLoopProps) {
+	const t = useTranslations("mediaPlayer");
 	const { children, className, disabled, ...loopProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerLoop");
@@ -2974,13 +3004,13 @@ function MediaPlayerLoop(props: MediaPlayerLoopProps) {
 
 	return (
 		<MediaPlayerTooltip
-			tooltip={isLooping ? "Disable loop" : "Enable loop"}
+			tooltip={isLooping ? t("disableLoop") : t("enableLoop")}
 			shortcut="R"
 		>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={isLooping ? "Disable loop" : "Enable loop"}
+				aria-label={isLooping ? t("disableLoop") : t("enableLoop")}
 				aria-pressed={isLooping}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-loop"
@@ -3007,6 +3037,7 @@ interface MediaPlayerFullscreenProps
 	extends React.ComponentProps<typeof Button> {}
 
 function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
+	const t = useTranslations("mediaPlayer");
 	const { children, className, disabled, ...fullscreenProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerFullscreen");
@@ -3031,10 +3062,10 @@ function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
 	);
 
 	return (
-		<MediaPlayerTooltip tooltip="Fullscreen" shortcut="F">
+		<MediaPlayerTooltip tooltip={t("fullscreen")} shortcut="F">
 			<PlayerButton
 				type="button"
-				aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+				aria-label={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-fullscreen"
 				data-state={isFullscreen ? "on" : "off"}
@@ -3056,6 +3087,7 @@ interface MediaPlayerPiPProps extends React.ComponentProps<typeof Button> {
 }
 
 function MediaPlayerPiP(props: MediaPlayerPiPProps) {
+	const t = useTranslations("mediaPlayer");
 	const { children, className, onPipError, disabled, ...pipButtonProps } =
 		props;
 
@@ -3095,11 +3127,11 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
 	);
 
 	return (
-		<MediaPlayerTooltip tooltip="Picture in picture" shortcut="P">
+		<MediaPlayerTooltip tooltip={t("pictureInPicture")} shortcut="P">
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={isPictureInPicture ? "Exit pip" : "Enter pip"}
+				aria-label={isPictureInPicture ? t("exitPip") : t("enterPip")}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-pip"
 				data-state={isPictureInPicture ? "on" : "off"}
@@ -3126,6 +3158,7 @@ interface MediaPlayerCaptionsProps extends React.ComponentProps<typeof Button> {
 }
 
 function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		children,
 		className,
@@ -3143,11 +3176,11 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 	}, [toggleCaptions, setToggleCaptions]);
 
 	return (
-		<MediaPlayerTooltip tooltip="Captions">
+		<MediaPlayerTooltip tooltip={t("captions")}>
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label={toggleCaptions ? "Disable captions" : "Enable captions"}
+				aria-label={toggleCaptions ? t("disableCaptions") : t("enableCaptions")}
 				aria-pressed={toggleCaptions}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-captions"
@@ -3175,6 +3208,7 @@ interface MediaPlayerEnhancedAudioProps
 }
 
 function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
+	const t = useTranslations("mediaPlayer");
 	const {
 		children,
 		className,
@@ -3206,10 +3240,10 @@ function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
 	}
 
 	const tooltipText = isProcessing
-		? "Enhancing audio..."
+		? t("enhancingAudio")
 		: enhancedAudioEnabled
-			? "Enhanced audio on"
-			: "Enhance audio";
+			? t("enhancedAudioOn")
+			: t("enhanceAudio");
 
 	return (
 		<MediaPlayerTooltip tooltip={tooltipText}>
@@ -3218,10 +3252,10 @@ function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
 				aria-controls={context.mediaId}
 				aria-label={
 					isProcessing
-						? "Audio enhancement in progress"
+						? t("audioEnhancementInProgress")
 						: enhancedAudioEnabled
-							? "Disable enhanced audio"
-							: "Enable enhanced audio"
+							? t("disableEnhancedAudio")
+							: t("enableEnhancedAudio")
 				}
 				aria-pressed={enhancedAudioEnabled}
 				data-disabled={isDisabled ? "" : undefined}
@@ -3366,6 +3400,7 @@ interface MediaPlayerDownloadProps
 	extends React.ComponentProps<typeof Button> {}
 
 function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
+	const t = useTranslations("mediaPlayer");
 	const { children, className, disabled, ...downloadProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerDownload");
@@ -3393,11 +3428,11 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 
 	return (
-		<MediaPlayerTooltip tooltip="Download" shortcut="D">
+		<MediaPlayerTooltip tooltip={t("download")} shortcut="D">
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label="Download"
+				aria-label={t("download")}
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-download"
 				disabled={isDisabled}
@@ -3413,25 +3448,16 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 }
 
-type CaptionLanguage = string;
-
-interface CaptionOption {
-	code: CaptionLanguage;
-	name: string;
-}
-
 interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	enhancedAudioEnabled?: boolean;
 	setEnhancedAudioEnabled?: (enabled: boolean) => void;
-	captionLanguage?: CaptionLanguage;
-	onCaptionLanguageChange?: (language: CaptionLanguage) => void;
-	availableCaptions?: CaptionOption[];
-	isCaptionLoading?: boolean;
-	hasCaptions?: boolean;
+	transcriptLanguages?: TranscriptLanguageOptions;
 }
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
+	const t = useTranslations("mediaPlayer");
+	const shareT = useTranslations("share");
 	const {
 		open,
 		defaultOpen,
@@ -3445,11 +3471,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		enhancedAudioStatus,
 		enhancedAudioEnabled,
 		setEnhancedAudioEnabled,
-		captionLanguage = "original",
-		onCaptionLanguageChange,
-		availableCaptions = [],
-		isCaptionLoading = false,
-		hasCaptions = false,
+		transcriptLanguages,
 		...settingsProps
 	} = props;
 
@@ -3543,12 +3565,12 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 			defaultOpen={defaultOpen}
 			onOpenChange={onOpenChange}
 		>
-			<MediaPlayerTooltip tooltip="Settings">
+			<MediaPlayerTooltip tooltip={t("settings")}>
 				<DropdownMenuTrigger asChild>
 					<PlayerButton
 						type="button"
 						aria-controls={context.mediaId}
-						aria-label="Settings"
+						aria-label={t("settings")}
 						data-disabled={isDisabled ? "" : undefined}
 						data-slot="media-player-settings"
 						disabled={isDisabled}
@@ -3568,10 +3590,10 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				container={context.portalContainer}
 				className="w-56 data-[side=top]:mb-3.5"
 			>
-				<DropdownMenuLabel className="sr-only">Settings</DropdownMenuLabel>
+				<DropdownMenuLabel className="sr-only">{t("settings")}</DropdownMenuLabel>
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger>
-						<span className="flex-1">Speed</span>
+						<span className="flex-1">{t("speed")}</span>
 						<Badge variant="outline" className="rounded">
 							{mediaPlaybackRate}x
 						</Badge>
@@ -3595,7 +3617,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 					>
 						<span className="flex items-center gap-2">
 							<SparklesIcon className="size-4" />
-							Enhanced Audio
+							{t("enhancedAudio")}
 						</span>
 						{enhancedAudioEnabled && <CheckIcon />}
 					</DropdownMenuItem>
@@ -3603,7 +3625,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
-							<span className="flex-1">Quality</span>
+							<span className="flex-1">{t("quality")}</span>
 							<Badge variant="outline" className="rounded">
 								{selectedRenditionLabel}
 							</Badge>
@@ -3613,7 +3635,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 								className="justify-between"
 								onSelect={() => onRenditionChange("auto")}
 							>
-								Auto
+								{t("auto")}
 								{!selectedRenditionId && <CheckIcon />}
 							</DropdownMenuItem>
 							{mediaRenditionList
@@ -3646,50 +3668,68 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}
-				{hasCaptions && (
+				{transcriptLanguages && (
 					<DropdownMenuSub>
-						<DropdownMenuSubTrigger disabled={isCaptionLoading}>
-							<span className="flex items-center gap-2 flex-1">
-								<GlobeIcon className="size-4" />
-								Captions
-							</span>
-							<Badge variant="outline" className="rounded">
-								{isCaptionLoading
-									? "..."
-									: captionLanguage === "off"
-										? "Off"
-										: captionLanguage === "original"
-											? "Original"
-											: (availableCaptions.find(
-													(c) => c.code === captionLanguage,
-												)?.name ?? captionLanguage)}
-							</Badge>
+						<DropdownMenuSubTrigger>
+							<span className="flex-1">{shareT("languageMenu")}</span>
 						</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+						<DropdownMenuSubContent>
 							<DropdownMenuItem
 								className="justify-between"
-								onSelect={() => onCaptionLanguageChange?.("off")}
+								onSelect={() => transcriptLanguages.onSelect("base")}
 							>
-								Off
-								{captionLanguage === "off" && <CheckIcon />}
+								{transcriptLanguages.baseLanguage
+									? LANGUAGE_LABELS[transcriptLanguages.baseLanguage]
+									: shareT("languageOriginal")}
+								{transcriptLanguages.selected === "base" && <CheckIcon />}
 							</DropdownMenuItem>
-							<DropdownMenuItem
-								className="justify-between"
-								onSelect={() => onCaptionLanguageChange?.("original")}
-							>
-								Original
-								{captionLanguage === "original" && <CheckIcon />}
-							</DropdownMenuItem>
-							{availableCaptions.map((caption) => (
-								<DropdownMenuItem
-									key={caption.code}
-									className="justify-between"
-									onSelect={() => onCaptionLanguageChange?.(caption.code)}
-								>
-									{caption.name}
-									{captionLanguage === caption.code && <CheckIcon />}
-								</DropdownMenuItem>
-							))}
+							{ALL_LANGUAGES.map((lang) => {
+								if (lang === transcriptLanguages.baseLanguage) return null;
+								const isAvailable = transcriptLanguages.available.includes(lang);
+								const isGenerating =
+									transcriptLanguages.generatingLanguage === lang;
+
+								if (!isAvailable && !transcriptLanguages.canGenerate) {
+									return null;
+								}
+
+								if (isGenerating) {
+									return (
+										<DropdownMenuItem
+											key={lang}
+											disabled
+											className="justify-between"
+										>
+											{LANGUAGE_LABELS[lang]}
+											<Loader2Icon className="animate-spin size-3.5" />
+										</DropdownMenuItem>
+									);
+								}
+
+								if (isAvailable) {
+									return (
+										<DropdownMenuItem
+											key={lang}
+											className="justify-between"
+											onSelect={() => transcriptLanguages.onSelect(lang)}
+										>
+											{LANGUAGE_LABELS[lang]}
+											{transcriptLanguages.selected === lang && <CheckIcon />}
+										</DropdownMenuItem>
+									);
+								}
+
+								return (
+									<DropdownMenuItem
+										key={lang}
+										className="justify-between"
+										onSelect={() => transcriptLanguages.onGenerate(lang)}
+									>
+										{LANGUAGE_LABELS[lang]}
+										<PlusIcon className="size-3.5" />
+									</DropdownMenuItem>
+								);
+							})}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}
@@ -3748,7 +3788,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 			<TooltipContent
 				container={context.portalContainer}
 				sideOffset={tooltipSideOffset}
-				className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-black data-[side=top]:mb-3.5  [&>span]:hidden"
+				className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-black data-[side=top]:mb-3.5 dark:border-gray-6 dark:bg-gray-2 dark:text-gray-12  [&>span]:hidden"
 			>
 				<p>{tooltip}</p>
 				{Array.isArray(shortcut) ? (
@@ -3756,7 +3796,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 						{shortcut.map((shortcutKey) => (
 							<kbd
 								key={shortcutKey}
-								className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-black shadow-xs"
+								className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-black shadow-xs dark:border-gray-6 dark:bg-gray-3 dark:text-gray-12"
 							>
 								<abbr title={shortcutKey} className="no-underline">
 									{shortcutKey}
@@ -3768,7 +3808,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
 					shortcut && (
 						<kbd
 							key={shortcut}
-							className="select-none rounded border bg-white px-1.5 py-px font-mono text-[11.2px] text-foreground shadow-xs"
+							className="select-none rounded border bg-white px-1.5 py-px font-mono text-[11.2px] text-foreground shadow-xs dark:border-gray-6 dark:bg-gray-3"
 						>
 							<abbr title={shortcut} className="no-underline">
 								{shortcut}
@@ -3835,5 +3875,3 @@ export {
 	useMediaSelector as useMediaPlayer,
 	useStoreSelector as useMediaPlayerStore,
 };
-
-export type { CaptionOption, CaptionLanguage };

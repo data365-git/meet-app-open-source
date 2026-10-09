@@ -6,10 +6,11 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { AI_ACCESS_DENIED_CODE, canUseAI } from "@/lib/permissions/ai-access";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export async function POST(
-	request: Request,
+	_request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-ai">,
 ) {
 	try {
@@ -18,15 +19,15 @@ export async function POST(
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
+		// Paid AI spend is admin-only, same gate as generate/continue-paid/translate.
+		if (!canUseAI(user)) {
+			return Response.json({ error: AI_ACCESS_DENIED_CODE }, { status: 403 });
+		}
+
 		const { videoId } = (await props.params) as { videoId: Video.VideoId };
 		if (!videoId) {
 			return Response.json({ error: "Video ID is required" }, { status: 400 });
 		}
-
-		// force=1: the owner explicitly (re)generates from the share-page strip.
-		// It bypasses the "already generated / in progress" guard by clearing the
-		// prior AI metadata so a fresh generation can run.
-		const force = new URL(request.url).searchParams.get("force") === "1";
 
 		const videoQuery = await db()
 			.select()
@@ -56,7 +57,6 @@ export async function POST(
 		const metadata = (video.metadata as VideoMetadata) || {};
 
 		const canRetry =
-			force ||
 			!metadata.aiGenerationStatus ||
 			metadata.aiGenerationStatus === "ERROR" ||
 			metadata.aiGenerationStatus === "SKIPPED";
@@ -70,23 +70,6 @@ export async function POST(
 				},
 				{ status: 400 },
 			);
-		}
-
-		// Regeneration: clear prior AI output so the workflow's "already generated"
-		// guard passes and a fresh summary is produced.
-		if (force) {
-			await db()
-				.update(videos)
-				.set({
-					metadata: {
-						...metadata,
-						summary: undefined,
-						chapters: undefined,
-						aiSummary: undefined,
-						aiGenerationStatus: undefined,
-					},
-				})
-				.where(eq(videos.id, videoId));
 		}
 
 		const videoOwnerQuery = await db()

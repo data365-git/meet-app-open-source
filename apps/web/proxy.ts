@@ -20,11 +20,23 @@ const mainOrigins = [
 	addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST),
 ].filter(Boolean) as string[];
 
+function hasSessionCookie(request: NextRequest) {
+	return (
+		request.cookies.has("next-auth.session-token") ||
+		request.cookies.has("__Secure-next-auth.session-token") ||
+		request.cookies.has("authjs.session-token") ||
+		request.cookies.has("__Secure-authjs.session-token")
+	);
+}
+
 export async function proxy(request: NextRequest) {
 	const url = new URL(request.url);
 	const path = url.pathname;
 
-	if (path === "/" && request.cookies.has("next-auth.session-token")) {
+	if (
+		hasSessionCookie(request) &&
+		(path === "/" || path.startsWith("/login") || path.startsWith("/signup"))
+	) {
 		return NextResponse.redirect(new URL("/dashboard/caps", url.origin));
 	}
 
@@ -33,7 +45,7 @@ export async function proxy(request: NextRequest) {
 		response.headers.set("X-Frame-Options", "SAMEORIGIN");
 		response.headers.set(
 			"Content-Security-Policy",
-			"frame-ancestors https://cap.so",
+			"frame-ancestors 'self'",
 		);
 		return response;
 	}
@@ -45,6 +57,8 @@ export async function proxy(request: NextRequest) {
 			!(
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
+				path.startsWith("/embed/") ||
+				path.startsWith("/extension/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
@@ -55,6 +69,7 @@ export async function proxy(request: NextRequest) {
 				path.startsWith("/self-hosting") ||
 				path.startsWith("/download") ||
 				path.startsWith("/terms") ||
+				path.startsWith("/privacy") ||
 				path.startsWith("/verify-otp")
 			) &&
 			process.env.NODE_ENV !== "development"

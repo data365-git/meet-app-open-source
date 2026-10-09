@@ -20,9 +20,15 @@ import { Effect, Option } from "effect";
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteAccount } from "@/actions/account/delete-account";
+import {
+	DELETE_CONFIRMATION_PHRASE,
+	resolveDeleteOutcome,
+	shouldDisableConfirm,
+} from "./delete-account-outcome";
 import { updatePreferences } from "@/actions/notifications/update-preferences";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { Locale } from "@/i18n/locales";
@@ -49,16 +55,6 @@ type NotificationPreferencesProps = {
 	className?: string;
 };
 
-const notificationToggles: Array<{
-	label: string;
-	key: keyof NotificationPrefs;
-}> = [
-	{ label: "Comments", key: "pauseComments" },
-	{ label: "Replies", key: "pauseReplies" },
-	{ label: "Reactions", key: "pauseReactions" },
-	{ label: "Views", key: "pauseViews" },
-];
-
 const defaultNotificationPrefs: NotificationPrefs = {
 	pauseComments: false,
 	pauseReplies: false,
@@ -71,6 +67,13 @@ const NotificationPreferences = ({
 	preferences,
 	className,
 }: NotificationPreferencesProps) => {
+	const t = useTranslations("settings");
+	const notificationToggles: Array<{ label: string; key: keyof NotificationPrefs }> = [
+		{ label: t("notificationComments"), key: "pauseComments" },
+		{ label: t("notificationReplies"), key: "pauseReplies" },
+		{ label: t("notificationReactions"), key: "pauseReactions" },
+		{ label: t("notificationViews"), key: "pauseViews" },
+	];
 	const queryClient = useQueryClient();
 	const current = preferences ?? defaultNotificationPrefs;
 
@@ -81,7 +84,7 @@ const NotificationPreferences = ({
 			queryClient.invalidateQueries({ queryKey: ["notifications"] });
 		},
 		onError: () => {
-			toast.error("Failed to update notification preferences");
+			toast.error(t("notificationUpdateError"));
 		},
 	});
 
@@ -92,9 +95,9 @@ const NotificationPreferences = ({
 	return (
 		<Card className={`flex flex-col gap-4 ${className ?? ""}`}>
 			<div className="space-y-1">
-				<CardTitle>Notification preferences</CardTitle>
+				<CardTitle>{t("notificationTitle")}</CardTitle>
 				<CardDescription>
-					Choose which activity triggers a notification for you.
+					{t("notificationDescription")}
 				</CardDescription>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
@@ -113,10 +116,14 @@ const NotificationPreferences = ({
 	);
 };
 
-const DangerZone = ({ userEmail }: { userEmail: string }) => {
-	const router = useRouter();
+const DangerZone = () => {
+	const t = useTranslations("settings");
 	const [open, setOpen] = useState(false);
-	const [confirmEmail, setConfirmEmail] = useState("");
+	const [confirmPhrase, setConfirmPhrase] = useState("");
+	// Once a delete succeeds (or we learn the account is already gone), the
+	// confirm control must never be able to fire a second deleteAccount call
+	// while signOut()'s navigation is in flight.
+	const [deleteSucceeded, setDeleteSucceeded] = useState(false);
 	const inputId = useId();
 
 	const {
@@ -124,23 +131,29 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 		isPending,
 		error: deleteError,
 	} = useMutation({
-		mutationFn: deleteAccount,
+		mutationFn: () => deleteAccount(confirmPhrase),
 		onSuccess: (result) => {
-			if (!result.ok) {
-				toast.error(result.error);
+			const outcome = resolveDeleteOutcome(result);
+			if (outcome.kind === "error") {
+				toast.error(outcome.message);
 				return;
 			}
-			router.push("/");
+			setDeleteSucceeded(true);
+			if (outcome.toastKey) toast.error(t(outcome.toastKey));
+			// signOut() clears the NextAuth session cookie AND performs a real
+			// full-page navigation — a soft router.push leaves the user looking
+			// signed-in with no confirmation, which is the defect this fixes.
+			signOut({ callbackUrl: outcome.callbackUrl });
 		},
 		onError: () => {
-			toast.error("Failed to delete account. Please try again.");
+			toast.error(t("deleteAccountError"));
 		},
 	});
 
 	const handleOpenChange = (next: boolean) => {
 		if (!isPending) {
 			setOpen(next);
-			if (!next) setConfirmEmail("");
+			if (!next) setConfirmPhrase("");
 		}
 	};
 
@@ -148,17 +161,16 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 		<>
 			<div className="mt-10 border border-red-200 rounded-xl p-6 space-y-4">
 				<div className="space-y-1">
-					<h3 className="text-base font-semibold text-red-600">Danger Zone</h3>
+					<h3 className="text-base font-semibold text-red-600">{t("dangerZoneTitle")}</h3>
 					<p className="text-sm text-gray-11">
-						Permanently delete your account and all associated data. This cannot
-						be undone.
+						{t("dangerZoneDescription")}
 					</p>
 				</div>
-				<div className="flex items-center justify-between">
+				<div className="flex flex-wrap gap-4 items-center justify-between">
 					<div className="space-y-0.5">
-						<p className="text-sm font-medium text-gray-12">Delete Account</p>
+						<p className="text-sm font-medium text-gray-12">{t("deleteAccountLabel")}</p>
 						<p className="text-xs text-gray-10">
-							Once deleted, your account cannot be recovered.
+							{t("deleteAccountSubtext")}
 						</p>
 					</div>
 					<Button
@@ -167,7 +179,7 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 						type="button"
 						onClick={() => setOpen(true)}
 					>
-						Delete my account
+						{t("deleteAccountButton")}
 					</Button>
 				</div>
 			</div>
@@ -175,17 +187,19 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogContent>
 					<DialogHeader
-						description={`Type your email address (${userEmail}) to confirm deletion. This action is permanent and cannot be undone.`}
+						description={t("deleteAccountDialogDescription", {
+							phrase: DELETE_CONFIRMATION_PHRASE,
+						})}
 					>
-						<DialogTitle>Delete Account</DialogTitle>
+						<DialogTitle>{t("deleteAccountDialogTitle")}</DialogTitle>
 					</DialogHeader>
 					<div className="p-5 space-y-3">
 						<Input
 							id={inputId}
-							type="email"
-							value={confirmEmail}
-							onChange={(e) => setConfirmEmail(e.target.value)}
-							placeholder={userEmail}
+							type="text"
+							value={confirmPhrase}
+							onChange={(e) => setConfirmPhrase(e.target.value)}
+							placeholder={DELETE_CONFIRMATION_PHRASE}
 							autoComplete="off"
 						/>
 						{deleteError && (
@@ -198,19 +212,19 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 							variant="gray"
 							type="button"
 							onClick={() => handleOpenChange(false)}
-							disabled={isPending}
+							disabled={isPending || deleteSucceeded}
 						>
-							Cancel
+							{t("cancel")}
 						</Button>
 						<Button
 							size="sm"
 							variant="destructive"
 							type="button"
 							spinner={isPending}
-							disabled={confirmEmail !== userEmail || isPending}
+							disabled={shouldDisableConfirm({ confirmPhrase, isPending, deleteSucceeded })}
 							onClick={() => doDelete()}
 						>
-							{isPending ? "Deleting..." : "Confirm delete"}
+							{isPending ? t("deleteAccountPending") : t("deleteAccountConfirm")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -220,12 +234,13 @@ const DangerZone = ({ userEmail }: { userEmail: string }) => {
 };
 
 export const Settings = () => {
+	const t = useTranslations("settings");
 	const router = useRouter();
 	const { organizationData, user, userPreferences } = useDashboardContext();
-	const currentLocale: Locale =
-		((userPreferences as Record<string, unknown> | null)?.locale as
-			| Locale
-			| undefined) ?? "uz";
+	// Reflect the ACTUALLY-rendered locale (next-intl), not the raw DB
+	// preference — the two can disagree (e.g. cookie-only locale changes),
+	// which previously trapped the switcher's early-return on a no-op click.
+	const currentLocale = useLocale() as Locale;
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
 	const [defaultOrgId, setDefaultOrgId] = useState<
@@ -268,23 +283,23 @@ export const Settings = () => {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Name updated successfully");
+			toast.success(t("nameUpdated"));
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("Failed to update name");
+			toast.error(t("nameUpdateError"));
 		},
 	});
 
 	const signOutAllDevicesMutation = useMutation({
 		mutationFn: signOutAllDevices,
 		onSuccess: () => {
-			toast.success("Signed out of all devices");
+			toast.success(t("signOutAllDevicesSuccess"));
 			setSignOutAllDevicesOpen(false);
 			signOut({ callbackUrl: "/login" });
 		},
 		onError: () => {
-			toast.error("Failed to sign out of all devices");
+			toast.error(t("signOutAllDevicesError"));
 		},
 	});
 
@@ -317,7 +332,7 @@ export const Settings = () => {
 		}),
 		onSuccess: () => {
 			setProfileImageOverride(undefined);
-			toast.success("Profile image updated successfully");
+			toast.success(t("profileImageUpdated"));
 			router.refresh();
 		},
 		onError: (error) => {
@@ -326,7 +341,7 @@ export const Settings = () => {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to upload profile image",
+					: t("profileImageUploadError"),
 			);
 		},
 	});
@@ -335,7 +350,7 @@ export const Settings = () => {
 		mutationFn: () => rpc.UserUpdate({ id: user.id, image: Option.none() }),
 		onSuccess: () => {
 			setProfileImageOverride(null);
-			toast.success("Profile image removed");
+			toast.success(t("profileImageRemoved"));
 			router.refresh();
 		},
 		onError: (error) => {
@@ -344,7 +359,7 @@ export const Settings = () => {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to remove profile image",
+					: t("profileImageRemoveError"),
 			);
 		},
 	});
@@ -379,9 +394,9 @@ export const Settings = () => {
 				<div className="grid gap-6 w-full md:grid-cols-2">
 					<Card className="space-y-4">
 						<div className="space-y-1">
-							<CardTitle>Profile image</CardTitle>
+							<CardTitle>{t("profileImageTitle")}</CardTitle>
 							<CardDescription>
-								This image appears in your profile, comments, and shared caps.
+								{t("profileImageDescription")}
 							</CardDescription>
 						</div>
 						<ProfileImage
@@ -396,17 +411,16 @@ export const Settings = () => {
 					</Card>
 					<Card className="space-y-4">
 						<div className="space-y-1">
-							<CardTitle>Your name</CardTitle>
+							<CardTitle>{t("yourNameTitle")}</CardTitle>
 							<CardDescription>
-								Changing your name below will update how your name appears when
-								sharing a Cap, and in your profile.
+								{t("yourNameDescription")}
 							</CardDescription>
 						</div>
 						<div className="flex flex-col flex-wrap gap-3 w-full">
 							<div className="flex-1">
 								<Input
 									type="text"
-									placeholder="First name"
+									placeholder={t("firstNamePlaceholder")}
 									onChange={(e) => setFirstName(e.target.value)}
 									defaultValue={firstName as string}
 									id={firstNameId}
@@ -416,7 +430,7 @@ export const Settings = () => {
 							<div className="flex-1 space-y-2">
 								<Input
 									type="text"
-									placeholder="Last name"
+									placeholder={t("lastNamePlaceholder")}
 									onChange={(e) => setLastName(e.target.value)}
 									defaultValue={lastName as string}
 									id={lastNameId}
@@ -427,9 +441,9 @@ export const Settings = () => {
 					</Card>
 					<Card className="flex flex-col gap-4">
 						<div className="space-y-1">
-							<CardTitle>Contact email address</CardTitle>
+							<CardTitle>{t("contactEmailTitle")}</CardTitle>
 							<CardDescription>
-								This is the email address you used to sign up to Cap with.
+								{t("contactEmailDescription")}
 							</CardDescription>
 						</div>
 						<Input
@@ -443,14 +457,14 @@ export const Settings = () => {
 					<ApiKeysSection />
 					<Card className="flex flex-col gap-4">
 						<div className="space-y-1">
-							<CardTitle>Default organization</CardTitle>
+							<CardTitle>{t("defaultOrgTitle")}</CardTitle>
 							<CardDescription>
-								This is the default organization
+								{t("defaultOrgDescription")}
 							</CardDescription>
 						</div>
 
 						<Select
-							placeholder="Default organization"
+							placeholder={t("defaultOrgPlaceholder")}
 							value={
 								defaultOrgId ??
 								user?.defaultOrgId ??
@@ -495,25 +509,25 @@ export const Settings = () => {
 					variant="dark"
 					spinner={updateNamePending}
 				>
-					{updateNamePending ? "Saving..." : "Save"}
+					{updateNamePending ? t("savePending") : t("save")}
 				</Button>
 			</form>
 			<Card className="flex flex-col gap-4 mt-6 md:flex-row md:items-center md:justify-between">
 				<div className="space-y-1">
-					<CardTitle>Sign out of all devices</CardTitle>
+					<CardTitle>{t("signOutAllDevicesTitle")}</CardTitle>
 					<CardDescription>
-						Invalidate every Cap web session and desktop app authentication
-						token connected to your account.
+						{t("signOutAllDevicesDescription")}
 					</CardDescription>
 				</div>
 				<Button
 					type="button"
 					size="sm"
-					variant="destructive"
+					variant="outline"
 					icon={<LogOut className="size-4" />}
+					className="mt-3 md:mt-0"
 					onClick={() => setSignOutAllDevicesOpen(true)}
 				>
-					Sign out all devices
+					{t("signOutAllDevicesButton")}
 				</Button>
 			</Card>
 			<Dialog
@@ -523,18 +537,13 @@ export const Settings = () => {
 				<DialogContent>
 					<DialogHeader
 						icon={<LogOut className="size-4" />}
-						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, and desktop API keys for your account."
+						description={t("signOutAllDevicesDialogDescription")}
 					>
-						<DialogTitle>Sign out of all devices?</DialogTitle>
+						<DialogTitle>{t("signOutAllDevicesDialogTitle")}</DialogTitle>
 					</DialogHeader>
 					<div className="p-5 space-y-3 text-sm text-gray-11">
-						<p>
-							You will be signed out of this browser after the reset completes.
-						</p>
-						<p>
-							The Cap desktop app may need you to click Sign out, then sign in
-							again before uploads and settings sync work.
-						</p>
+						<p>{t("signOutAllDevicesDialogBody1")}</p>
+						<p>{t("signOutAllDevicesDialogBody2")}</p>
 					</div>
 					<DialogFooter>
 						<Button
@@ -543,7 +552,7 @@ export const Settings = () => {
 							variant="gray"
 							onClick={() => setSignOutAllDevicesOpen(false)}
 						>
-							Cancel
+							{t("cancel")}
 						</Button>
 						<Button
 							type="button"
@@ -554,14 +563,12 @@ export const Settings = () => {
 							spinner={signOutAllDevicesMutation.isPending}
 							disabled={signOutAllDevicesMutation.isPending}
 						>
-							{signOutAllDevicesMutation.isPending
-								? "Signing out..."
-								: "Sign out all devices"}
+							{signOutAllDevicesMutation.isPending ? t("signOutAllDevicesPending") : t("signOutAllDevicesButton")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-			<DangerZone userEmail={user?.email as string} />
+			<DangerZone />
 		</>
 	);
 };

@@ -1,31 +1,21 @@
-# QA Smoke Gate — Ustoz
+# QA Smoke — cap-v2 (Ustoz) — RUN 6 (Contabo prod, data365.duckdns.org)
 
-**Verdict: PASS** — the app type-checks clean, boots, and serves all core routes. Lint + unit-test failures are quality debt (formatting + missing test-env), not a broken build. Proceeding to Step 3.
+Build-health gate. Evidence = live prod driven via Browser pane (anonymous, read-only). State-read on every pass (techniques §7). No `QA_REGRESSION.md` exists → no regression rows to drive first.
 
-## Build health
-| Check | Command | Result |
-|---|---|---|
-| Typecheck | `pnpm -F @cap/web typecheck` (`next typegen && tsc -b`) | ✅ **PASS** (exit 0) |
-| Production build | `pnpm -F @cap/web build` | ⏳ deferred — `next build` shares `.next/` with the running dev server; will run during/after live E2E |
-| Lint | `pnpm biome check` | ⚠️ 1283 errors + 127 warnings / 1091 files — **predominantly formatting/style** (e.g. package.json spacing). Auto-fixable via `biome check --write`. Hardening item, not a functional bug. |
-| Unit + integration tests | `pnpm -F @cap/web test` (vitest) | ⚠️ **543/633 pass (86%)**. 90 fail across 21 suites — ~64 are SEO/canonical-URL page tests (missing base-URL env), ~15 transcribe-integration (env), rest = ffmpeg/Stripe not installed + a few stale expectations. **No user-facing bug**; needs a real test-env + CI (separate task). A couple (save-video-edits ×5, playback-source ×2) worth a later look. |
+| Smoke # | Check | Status | Evidence (read value) | Notes |
+|---|---|---|---|---|
+| F1 | `/api/health` | ✅ | `{"status":"ok","checks":{"db":"ok","storage":"ok"}}` (get_page_text) | DB + R2 reachable |
+| F2 | Root `/` (anon) | ✅ | Renders login "data365 ga kirish / Kirish" (get_page_text) | Anon → login, no crash |
+| F3 | `/login` form | ✅ | email textbox `siz@kompaniya.uz`, password textbox, "Kirish" submit, signup/terms/privacy links (read_page) · 0 console errors | No Google btn (OAuth unconfigured — expected) |
+| F4 | Share `/s/fm3pz7yref328m7` render | ✅ | Title "Tuxum fabrikasini avtomatlashtirish va IT audit muhokamasi", summary + 8 chapters + 3 tasks + suggested-Qs rendered · 0 console errors | Real migrated content off Contabo DB/R2 |
+| F5 | Share playback | ✅ | `<video>` readyState=4, duration=3171s, src=R2, play() → currentTime 0→0.76s in 1.2s (js state-read) | Streams from R2, real playback |
+| F6 | AI tabs switch (Xulosa/Vazifalar/Transkript/Matn) | ⚠️ Unverified | Clicking Transkript (ref + direct JS `.click()`) does NOT change `aria-selected` — stays "Xulosa". Root cause read from code: `SharePanel.tsx:119` `effectiveActiveTab = processing ? "summary" : activeTab` → tabs are LOCKED to Summary while `aiProcessing` (transcription/AI busy) is true. The only anon-reachable video is currently in that state. | By-design lock; could NOT verify switching works. Also a candidate finding (see QA_REPORT) — flagship demo video shows "optimizing" + locked tabs post-migration. |
+| F9 | Dock / slim bottom bar | → Step 3 | (deferred to full pass) | — |
+| F10 | T4b owner-gating (anon leak) | ✅ | replace-with-audio btn: `opacity:0, pointerEvents:none, ariaHidden:true, disabled:false` (getComputedStyle) — inert, out of a11y tree | Prior-run a11y gap (no aria-hidden) is FIXED |
+| F14 | Invalid share id `/s/zzzzzzzzzzzzz` | ✅ | "This video is private / restricted" page, title "…is restricted", 0 console errors, no 500 | Graceful; doesn't leak existence |
+| F15 | Unknown route `/this-route-does-not-exist-xyz` | ✅ | Falls through to login "Bosh sahifa", no crash/stacktrace | No distinct 404 page (auth-walled app) |
 
-## Runtime smoke
-| Check | Result |
-|---|---|
-| Dev server boot | ✅ Ready in ~1.2s on http://localhost:3001 |
-| Boot error (non-fatal) | ⚠️ `instrumentation.node.ts` `PutBucketCors` → MinIO **501 NotImplemented** (unhandledRejection). **Harmless** — MinIO already allows CORS (preflight returns 204 + `Access-Control-Allow-Origin: http://localhost:3001`). Should still be caught/silenced. |
-| `/login` | ✅ 200 |
-| `/dashboard` (unauthed) | ✅ 307 → /login (correct) |
-| `/s/x1nj6750tqpnm1b` | ✅ 200 |
-| `/` (root) | ⚠️ **404** — no landing page or redirect at root (minor finding). |
+**9 of 10 smoke checks passed · 1 Unverified (F6, blocked by processing-lock) · 0 failed.**
 
-## API probes (no auth)
-| Endpoint | Result | Meaning |
-|---|---|---|
-| `POST /api/video/tasks/toggle` | **404** | F002 confirmed — route doesn't exist |
-| `POST /api/video/ai/chat` | **200, streamed AI reply** | F001 confirmed — zero auth, drains owner's Gemini quota |
-| `GET /api/video/ai?videoId=` | 401 `{auth:false}` | auth-gated (IDOR needs 2-user test → code-confirmed REAL as F022) |
-| `GET /api/video/transcribe/status` | 401 `{auth:false}` | auth-gated (no-ownership = F023, code-confirmed) |
-| MinIO CORS preflight (OPTIONS) | 204 + ACAO=localhost:3001 | uploads NOT CORS-blocked (F005 refuted) |
-| GEMINI key | ✅ HTTP 200, 50 models | key valid; AI flows testable |
+## Gate decision
+Build is healthy — renders, plays from R2, health green, error paths graceful, no console errors on any driven route. No build-broken smoke failure → **G1 not triggered.** F6 is Unverified (design lock, not a build break). **Smoke passed. Proceeding to Step 3.**

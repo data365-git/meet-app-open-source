@@ -22,6 +22,11 @@ export const useMediaRecorderSetup = () => {
 		null,
 	);
 	const isStoppingRef = useRef(false);
+	// Set only when onRecorderError arms a stop promise ahead of the
+	// recorder's own auto-stop (see onRecorderError below). Lets a concurrent
+	// stopRecordingInternal call hand back the same pending promise instead of
+	// racing a second recorder.stop().
+	const armedStopPromiseRef = useRef<Promise<Blob | null> | null>(null);
 
 	const setLocalRecordingStrategy = useCallback(
 		(strategy: LocalRecordingStrategy) => {
@@ -98,6 +103,7 @@ export const useMediaRecorderSetup = () => {
 			const rejecter = stopPromiseRejectRef.current;
 			stopPromiseResolverRef.current = null;
 			stopPromiseRejectRef.current = null;
+			armedStopPromiseRef.current = null;
 			isStoppingRef.current = false;
 			rejecter?.(new Error("No recorded data"));
 			return;
@@ -109,24 +115,57 @@ export const useMediaRecorderSetup = () => {
 		const resolver = stopPromiseResolverRef.current;
 		stopPromiseResolverRef.current = null;
 		stopPromiseRejectRef.current = null;
+		armedStopPromiseRef.current = null;
 		isStoppingRef.current = false;
 		resolver?.(blob);
 	}, []);
 
-	const onRecorderError = useCallback((event: RecorderErrorEvent) => {
-		const error = event.error ?? new DOMException("Recording error");
-		const rejecter = stopPromiseRejectRef.current;
-		stopPromiseResolverRef.current = null;
-		stopPromiseRejectRef.current = null;
-		isStoppingRef.current = false;
-		rejecter?.(error);
-	}, []);
+	const onRecorderError = useCallback(
+		(event: RecorderErrorEvent, onUnexpectedError?: (error: Error) => void) => {
+			const error = event.error ?? new DOMException("Recording error");
+
+			if (isStoppingRef.current) {
+				const rejecter = stopPromiseRejectRef.current;
+				stopPromiseResolverRef.current = null;
+				stopPromiseRejectRef.current = null;
+				armedStopPromiseRef.current = null;
+				isStoppingRef.current = false;
+				rejecter?.(error);
+				return;
+			}
+
+			// No stop was requested: this is a fatal error mid-recording. Per
+			// the MediaRecorder spec the browser fires `stop` right after this
+			// handler returns (still synchronously, before onRecorderStop
+			// would otherwise see no resolver and discard the buffered
+			// bytes). Arm the stop promise now — without calling
+			// recorder.stop() ourselves, since the browser is already
+			// stopping it — so the caller can await the real, finalized blob
+			// and salvage it instead of losing it.
+			isStoppingRef.current = true;
+			const stopPromise = new Promise<Blob | null>((resolve, reject) => {
+				stopPromiseResolverRef.current = resolve;
+				stopPromiseRejectRef.current = reject;
+			});
+			armedStopPromiseRef.current = stopPromise;
+
+			onUnexpectedError?.(error);
+		},
+		[],
+	);
 
 	const stopRecordingInternal = useCallback(
 		async (cleanupStreams: () => void, clearTimer: () => void) => {
+			if (isStoppingRef.current) {
+				// A stop is already armed — e.g. onRecorderError armed one
+				// ahead of the recorder's own imminent auto-stop. Hand back
+				// the same pending promise instead of racing a second
+				// recorder.stop() call.
+				return armedStopPromiseRef.current;
+			}
+
 			const recorder = mediaRecorderRef.current;
 			if (!recorder || recorder.state === "inactive") return null;
-			if (isStoppingRef.current) return null;
 
 			isStoppingRef.current = true;
 
@@ -134,6 +173,7 @@ export const useMediaRecorderSetup = () => {
 				stopPromiseResolverRef.current = resolve;
 				stopPromiseRejectRef.current = reject;
 			});
+			armedStopPromiseRef.current = stopPromise;
 
 			recorder.stop();
 			cleanupStreams();

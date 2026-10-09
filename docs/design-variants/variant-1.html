@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variant 1 — Sokin</title>
+<style>
+  :root{
+    --bg:#f7f7f8; --surface:#ffffff; --border:#e4e4e7; --text:#18181b; --text-dim:#71717a;
+    --accent:#2563eb; --accent-fg:#ffffff; --radius:14px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#121214; --surface:#1c1c1f; --border:#2c2c31; --text:#f4f4f5; --text-dim:#a1a1aa; --accent:#3b82f6; --accent-fg:#0b1220; }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  .titlebar{background:#111827;color:#fbbf24;font-size:13px;padding:8px 16px;text-align:center;}
+  .titlebar b{color:#fff;}
+  .wrap{max-width:760px;margin:0 auto;padding:20px 16px 80px;}
+  .header{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  .back{width:36px;height:36px;border-radius:999px;border:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:16px;flex-shrink:0;}
+  .htitle{font-size:20px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .menu-btn{width:36px;height:36px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text-dim);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;}
+  .meta{display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;margin-bottom:20px;}
+  .avatar{width:24px;height:24px;border-radius:999px;background:linear-gradient(135deg,#a1a1aa,#71717a);flex-shrink:0;}
+  .video{aspect-ratio:16/9;border-radius:var(--radius);background:repeating-linear-gradient(135deg,#27272a,#27272a 10px,#1f1f22 10px,#1f1f22 20px);position:relative;margin-bottom:12px;}
+  @media (prefers-color-scheme: light){ .video{background:repeating-linear-gradient(135deg,#d4d4d8,#d4d4d8 10px,#e4e4e7 10px,#e4e4e7 20px);} }
+  .playbtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:999px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;font-size:20px;color:#111;}
+  .primary-row{display:flex;justify-content:center;margin-bottom:28px;}
+  .btn-primary{background:var(--accent);color:var(--accent-fg);border:none;border-radius:999px;padding:12px 28px;font-size:15px;font-weight:600;cursor:pointer;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:14px;}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin:0 0 10px;font-weight:600;}
+  .card p{margin:0;line-height:1.6;font-size:14.5px;}
+  .tasklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .tasklist li{display:flex;align-items:flex-start;gap:8px;font-size:14.5px;line-height:1.5;}
+  .tasklist input{margin-top:3px;}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px;}
+  .tab{flex:1;text-align:center;padding:8px 4px;border-radius:999px;font-size:13px;color:var(--text-dim);cursor:pointer;user-select:none;}
+  .tab.active{background:var(--accent);color:var(--accent-fg);font-weight:600;}
+  .panel{display:none;}
+  .panel.active{display:block;}
+  details{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px;overflow:hidden;}
+  summary{padding:14px 18px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text-dim);list-style:none;display:flex;justify-content:space-between;align-items:center;}
+  summary::-webkit-details-marker{display:none;}
+  summary::after{content:"▾";font-size:11px;}
+  details[open] summary::after{content:"▴";}
+  .details-body{padding:0 18px 16px;font-size:14px;color:var(--text-dim);display:flex;flex-direction:column;gap:10px;}
+  .details-body .row{display:flex;justify-content:space-between;}
+  .menu-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:flex-start;justify-content:flex-end;padding:56px 16px 0 0;z-index:50;}
+  .menu-overlay.open{display:flex;}
+  .menu-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;min-width:200px;box-shadow:0 10px 30px rgba(0,0,0,.2);overflow:hidden;}
+  .menu-item{padding:12px 16px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--border);}
+  .menu-item:last-child{border-bottom:none;}
+  .footnote{text-align:center;color:var(--text-dim);font-size:12px;margin-top:24px;}
+</style>
+</head>
+<body>
+<div class="titlebar">Variant 1 — <b>hammasi bitta ustunda, kamroq tugma</b>: faqat bitta asosiy tugma (Ulashish), qolgan hammasi menyu va "batafsil" ichida yashiringan.</div>
+
+<div class="wrap">
+  <div class="header">
+    <div class="back">&#8592;</div>
+    <div class="htitle">Haftalik jamoa yig'ilishi — 28-iyul</div>
+    <div class="menu-btn" onclick="document.getElementById('menu').classList.add('open')">&#8942;</div>
+  </div>
+  <div class="meta">
+    <div class="avatar"></div>
+    <span>Aziz Karimov · 3 kun oldin</span>
+  </div>
+
+  <div class="video"><div class="playbtn">&#9654;</div></div>
+
+  <div class="primary-row">
+    <button class="btn-primary">Ulashish</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('xulosa')">Xulosa</div>
+    <div class="tab" onclick="showTab('vazifalar')">Vazifalar</div>
+    <div class="tab" onclick="showTab('transkript')">Transkript</div>
+    <div class="tab" onclick="showTab('matn')">Matn</div>
+  </div>
+
+  <div id="xulosa" class="panel active">
+    <div class="card">
+      <h2>Umumiy xulosa</h2>
+      <p>Jamoa Q3 mahsulot rejasini ko'rib chiqdi. Yangi onboarding oqimi ustuvorlashtirildi, dizayn bo'limi 2 haftada prototip taqdim etadi. Byudjet masalasi keyingi yig'ilishga qoldirildi.</p>
+    </div>
+  </div>
+  <div id="vazifalar" class="panel">
+    <div class="card">
+      <h2>Vazifalar · 4</h2>
+      <ul class="tasklist">
+        <li><input type="checkbox" checked> Onboarding prototipini tayyorlash — Nodira, 5-avgustgacha</li>
+        <li><input type="checkbox"> Byudjet hisobotini yangilash — Aziz</li>
+        <li><input type="checkbox"> Mijozlar bilan intervyu rejalashtirish — Dilnoza</li>
+        <li><input type="checkbox"> Keyingi yig'ilish kun tartibini yuborish — Aziz</li>
+      </ul>
+    </div>
+  </div>
+  <div id="transkript" class="panel">
+    <div class="card">
+      <h2>Transkript</h2>
+      <p><b>00:12</b> Aziz: Boshlaymiz, bugungi kun tartibi uchta band...<br><b>02:41</b> Nodira: Dizayn tomondan aytadigan bo'lsam...</p>
+    </div>
+  </div>
+  <div id="matn" class="panel">
+    <div class="card">
+      <h2>Tozalangan matn</h2>
+      <p>Yig'ilish uch bosqichda o'tdi: reja ko'rib chiqildi, dizayn taqdimoti bo'ldi, vazifalar taqsimlandi. To'liq tozalangan matn shu yerda ko'rinadi.</p>
+    </div>
+  </div>
+
+  <details>
+    <summary>Batafsil (ko'rishlar, izohlar, tahlil)</summary>
+    <div class="details-body">
+      <div class="row"><span>Ko'rishlar</span><span>24</span></div>
+      <div class="row"><span>Izohlar</span><span>3</span></div>
+      <div class="row"><span>Reaksiyalar</span><span>👍 5</span></div>
+      <div class="row"><span>AI tahlil narxi (faqat egasi ko'radi)</span><span>0.02 $</span></div>
+      <div class="row"><span><a href="#" style="color:var(--accent);text-decoration:none;">Tahlilni ko'rish</a></span><span></span></div>
+      <div class="row"><span><a href="#" style="color:var(--accent);text-decoration:none;">Izoh qoldirish</a></span><span></span></div>
+      <div class="row"><span><a href="#" style="color:var(--accent);text-decoration:none;">Yuklab olish</a></span><span></span></div>
+    </div>
+  </details>
+
+  <details>
+    <summary>Meeting AI — savol bering</summary>
+    <div class="details-body">
+      <p style="margin:0;">Transkript, vazifalar va qarorlar bo'yicha savol bering.</p>
+      <input type="text" placeholder="Masalan: kim nima qilishi kerak?" style="padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;">
+    </div>
+  </details>
+
+  <p class="footnote">Bu — statik namuna (mockup). Haqiqiy sahifa emas.</p>
+</div>
+
+<div class="menu-overlay" id="menu" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="menu-panel">
+    <div class="menu-item">Video tahrirlash</div>
+    <div class="menu-item">Tahlilni ko'rish</div>
+    <div class="menu-item">Boshqaruv panelga o'tish</div>
+    <div class="menu-item">Tungi rejim</div>
+  </div>
+</div>
+
+<script>
+function showTab(id){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

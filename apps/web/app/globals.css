@@ -4,21 +4,37 @@
 @import "@radix-ui/colors/gray-alpha.css";
 @import "@radix-ui/colors/gray-dark.css";
 @import "@radix-ui/colors/blue.css";
+@import "@radix-ui/colors/blue-dark.css";
+@import "@radix-ui/colors/amber.css";
+@import "@radix-ui/colors/amber-dark.css";
+@import "@radix-ui/colors/green.css";
+@import "@radix-ui/colors/green-dark.css";
+@import "@radix-ui/colors/purple.css";
+@import "@radix-ui/colors/purple-dark.css";
+@import "@radix-ui/colors/yellow.css";
+@import "@radix-ui/colors/yellow-dark.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-	--primary: #005cb1;
-	--primary-2: #004c93;
-	--primary-3: #003b73;
-	--secondary: #2eb4ff;
-	--secondary-2: #1696e0;
-	--secondary-3: #117ebd;
-	--tertiary: #c5eaff;
-	--tertiary-2: #d3e5ff;
-	--tertiary-3: #e0edff;
+	--brand: #005cb1;
+	--brand-fg: #ffffff;
+	--brand-wash: #e0edff;
+	/* design n01 semantic surface/text/state tokens (consume via bg-[var(--ds-*)] etc.) */
+	--ds-bg: #f7f7f7;
+	--ds-surface: #ffffff;
+	--ds-surface-2: #fbfbfb;
+	--ds-text: #202020;
+	--ds-muted: #6b6b6b;
+	--ds-border: #e8e8e8;
+	--ds-error: #e5484d;
+	--ds-error-wash: #fdeaea;
+	--ds-success: #1a9e5c;
+	--ds-warning: #f0a03c;
+	--primary: var(--brand);
+	--secondary: var(--brand);
 	--filler: #efefef;
 	--filler-2: #e4e4e4;
 	--filler-3: #e2e2e2;
@@ -42,14 +58,32 @@
 	}
 }
 
+.dark {
+	--brand: #2e9dff;
+	--brand-wash: rgba(46, 157, 255, 0.15);
+	/* design n01 semantic tokens — dark values */
+	--ds-bg: #141416;
+	--ds-surface: #1c1c1f;
+	--ds-surface-2: #18181b;
+	--ds-text: #ededef;
+	--ds-muted: #909096;
+	--ds-border: #2b2b30;
+	--ds-error: #e5484d;
+	--ds-error-wash: rgba(229, 72, 77, 0.15);
+	--ds-success: #3ecf8e;
+	--ds-warning: #f0a03c;
+	/* Semantic text token for recorder dialog labels in dark mode. */
+	--text-primary: var(--gray-12);
+}
+
 body {
 	overflow-x: hidden;
 }
 
-body,
-html {
-	color: #000000;
-	background-color: #f2f2f2;
+body.dark,
+html:has(body.dark) {
+	color: hsl(210, 20%, 98%);
+	background-color: hsl(224, 71.4%, 4.1%);
 }
 .dashboard-grid {
 	display: grid;
@@ -125,13 +159,13 @@ html {
 }
 
 .dark ::selection {
-	background: #ffffff;
-	color: #000000;
+	background: var(--brand-wash);
+	color: inherit;
 }
 
 ::selection {
-	background: #000000;
-	color: #ffffff;
+	background: var(--brand-wash);
+	color: inherit;
 }
 
 .wrapper {
@@ -170,7 +204,7 @@ html {
 }
 
 a.text-primary:hover {
-	color: var(--primary-2);
+	color: var(--brand);
 }
 
 .text-secondary {
@@ -178,30 +212,11 @@ a.text-primary:hover {
 }
 
 a.text-secondary:hover {
-	color: var(--secondary-2);
+	color: var(--brand);
 }
 
 a.bg-primary:hover {
-	background-color: var(--primary-2);
-}
-
-.bg-dark {
-	background-color: var(--secondary-3);
-}
-
-.bg-gradient {
-	@apply bg-gradient-to-r transition-all duration-300 from-secondary-2 to-secondary-3;
-}
-
-.bg-gradient:hover {
-	@apply bg-gradient-to-r from-secondary to-secondary-3;
-}
-
-.bg-animated {
-	content: "";
-	background: linear-gradient(60deg, var(--primary), var(--secondary));
-	animation: animatedgradient 2s ease infinite;
-	background-size: 300% 300%;
+	background-color: var(--brand);
 }
 
 .animated-yaxis {
@@ -311,20 +326,18 @@ a.bg-primary:hover {
 	mask-composite: exclude;
 }
 
-@media all and (max-width: 1024px) {
+/* 1023.98px (not 1024px): Tailwind's `lg:` is min-width:1024px, so at exactly
+   1024px both this mobile grid AND the lg: desktop sidebar applied at once —
+   the sidebar lost its named grid area and the main column collapsed to
+   0 height (blank dashboard at Windows 125% scale, where a 1280px-wide
+   window lands on exactly 1024 CSS px). */
+@media all and (max-width: 1023.98px) {
 	.dashboard-grid {
 		grid-template-columns: 1fr;
 		grid-template-rows: 1fr;
 		grid-template-areas:
 			"main"
 			"main";
-	}
-}
-
-@media (prefers-color-scheme: dark) {
-	body,
-	html {
-		color: #000000;
 	}
 }
 
@@ -401,24 +414,6 @@ label {
 		linear-gradient(#fff 0 0);
 	-webkit-mask-composite: xor;
 	mask-composite: exclude;
-}
-
-.muted-custom-bg {
-	background: radial-gradient(
-		50.01% 50.01% at 53.53% 49.99%,
-		var(--tertiary-3) 4.65%,
-		var(--tertiary-3) 68.48%,
-		#ffffff 100%
-	);
-}
-
-.muted-custom-bg-2 {
-	background: radial-gradient(
-		50.01% 50.01% at 53.53% 49.99%,
-		var(--tertiary-2) 4.65%,
-		var(--tertiary) 68.48%,
-		#ffffff 100%
-	);
 }
 
 .theme-transition {

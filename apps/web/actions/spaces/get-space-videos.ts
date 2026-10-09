@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos } from "@cap/database/schema";
+import { sharedVideos, spaceVideos, spaces } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 
@@ -19,6 +19,28 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 		}
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
+		// Membership guard: this is a "use server" action, i.e. a POST endpoint any
+		// signed-in user can call with any id. Without this, passing a spaceId from
+		// somebody else's organization returned that space's video ids — an
+		// enumeration leak. The "all spaces" branch is safe by construction (the id
+		// IS the caller's active org), so only the space branch needs the check.
+		// Same pattern as getFolderVideoIds, whose comment already cites this leak.
+		if (!isAllSpacesEntry) {
+			const [space] = await db()
+				.select({ id: spaces.id })
+				.from(spaces)
+				.where(
+					and(
+						eq(spaces.id, spaceId),
+						eq(spaces.organizationId, user.activeOrganizationId),
+					),
+				);
+
+			if (!space) {
+				throw new Error("Space not found or not accessible");
+			}
+		}
 
 		const videoIds = isAllSpacesEntry
 			? await db()

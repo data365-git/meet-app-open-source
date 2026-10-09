@@ -1,0 +1,42 @@
+K5 — Cost-accounting model literal (A2 fix): CODE-READ + unit-test evidence
+
+File: apps/web/lib/ai-cost-guard.ts, withCostGuard(), line ~295-337:
+
+  const result = await options.fn();
+
+  // The model that actually produced this result (e.g. after an overload
+  // fallback chain inside fn) takes priority over the requested model — both
+  // for pricing and for what gets recorded, so spend is never attributed to a
+  // model that wasn't the one actually billed.
+  const billedModel = result.modelUsed ?? options.model;
+  ...
+  const costUsdMicros = options.free ? 0 : priceForMicros(billedModel, {...});
+  ...
+  await db().insert(aiUsageEvents).values({
+    ...
+    model: billedModel,      // <-- recorded model = ACTUAL model used, not the literal requested
+    ...
+    costUsdMicros,
+  });
+
+CostGuardOptions<T>.fn's return type explicitly documents this contract
+(lines 213-225): "modelUsed?: string — The model that ACTUALLY produced this
+result, when the caller's fn can fall back to a different model than
+options.model requested ... When present, this — not options.model — is what
+gets priced and recorded."
+
+Unit test: apps/web/__tests__/unit/ai-cost-guard-model-used.test.ts
+  - "prices and records the actually-used model when fn reports a fallback
+    (modelUsed), not the requested model" — asserts modelUsed: "gemini-2.5-flash"
+    (the fallback) is what gets billed/recorded, not the originally requested
+    model.
+  - "falls back to options.model when the fn result carries no modelUsed
+    (back-compat for other callers)" — confirms callers that never set
+    modelUsed still record options.model as before (no regression).
+
+Live vitest run 2026-07-22 (see vitest-C3-K1-K1b-K2-K3-K5.txt in this folder):
+  __tests__/unit/ai-cost-guard-model-used.test.ts (2 tests) — PASS
+
+VERDICT: A2 fix confirmed landed. Recorded ai_usage_events.model reflects the
+actual model that produced the result (result.modelUsed ?? options.model),
+never a hardcoded literal on a fallback path.

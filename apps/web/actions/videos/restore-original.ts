@@ -49,6 +49,13 @@ export async function restoreOriginal(
 		await bucket
 			.copyObject(`${bucket.bucketName}/${sourceKey}`, resultKey)
 			.pipe(runPromise);
+		// The media clock just changed back: a transcription resume seed from
+		// the edited timeline must not be spliced into the original (best-effort).
+		try {
+			await bucket
+				.deleteObject(`${video.ownerId}/${videoId}/transcription-partial.vtt`)
+				.pipe(runPromise);
+		} catch {}
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "Failed to restore original.";

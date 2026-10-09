@@ -1,0 +1,9 @@
+{
+	"manifest_version": 3,
+	"name": "PROTO — screen video + tab audio",
+	"version": "0.1",
+	"description": "Throwaway spike: prove entire-screen video + Meet-tab audio (tabCapture) mix into one playable file, no 'share system audio' tick.",
+	"permissions": ["tabCapture", "tabs"],
+	"background": { "service_worker": "background.js" },
+	"action": { "default_popup": "popup.html" }
+}

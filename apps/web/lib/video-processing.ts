@@ -2,32 +2,31 @@ import { db } from "@cap/database";
 import { videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
+import { getAffectedRows } from "@/lib/affected-rows";
+import { persistableProcessingError } from "@/lib/processing-error";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export async function setVideoProcessingError(
 	videoId: Video.VideoId,
 	processingMessage: string,
 	error: unknown,
 ): Promise<void> {
+	// FULL detail to the server log; the persisted field reaches every viewer
+	// of the share link, so it gets the allowlist token only (round-18 — an
+	// S3 error message can carry a working presigned URL).
+	console.error(
+		`[video-processing] ${processingMessage} failed for video=${videoId}:`,
+		error,
+	);
 	await db()
 		.update(videoUploads)
 		.set({
 			phase: "error",
 			processingProgress: 0,
 			processingMessage,
-			processingError: error instanceof Error ? error.message : String(error),
+			processingError: persistableProcessingError(error),
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId));
@@ -114,31 +113,30 @@ export async function startVideoProcessingWorkflow({
 	});
 
 	if (status === "already-processing") {
+		// A duplicate hand-off lands here and launches nothing — until
+		// 2026-09-10 that outcome left no log line at all.
+		console.log(
+			`[startVideoProcessingWorkflow] Video ${videoId} is already processing — not launching a second workflow`,
+		);
 		return status;
 	}
 
-	try {
-		// Workflow DevKit plugin is disabled (see apps/web/next.config.mjs) — the
-		// media server was removed, so "processing" is just clearing the upload
-		// record. Run it inline instead of through the WDK `start()` runtime,
-		// which would reject the function without the build plugin.
-		await processVideoWorkflow({
-			videoId,
-			userId,
-			rawFileKey,
-			bucketId: bucketId as S3Bucket.S3BucketId | null,
-		});
-		return "started";
-	} catch (error) {
+	processVideoWorkflow({
+		videoId,
+		userId,
+		rawFileKey,
+		bucketId: bucketId as S3Bucket.S3BucketId | null,
+	}).catch(async (err) => {
 		const normalizedError =
-			error instanceof Error
-				? error
+			err instanceof Error
+				? err
 				: new Error("Video processing could not start");
+		console.error(`[startVideoProcessingWorkflow] Inline workflow failed for video ${videoId}:`, err);
 		await setVideoProcessingError(
 			videoId,
 			startFailureMessage,
 			normalizedError,
 		);
-		throw normalizedError;
-	}
+	});
+	return "started";
 }

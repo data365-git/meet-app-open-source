@@ -1,0 +1,21 @@
+C1/C2 — DB verify: ai_chat_usage rows after C1 (guest) + C2 (member) calls
+Query (read-only SELECT, via SSH -> mysql inside container fot1zbunh8jld7l4k67h2zp4):
+
+SELECT id, videoId, clientId, dateUtc, requestCount FROM ai_chat_usage
+WHERE videoId='15xgcytw49pmrj8' AND dateUtc = CURDATE() ORDER BY id;
+
+Result:
+id              videoId          clientId                    dateUtc      requestCount
+8sf4c8e6vw4r2rx 15xgcytw49pmrj8  qa0pool0loop000              2026-07-22   1
+qgmg99aexn913e3 15xgcytw49pmrj8  guest_ip:31.182.175.95       2026-07-22   1
+
+Interpretation:
+- C1 (no cookie, guest) landed as a SEPARATE row keyed clientId=guest_ip:<ip>
+  (falls back to IP-keyed bucket since curl didn't resend the Set-Cookie
+  ai_chat_cid on a follow-up request — expected for a single curl call).
+- C2 (session cookie = qa0pool0loop000 member) landed as a SEPARATE row keyed
+  clientId=qa0pool0loop000 — the real users.id, NOT a guest bucket.
+- Two distinct rows confirm: member usage is counted under the member's own
+  users.id and is NOT merged into / counted against the guest total for this
+  video, matching the C2 expectation ("usage keyed by users.id, NOT counted
+  toward the guest per-video total").

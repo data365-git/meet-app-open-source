@@ -17,6 +17,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
+import { signedMediaUrl } from "@/lib/media-cdn";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
 export const dynamic = "force-dynamic";
@@ -102,28 +103,15 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 
 		if (
 			video.source.type !== "webMP4" &&
-			video.source.type !== "webAudio" &&
 			video.source.type !== "extensionWeb"
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
 
-		// Cover every extension an upload may be stored under (video + audio).
-		// After processing deletes the videoUploads row, this fallback is what
-		// locates the raw file, so it must include all accepted media types.
 		const candidateKeys = [
-			"mp4",
-			"webm",
-			"mov",
-			"mkv",
-			"avi",
-			"m4v",
-			"mp3",
-			"m4a",
-			"wav",
-			"aac",
-			"ogg",
-		].map((ext) => `${video.ownerId}/${video.id}/raw-upload.${ext}`);
+			`${video.ownerId}/${video.id}/raw-upload.mp4`,
+			`${video.ownerId}/${video.id}/raw-upload.webm`,
+		];
 		const headResults = yield* Effect.all(
 			candidateKeys.map((key) => bucket.headObject(key).pipe(Effect.option)),
 			{ concurrency: "unbounded" },
@@ -151,7 +139,6 @@ const getPlaylistResponse = (
 		const isMp4Source =
 			video.source.type === "desktopMP4" ||
 			video.source.type === "webMP4" ||
-			video.source.type === "webAudio" ||
 			video.source.type === "extensionWeb";
 
 		if (urlParams.videoType === "raw-preview") {
@@ -310,8 +297,10 @@ const getPlaylistResponse = (
 				}
 			}
 
+			const isMp4Redirect = redirect.endsWith(".mp4");
+			const cdnUrl = isMp4Redirect ? signedMediaUrl(redirect) : null;
 			return HttpServerResponse.redirect(
-				yield* bucket.getSignedObjectUrl(redirect),
+				cdnUrl ?? (yield* bucket.getSignedObjectUrl(redirect)),
 			);
 		}
 
@@ -356,8 +345,13 @@ const getPlaylistResponse = (
 			yield* Effect.log(
 				`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
 			);
+			const mp4Key = `${video.ownerId}/${video.id}/result.mp4`;
+			const cdnUrl = signedMediaUrl(mp4Key);
+			if (cdnUrl !== null) {
+				return HttpServerResponse.redirect(cdnUrl);
+			}
 			return yield* bucket
-				.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+				.getSignedObjectUrl(mp4Key)
 				.pipe(Effect.map(HttpServerResponse.redirect));
 		}
 

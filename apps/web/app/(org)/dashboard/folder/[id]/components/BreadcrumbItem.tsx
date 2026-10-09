@@ -1,6 +1,6 @@
 "use client";
 
-import type { Folder, Space } from "@cap/web-domain";
+import type { Folder, Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -57,17 +57,34 @@ export function BreadcrumbItem({
 			const data = e.dataTransfer.getData("application/cap");
 			if (!data) return;
 
-			const capData = JSON.parse(data);
+			const capData: {
+				id?: Video.VideoId;
+				name?: string;
+				ids?: Video.VideoId[];
+			} = JSON.parse(data);
 			if (!capData.id) return;
 
+			// A card dragged out of a multi-selection carries every selected id on
+			// the payload. Move all of them — otherwise the breadcrumb folder would
+			// silently swallow one video and leave the rest behind while still
+			// reporting success. A single card has `ids` of length 1 (or none).
+			const ids =
+				capData.ids && capData.ids.length > 0 ? capData.ids : [capData.id];
+
 			setIsMoving(true);
-			await moveVideoToFolder({
-				videoId: capData.id,
-				folderId: id,
-				spaceId: spaceId ?? null,
-			});
+			for (const videoId of ids) {
+				await moveVideoToFolder({
+					videoId,
+					folderId: id,
+					spaceId: spaceId ?? null,
+				});
+			}
 			router.refresh();
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			toast.success(
+				ids.length > 1
+					? `${ids.length} caps moved to "${name}" folder`
+					: `"${capData.name}" moved to "${name}" folder`,
+			);
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
 			toast.error("Failed to move video to folder");

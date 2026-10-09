@@ -1,12 +1,16 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { users, videos } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	videos,
+} from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { startAiGeneration } from "@/lib/generate-ai";
-import { isAiGenerationEnabled } from "@/utils/flags";
+import { buildAiStatusFacts, buildProcessingProgress } from "@/lib/ai-request-pending";
+import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +34,7 @@ export async function GET(request: NextRequest) {
 		const result = await db()
 			.select()
 			.from(videos)
-			.where(eq(videos.id, videoId));
+			.where(and(eq(videos.id, videoId), isNull(videos.deletedAt)));
 		if (result.length === 0 || !result[0]) {
 			return Response.json(
 				{ error: true, message: "Video not found" },
@@ -39,7 +43,42 @@ export async function GET(request: NextRequest) {
 		}
 
 		const video = result[0];
-		if (video.ownerId !== user.id) {
+		// Allow the video owner OR an org owner/admin (same gate as the manual
+		// "start AI" / translate paths). Without this, an org admin who started
+		// generation gets 403 here and their status poll never reaches a terminal
+		// state, leaving the share page stuck on the optimistic "processing" view.
+		let hasPermission = video.ownerId === user.id;
+		if (!hasPermission && video.orgId) {
+			const [orgAccess] = await db()
+				.select({
+					ownerId: organizations.ownerId,
+					memberRole: organizationMembers.role,
+				})
+				.from(organizations)
+				.leftJoin(
+					organizationMembers,
+					and(
+						eq(organizationMembers.organizationId, organizations.id),
+						eq(organizationMembers.userId, user.id),
+					),
+				)
+				.where(
+					and(
+						eq(organizations.id, video.orgId),
+						isNull(organizations.tombstoneAt),
+					),
+				)
+				.limit(1);
+			if (orgAccess) {
+				const role = getEffectiveOrganizationRole({
+					userId: user.id,
+					ownerId: orgAccess.ownerId,
+					memberRole: orgAccess.memberRole,
+				});
+				hasPermission = role === "owner" || role === "admin";
+			}
+		}
+		if (!hasPermission) {
 			return Response.json(
 				{ error: true, message: "Forbidden" },
 				{ status: 403 },
@@ -47,6 +86,41 @@ export async function GET(request: NextRequest) {
 		}
 
 		const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
+
+		// Granular status fields (Wave 2.1): fine per-chunk progress written by
+		// transcribe.ts (transcriptionChunks*) and generate-ai.ts (aiStageChunks*,
+		// reset at each summary/refine stage transition). Included in every branch
+		// below so the poll never has to fall back to a full page refresh just to
+		// see these move — that's what let ShareVideo.tsx retire its 6s
+		// `router.refresh()` workaround.
+		// The share panel must be able to tell "banked / not yet claimed" from
+		// "did nothing" WITHOUT a page reload, and must not fall back to the
+		// start button because one poll raced the workflow's claim. Both need
+		// server facts the poll never used to carry: the live transcription
+		// status and whether the user's press is still outstanding.
+		const statusFacts = buildAiStatusFacts({
+			transcriptionStatus: video.transcriptionStatus,
+			metadata,
+		});
+
+		const chunkProgress = {
+			// Fine sub-phase inside "transcribe" (e.g. audio extraction), written
+			// by the workflow at the moment the phase starts — same honesty rule
+			// as the chunk counters below.
+			aiProcessingSubStep: metadata.aiProcessingSubStep ?? null,
+			transcriptionChunksCompleted:
+				metadata.transcriptionChunksCompleted ?? null,
+			transcriptionChunksTotal: metadata.transcriptionChunksTotal ?? null,
+			aiStageChunksCompleted: metadata.aiStageChunksCompleted ?? null,
+			aiStageChunksTotal: metadata.aiStageChunksTotal ?? null,
+		};
+
+		// The silent pre-AI optimize/save stage (2026-08-18 wave 2, Change B) —
+		// the only place progress for that stage is written, since videoUploads
+		// is deleted before it starts. Included in every branch below, same as
+		// chunkProgress, so the poll behind CapCard/ShareVideo sees it regardless
+		// of whether AI has been requested yet.
+		const processingProgress = buildProcessingProgress({ metadata });
 
 		if (metadata.summary || metadata.chapters) {
 			console.log(
@@ -58,7 +132,10 @@ export async function GET(request: NextRequest) {
 					title: metadata.aiTitle ?? null,
 					summary: metadata.summary ?? null,
 					chapters: metadata.chapters ?? null,
-					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
+					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					...statusFacts,
+					...chunkProgress,
+					...processingProgress,
 				},
 				{ status: 200 },
 			);
@@ -75,94 +152,31 @@ export async function GET(request: NextRequest) {
 				{
 					processing: true,
 					message: "AI metadata generation in progress",
-					aiGenerationStatus: metadata.aiGenerationStatus,
+					aiProcessingStep: metadata.aiProcessingStep ?? null,
+					...statusFacts,
+					...chunkProgress,
+					...processingProgress,
 				},
 				{ status: 200 },
 			);
 		}
 
-		const canRetry =
-			metadata.aiGenerationStatus === "ERROR" ||
-			metadata.aiGenerationStatus === "SKIPPED";
-
-		if (!canRetry) {
-			return Response.json(
-				{
-					processing: false,
-					message:
-						"AI generation is not available for retry. Generation is triggered automatically when transcription completes.",
-					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
-				},
-				{ status: 200 },
-			);
-		}
-
-		if (video.transcriptionStatus !== "COMPLETE") {
-			return Response.json(
-				{
-					processing: false,
-					message: `Cannot generate AI metadata - transcription status: ${video.transcriptionStatus || "unknown"}`,
-					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
-				},
-				{ status: 200 },
-			);
-		}
-
-		const videoOwnerQuery = await db()
-			.select({
-				email: users.email,
-				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-			})
-			.from(users)
-			.where(eq(users.id, video.ownerId))
-			.limit(1);
-
-		if (
-			videoOwnerQuery.length === 0 ||
-			!videoOwnerQuery[0] ||
-			!(await isAiGenerationEnabled(videoOwnerQuery[0]))
-		) {
-			return Response.json(
-				{
-					processing: false,
-					message: "AI generation feature is not available for this user",
-				},
-				{ status: 403 },
-			);
-		}
-
-		try {
-			const aiResult = await startAiGeneration(videoId, video.ownerId);
-
-			if (!aiResult.success) {
-				return Response.json(
-					{
-						processing: false,
-						error: aiResult.message,
-					},
-					{ status: 500 },
-				);
-			}
-
-			return Response.json(
-				{
-					processing: true,
-					message: aiResult.message,
-					aiGenerationStatus: "QUEUED",
-				},
-				{ status: 200 },
-			);
-		} catch (error) {
-			console.error("[AI API] Error starting AI generation workflow:", error);
-			return Response.json(
-				{
-					processing: false,
-					error: "Failed to start AI generation workflow",
-				},
-				{ status: 500 },
-			);
-		}
+		// GET is strictly READ-ONLY. AI generation is MANUAL: an admin / video
+		// owner starts (or retries) the pipeline only via the explicit POST
+		// /api/videos/[videoId]/generate path (see _components/GenerateAiPanel.tsx).
+		// This endpoint NEVER starts or restarts generation — doing so on a GET
+		// (e.g. for ERROR/SKIPPED status) would silently waste tokens. It only
+		// reports the current status so the client can show the right UI.
+		return Response.json(
+			{
+				processing: false,
+				aiProcessingStep: metadata.aiProcessingStep ?? null,
+				...statusFacts,
+				...chunkProgress,
+				...processingProgress,
+			},
+			{ status: 200 },
+		);
 	} catch (error) {
 		console.error("[AI API] Unexpected error:", error);
 		return Response.json(

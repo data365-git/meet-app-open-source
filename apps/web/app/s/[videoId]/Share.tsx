@@ -1,6 +1,7 @@
 "use client";
 
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { AiSummary } from "@cap/database/types";
 import type { ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
@@ -162,10 +163,15 @@ interface ShareProps {
 		title?: string | null;
 		summary?: string | null;
 		chapters?: { title: string; start: number }[] | null;
+		aiSummary?: AiSummary | null;
 		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
 	aiGenerationAvailable: boolean;
 	transcriptionGenerationAvailable: boolean;
+	/** Chat needs a GEMINI key specifically (embeddings are Google-only), which
+	 * is a strictly narrower requirement than the paid-provider flags above. */
+	aiChatAvailable: boolean;
+	canGenerate?: boolean;
 }
 
 const useVideoStatus = (
@@ -181,6 +187,7 @@ const useVideoStatus = (
 			title?: string | null;
 			summary?: string | null;
 			chapters?: { title: string; start: number }[] | null;
+			aiSummary?: AiSummary | null;
 			aiGenerationStatus?: AiGenerationStatus | null;
 		} | null;
 	},
@@ -200,10 +207,12 @@ const useVideoStatus = (
 					aiGenerationStatus:
 						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
 						null,
+					aiProcessingStep: null,
 					name: initialData.name ?? null,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
+					aiSummary: initialData.aiData?.aiSummary || null,
 				}
 			: undefined,
 		refetchInterval: (query) => {
@@ -252,7 +261,7 @@ const useVideoStatus = (
 						!data.summary &&
 						!data.chapters?.length
 					) {
-						return true;
+						return false;
 					}
 
 					return false;
@@ -280,13 +289,12 @@ export const Share = ({
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
+	aiChatAvailable,
+	canGenerate = false,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
 		: data.createdAt;
-
-	const olderThanFiveMin =
-		Date.now() - effectiveDate.getTime() > 5 * 60 * 1000;
 
 	const playerRef = useRef<HTMLVideoElement | null>(null);
 	const activityRef = useRef<{ scrollToBottom: () => void }>(null);
@@ -317,16 +325,15 @@ export const Share = ({
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
 
-	const transcriptionProgress = videoStatus?.transcriptionProgress ?? null;
-
 	const aiData = useMemo(
 		() => ({
 			title: videoStatus?.aiTitle || null,
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
+			aiSummary: videoStatus?.aiSummary ?? data.metadata?.aiSummary ?? null,
 			aiGenerationStatus: videoStatus?.aiGenerationStatus || null,
 		}),
-		[videoStatus],
+		[videoStatus, data.metadata?.aiSummary],
 	);
 
 	useEffect(() => {
@@ -349,58 +356,6 @@ export const Share = ({
 	const areCaptionsDisabled = isDisabled("disableCaptions");
 	const areCommentStampsDisabled = isDisabled("disableComments");
 	const areReactionStampsDisabled = isDisabled("disableReactions");
-	const allSettingsDisabled =
-		isDisabled("disableComments") &&
-		isDisabled("disableSummary") &&
-		isDisabled("disableTranscript");
-
-	const shouldShowLoading = () => {
-		const hasVisibleAiSection = !isSummaryDisabled || !areChaptersDisabled;
-		const hasAiData = Boolean(aiData.summary || aiData.chapters?.length);
-
-		if (!hasVisibleAiSection || !aiGenerationAvailable || hasAiData) {
-			return false;
-		}
-
-		if (!transcriptionStatus) {
-			return transcriptionGenerationAvailable;
-		}
-
-		if (transcriptionStatus === "PROCESSING") {
-			return true;
-		}
-
-		if (
-			transcriptionStatus === "ERROR" ||
-			transcriptionStatus === "SKIPPED" ||
-			transcriptionStatus === "NO_AUDIO"
-		) {
-			return false;
-		}
-
-		if (transcriptionStatus === "COMPLETE") {
-			if (
-				aiData.aiGenerationStatus === "SKIPPED" ||
-				aiData.aiGenerationStatus === "ERROR" ||
-				aiData.aiGenerationStatus === "COMPLETE"
-			) {
-				return false;
-			}
-			if (
-				aiData.aiGenerationStatus === "QUEUED" ||
-				aiData.aiGenerationStatus === "PROCESSING"
-			) {
-				return !olderThanFiveMin;
-			}
-			if (!aiData.aiGenerationStatus) {
-				return true;
-			}
-		}
-
-		return false;
-	};
-
-	const aiLoading = shouldShowLoading();
 
 	const searchParams = useSearchParams();
 	const initialSeekDone = useRef(false);
@@ -533,67 +488,56 @@ export const Share = ({
 			transcriptionStatus={transcriptionStatus}
 		>
 			<div className="mt-4">
-				<div className="flex flex-col gap-4 lg:flex-row">
-					<div className="flex-1">
-						<div
-							className={`overflow-visible relative bg-white rounded-2xl border border-gray-5 ${
-								data.source?.type === "webAudio" ? "" : "aspect-video"
-							}`}
-						>
-							<div
-								className={
-									data.source?.type === "webAudio"
-										? "relative p-3 overflow-visible rounded-xl"
-										: "absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl"
-								}
-							>
-								<ShareVideo
-									data={{ ...data, transcriptionStatus }}
-									comments={comments}
-									areChaptersDisabled={areChaptersDisabled}
-									areCaptionsDisabled={areCaptionsDisabled}
-									areCommentStampsDisabled={areCommentStampsDisabled}
-									areReactionStampsDisabled={areReactionStampsDisabled}
-									chapters={aiData?.chapters || []}
-									aiGenerationStatus={aiData?.aiGenerationStatus}
-									transcriptionProgress={transcriptionProgress}
-									canRetryProcessing={viewerId === data.owner.id}
-									canFinalizeDesktopSegments={viewerId === data.owner.id}
-									showPlaybackStatusBadge={viewerId === data.owner.id}
-									isEditProcessing={isEditProcessing}
-									recordingStopped={recordingStopped}
-									defaultPlaybackSpeed={defaultPlaybackSpeed}
-									ref={playerRef}
-								/>
-							</div>
-						</div>
-					</div>
-
-					{!allSettingsDisabled && (
-						<div className="flex flex-col lg:w-80">
-							<Sidebar
-								data={{
-									...data,
-									createdAt: effectiveDate,
-									transcriptionStatus,
-								}}
-								videoSettings={videoSettings}
-								commentsData={commentsData}
-								setCommentsData={setCommentsData}
-								optimisticComments={optimisticComments}
-								setOptimisticComments={setOptimisticComments}
-								handleCommentSuccess={handleCommentSuccess}
-								views={views}
-								onSeek={handleSeek}
-								videoId={data.id}
-								aiData={aiData}
-								aiGenerationEnabled={aiGenerationAvailable}
-								disableReactions={areReactionStampsDisabled}
-								ref={activityRef}
-							/>
-						</div>
-					)}
-				</div>
+				<ShareVideo
+					data={{
+						...data,
+						transcriptionStatus,
+						metadata: {
+							...(data.metadata || {}),
+							aiSummary: aiData.aiSummary,
+						},
+					}}
+					comments={comments}
+					areChaptersDisabled={areChaptersDisabled}
+					areCaptionsDisabled={areCaptionsDisabled}
+					areCommentStampsDisabled={areCommentStampsDisabled}
+					areReactionStampsDisabled={areReactionStampsDisabled}
+					chapters={aiData?.chapters || []}
+					aiGenerationStatus={aiData?.aiGenerationStatus}
+					canRetryProcessing={viewerId === data.owner.id}
+					canReplaceWithAudio={
+						viewerId === data.owner.id && !data.metadata?.isAudio
+					}
+					canFinalizeDesktopSegments={viewerId === data.owner.id}
+					showPlaybackStatusBadge={viewerId === data.owner.id}
+					isEditProcessing={isEditProcessing}
+					recordingStopped={recordingStopped}
+					defaultPlaybackSpeed={defaultPlaybackSpeed}
+					canGenerate={canGenerate}
+					aiChatAvailable={aiChatAvailable}
+					ref={playerRef}
+					showCostPanel={viewerId === data.owner.id}
+					commentsPanel={
+						<Sidebar
+							data={{
+								...data,
+								createdAt: effectiveDate,
+								transcriptionStatus,
+							}}
+							videoSettings={videoSettings}
+							commentsData={commentsData}
+							setCommentsData={setCommentsData}
+							optimisticComments={optimisticComments}
+							setOptimisticComments={setOptimisticComments}
+							handleCommentSuccess={handleCommentSuccess}
+							views={views}
+							onSeek={handleSeek}
+							videoId={data.id}
+							disableReactions={areReactionStampsDisabled}
+							ref={activityRef}
+						/>
+					}
+				/>
 			</div>
 		</CaptionProvider>
 	);

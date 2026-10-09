@@ -2,9 +2,9 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos } from "@cap/database/schema";
+import { folders, sharedVideos, spaceVideos } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 export async function getFolderVideoIds(
 	folderId: Folder.FolderId,
@@ -19,6 +19,23 @@ export async function getFolderVideoIds(
 
 		if (!folderId) {
 			throw new Error("Folder ID is required");
+		}
+
+		// Membership guard: without this, any authenticated user could enumerate
+		// video IDs from a folder in an org/space they don't belong to (ID
+		// enumeration leak). Same authorization pattern as moveVideoToFolder.ts.
+		const [folder] = await db()
+			.select({ id: folders.id })
+			.from(folders)
+			.where(
+				and(
+					eq(folders.id, folderId),
+					eq(folders.organizationId, user.activeOrganizationId),
+				),
+			);
+
+		if (!folder) {
+			throw new Error("Folder not found or not accessible");
 		}
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;

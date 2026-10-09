@@ -17,6 +17,7 @@ import {
 	bigint,
 	boolean,
 	customType,
+	date,
 	datetime,
 	float,
 	foreignKey,
@@ -113,6 +114,14 @@ export const users = mysqlTable(
 				};
 				locale?: string;
 				devModeEnabled?: boolean;
+				/**
+				 * AI access grant (ИSH batch-2): when true, this non-admin user may
+				 * use the paid AI actions (generate analysis, translate, chat).
+				 * Set by an admin via /admin/pro. Admins always have access
+				 * regardless of this flag. Separate from the global `userIsPro`
+				 * (branding/collections) which must NOT be repurposed for this.
+				 */
+				aiPro?: boolean;
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
@@ -361,7 +370,7 @@ export const videos = mysqlTable(
 		height: int("height"),
 		fps: int("fps"),
 		metadata: json("metadata").$type<VideoMetadata>(),
-		public: boolean("public").notNull().default(true),
+		public: boolean("public").notNull().default(false),
 		settings: json("settings").$type<{
 			disableSummary?: boolean;
 			disableCaptions?: boolean;
@@ -372,7 +381,7 @@ export const videos = mysqlTable(
 			defaultPlaybackSpeed?: number;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
-			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO" | "CANCELLED"
+			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
 		>(),
 		source: json("source")
 			.$type<
@@ -381,7 +390,6 @@ export const videos = mysqlTable(
 				| { type: "desktopMP4" }
 				| { type: "desktopSegments" }
 				| { type: "webMP4" }
-				| { type: "webAudio" }
 				| {
 						type: "extensionWeb";
 						context: "meeting" | "instruction";
@@ -391,6 +399,15 @@ export const videos = mysqlTable(
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
+		// Which library section this video lives in: Recordings or Meetings.
+		// ADDITIVE + nullable on purpose: NULL means "not classified yet", and
+		// callers fall back to inferring the section from `source`. Moving a
+		// video between the two libraries writes ONLY this column — `source`
+		// stays the immutable record of how the video was captured.
+		libraryKind: varchar("libraryKind", {
+			length: 16,
+			enum: ["recording", "meeting"],
+		}).$type<"recording" | "meeting">(),
 		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		effectiveCreatedAt: datetime("effectiveCreatedAt").generatedAlwaysAs(
@@ -400,6 +417,7 @@ export const videos = mysqlTable(
 			{ mode: "stored" },
 		),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		deletedAt: timestamp("deletedAt"),
 		// PRIVATE
 		password: encryptedTextNullable("password"),
 		// LEGACY
@@ -429,6 +447,7 @@ export const videos = mysqlTable(
 			table.orgId,
 			table.effectiveCreatedAt,
 		),
+		index("owner_deleted_idx").on(table.ownerId, table.deletedAt),
 	],
 );
 
@@ -483,7 +502,13 @@ export const comments = mysqlTable(
 		type: varchar("type", { length: 6, enum: ["emoji", "text"] }).notNull(),
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
-		authorId: nanoId("authorId").notNull().$type<User.UserId>(),
+		// Nullable so unauthenticated (guest) viewers can comment on a public/
+		// shared video — exactly like Loom. Logged-in comments still set authorId.
+		authorId: nanoIdNullable("authorId").$type<User.UserId>(),
+		// Display name supplied by a guest commenter. Null for logged-in users,
+		// whose name is resolved via the users join. Capped to mirror the
+		// server-side guestName length cap.
+		authorName: varchar("authorName", { length: 50 }),
 		videoId: nanoId("videoId")
 			.notNull()
 			.$type<Video.VideoId>()
@@ -778,6 +803,7 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 export const authApiKeys = mysqlTable("auth_api_keys", {
 	id: varchar("id", { length: 64 }).notNull().primaryKey(),
 	userId: nanoId("userId").notNull().$type<User.UserId>(),
+	purpose: varchar("purpose", { length: 32 }),
 	createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -1526,7 +1552,12 @@ export const transcriptChunksRelations = relations(
 	}),
 );
 
-export type AiOperation = "transcription" | "summary" | "embedding" | "chat";
+export type AiOperation =
+	| "transcription"
+	| "summary"
+	| "embedding"
+	| "chat"
+	| "translate";
 
 export const aiUsageEvents = mysqlTable(
 	"ai_usage_events",
@@ -1583,6 +1614,46 @@ export const aiUsageEventsRelations = relations(aiUsageEvents, ({ one }) => ({
 		references: [videos.id],
 	}),
 }));
+
+export const aiChatUsage = mysqlTable(
+	"ai_chat_usage",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		clientId: varchar("clientId", { length: 64 }).notNull(),
+		dateUtc: date("dateUtc", { mode: "string" }).notNull(),
+		requestCount: int("requestCount").notNull().default(0),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		uniqueIndex("video_client_date_idx").on(
+			table.videoId,
+			table.clientId,
+			table.dateUtc,
+		),
+	],
+);
+
+/**
+ * Daily count of FREE-tier Gemini requests, per model, per Pacific-time day
+ * (Google's daily quotas reset at midnight America/Los_Angeles). Google
+ * exposes NO "remaining quota" API, so the dashboard badge counts our OWN
+ * requests — never a "remaining" number. `dailyExhaustedAt` is set when a
+ * 429 body names a PerDay quota, which is what lets the badge say
+ * "kunlik limit tugadi" instead of guessing from a count.
+ */
+export const aiFreeQuotaUsage = mysqlTable(
+	"ai_free_quota_usage",
+	{
+		dayPt: varchar("dayPt", { length: 10 }).notNull(),
+		model: varchar("model", { length: 96 }).notNull(),
+		requests: int("requests").notNull().default(0),
+		dailyExhaustedAt: datetime("dailyExhaustedAt"),
+		updatedAt: datetime("updatedAt").notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.dayPt, table.model] })],
+);
 
 export const auditLog = mysqlTable("audit_log", {
 	id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),

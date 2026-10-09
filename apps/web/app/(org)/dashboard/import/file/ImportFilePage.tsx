@@ -1,79 +1,29 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
-import type { Organisation } from "@cap/web-domain";
-import { Folder } from "@cap/web-domain";
 import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useStore } from "@tanstack/react-store";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
-import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
-import {
-	type UploadStatus,
-	useUploadingContext,
-} from "@/app/(org)/dashboard/caps/UploadingContext";
 import { PreUploadTrimmer } from "@/components/PreUploadTrimmer";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { uploadWithTarget } from "@/utils/upload-target";
+import { IMPORT_FILE_ACCEPT, useImportUpload } from "./useImportUpload";
 
 export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
-	const { user, activeOrganization } = useDashboardContext();
-	const router = useRouter();
-	const inputRef = useRef<HTMLInputElement>(null);
-	const { uploadingStore, setUploadStatus } = useUploadingContext();
-	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
-	const [upgradeModalOpen, setUpgradeModalOpen] = useState(
-		buildEnv.NEXT_PUBLIC_IS_CAP ? !user?.isPro : false,
-	);
-	const [uploadKind, setUploadKind] = useState<"video" | "audio">("video");
+	const {
+		inputRef,
+		isUploading,
+		upgradeModalOpen,
+		setUpgradeModalOpen,
+		pendingFile,
+		setPendingFile,
+		processFile,
+		handleFileChange,
+		openFilePicker,
+		progressPercent,
+		statusLabel,
+	} = useImportUpload({ folderId });
 	const [isDragOver, setIsDragOver] = useState(false);
-	const [pendingFile, setPendingFile] = useState<File | null>(null);
-
-	const processFile = useCallback(
-		async (file: File) => {
-			if (!user || !activeOrganization) return;
-
-			if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
-				setUpgradeModalOpen(true);
-				return;
-			}
-
-			const ok = await uploadVideoForServerProcessing(
-				file,
-				folderId ? Folder.FolderId.make(folderId) : undefined,
-				activeOrganization.organization.id,
-				setUploadStatus,
-			);
-			if (ok)
-				router.push(
-					folderId ? `/dashboard/folder/${folderId}` : "/dashboard/caps",
-				);
-		},
-		[user, activeOrganization, setUploadStatus, router, folderId],
-	);
-
-	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const file = e.target.files?.[0];
-		if (!file) return;
-		if (uploadKind === "audio") {
-			// Audio fast-path: skip the trim modal, upload immediately.
-			void processFile(file);
-		} else {
-			const maxSize = 500 * 1024 * 1024;
-			if (file.size > maxSize) {
-				void processFile(file);
-			} else {
-				setPendingFile(file);
-			}
-		}
-		if (inputRef.current) inputRef.current.value = "";
-	};
 
 	const handleDrop = useCallback(
 		(e: React.DragEvent) => {
@@ -82,64 +32,20 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			const file = e.dataTransfer.files[0];
 			if (!file) return;
 
-			if (uploadKind === "audio") {
-				const isAudioFile =
-					file.type.startsWith("audio/") ||
-					/\.(mp3|m4a|wav|ogg|opus|flac|aac)$/i.test(file.name);
-				if (!isAudioFile) {
-					toast.error("Please drop an audio file.");
-					return;
-				}
-				// Audio fast-path: skip the trim modal, upload immediately.
-				void processFile(file);
-				return;
-			}
-
 			const isMedia =
 				file.type.startsWith("video/") ||
 				file.type.startsWith("audio/") ||
-				/\.(mov|mp4|avi|mkv|webm|m4v|mp3|m4a|wav|aac|ogg)$/i.test(file.name);
+				/\.(mov|mp4|avi|mkv|webm|m4v|mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(
+					file.name,
+				);
 			if (!isMedia) {
 				toast.error("Please drop a video or audio file.");
 				return;
 			}
-			const maxSize = 500 * 1024 * 1024;
-			if (file.size > maxSize) {
-				void processFile(file);
-			} else {
-				setPendingFile(file);
-			}
+			setPendingFile(file);
 		},
-		[processFile, uploadKind],
+		[setPendingFile],
 	);
-
-	const handleBrowseClick = () => {
-		if (!user) return;
-
-		if (!user.isPro && buildEnv.NEXT_PUBLIC_IS_CAP) {
-			setUpgradeModalOpen(true);
-			return;
-		}
-
-		inputRef.current?.click();
-	};
-
-	const uploadStatus = useStore(uploadingStore, (s) => s.uploadStatus);
-	const progressPercent =
-		uploadStatus && "progress" in uploadStatus
-			? Math.round(uploadStatus.progress)
-			: null;
-	const statusLabel = uploadStatus
-		? uploadStatus.status === "parsing"
-			? "Analyzing video..."
-			: uploadStatus.status === "creating"
-				? "Preparing upload..."
-				: uploadStatus.status === "uploadingVideo"
-					? `Uploading... ${progressPercent ?? 0}%`
-					: uploadStatus.status === "serverProcessing"
-						? "Processing on server..."
-						: "Working..."
-		: null;
 
 	return (
 		<div className="flex flex-col w-full h-full">
@@ -157,35 +63,10 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 				</p>
 			</div>
 
-			<div className="inline-flex items-center gap-1 p-1 rounded-lg bg-gray-3 mb-6 self-start">
-				<button
-					type="button"
-					onClick={() => setUploadKind("video")}
-					className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-						uploadKind === "video"
-							? "bg-gray-12 text-gray-1 shadow-sm"
-							: "text-gray-10 hover:text-gray-12"
-					}`}
-				>
-					Video
-				</button>
-				<button
-					type="button"
-					onClick={() => setUploadKind("audio")}
-					className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-						uploadKind === "audio"
-							? "bg-gray-12 text-gray-1 shadow-sm"
-							: "text-gray-10 hover:text-gray-12"
-					}`}
-				>
-					Audio
-				</button>
-			</div>
-
 			<button
 				type="button"
 				disabled={isUploading}
-				onClick={handleBrowseClick}
+				onClick={openFilePicker}
 				onDragOver={(e) => {
 					e.preventDefault();
 					if (!isUploading) setIsDragOver(true);
@@ -226,14 +107,10 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 						</span>
 						<span className="flex flex-col items-center gap-1">
 							<span className="text-sm font-medium text-gray-12">
-								{uploadKind === "audio"
-									? "Drag and drop your audio here"
-									: "Drag and drop your video here"}
+								Drag and drop your video or audio here
 							</span>
 							<span className="text-xs text-gray-10">
-								{uploadKind === "audio"
-									? "Audio files: MP3, M4A, WAV, OGG, OPUS, FLAC, AAC"
-									: "MP4, MOV, MKV, WebM up to any size"}
+								Video (MP4, MOV, MKV, WebM) or audio (MP3, WAV, M4A) — any size
 							</span>
 						</span>
 						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
@@ -246,11 +123,8 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			<input
 				ref={inputRef}
 				type="file"
-				accept={
-					uploadKind === "audio"
-						? "audio/*,.mp3,.m4a,.wav,.aac,.ogg,.opus,.flac"
-						: "video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
-				}
+				accept={IMPORT_FILE_ACCEPT}
+				multiple
 				onChange={handleFileChange}
 				className="hidden"
 			/>
@@ -263,9 +137,9 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 			{pendingFile && (
 				<PreUploadTrimmer
 					file={pendingFile}
-					onConfirm={(trimmed) => {
+					onConfirm={(trimmed, serverTrim) => {
 						setPendingFile(null);
-						void processFile(trimmed);
+						void processFile(trimmed, serverTrim);
 					}}
 					onCancel={() => setPendingFile(null)}
 				/>
@@ -273,179 +147,3 @@ export const ImportFilePage = ({ folderId }: { folderId?: string }) => {
 		</div>
 	);
 };
-
-async function uploadVideoForServerProcessing(
-	file: File,
-	folderId: Folder.FolderId | undefined,
-	orgId: Organisation.OrganisationId,
-	setUploadStatus: (state: UploadStatus | undefined) => void,
-) {
-	try {
-		setUploadStatus({ status: "parsing" });
-
-		let duration: number | undefined;
-		let resolution: string | undefined;
-
-		try {
-			const parser = await import("@remotion/media-parser");
-			const metadata = await parser.parseMedia({
-				src: file,
-				fields: {
-					durationInSeconds: true,
-					dimensions: true,
-				},
-			});
-
-			duration = metadata.durationInSeconds
-				? Math.round(metadata.durationInSeconds)
-				: undefined;
-			resolution = metadata.dimensions
-				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
-				: undefined;
-		} catch (parseError) {
-			console.warn(
-				"Failed to parse video metadata, continuing without it:",
-				parseError,
-			);
-		}
-
-		setUploadStatus({ status: "creating" });
-		const videoData = await createVideoForServerProcessing({
-			duration,
-			resolution,
-			folderId,
-			orgId,
-			fileName: file.name,
-			contentType: file.type || undefined,
-		});
-
-		const uploadId = videoData.id;
-
-		setUploadStatus({
-			status: "uploadingVideo",
-			capId: uploadId,
-			progress: 0,
-			thumbnailUrl: undefined,
-		});
-
-		const createProgressTracker = () => {
-			const uploadState = {
-				videoId: uploadId,
-				uploaded: 0,
-				total: 0,
-				pendingTask: undefined as ReturnType<typeof setTimeout> | undefined,
-				lastUpdateTime: Date.now(),
-			};
-
-			const scheduleProgressUpdate = (uploaded: number, total: number) => {
-				uploadState.uploaded = uploaded;
-				uploadState.total = total;
-				uploadState.lastUpdateTime = Date.now();
-
-				if (uploadState.pendingTask) {
-					clearTimeout(uploadState.pendingTask);
-					uploadState.pendingTask = undefined;
-				}
-
-				const shouldSendImmediately = uploaded >= total;
-
-				if (!shouldSendImmediately) {
-					uploadState.pendingTask = setTimeout(() => {
-						if (uploadState.videoId) {
-							sendProgressUpdate(
-								uploadState.videoId,
-								uploadState.uploaded,
-								uploadState.total,
-							);
-						}
-						uploadState.pendingTask = undefined;
-					}, 2000);
-				}
-			};
-
-			const cleanup = () => {
-				if (uploadState.pendingTask) {
-					clearTimeout(uploadState.pendingTask);
-					uploadState.pendingTask = undefined;
-				}
-			};
-
-			const getTotal = () => uploadState.total;
-			const didFinishSending = () =>
-				uploadState.total > 0 && uploadState.uploaded >= uploadState.total;
-
-			return { scheduleProgressUpdate, cleanup, getTotal, didFinishSending };
-		};
-
-		const progressTracker = createProgressTracker();
-
-		try {
-			await uploadWithTarget({
-				target: videoData.uploadTarget,
-				body: file,
-				fileName: file.name,
-				onProgress: ({ loaded, total }) => {
-					const percent = (loaded / total) * 100;
-					setUploadStatus({
-						status: "uploadingVideo",
-						capId: uploadId,
-						progress: percent,
-						thumbnailUrl: undefined,
-					});
-
-					progressTracker.scheduleProgressUpdate(loaded, total);
-				},
-			});
-		} catch (uploadError) {
-			if (!progressTracker.didFinishSending()) {
-				progressTracker.cleanup();
-				throw uploadError;
-			}
-
-			console.warn(
-				"Upload request failed after all bytes were sent; verifying object before processing:",
-				uploadError,
-			);
-		}
-		progressTracker.cleanup();
-		const total = progressTracker.getTotal() || file.size || 1;
-		await sendProgressUpdate(uploadId, total, total);
-
-		setUploadStatus({
-			status: "serverProcessing",
-			capId: uploadId,
-		});
-
-		try {
-			await triggerVideoProcessing({
-				videoId: uploadId,
-				rawFileKey: videoData.rawFileKey,
-				bucketId: videoData.bucketId,
-			});
-		} catch (triggerError) {
-			console.error("Failed to trigger processing:", triggerError);
-			toast.error("Failed to start video processing. Please try again.");
-			setUploadStatus(undefined);
-			return false;
-		}
-
-		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
-		return true;
-	} catch (err) {
-		console.error("Video upload failed", err);
-
-		if (err instanceof Error && err.message === "upgrade_required") {
-			toast.error(
-				"Video duration exceeds the limit for free accounts. Please upgrade to Pro.",
-			);
-		} else {
-			toast.error("Failed to upload video. Please try again.");
-		}
-	}
-
-	setUploadStatus(undefined);
-	return false;
-}

@@ -11,6 +11,10 @@ import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-insta
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import {
+	MULTIPART_UPLOAD_THRESHOLD_BYTES,
+	uploadBlobMultipart,
+} from "@/utils/multipart-upload";
 import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
@@ -47,6 +51,7 @@ import {
 } from "./web-recorder-constants";
 import type {
 	ChunkUploadState,
+	RecorderErrorEvent,
 	RecorderPhase,
 	RecordingFailureDownload,
 	RecoveredRecordingDownload,
@@ -87,6 +92,11 @@ type InstantVideoCreation = {
 	shareUrl: string;
 	upload: UploadTarget;
 };
+// "recorder-error" marks a stop triggered by an unexpected mid-recording
+// MediaRecorder failure (no user Stop click) rather than a normal stop. It
+// selects the warning wording, NOT the outcome: a salvage whose upload succeeds
+// still completes normally, share link and all.
+type StopRecordingOptions = { reason?: "user" | "recorder-error" };
 
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
 	if (Exit.isFailure(exit)) {
@@ -113,7 +123,7 @@ const createRecordingDownloadName = (
 ) => {
 	const timestamp = new Date(createdAt).toISOString().replace(/[:.]/g, "-");
 	const extension = getFileExtensionFromMime(mime);
-	return `cap-recording-${timestamp}.${extension}`;
+	return `data365-recording-${timestamp}.${extension}`;
 };
 
 const triggerBrowserDownload = (url: string, fileName: string) => {
@@ -144,6 +154,13 @@ export const useWebRecorder = ({
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
+	const [isMicMuted, setIsMicMuted] = useState(false);
+	const [isCameraOff, setIsCameraOff] = useState(false);
+	// Reactive mirror of whether cameraStreamRef currently holds a camera track.
+	// canToggleCamera must NOT read the ref directly — a ref write (e.g. the
+	// screen+camera preview registering its stream asynchronously) doesn't
+	// re-render, so the toggle button would intermittently stay disabled.
+	const [hasCameraStream, setHasCameraStream] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
@@ -234,7 +251,9 @@ export const useWebRecorder = ({
 		height?: number;
 		fps?: number;
 	}>({});
-	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const stopRecordingRef = useRef<
+		((options?: StopRecordingOptions) => Promise<void>) | null
+	>(null);
 	const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
 	const instantUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const recordingPipelineRef = useRef<RecordingPipeline | null>(null);
@@ -256,6 +275,10 @@ export const useWebRecorder = ({
 	const recordingSpoolDegradingRef = useRef(false);
 	const recordingSpoolWarningShownRef = useRef(false);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
+	const micTracksRef = useRef<MediaStreamTrack[]>([]);
+	// Show the calm "system sound isn't included" note at most once per session
+	// so a teacher who records many full-screen lessons isn't nagged every time.
+	const systemAudioNoticeShownRef = useRef(false);
 
 	const isStreamingPipelineActive = useCallback(
 		() => recordingPipelineRef.current?.mode === "streaming-webm",
@@ -594,6 +617,10 @@ export const useWebRecorder = ({
 		setUploadStatus(undefined);
 		setChunkUploads([]);
 		setHasAudioTrack(false);
+		micTracksRef.current = [];
+		setIsMicMuted(false);
+		setIsCameraOff(false);
+		setHasCameraStream(false);
 		replaceErrorDownload(null);
 		setCompletedShareUrl(null);
 		shareUrlOpenedRef.current = false;
@@ -673,6 +700,26 @@ export const useWebRecorder = ({
 		return stopRecordingInternal(cleanupStreams, clearTimer);
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
+	const handleRecorderError = useCallback(
+		(event: RecorderErrorEvent) => {
+			onRecorderError(event, (error) => {
+				// A mid-recording MediaRecorder failure with no stop in
+				// flight: surface it immediately (silent failure is the
+				// worst outcome), then drive the same stop/upload path a
+				// user-initiated Stop would, so whatever was captured is
+				// finalized rather than lost. Tagged "recorder-error" only to
+				// pick the warning wording — if the salvage uploads, the user
+				// gets the normal completed state and their share link.
+				console.error("Recording stopped unexpectedly", error);
+				toast.error(
+					"Recording stopped unexpectedly. Saving what was captured so far…",
+				);
+				void stopRecordingRef.current?.({ reason: "recorder-error" });
+			});
+		},
+		[onRecorderError],
+	);
+
 	const startRecording = async () => {
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
@@ -716,6 +763,8 @@ export const useWebRecorder = ({
 				});
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
+				setIsCameraOff(false);
+				setHasCameraStream(videoStream.getVideoTracks().length > 0);
 			} else {
 				const desiredSurface =
 					RECORDING_MODE_TO_DISPLAY_SURFACE[
@@ -873,18 +922,6 @@ export const useWebRecorder = ({
 					? (videoStream?.getAudioTracks() ?? [])
 					: [];
 
-			if (
-				systemAudioEnabled &&
-				recordingMode !== "camera" &&
-				systemAudioTracks.length === 0
-			) {
-				toast.warning(
-					recordingMode === "tab"
-						? 'System audio wasn\'t captured. Make sure "Share tab audio" is checked in the browser picker.'
-						: "System audio wasn't captured. Your browser or OS may not support it for screen sharing. Try sharing a browser tab instead.",
-				);
-			}
-
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
 				try {
@@ -905,11 +942,37 @@ export const useWebRecorder = ({
 
 			if (micStream) {
 				micStreamRef.current = micStream;
+				micTracksRef.current = micStream.getAudioTracks();
+			} else {
+				micTracksRef.current = [];
 			}
+			setIsMicMuted(false);
 
 			let audioTracks: MediaStreamTrack[] = [];
 			const hasSystemAudio = systemAudioTracks.length > 0;
 			const hasMicAudio = micStream !== null;
+
+			// System audio is best-effort: on Windows/full-screen, Chrome usually
+			// can't capture it. Only ALARM when the whole recording would be silent
+			// (no mic AND no system audio). When the mic is recording the narration,
+			// a missing system/app sound is expected — show a calm, once-per-session
+			// note instead of a scary warning so a narrating teacher isn't alarmed.
+			if (systemAudioEnabled && recordingMode !== "camera" && !hasSystemAudio) {
+				if (!hasMicAudio) {
+					toast.warning(
+						recordingMode === "tab"
+							? 'No audio is being recorded. Turn on your microphone, or check "Share tab audio" in the browser picker.'
+							: "No audio is being recorded. Turn on your microphone to narrate, or share a browser tab to capture system sound.",
+					);
+				} else if (!systemAudioNoticeShownRef.current) {
+					systemAudioNoticeShownRef.current = true;
+					toast.info(
+						recordingMode === "tab"
+							? 'Your mic is recording. To also include the tab\'s sound, check "Share tab audio" in the picker.'
+							: "Recording your voice. Your computer's sound (like a video) is not included. To record it too, share a browser tab instead.",
+					);
+				}
+			}
 
 			if (hasSystemAudio && hasMicAudio) {
 				const audioCtx = new AudioContext();
@@ -1029,12 +1092,17 @@ export const useWebRecorder = ({
 
 			const recorder = new MediaRecorder(mixedStream, {
 				mimeType: pipeline.mimeType,
-				videoBitsPerSecond: 1_200_000,
+				// 1.5Mbps video / 128kbps audio: transparent enough for 720p slides
+				// while the buffered-raw path now uploads via multipart above ~50MB
+				// (see MULTIPART_UPLOAD_THRESHOLD_BYTES) instead of one un-chunked
+				// PUT, so the higher bitrate no longer risks an OOM/whole-file-retry
+				// on a large single Blob.
+				videoBitsPerSecond: 1_500_000,
 				audioBitsPerSecond: 128_000,
 			});
 			recorder.ondataavailable = handleRecorderDataAvailable;
 			recorder.onstop = onRecorderStop;
-			recorder.onerror = onRecorderError;
+			recorder.onerror = handleRecorderError;
 
 			const handleVideoEnded = () => {
 				window.focus();
@@ -1140,7 +1208,8 @@ export const useWebRecorder = ({
 		startInstantChunkInterval,
 	]);
 
-	const stopRecording = useCallback(async () => {
+	const stopRecording = useCallback(async (options?: StopRecordingOptions) => {
+		const isRecorderErrorSalvage = options?.reason === "recorder-error";
 		stopInstantChunkInterval();
 		clearInstantChunkGuard();
 		instantChunkModeRef.current = null;
@@ -1300,23 +1369,59 @@ export const useWebRecorder = ({
 						thumbnailUrl: thumbnailPreviewUrl,
 					});
 
-					await uploadRecording(
-						processedRecordingBlob,
-						creationResult.upload,
-						creationResult.id,
-						thumbnailPreviewUrl,
-						setUploadStatus,
-					);
-
-					try {
-						await triggerInstantRecordingProcessing({
+					// Large buffered-raw recordings (Safari/Firefox, or anywhere the
+					// streaming-webm pipeline isn't available) route through multipart
+					// instead of one un-chunked PUT of the whole Blob — a 500MB+
+					// recording on a single XHR risked OOM/whole-file retries. The
+					// "raw-upload." key mirrors the streaming pipeline's convention so
+					// the server auto-starts processing on complete; below the
+					// threshold, keep the existing single-PUT + explicit trigger path.
+					if (processedRecordingBlob.size >= MULTIPART_UPLOAD_THRESHOLD_BYTES) {
+						const completion = await uploadBlobMultipart({
 							videoId: creationResult.id,
+							blob: processedRecordingBlob,
+							contentType: "video/mp4",
+							subpath: "raw-upload.mp4",
+							durationInSecs: durationSeconds,
+							width,
+							height,
+							fps,
+							onProgress: (loaded, total) => {
+								const percent = total > 0 ? (loaded / total) * 100 : 0;
+								setUploadStatus({
+									status: "uploadingVideo",
+									capId: creationResult.id,
+									progress: percent,
+									thumbnailUrl: thumbnailPreviewUrl,
+								});
+								void sendProgressUpdate(creationResult.id, loaded, total);
+							},
 						});
-					} catch (processingError) {
-						console.error("Failed to start video processing", processingError);
-						toast.warning(
-							"Recording uploaded. Processing did not start yet, but the original recording is available.",
+
+						if (!completion.processingStarted) {
+							toast.warning(
+								"Recording uploaded. Processing did not start yet, but the original recording is available.",
+							);
+						}
+					} else {
+						await uploadRecording(
+							processedRecordingBlob,
+							creationResult.upload,
+							creationResult.id,
+							thumbnailPreviewUrl,
+							setUploadStatus,
 						);
+
+						try {
+							await triggerInstantRecordingProcessing({
+								videoId: creationResult.id,
+							});
+						} catch (processingError) {
+							console.error("Failed to start video processing", processingError);
+							toast.warning(
+								"Recording uploaded. Processing did not start yet, but the original recording is available.",
+							);
+						}
 					}
 
 					if (thumbnailBlob) {
@@ -1371,12 +1476,26 @@ export const useWebRecorder = ({
 
 			setUploadStatus(undefined);
 			setCompletedShareUrl(creationResult.shareUrl);
+			// The salvage SUCCEEDED — the recording exists and is shareable, so the
+			// phase is "completed" either way. Showing "error" here would hand the
+			// user a red failure screen and withhold the share link for a recording
+			// that is actually saved: they re-record, and the salvaged cap is
+			// orphaned. That is the same harm as losing it. The truth that it ended
+			// early belongs in the warning toast, not in a phase that hides the link.
 			updatePhase("completed");
-			toast.success(
-				pipeline.mode === "streaming-webm"
-					? "Recording uploaded. Processing will continue shortly."
-					: "Recording uploaded.",
-			);
+			if (isRecorderErrorSalvage) {
+				toast.warning(
+					pipeline.mode === "streaming-webm"
+						? "Recording stopped unexpectedly, but what was captured was saved. Processing will continue shortly."
+						: "Recording stopped unexpectedly, but what was captured was saved.",
+				);
+			} else {
+				toast.success(
+					pipeline.mode === "streaming-webm"
+						? "Recording uploaded. Processing will continue shortly."
+						: "Recording uploaded.",
+				);
+			}
 			openShareUrl(creationResult.shareUrl);
 			router.refresh();
 		} catch (err) {
@@ -1512,6 +1631,50 @@ export const useWebRecorder = ({
 		!isSettingUp &&
 		!isRestarting &&
 		isBrowserSupported;
+
+	const canToggleMic = micTracksRef.current.length > 0;
+
+	const toggleMicMute = useCallback(() => {
+		const tracks = micTracksRef.current;
+		if (tracks.length === 0) return;
+		const nextMuted = !isMicMuted;
+		for (const track of tracks) {
+			track.enabled = !nextMuted;
+		}
+		setIsMicMuted(nextMuted);
+	}, [isMicMuted]);
+
+	// In camera-only mode, cameraStreamRef holds the actual recorded stream. In
+	// screen/window/tab + camera mode, there is no camera track in the recorded
+	// stream (the camera is only a floating preview bubble) — so
+	// registerPreviewCameraStream below lets CameraPreviewWindow hand its own
+	// getUserMedia stream to the hook, so the toggle can mute the same stream
+	// the user sees on screen.
+	const registerPreviewCameraStream = useCallback(
+		(stream: MediaStream | null) => {
+			if (recordingMode === "camera") return;
+			cameraStreamRef.current = stream;
+			setHasCameraStream((stream?.getVideoTracks().length ?? 0) > 0);
+		},
+		[recordingMode, cameraStreamRef],
+	);
+
+	// In camera-only mode the camera IS the recorded track — muting it would
+	// silently record black video while the preview bubble still shows a live
+	// face. Only offer the camera-off toggle in screen+camera mode, where the
+	// camera is a detachable preview overlay.
+	const canToggleCamera = hasCameraStream && recordingMode !== "camera";
+
+	const toggleCameraMute = useCallback(() => {
+		const tracks = cameraStreamRef.current?.getVideoTracks() ?? [];
+		if (tracks.length === 0) return;
+		const nextOff = !isCameraOff;
+		for (const track of tracks) {
+			track.enabled = !nextOff;
+		}
+		setIsCameraOff(nextOff);
+	}, [isCameraOff]);
+
 	const isPaused = phase === "paused";
 	const isRecordingActive = phase === "recording" || isPaused;
 	const isBusyPhase =
@@ -1542,6 +1705,13 @@ export const useWebRecorder = ({
 		durationMs,
 		videoId,
 		hasAudioTrack,
+		isMicMuted,
+		toggleMicMute,
+		canToggleMic,
+		isCameraOff,
+		toggleCameraMute,
+		canToggleCamera,
+		registerPreviewCameraStream,
 		chunkUploads,
 		errorDownload,
 		completedShareUrl,

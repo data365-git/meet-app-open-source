@@ -1,0 +1,17 @@
+{
+	"manifest_version": 3,
+	"name": "PROTO — offscreen getDisplayMedia spike",
+	"version": "0.0.1",
+	"description": "Throwaway: prove offscreen getDisplayMedia + tabCapture audio coexist and mix into one recording.",
+	"action": { "default_title": "Open offscreen-getDisplayMedia tester" },
+	"background": { "service_worker": "background.js", "type": "module" },
+	"permissions": [
+		"tabCapture",
+		"offscreen",
+		"activeTab",
+		"tabs",
+		"storage",
+		"unlimitedStorage"
+	],
+	"host_permissions": ["<all_urls>"]
+}

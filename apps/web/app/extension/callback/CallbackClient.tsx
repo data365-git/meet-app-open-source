@@ -7,10 +7,26 @@ type Status =
 	| { kind: "success"; email: string; fallbackToken?: string }
 	| { kind: "error"; message: string; token: string };
 
+// Only hand the token to Chrome's official extension redirect host. This guards
+// against an open-redirect that would leak the token to an arbitrary site.
+function isValidExtensionRedirect(url: string): boolean {
+	try {
+		const parsed = new URL(url);
+		return (
+			parsed.protocol === "https:" &&
+			parsed.hostname.endsWith(".chromiumapp.org")
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function CallbackClient({
 	extensionId,
+	redirect,
 }: {
 	extensionId: string | undefined;
+	redirect: string | undefined;
 }) {
 	const [status, setStatus] = useState<Status>({ kind: "loading" });
 	const [copied, setCopied] = useState(false);
@@ -41,6 +57,20 @@ export function CallbackClient({
 				};
 
 				if (cancelled) return;
+
+				// Chrome identity flow: the extension opened this page inside
+				// launchWebAuthFlow with a chrome.identity redirect URL. Hand the
+				// token back via the URL fragment (never sent to any server) and
+				// let Chrome capture it. Validated above to be *.chromiumapp.org.
+				if (redirect && isValidExtensionRedirect(redirect)) {
+					const sep = redirect.includes("#") ? "&" : "#";
+					window.location.replace(
+						`${redirect}${sep}token=${encodeURIComponent(
+							token,
+						)}&email=${encodeURIComponent(email)}`,
+					);
+					return;
+				}
 
 				const chromeRuntime =
 					typeof globalThis !== "undefined" &&
@@ -126,7 +156,7 @@ export function CallbackClient({
 		return () => {
 			cancelled = true;
 		};
-	}, [extensionId]);
+	}, [extensionId, redirect]);
 
 	if (status.kind === "loading") {
 		return (
@@ -190,31 +220,39 @@ export function CallbackClient({
 				Extension connected
 			</h1>
 			<p className="text-gray-11 text-sm mb-4">
-				Connected for {status.email}. If the extension didn&apos;t pick up the
-				key automatically, copy it below and paste into the extension&apos;s
-				Options page.
+				Connected for {status.email}. You can close this page and start
+				recording.
 			</p>
 
 			{status.fallbackToken && (
-				<div className="mb-4">
-					<code className="block bg-gray-3 rounded-lg px-4 py-3 text-sm font-mono text-gray-12 break-all select-all mb-2">
-						{status.fallbackToken}
-					</code>
-					<button
-						type="button"
-						onClick={() => {
-							const key = status.fallbackToken;
-							if (!key) return;
-							navigator.clipboard.writeText(key).then(() => {
-								setCopied(true);
-								setTimeout(() => setCopied(false), 2000);
-							});
-						}}
-						className="w-full inline-flex items-center justify-center rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-					>
-						{copied ? "Copied!" : "Copy key"}
-					</button>
-				</div>
+				<details className="text-left rounded-lg border border-gray-3 bg-gray-1 px-4 py-3">
+					<summary className="cursor-pointer text-sm font-medium text-gray-12">
+						Manual setup
+					</summary>
+					<div className="mt-3">
+						<p className="text-gray-11 text-sm mb-3">
+							If the extension did not connect automatically, copy this key and
+							paste it into the extension&apos;s Options page.
+						</p>
+						<code className="block bg-white border border-gray-3 rounded-lg px-4 py-3 text-sm font-mono text-gray-12 break-all select-all mb-3">
+							{status.fallbackToken}
+						</code>
+						<button
+							type="button"
+							onClick={() => {
+								const key = status.fallbackToken;
+								if (!key) return;
+								navigator.clipboard.writeText(key).then(() => {
+									setCopied(true);
+									setTimeout(() => setCopied(false), 2000);
+								});
+							}}
+							className="w-full inline-flex items-center justify-center rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+						>
+							{copied ? "Copied!" : "Copy key"}
+						</button>
+					</div>
+				</details>
 			)}
 		</div>
 	);

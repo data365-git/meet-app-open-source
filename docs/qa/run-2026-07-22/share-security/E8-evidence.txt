@@ -1,0 +1,60 @@
+FLOW E - E8 EVIDENCE - 2026-07-22 (empty states for a zero-recordings account)
+
+PRECONDITION (read-only DB, confirmed real): qa0pool0loop000 (the fixture
+member session) genuinely owns 0 videos:
+  SELECT u.id, u.email, u.isAdmin, u.authSessionVersion,
+    (SELECT COUNT(*) FROM videos v WHERE v.ownerId=u.id AND v.deletedAt IS NULL)
+    AS ownedVideoCount FROM users u WHERE u.id='qa0pool0loop000';
+  -> qa0pool0loop000 | qa.pool.loop@data365-test.uz | 0 | 0 | ownedVideoCount=0
+
+LIVE HTTP (curl -b next-auth.session-token=<memberSession>):
+  GET /dashboard/caps      -> 200, 71698 bytes
+  GET /dashboard/meetings  -> 200, 72539 bytes
+  GET /dashboard/analytics -> 200, 71116 bytes
+All three: 200 (not 307/500), substantial body (not blank), correct auth
+(session accepted, no login redirect).
+
+CODE READ of the empty-state wiring (server-computed, not a client guess):
+  - apps/web/app/(org)/dashboard/caps/page.tsx: server-side
+    `SELECT count()...` -> `totalCount`, passed as `<Caps count={totalCount} .../>`.
+    Caps.tsx:317 `const isEmpty = count === 0 && folders.length === 0;`
+    Caps.tsx:386 `{isEmpty && <EmptyCapState />}` -- EmptyCapState renders a
+    calm heading ("Birinchi yozuvni yarating" / "Create your first
+    recording") + subtitle + Record/Upload CTAs, not a blank screen.
+  - apps/web/app/(org)/dashboard/meetings/Meetings.tsx:187
+    `const isEmpty = count === 0;` :205-224 renders a calm heading
+    ("Hozircha uchrashuv yozuvlari yo'q" / "No meeting recordings yet") +
+    subtitle + an "Install extension" CTA link, not a blank screen.
+  - `meetings/loading.tsx` exists (confirmed present in repo), giving a
+    skeleton during any client fetch window rather than a blank flash.
+
+IMPORTANT METHODOLOGY NOTE / LIMITATION: I attempted to confirm the actual
+RENDERED empty-state text via `grep` on the curl'd HTML, but discovered this
+is NOT reliable evidence here: strings like "Hozircha uchrashuv yozuvlari
+yo'q" (meetings-specific empty copy) and "Birinchi yozuvni yarating"
+(caps-specific empty copy) each appeared EXACTLY ONCE in ALL THREE pages'
+HTML (caps, meetings, AND analytics) with identical counts -- i.e. the
+meetings-only empty-state string also "appears" in the caps and analytics
+responses. This proves these strings come from a shared, globally-embedded
+next-intl message bundle sent to every /dashboard/* page for client-side
+hydration, NOT from the actual per-page conditional render outcome. Raw
+curl+grep text-matching is therefore not conclusive proof of which UI branch
+actually rendered on screen.
+
+Per the plan's own §-level note (Flow M preamble): "Authed dashboard pages
+canNOT be rendered at 375px/dark in the Browser pane (a session cookie can't
+be set there)" -- I did not attempt to bypass this by injecting the session
+cookie into the Browser pane via JS, since the plan explicitly says this is
+blocked by the safety classifier and that is a guardrail I should respect,
+not work around.
+
+STATUS: flag (not a clean pass) -- the precondition (zero-recordings
+account) is real, the pages load successfully with no crash/500/blank body,
+and the code shows a proper, server-computed, calm empty-state branch with
+CTAs (not a blank screen or "undefined") wired for all 3 surfaces. But I
+could not obtain conclusive LIVE VISUAL proof that this exact branch is what
+actually renders on screen for this account, given the curl-only
+constraint. Recommend closing this with a real screenshot (owner's device,
+or a from-scratch fresh dashboard account walk) as part of the Flow O
+dashboard visual pass the plan already reserves for authed-page dark/375px
+verification.

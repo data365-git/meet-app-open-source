@@ -1,5 +1,5 @@
 "use client";
-import type { Folder, Space } from "@cap/web-domain";
+import type { Folder, Space, Video } from "@cap/web-domain";
 import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
@@ -98,6 +98,7 @@ const FolderCard = ({
 		},
 		onError: () => {
 			setPublicEnabled(isPublic);
+			setUpdateName(name);
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
@@ -113,6 +114,10 @@ const FolderCard = ({
 	useEffect(() => {
 		setPublicEnabled(isPublic);
 	}, [isPublic]);
+
+	useEffect(() => {
+		setUpdateName(name);
+	}, [name]);
 
 	useEffect(() => {
 		if (!folderRef.current) return;
@@ -213,10 +218,15 @@ const FolderCard = ({
 
 		// Check if the dragged item is a CapCard
 		if (e.dataTransfer.types.includes("application/cap")) {
+			// dropEffect is reset by the browser before EVERY dragover event, so it
+			// has to be re-asserted every time — setting it only on the first event
+			// (inside the `!isDragOver` branch below) made the MOVE cursor flicker
+			// back to the default after a single frame.
+			e.dataTransfer.dropEffect = "move";
+
 			if (!isDragOver) {
 				setIsDragOver(true);
 				dragStateRef.current.isDragging = true;
-				e.dataTransfer.dropEffect = "move";
 
 				// Clear any pending animation timer
 				if (animationTimerRef.current) {
@@ -276,13 +286,31 @@ const FolderCard = ({
 			const data = e.dataTransfer.getData("application/cap");
 			if (!data) return;
 
-			const capData = JSON.parse(data);
+			const capData: {
+				id?: Video.VideoId;
+				name?: string;
+				ids?: Video.VideoId[];
+			} = JSON.parse(data);
 			if (!capData.id) return;
 
+			// A card dragged out of a multi-selection carries every selected id on
+			// the payload. Move all of them — the same thing the Move menu does for
+			// a selection — otherwise the folder would silently swallow one video
+			// and leave the rest behind while still reporting success. A single
+			// card has `ids` of length 1 (or none), so this is unchanged for it.
+			const ids =
+				capData.ids && capData.ids.length > 0 ? capData.ids : [capData.id];
+
 			setIsMovingVideo(true);
-			await moveVideoToFolder({ videoId: capData.id, folderId: id, spaceId });
+			for (const videoId of ids) {
+				await moveVideoToFolder({ videoId, folderId: id, spaceId });
+			}
 			router.refresh();
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			toast.success(
+				ids.length > 1
+					? `${ids.length} caps moved to "${name}" folder`
+					: `"${capData.name}" moved to "${name}" folder`,
+			);
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
 			toast.error("Failed to move video to folder");
@@ -326,18 +354,24 @@ const FolderCard = ({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			className={clsx(
-				"flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+				"relative flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
 				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
 				isMovingVideo && "opacity-70",
 			)}
 		>
+			<Link
+				href={folderHref}
+				prefetch={false}
+				aria-label={`Open folder ${name}`}
+				className="absolute inset-0 z-[1] rounded-lg"
+			/>
 			<div className="flex flex-1 gap-3 items-center">
-				<Link href={folderHref} prefetch={false} className="shrink-0">
+				<div className="shrink-0" aria-hidden="true">
 					<FolderRive
 						key={`${theme}folder${id}`}
 						className="w-[50px] h-[50px]"
 					/>
-				</Link>
+				</div>
 				<div className="flex flex-col justify-center h-10">
 					{isRenaming ? (
 						<textarea
@@ -367,19 +401,15 @@ const FolderCard = ({
 										});
 								}
 							}}
-							className="w-full resize-none bg-transparent border-none focus:outline-none
+							className="relative z-[2] w-full resize-none bg-transparent border-none focus:outline-none
                  focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
 						/>
 					) : (
-						<Link
-							href={folderHref}
-							prefetch={false}
-							className="block text-left"
-						>
+						<span className="block text-left">
 							<span className="block text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
 								{updateName}
 							</span>
-						</Link>
+						</span>
 					)}
 					<div className="flex gap-2 items-center">
 						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
@@ -404,29 +434,31 @@ const FolderCard = ({
 				title="Delete Folder"
 				description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
 			/>
-			<FoldersDropdown
-				id={id}
-				parentId={parentId}
-				public={publicEnabled}
-				setIsRenaming={setIsRenaming}
-				setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
-				nameRef={nameRef}
-				onPublicToggle={() => {
-					const nextPublic = !publicEnabled;
-					if (nextPublic && !ownerIsPro) {
-						setUpgradeModalOpen(true);
-						return;
-					}
-					setPublicEnabled(nextPublic);
-					updateFolder.mutate({
-						id,
-						public: nextPublic,
-					});
-				}}
-				onCopyPublicLink={async () => {
-					await copyPublicLink();
-				}}
-			/>
+			<div className="relative z-[2]">
+				<FoldersDropdown
+					id={id}
+					parentId={parentId}
+					public={publicEnabled}
+					setIsRenaming={setIsRenaming}
+					setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+					nameRef={nameRef}
+					onPublicToggle={() => {
+						const nextPublic = !publicEnabled;
+						if (nextPublic && !ownerIsPro) {
+							setUpgradeModalOpen(true);
+							return;
+						}
+						setPublicEnabled(nextPublic);
+						updateFolder.mutate({
+							id,
+							public: nextPublic,
+						});
+					}}
+					onCopyPublicLink={async () => {
+						await copyPublicLink();
+					}}
+				/>
+			</div>
 		</fieldset>
 	);
 };

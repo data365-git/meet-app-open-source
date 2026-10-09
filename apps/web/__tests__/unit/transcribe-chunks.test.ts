@@ -1,0 +1,456 @@
+import { describe, expect, it, vi } from "vitest";
+
+// ─── Mock heavy production dependencies that transcribe.ts imports ────────────
+vi.mock("@cap/database", () => ({ db: vi.fn() }));
+vi.mock("@cap/env", () => ({ serverEnv: () => ({}) }));
+vi.mock("@cap/web-backend", () => ({ Storage: {} }));
+vi.mock("@cap/database/crypto", () => ({ decrypt: vi.fn() }));
+vi.mock("@cap/utils", () => ({ userIsPro: vi.fn() }));
+vi.mock("@cap/web-domain", () => ({}));
+vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
+vi.mock("@/lib/video-storage", () => ({ getStorageAccessForVideo: vi.fn() }));
+vi.mock("@/lib/ai-cost-guard", () => ({ withCostGuard: vi.fn() }));
+vi.mock("@/lib/ai-generation-request", () => ({
+  shouldStartAiAfterTranscription: vi.fn(),
+}));
+vi.mock("@/lib/audio-enhance", () => ({
+  ENHANCED_AUDIO_CONTENT_TYPE: "audio/wav",
+  ENHANCED_AUDIO_EXTENSION: "wav",
+  enhanceAudioFromUrl: vi.fn(),
+}));
+vi.mock("@/lib/audio-extract", () => ({
+  checkHasAudioTrack: vi.fn(),
+  extractAudioChunksFromUrl: vi.fn(),
+  extractAudioFromUrl: vi.fn(),
+}));
+vi.mock("@/lib/generate-ai", () => ({ startAiGeneration: vi.fn() }));
+vi.mock("@/lib/transcription-settings", () => ({
+  isTranscriptionDisabled: vi.fn(),
+}));
+vi.mock("@/lib/video-alive", () => ({ assertVideoNotDeleted: vi.fn() }));
+vi.mock("server-only", () => ({}));
+vi.mock("workflow", () => ({
+  FatalError: class FatalError extends Error {
+    readonly _tag = "FatalError";
+  },
+}));
+
+// ─── Import AFTER mocks ───────────────────────────────────────────────────────
+import { FatalError } from "workflow";
+import { TranscriptionQuotaFailureError } from "@/lib/ai-quota-wait";
+import { mergeChunkedWebVtt } from "@/lib/gemini-transcribe";
+import {
+  isChunkCoveredByPartial,
+  MAX_CHUNK_GAP_SEC,
+  transcribeAudioChunks,
+  transcribeAudioChunkWithRetry,
+  webVttLargestGapSec,
+} from "@/workflows/transcribe";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const CTX = { userId: "u1", orgId: "o1", videoId: "v1" };
+
+function makeChunk(startSec: number) {
+  return {
+    key: `chunk-${startSec}`,
+    url: `https://example.com/audio-${startSec}.mp3`,
+    startSec,
+    durationSec: 900 as number | null,
+  };
+}
+
+function makeAudio(startSecs: number[]) {
+  return {
+    chunks: startSecs.map(makeChunk),
+    totalDurationSec: startSecs.length * 900,
+  };
+}
+
+/** Build a minimal valid VTT with one cue whose text uniquely identifies the chunk. */
+function chunkVtt(label: string, startSec = 0): string {
+  return `WEBVTT\n\n1\n${fmt(startSec)} --> ${fmt(startSec + 2)}\n${label}\n\n`;
+}
+
+function fmt(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.000`;
+}
+
+// ─── Test suite ───────────────────────────────────────────────────────────────
+
+describe("transcribeAudioChunks", () => {
+  // A) All 3 chunks succeed
+  it("A) all-succeed: merged VTT contains all 3 chunks content", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`chunk-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub);
+
+    expect(result).toContain("chunk-at-0");
+    expect(result).toContain("chunk-at-900");
+    expect(result).toContain("chunk-at-1800");
+    // Sanity: starts with WEBVTT
+    expect(result.startsWith("WEBVTT")).toBe(true);
+    // Should not throw — reaching here is the assertion
+  });
+
+  // B) THE FIX: chunk index 1 fails → resolved, partial result, chunk 0 & 2 present
+  it("B) partial-failure (THE FIX): chunk 1 fails → resolves with chunks 0 and 2, not chunk 1", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const failingStartSec = 900;
+
+    const stub = vi.fn(
+      async ({ chunk }: { chunk: { startSec: number } }) => {
+        if (chunk.startSec === failingStartSec) {
+          throw new Error("transient API error");
+        }
+        return chunkVtt(`chunk-at-${chunk.startSec}`, 1);
+      },
+    );
+
+    // Must NOT throw — this is exactly what the fault-tolerance fix guarantees
+    const result = await transcribeAudioChunks(audio, null, CTX, stub);
+
+    expect(result).toContain("chunk-at-0");
+    expect(result).not.toContain("chunk-at-900"); // gap — content absent
+    expect(result).toContain("chunk-at-1800");
+  });
+
+  // C) All 3 chunks fail → rejects
+  it("C) all-fail: rejects with message about all chunks failing", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(async () => {
+      throw new Error("always fails");
+    });
+
+    await expect(
+      transcribeAudioChunks(audio, null, CTX, stub),
+    ).rejects.toThrow(/All 3 .*chunks failed/);
+  });
+
+  // C2) THE 2026-09-24 FIX (dars3 shape: free 429'd mid-run, paid leg
+  // OpenRouter-402'd "requires at least $0.50 in balance for audio", 22/34
+  // chunks died, yet the run wrote COMPLETE with a transcript that silently
+  // stopped at 72 min of a 204-min audio). SOME chunks succeed, EVERY failure
+  // is quota/credit-shaped => the run is money-blocked: it must REJECT with
+  // TranscriptionQuotaFailureError so markError records code=QUOTA and the
+  // recovery cron re-runs the video once credits return — never a silent
+  // COMPLETE with holes. RED against the pre-fix workflow (it resolved).
+  it("C2) partial quota-death (quota on every failed chunk): rejects with TranscriptionQuotaFailureError, not a partial resolve", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(
+      async ({ chunk }: { chunk: { startSec: number } }) => {
+        if (chunk.startSec === 900) {
+          throw new Error(
+            'OpenRouter completion failed (HTTP 402): {"error":{"message":"This request requires at least $0.50 in balance for audio"}}',
+          );
+        }
+        return chunkVtt(`chunk-at-${chunk.startSec}`, 1);
+      },
+    );
+
+    await expect(transcribeAudioChunks(audio, null, CTX, stub)).rejects.toBeInstanceOf(
+      TranscriptionQuotaFailureError,
+    );
+  });
+
+  // C3) Mixed failure (one quota, one NOT) keeps the tolerant behaviour: the
+  // run is not money-blocked, so it still resolves with a gap (test B's
+  // contract, pinned against the new quota gate over-firing).
+  it("C3) mixed partial-failure (quota + non-quota): still resolves with a gap", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+
+    const stub = vi.fn(
+      async ({ chunk }: { chunk: { startSec: number } }) => {
+        if (chunk.startSec === 0) throw new Error("HTTP 429 quota exceeded");
+        if (chunk.startSec === 900) throw new Error("transient API error");
+        return chunkVtt(`chunk-at-${chunk.startSec}`, 1);
+      },
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub);
+
+    expect(result).not.toContain("chunk-at-0");
+    expect(result).not.toContain("chunk-at-900");
+    expect(result).toContain("chunk-at-1800");
+  });
+
+  // G) onProgress is called once per chunk with monotonically increasing completed counts
+  it("G) onProgress called once per chunk; completed increases 1,2,3 and total===3; result unchanged", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`chunk-at-${chunk.startSec}`, 1),
+    );
+
+    const progressCalls: { completed: number; total: number }[] = [];
+    const onProgress = vi.fn(async (p: { transcribedChunks: Array<{ vtt: string; offsetSec: number }>; completed: number; total: number }) => {
+      progressCalls.push({ completed: p.completed, total: p.total });
+    });
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, onProgress);
+
+    expect(onProgress).toHaveBeenCalledTimes(3);
+    expect(progressCalls.map((p) => p.completed)).toEqual([1, 2, 3]);
+    expect(progressCalls.every((p) => p.total === 3)).toBe(true);
+    expect(result).toContain("chunk-at-0");
+    expect(result).toContain("chunk-at-900");
+    expect(result).toContain("chunk-at-1800");
+  });
+
+  // H) onProgress that throws does NOT abort transcription
+  it("H) onProgress that throws does not abort; full transcript still returned", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`chunk-at-${chunk.startSec}`, 1),
+    );
+
+    const onProgress = vi.fn(async () => {
+      throw new Error("partial-save exploded");
+    });
+
+    // Must NOT throw even though onProgress always throws
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, onProgress);
+
+    expect(result).toContain("chunk-at-0");
+    expect(result).toContain("chunk-at-900");
+    expect(result).toContain("chunk-at-1800");
+  });
+});
+
+// ─── Retry resume: reuse partial, don't re-bill Gemini ───────────────────────
+/** A merged (absolute-timestamped) partial that densely covers the chunks at
+ *  absolute 0 and 900, but has NOTHING for the chunk at 1800. */
+function densePartial(): string {
+  const cues: string[] = [];
+  let n = 1;
+  for (const base of [0, 900]) {
+    for (let s = 0; s <= 500; s += 100) {
+      cues.push(`${n++}\n${fmt(base + s)} --> ${fmt(base + s + 2)}\nseeded-${base + s}\n`);
+    }
+  }
+  return `WEBVTT\n\n${cues.join("\n")}\n`;
+}
+
+describe("transcribeAudioChunks — retry resume", () => {
+  it("reuses chunks the partial already covers; transcribes ONLY the missing one", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(
+      audio,
+      null,
+      CTX,
+      stub,
+      undefined,
+      densePartial(),
+    );
+
+    // Only the uncovered chunk (1800) hit the API — 0 and 900 came from the seed.
+    expect(stub).toHaveBeenCalledTimes(1);
+    expect((stub.mock.calls[0]?.[0] as { chunk: { startSec: number } }).chunk.startSec).toBe(1800);
+    expect(result).toContain("seeded-0");
+    expect(result).toContain("seeded-900");
+    expect(result).toContain("fresh-at-1800");
+    // The reused chunks were NOT re-transcribed.
+    expect(result).not.toContain("fresh-at-0");
+    expect(result).not.toContain("fresh-at-900");
+  });
+
+  it("no partial → transcribes every chunk (regression: unchanged behavior)", async () => {
+    const audio = makeAudio([0, 900, 1800]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, undefined, undefined);
+
+    expect(stub).toHaveBeenCalledTimes(3);
+    expect(result).toContain("fresh-at-0");
+    expect(result).toContain("fresh-at-900");
+    expect(result).toContain("fresh-at-1800");
+  });
+
+  it("all chunks covered by partial → zero API calls, seed content returned", async () => {
+    const audio = makeAudio([0, 900]);
+    const stub = vi.fn(async ({ chunk }: { chunk: { startSec: number } }) =>
+      chunkVtt(`fresh-at-${chunk.startSec}`, 1),
+    );
+
+    const result = await transcribeAudioChunks(audio, null, CTX, stub, undefined, densePartial());
+
+    expect(stub).toHaveBeenCalledTimes(0);
+    expect(result).toContain("seeded-0");
+    expect(result).toContain("seeded-900");
+  });
+});
+
+describe("isChunkCoveredByPartial", () => {
+  it("true when the partial densely covers the chunk range", () => {
+    expect(isChunkCoveredByPartial(densePartial(), 0, 900)).toBe(true);
+    expect(isChunkCoveredByPartial(densePartial(), 900, 900)).toBe(true);
+  });
+
+  it("false when the partial has no cues in the range", () => {
+    expect(isChunkCoveredByPartial(densePartial(), 1800, 900)).toBe(false);
+  });
+
+  it("false when a hole bigger than MAX_CHUNK_GAP_SEC remains inside the range", () => {
+    // reach 600 ≥ 450 (covered by reach alone) BUT a 600s internal gap > 120s.
+    const vtt = `WEBVTT\n\n1\n${fmt(0)} --> ${fmt(2)}\na\n\n2\n${fmt(600)} --> ${fmt(602)}\nb\n\n`;
+    expect(isChunkCoveredByPartial(vtt, 0, 900)).toBe(false);
+  });
+
+  it("false for empty vtt or non-positive duration", () => {
+    expect(isChunkCoveredByPartial("WEBVTT\n\n", 0, 900)).toBe(false);
+    expect(isChunkCoveredByPartial(densePartial(), 0, 0)).toBe(false);
+  });
+});
+
+describe("transcribeAudioChunkWithRetry", () => {
+  const chunk = makeChunk(0);
+
+  // D) Retry: 3 failures then success on attempt 4 → resolves; stub called exactly 4 times
+  it("D) retry success on attempt 4 → resolves; stub called exactly 4 times", async () => {
+    let calls = 0;
+    const stub = vi.fn(async () => {
+      calls++;
+      if (calls < 4) throw new Error(`fail attempt ${calls}`);
+      return "SUCCESS_VTT";
+    });
+
+    const result = await transcribeAudioChunkWithRetry(
+      { chunk, ownerEncryptedGeminiKey: null, context: CTX },
+      stub,
+    );
+
+    expect(result).toBe("SUCCESS_VTT");
+    expect(stub).toHaveBeenCalledTimes(4);
+  });
+
+  // E) FatalError on first call → rejects immediately; stub called exactly once (no retries)
+  it("E) FatalError → rejects immediately, stub called exactly once", async () => {
+    const stub = vi.fn(async () => {
+      throw new FatalError("no api key");
+    });
+
+    await expect(
+      transcribeAudioChunkWithRetry(
+        { chunk, ownerEncryptedGeminiKey: null, context: CTX },
+        stub,
+      ),
+    ).rejects.toBeInstanceOf(FatalError);
+
+    expect(stub).toHaveBeenCalledTimes(1);
+  });
+
+  // F) Always throws plain Error → rejects after exactly 4 calls
+  it("F) retry exhausted: rejects after exactly 4 calls", async () => {
+    const stub = vi.fn(async () => {
+      throw new Error("persistent error");
+    });
+
+    await expect(
+      transcribeAudioChunkWithRetry(
+        { chunk, ownerEncryptedGeminiKey: null, context: CTX },
+        stub,
+      ),
+    ).rejects.toThrow("persistent error");
+
+    expect(stub).toHaveBeenCalledTimes(4);
+  });
+});
+
+// ─── Leading/internal-gap detection (the "first 14 min missing" bug) ─────────
+describe("webVttLargestGapSec", () => {
+  it("reports the whole duration when a chunk has no cues", () => {
+    expect(webVttLargestGapSec("WEBVTT\n\n", 900)).toBe(900);
+  });
+
+  it("detects a large LEADING gap (cues only near the chunk end)", () => {
+    // Single cue at 14:14 in a 15-min chunk → 854s blank at the start.
+    const vtt = `WEBVTT\n\n1\n${fmt(854)} --> ${fmt(856)}\nlate cue\n\n`;
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(854, 0);
+  });
+
+  it("detects a large INTERNAL gap between cues", () => {
+    const vtt =
+      `WEBVTT\n\n1\n${fmt(0)} --> ${fmt(2)}\na\n\n` +
+      `2\n${fmt(300)} --> ${fmt(302)}\nb\n\n`; // 300s hole
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(300, 0);
+  });
+
+  it("ignores trailing silence (a lone early cue → only its leading gap counts)", () => {
+    const vtt = `WEBVTT\n\n1\n${fmt(2)} --> ${fmt(4)}\na\n\n`; // one cue at 2s
+    // Largest gap is the 2s leading gap, NOT the ~896s of trailing silence.
+    expect(webVttLargestGapSec(vtt, 900)).toBeCloseTo(2, 0);
+  });
+});
+
+describe("transcribeAudioChunkWithRetry — gap triggers a retry", () => {
+  it("retries a chunk whose cues sit only near the end, then keeps the denser result", async () => {
+    const sparse = `WEBVTT\n\n1\n${fmt(854)} --> ${fmt(856)}\nlate only\n\n`;
+    // Dense: reaches ≥450s (needSec) with every gap ≤120s.
+    const dense =
+      `WEBVTT\n\n1\n${fmt(1)} --> ${fmt(3)}\nearly\n\n` +
+      `2\n${fmt(100)} --> ${fmt(102)}\nb\n\n` +
+      `3\n${fmt(200)} --> ${fmt(202)}\nc\n\n` +
+      `4\n${fmt(300)} --> ${fmt(302)}\nd\n\n` +
+      `5\n${fmt(400)} --> ${fmt(402)}\ne\n\n` +
+      `6\n${fmt(500)} --> ${fmt(502)}\nf\n\n`;
+    let calls = 0;
+    const stub = vi.fn(async () => {
+      calls++;
+      return calls === 1 ? sparse : dense;
+    });
+    const result = await transcribeAudioChunkWithRetry(
+      { chunk: makeChunk(0), ownerEncryptedGeminiKey: null, context: CTX },
+      stub,
+    );
+    // First attempt had an 854s leading gap (> MAX_CHUNK_GAP_SEC) → retried.
+    expect(calls).toBeGreaterThan(1);
+    expect(result).toContain("early");
+    expect(webVttLargestGapSec(result, 900)).toBeLessThanOrEqual(
+      MAX_CHUNK_GAP_SEC,
+    );
+  });
+
+  it("does NOT retry a well-covered chunk (dense from the start)", async () => {
+    const dense =
+      `WEBVTT\n\n1\n${fmt(1)} --> ${fmt(3)}\na\n\n` +
+      `2\n${fmt(100)} --> ${fmt(102)}\nb\n\n` +
+      `3\n${fmt(200)} --> ${fmt(202)}\nc\n\n` +
+      `4\n${fmt(300)} --> ${fmt(302)}\nd\n\n` +
+      `5\n${fmt(400)} --> ${fmt(402)}\ne\n\n` +
+      `6\n${fmt(500)} --> ${fmt(502)}\nf\n\n`;
+    const stub = vi.fn(async () => dense);
+    await transcribeAudioChunkWithRetry(
+      { chunk: makeChunk(0), ownerEncryptedGeminiKey: null, context: CTX },
+      stub,
+    );
+    expect(stub).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Smoke-check that mergeChunkedWebVtt is the real implementation ───────────
+describe("mergeChunkedWebVtt (real implementation exercised)", () => {
+  it("offsets timestamps correctly when used with chunk VTTs", () => {
+    const merged = mergeChunkedWebVtt([
+      { vtt: chunkVtt("hello", 1), offsetSec: 0 },
+      { vtt: chunkVtt("world", 1), offsetSec: 900 },
+    ]);
+    expect(merged).toContain("hello");
+    expect(merged).toContain("world");
+    // Second chunk cue should be offset by 900s → 00:15:01.000
+    expect(merged).toContain("00:15:01.000");
+  });
+});

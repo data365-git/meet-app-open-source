@@ -24,8 +24,8 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import * as EffectRuntime from "@/lib/server";
-import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 
@@ -35,13 +35,15 @@ export async function generateMetadata(
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
+	const t = await getTranslations("share");
+
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
 					title: `${video.name} | data365`,
-					description: "Watch this video on Cap",
+					description: t("metaWatchDesc"),
 					openGraph: {
 						images: [
 							{
@@ -68,7 +70,7 @@ export async function generateMetadata(
 					twitter: {
 						card: "player",
 						title: `${video.name} | data365`,
-						description: "Watch this video on Cap",
+						description: t("metaWatchDesc"),
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -95,14 +97,14 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "data365: This video is private",
-					description: "This video is private and cannot be shared.",
+					title: t("metaPrivateTitle"),
+					description: t("metaPrivateDesc"),
 					robots: "noindex, nofollow",
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "data365: Password Protected Video",
-					description: "This video is password protected.",
+					title: t("metaPasswordTitle"),
+					description: t("metaPasswordDesc"),
 					robots: "noindex, nofollow",
 				}),
 		}),
@@ -111,16 +113,30 @@ export async function generateMetadata(
 	);
 }
 
-const renderEmbedPolicyDenied = () =>
-	Effect.succeed(
-		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-			<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
-			<p className="text-gray-400">
-				If you own this video, please <Link href="/login">sign in</Link> to
-				manage sharing.
+async function EmbedPolicyDeniedView() {
+	const t = await getTranslations("share");
+	return (
+		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black px-6">
+			<div className="flex items-center justify-center w-14 h-14 rounded-full bg-white/10 mb-5">
+				<svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+					<path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75A4.5 4.5 0 0 0 7.5 6.75v3.75m-.75 0h10.5A1.5 1.5 0 0 1 18.75 12v6a1.5 1.5 0 0 1-1.5 1.5H6.75a1.5 1.5 0 0 1-1.5-1.5v-6a1.5 1.5 0 0 1 1.5-1.5Z" />
+				</svg>
+			</div>
+			<h1 className="mb-2 text-xl font-bold">{t("policyPrivateTitle")}</h1>
+			<p className="text-gray-400 mb-6 max-w-xs text-sm leading-relaxed">
+				{t.rich("policyPrivateDesc", { signIn: (chunks) => chunks })}
 			</p>
-		</div>,
+			<Link
+				href="/login"
+				className="inline-flex items-center justify-center px-5 py-2.5 rounded-full bg-white text-black text-sm font-semibold hover:bg-white/90 transition-colors"
+			>
+				{t("policySignIn")}
+			</Link>
+		</div>
 	);
+}
+
+const renderEmbedPolicyDenied = () => Effect.succeed(<EmbedPolicyDeniedView />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 
@@ -146,6 +162,7 @@ export default async function EmbedVideoPage(
 					createdAt: videos.createdAt,
 					effectiveCreatedAt: videos.effectiveCreatedAt,
 					updatedAt: videos.updatedAt,
+					deletedAt: videos.deletedAt,
 					bucket: videos.bucket,
 					storageIntegrationId: videos.storageIntegrationId,
 					metadata: videos.metadata,
@@ -161,6 +178,7 @@ export default async function EmbedVideoPage(
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
+					libraryKind: videos.libraryKind,
 					folderId: videos.folderId,
 					width: videos.width,
 					height: videos.height,
@@ -180,7 +198,7 @@ export default async function EmbedVideoPage(
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
-				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
+				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt), isNull(videos.deletedAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
 		return Option.fromNullable(video);
@@ -236,24 +254,8 @@ async function EmbedContent({
 		spaces: sharedSpaces,
 	});
 
-	let aiGenerationEnabled = false;
-	const videoOwnerQuery = await db()
-		.select({
-			email: users.email,
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-		})
-		.from(users)
-		.where(eq(users.id, video.ownerId))
-		.limit(1);
-
-	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
-		const videoOwner = videoOwnerQuery[0];
-		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
-	}
-
-	// Manual mode: no auto-transcription on embed view. Transcription/AI are
-	// started only via the owner's "Generate" action in the app.
+	// AI generation is MANUAL and admin-only — no auto-trigger on embed page load.
+	// Only display content that has already been generated.
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	let initialAiData = null;
@@ -272,8 +274,24 @@ async function EmbedContent({
 
 	if (video.isScreenshot === true) {
 		return (
-			<div className="flex justify-center items-center min-h-screen text-white bg-black">
-				<p>Screenshots cannot be embedded</p>
+			<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black px-6">
+				<div className="flex items-center justify-center w-14 h-14 rounded-full bg-white/10 mb-5">
+					<svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+						<path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+					</svg>
+				</div>
+				<h1 className="mb-2 text-xl font-bold">This is a screenshot</h1>
+				<p className="text-gray-400 mb-6 max-w-xs text-sm leading-relaxed">
+					Screenshots cannot be embedded. View it directly on the share page.
+				</p>
+				<Link
+					href={`/s/${video.id}`}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="inline-flex items-center justify-center px-5 py-2.5 rounded-full bg-white text-black text-sm font-semibold hover:bg-white/90 transition-colors"
+				>
+					View screenshot
+				</Link>
 			</div>
 		);
 	}
@@ -289,7 +307,10 @@ async function EmbedContent({
 			createdAt: comments.createdAt,
 			updatedAt: comments.updatedAt,
 			parentCommentId: comments.parentCommentId,
-			authorName: users.name,
+			// Guests have no users row; fall back to the stored guest display name.
+			authorName: sql<
+				string | null
+			>`COALESCE(${users.name}, ${comments.authorName})`,
 		})
 		.from(comments)
 		.leftJoin(users, eq(comments.authorId, users.id))

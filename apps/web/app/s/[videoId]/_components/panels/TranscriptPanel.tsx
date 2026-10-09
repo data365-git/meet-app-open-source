@@ -1,11 +1,30 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useTranslations } from "next-intl";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+	normalizeWebVttVoiceText,
+	stripRenderedVttTags,
+} from "@/lib/transcript-vtt";
+import {
+	clampStartSec,
+	collapseRepeatedCues,
+	computeFollowScrollTop,
+	isNearActiveRow,
+} from "../utils/transcript-utils";
+import { downloadFilename } from "@/lib/download-filename";
+import { renderMarkdownBold } from "./markdownBold";
 
 interface TranscriptPanelProps {
 	transcriptContent?: string;
 	currentTime?: number;
 	onVideoJump?: (seconds: number) => void;
+	chapters?: { startSec: number; title: string }[];
+	duration?: number | null;
+	/** The recording's current title — the downloaded transcript is named after
+	 *  it. Without this every transcript downloaded as "transcript.txt", so five
+	 *  meetings produced five identical files. */
+	videoTitle?: string | null;
 }
 
 interface Cue {
@@ -13,14 +32,13 @@ interface Cue {
 	startSeconds: number;
 	endSeconds: number;
 	text: string;
-	speaker: string;
+	speaker: string | null;
 	timestamp: string;
 }
 
-function parseVTTCues(vttContent: string): Cue[] {
+export function parseVTTCues(vttContent: string): Cue[] {
 	const lines = vttContent.split(/\r?\n/);
 	const cues: Cue[] = [];
-	let cueId = 0;
 	let i = 0;
 
 	while (i < lines.length) {
@@ -31,36 +49,85 @@ function parseVTTCues(vttContent: string): Cue[] {
 			continue;
 		}
 
-		if (/^\d+$/.test(line)) {
-			cueId = parseInt(line, 10);
+		// Skip standalone cue-identifier lines (bare integers before a timestamp line).
+		if (/^\d+$/.test(line) && !line.includes("-->")) {
 			i++;
 			continue;
 		}
 
 		if (line.includes("-->")) {
-			const [startStr, endStr] = line.split(" --> ");
-			const startSeconds = vttTimeToSeconds(startStr?.trim() ?? "");
-			const endSeconds = vttTimeToSeconds(endStr?.split(" ")[0]?.trim() ?? "");
+			// Strip leading markdown / bracket decoration:
+			// handles "**[00:00:00.000 --> 00:00:05.500]** text"
+			//          "[00:00:00.000 --> 00:00:05.500] text"
+			//          "00:00:00.000 --> 00:00:05.500 text"
+			const stripped = line.replace(/^\*{0,2}\[?/, "");
 
-			i++;
-			const textLines: string[] = [];
-			while (i < lines.length && (lines[i]?.trim() ?? "") !== "") {
-				textLines.push(lines[i] ?? "");
+			const arrowIdx = stripped.indexOf("-->");
+			if (arrowIdx === -1) {
 				i++;
+				continue;
 			}
 
-			const rawText = textLines.join(" ").trim();
-			if (rawText && startSeconds !== null && endSeconds !== null) {
-				const { speaker, text } = extractSpeaker(rawText);
-				cues.push({
-					id: cueId,
-					startSeconds,
-					endSeconds,
-					text,
-					speaker,
-					timestamp: formatTimestamp(startSeconds),
-				});
+			const startRaw = stripped.slice(0, arrowIdx).trim();
+			const afterArrow = stripped.slice(arrowIdx + 3);
+
+			// The end timestamp runs up to the first ']', '**', or cue setting
+			// (position/align/line keywords). Take only the time token.
+			const endTokenMatch = afterArrow.match(/^[\s]*([\d:.,]+)/);
+			const endRaw = endTokenMatch?.[1]?.trim() ?? "";
+
+			const startSeconds = vttTimeToSeconds(startRaw);
+			const endSeconds = vttTimeToSeconds(endRaw);
+
+			if (startSeconds === null || endSeconds === null) {
+				i++;
+				continue;
 			}
+
+			// Capture any inline text that follows the closing bracket / **
+			// e.g. "**[start --> end]** spoken text here"
+			// Everything after the end timestamp token, then strip decorators.
+			const afterEnd = afterArrow.slice(endTokenMatch?.[0]?.length ?? 0);
+			const inlineText = afterEnd
+				.replace(/^[^\]]*\]/, "") // drop up to first ']' (handles closing bracket)
+				.replace(/^\*\*/, "") // drop the timestamp-wrapper's closing ** marker only
+				.replace(/^[\s\-–—:>]+/, "") // strip leading separators
+				.trim();
+
+			let rawText: string;
+
+			if (inlineText) {
+				// Text was on the same line — do NOT consume following lines.
+				rawText = inlineText;
+				i++;
+			} else {
+				// Standard multi-line VTT: collect following non-empty lines.
+				i++;
+				const textLines: string[] = [];
+				while (i < lines.length && (lines[i]?.trim() ?? "") !== "") {
+					textLines.push(lines[i] ?? "");
+					i++;
+				}
+				rawText = textLines.join(" ").trim();
+			}
+
+			// Discard parser artifacts: empty, bare numbers, or punctuation-only.
+			if (!rawText || /^[\d\s\-–—.,;:!?]+$/.test(rawText)) {
+				continue;
+			}
+
+			const { speaker, text } = extractSpeaker(rawText);
+			cues.push({
+				id: cues.length,
+				startSeconds,
+				endSeconds,
+				// Final render-boundary strip: guarantee no orphan WebVTT tag
+				// (e.g. a lone `</v>` from a lost cross-cue opener) survives into
+				// any downstream path (karaoke, search highlight, copy/download).
+				text: stripRenderedVttTags(text),
+				speaker,
+				timestamp: formatTimestamp(startSeconds),
+			});
 			continue;
 		}
 
@@ -71,7 +138,32 @@ function parseVTTCues(vttContent: string): Cue[] {
 }
 
 function vttTimeToSeconds(timeStr: string): number | null {
-	const parts = timeStr.split(":");
+	const trimmed = timeStr.trim();
+	const colonMs = trimmed.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2}):(\d{3})$/);
+	if (colonMs) {
+		const hours = colonMs[1] ? parseInt(colonMs[1], 10) : 0;
+		const minutes = parseInt(colonMs[2] ?? "0", 10);
+		const seconds = parseInt(colonMs[3] ?? "0", 10);
+		const ms = parseInt(colonMs[4] ?? "0", 10);
+		return hours * 3600 + minutes * 60 + seconds + ms / 1000;
+	}
+
+	let msValue = 0;
+	let core = trimmed;
+	const decimalMs = core.match(/^(.*)[.,](\d{1,3})$/);
+	if (decimalMs) {
+		core = decimalMs[1] ?? "";
+		msValue = parseInt((decimalMs[2] ?? "").padEnd(3, "0"), 10) / 1000;
+	}
+
+	const parts = core.split(":");
+	if (parts.length === 2) {
+		const [m, s] = parts;
+		const minutes = parseInt(m ?? "0", 10);
+		const seconds = parseFloat(s ?? "0");
+		if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null;
+		return minutes * 60 + seconds + msValue;
+	}
 	if (parts.length === 3) {
 		const [h, m, s] = parts;
 		const hours = parseInt(h ?? "0", 10);
@@ -79,193 +171,887 @@ function vttTimeToSeconds(timeStr: string): number | null {
 		const seconds = parseFloat(s ?? "0");
 		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
 			return null;
-		return hours * 3600 + minutes * 60 + seconds;
-	}
-	if (parts.length === 2) {
-		const [m, s] = parts;
-		const minutes = parseInt(m ?? "0", 10);
-		const seconds = parseFloat(s ?? "0");
-		if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null;
-		return minutes * 60 + seconds;
+		return hours * 3600 + minutes * 60 + seconds + msValue;
 	}
 	return null;
 }
 
-// Remove WebVTT voice tags (<v Name> opener + any stray </v> closer) from text.
-function stripVoiceTags(t: string): string {
-	return t.replace(/<\/?v\b[^>]*>/gi, "").trim();
-}
+function extractSpeaker(text: string): {
+	speaker: string | null;
+	text: string;
+} {
+	const normalized = normalizeWebVttVoiceText(text);
+	if (normalized.text !== text || normalized.speaker) return normalized;
 
-function extractSpeaker(text: string): { speaker: string; text: string } {
-	const match = text.match(/^<v\s+([^>]+)>(.*)$/s);
-	if (match) {
-		return {
-			speaker: match[1]?.trim() ?? "So'zlovchi",
-			text: stripVoiceTags(match[2] ?? text),
-		};
-	}
-	// Secondary speakers are prefixed "Savol:" / "Ishtirokchi:" per the
-	// transcription prompt; the primary speaker is unlabeled and falls through.
-	const colonMatch = text.match(/^(Savol|Ishtirokchi)\s*:\s*(.+)$/s);
+	const colonMatch = text.match(/^([^:]{1,30}):\s+(.+)$/);
 	if (colonMatch) {
 		return {
-			speaker: colonMatch[1]?.trim() ?? "Ishtirokchi",
-			text: stripVoiceTags(colonMatch[2] ?? text),
+			speaker: colonMatch[1]?.trim() ?? "Speaker",
+			text: colonMatch[2]?.trim() ?? text,
 		};
 	}
-	return { speaker: "So'zlovchi", text: stripVoiceTags(text) };
-}
-
-// Render **bold** segments (foreign words) as <strong>, like v2.
-function renderRichText(text: string): React.ReactNode {
-	const parts = text.split(/(\*\*[^*]+\*\*)/g);
-	return parts.map((part, i) => {
-		if (part.startsWith("**") && part.endsWith("**")) {
-			return (
-				<strong key={i} className="font-semibold">
-					{part.slice(2, -2)}
-				</strong>
-			);
-		}
-		return part;
-	});
+	return { speaker: null, text };
 }
 
 function formatTimestamp(seconds: number): string {
+	if (seconds >= 3600) {
+		const h = Math.floor(seconds / 3600);
+		const m = Math.floor((seconds % 3600) / 60);
+		const s = Math.floor(seconds % 60);
+		return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+	}
 	const m = Math.floor(seconds / 60);
 	const s = Math.floor(seconds % 60);
 	return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-function speakerHue(name: string): number {
-	let hash = 0;
-	for (let i = 0; i < name.length; i++) {
-		hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
-	}
-	return Math.abs(hash) % 360;
-}
+// Card grouping bounds: consecutive same-speaker cues merge into one compact
+// card while the inter-cue gap, the accumulated span, and the cue count stay
+// small — the goal is a card that reads as ~2-3 rows, not a sprawling block.
+const MAX_CARD_GAP_SEC = 6;
+const MAX_CARD_SPAN_SEC = 20;
+const MAX_CARD_CUES = 3;
 
-function speakerInitials(name: string): string {
-	return name
-		.split(/\s+/)
-		.slice(0, 2)
-		.map((w) => w[0]?.toUpperCase() ?? "")
-		.join("");
-}
-
-interface CueGroup {
-	speaker: string;
+export interface TranscriptCard {
+	speaker: string | null;
+	startSeconds: number;
+	timestamp: string;
 	cues: Cue[];
 }
 
-function groupBySpeaker(cues: Cue[]): CueGroup[] {
-	const groups: CueGroup[] = [];
+/**
+ * Group consecutive cues into speaker cards. A running card keeps absorbing the
+ * next cue while ALL hold: (a) same speaker, (b) inter-cue gap
+ * (next.start − prev.end) ≤ 6s, (c) accumulated span (next.end − card.start)
+ * ≤ 20s, (d) the card has fewer than 3 cues so far. Any violation starts a new
+ * card. The card's timestamp is its first cue's start. Pure + deterministic so
+ * it can be unit-tested in isolation.
+ */
+export function groupCuesIntoCards(cues: Cue[]): TranscriptCard[] {
+	const cards: TranscriptCard[] = [];
 	for (const cue of cues) {
-		const last = groups[groups.length - 1];
-		if (last && last.speaker === cue.speaker) {
-			last.cues.push(cue);
+		const current = cards[cards.length - 1];
+		const prev = current?.cues[current.cues.length - 1];
+		const sameSpeaker = current != null && current.speaker === cue.speaker;
+		const gapOk =
+			prev != null && cue.startSeconds - prev.endSeconds <= MAX_CARD_GAP_SEC;
+		const spanOk =
+			current != null &&
+			cue.endSeconds - current.startSeconds <= MAX_CARD_SPAN_SEC;
+		const countOk = current != null && current.cues.length < MAX_CARD_CUES;
+
+		if (current && sameSpeaker && gapOk && spanOk && countOk) {
+			current.cues.push(cue);
 		} else {
-			groups.push({ speaker: cue.speaker, cues: [cue] });
+			cards.push({
+				speaker: cue.speaker,
+				startSeconds: cue.startSeconds,
+				timestamp: cue.timestamp,
+				cues: [cue],
+			});
 		}
 	}
-	return groups;
+	return cards;
 }
 
-function isActive(cue: Cue, currentTime: number): boolean {
-	return currentTime >= cue.startSeconds && currentTime < cue.endSeconds;
+/**
+ * Active card = the LAST card whose `startSeconds <= currentTime` (same
+ * "most recently started" rule as `getActiveRefinedChapterStartSec`). Once
+ * playback passes the first card's start, exactly one card is always active
+ * (gaps included), so small per-cue timestamp drift never de-highlights the
+ * whole block. Returns `null` before the first card starts, or when there
+ * are no cards.
+ */
+export function getActiveTranscriptCardIndex(
+	cards: Array<{ startSeconds: number }>,
+	currentTime: number,
+): number | null {
+	let activeIndex: number | null = null;
+	cards.forEach((card, index) => {
+		if (card.startSeconds <= currentTime) {
+			activeIndex = index;
+		}
+	});
+	return activeIndex;
+}
+
+// --- Feature helpers ---
+
+function secondsToSRTTime(sec: number): string {
+	const h = Math.floor(sec / 3600);
+	const m = Math.floor((sec % 3600) / 60);
+	const s = Math.floor(sec % 60);
+	const ms = Math.round((sec - Math.floor(sec)) * 1000);
+	return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`;
+}
+
+export function cuesToPlainText(cues: Cue[]): string {
+	return cues
+		.map((c) => {
+			const text = c.text.replace(/\*\*/g, "");
+			return c.speaker
+				? `[${c.timestamp}] ${c.speaker}: ${text}`
+				: `[${c.timestamp}] ${text}`;
+		})
+		.join("\n");
+}
+
+export function cuesToSRT(cues: Cue[]): string {
+	return cues
+		.map(
+			(c, i) =>
+				`${i + 1}\n${secondsToSRTTime(c.startSeconds)} --> ${secondsToSRTTime(c.endSeconds)}\n${c.text.replace(/\*\*/g, "")}\n`,
+		)
+		.join("\n");
+}
+
+function downloadBlob(content: string, filename: string, type: string): void {
+	const blob = new Blob([content], { type });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	a.click();
+	URL.revokeObjectURL(url);
+}
+
+function highlightMatch(text: string, query: string): React.ReactNode {
+	if (!query) return text;
+	const idx = text.toLowerCase().indexOf(query.toLowerCase());
+	if (idx === -1) return text;
+	return (
+		<>
+			{text.slice(0, idx)}
+			<mark
+				style={{
+					background: "var(--brand-wash)",
+					color: "var(--brand)",
+					fontWeight: 600,
+					borderRadius: "3px",
+					padding: "0 1px",
+				}}
+			>
+				{text.slice(idx, idx + query.length)}
+			</mark>
+			{text.slice(idx + query.length)}
+		</>
+	);
+}
+
+export function getActiveTranscriptCueId(
+	cues: Array<{ id: number; startSeconds: number; endSeconds: number }>,
+	currentTime: number,
+): number | null {
+	let activeCueId: number | null = null;
+	for (const cue of cues) {
+		if (currentTime >= cue.startSeconds && currentTime < cue.endSeconds) {
+			activeCueId = cue.id;
+		}
+	}
+	return activeCueId;
+}
+
+function normalizeCueTimes(cues: Cue[], duration?: number | null): Cue[] {
+	if (!duration || duration <= 0) return cues;
+
+	return cues
+		.map((cue) => {
+			const recoveredStart = clampStartSec(cue.startSeconds, duration);
+			const shouldScaleEnd =
+				cue.endSeconds > duration && cue.endSeconds / 60 <= duration;
+			const recoveredEnd = shouldScaleEnd
+				? cue.endSeconds / 60
+				: Math.min(cue.endSeconds, duration);
+			const endSeconds =
+				recoveredEnd > recoveredStart
+					? recoveredEnd
+					: Math.min(duration, recoveredStart + 3);
+
+			return {
+				...cue,
+				startSeconds: recoveredStart,
+				endSeconds,
+				timestamp: formatTimestamp(recoveredStart),
+			};
+		})
+		.sort((a, b) => a.startSeconds - b.startSeconds);
 }
 
 export function TranscriptPanel({
 	transcriptContent,
 	currentTime = 0,
 	onVideoJump,
+	duration,
+	videoTitle,
 }: TranscriptPanelProps) {
+	const t = useTranslations("share");
 	const containerRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef<HTMLDivElement>(null);
 
-	const cues = transcriptContent ? parseVTTCues(transcriptContent) : [];
-	const groups = groupBySpeaker(cues);
+	const cues = transcriptContent
+		? normalizeCueTimes(
+				collapseRepeatedCues(parseVTTCues(transcriptContent), (c) => c.text),
+				duration,
+			)
+		: [];
 
-	const activeCueId = cues.find((c) => isActive(c, currentTime))?.id ?? null;
+	const hasAnySpeaker = cues.some((c) => c.speaker !== null);
+	const distinctSpeakers = Array.from(
+		new Set(cues.map((c) => c.speaker).filter((s): s is string => s !== null)),
+	);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCueId drives which DOM node activeRef points to; re-running when it changes is intentional
+	// --- Auto-follow active row, scoped to this panel's own scroll container ---
+	// `containerRef` (the panel root) is always rendered as the direct child of
+	// SharePanel's `overflow-y-auto` tabpanel div — that ancestor is the true
+	// scroll container, NOT the page. We scroll it via scrollTop math instead of
+	// `scrollIntoView`, which would otherwise drag every scrollable ancestor
+	// (including the page/viewport) along with it.
+	const followingRef = useRef(true);
+	const programmaticScrollRef = useRef(false);
+
+	function getScrollContainer(): HTMLElement | null {
+		return containerRef.current?.parentElement ?? null;
+	}
+
+	function scrollToActiveRow(behavior: ScrollBehavior) {
+		const container = getScrollContainer();
+		const row = activeRef.current;
+		if (!container || !row) return;
+		const target = computeFollowScrollTop({
+			rowOffsetTop: row.offsetTop,
+			rowHeight: row.offsetHeight,
+			containerScrollTop: container.scrollTop,
+			containerClientHeight: container.clientHeight,
+			containerScrollHeight: container.scrollHeight,
+		});
+		if (target === container.scrollTop) return;
+		programmaticScrollRef.current = true;
+		container.scrollTo({ top: target, behavior });
+	}
+
+	// Detect user-initiated scroll on the panel's own container: any 'scroll'
+	// event not flagged as our own programmatic scroll means the user touched
+	// the panel (wheel/touch/scrollbar all surface as native 'scroll' events).
+	// Stop following on such input; resume once they scroll back near the
+	// active row (checked on the same event, after the flag is cleared).
 	useEffect(() => {
-		if (activeRef.current) {
-			activeRef.current.scrollIntoView({
-				behavior: "smooth",
-				block: "nearest",
+		const container = getScrollContainer();
+		if (!container) return;
+
+		function handleScroll() {
+			if (programmaticScrollRef.current) {
+				programmaticScrollRef.current = false;
+				return;
+			}
+			// Genuine user scroll.
+			const row = activeRef.current;
+			if (!container || !row) {
+				followingRef.current = false;
+				return;
+			}
+			followingRef.current = isNearActiveRow({
+				rowOffsetTop: row.offsetTop,
+				rowHeight: row.offsetHeight,
+				containerScrollTop: container.scrollTop,
+				containerClientHeight: container.clientHeight,
 			});
 		}
-	}, [activeCueId]);
 
-	if (!transcriptContent || cues.length === 0) {
+		container.addEventListener("scroll", handleScroll, { passive: true });
+		return () => container.removeEventListener("scroll", handleScroll);
+	}, []);
+
+	// Seeking via cue click re-enables follow and jumps straight to that row.
+	function handleCueSeek(seconds: number) {
+		followingRef.current = true;
+		onVideoJump?.(seconds);
+	}
+
+	// --- Search state ---
+	const [searchQuery, setSearchQuery] = useState("");
+	const trimmedQuery = searchQuery.trim();
+
+	// --- Speaker filter state ---
+	const [speakerFilter, setSpeakerFilter] = useState<string | null>(null);
+	const [speakerMenuOpen, setSpeakerMenuOpen] = useState(false);
+	const speakerMenuRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!speakerMenuOpen) return;
+		function handleClickOutside(e: MouseEvent) {
+			if (
+				speakerMenuRef.current &&
+				!speakerMenuRef.current.contains(e.target as Node)
+			) {
+				setSpeakerMenuOpen(false);
+			}
+		}
+		function handleEsc(e: KeyboardEvent) {
+			if (e.key === "Escape") setSpeakerMenuOpen(false);
+		}
+		document.addEventListener("mousedown", handleClickOutside);
+		document.addEventListener("keydown", handleEsc);
+		return () => {
+			document.removeEventListener("mousedown", handleClickOutside);
+			document.removeEventListener("keydown", handleEsc);
+		};
+	}, [speakerMenuOpen]);
+
+	// --- Copy state ---
+	const [copied, setCopied] = useState(false);
+
+	function handleCopy() {
+		navigator.clipboard.writeText(cuesToPlainText(cues)).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	}
+
+	// --- Download ---
+	function handleDownload(format: "txt" | "srt") {
+		// Named after the recording, via the same helper the video and audio
+		// downloads use. It used to be the literal "transcript.txt" for every
+		// video, which made a folder of downloaded transcripts unusable.
+		const filename = downloadFilename(videoTitle, format);
+		if (format === "txt") {
+			downloadBlob(cuesToPlainText(cues), filename, "text/plain");
+		} else {
+			downloadBlob(cuesToSRT(cues), filename, "text/plain");
+		}
+	}
+
+	// Filtered cues: search query AND speaker filter combine (both must match).
+	const filteredCues = cues.filter((c) => {
+		const matchesQuery = trimmedQuery
+			? c.text.toLowerCase().includes(trimmedQuery.toLowerCase()) ||
+				(c.speaker?.toLowerCase().includes(trimmedQuery.toLowerCase()) ?? false)
+			: true;
+		const matchesSpeaker = speakerFilter ? c.speaker === speakerFilter : true;
+		return matchesQuery && matchesSpeaker;
+	});
+
+	// Group filtered cues into speaker cards and find the active (highlighted)
+	// block.
+	const cards = useMemo(() => groupCuesIntoCards(filteredCues), [filteredCues]);
+	const activeCardIndex = getActiveTranscriptCardIndex(cards, currentTime);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: activeCardIndex drives which DOM node activeRef points to; re-running when it changes is intentional
+	useEffect(() => {
+		if (followingRef.current) {
+			scrollToActiveRow("smooth");
+		}
+	}, [activeCardIndex]);
+
+	// Shared panel header (search + copy + download)
+	function renderHeader() {
 		return (
-			<div className="flex items-center justify-center h-full">
-				<p className="text-sm text-gray-500">No transcript available.</p>
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					gap: "8px",
+					padding: "4px 0 8px",
+					borderBottom: "1px solid var(--gray-3)",
+					marginBottom: "8px",
+				}}
+			>
+				{/* Search row */}
+				<div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+					<svg
+						aria-hidden="true"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						style={{
+							position: "absolute",
+							left: "10px",
+							width: "14px",
+							height: "14px",
+							color: "var(--gray-10)",
+							pointerEvents: "none",
+						}}
+					>
+						<circle cx="11" cy="11" r="8" />
+						<line x1="21" y1="21" x2="16.65" y2="16.65" />
+					</svg>
+					<input
+						type="text"
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						placeholder={t("searchTranscript")}
+						style={{
+							flex: 1,
+							paddingLeft: "32px",
+							paddingRight: searchQuery ? "32px" : "10px",
+							paddingTop: "7px",
+							paddingBottom: "7px",
+							fontSize: "13px",
+							background: "var(--gray-2)",
+							border: "1px solid var(--gray-4)",
+							borderRadius: "8px",
+							color: "var(--gray-12)",
+							outline: "none",
+						}}
+					/>
+					{searchQuery && (
+						<button
+							type="button"
+							onClick={() => setSearchQuery("")}
+							aria-label={t("clearSearch")}
+							style={{
+								position: "absolute",
+								right: "8px",
+								background: "none",
+								border: "none",
+								cursor: "pointer",
+								color: "var(--gray-10)",
+								padding: "2px",
+								display: "flex",
+								alignItems: "center",
+							}}
+						>
+							<svg
+								aria-hidden="true"
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.5"
+								strokeLinecap="round"
+								style={{ width: "13px", height: "13px" }}
+							>
+								<line x1="18" y1="6" x2="6" y2="18" />
+								<line x1="6" y1="6" x2="18" y2="18" />
+							</svg>
+						</button>
+					)}
+				</div>
+
+				{/* Speaker filter + results count + copy + download row */}
+				<div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+					{distinctSpeakers.length >= 2 && (
+						<div ref={speakerMenuRef} style={{ position: "relative" }}>
+							<button
+								type="button"
+								onClick={() => setSpeakerMenuOpen((v) => !v)}
+								aria-haspopup="listbox"
+								aria-expanded={speakerMenuOpen}
+								style={{
+									display: "flex",
+									alignItems: "center",
+									gap: "4px",
+									padding: "5px 10px",
+									fontSize: "12px",
+									fontWeight: 500,
+									background: speakerFilter ? "var(--brand-wash)" : "var(--gray-3)",
+									color: speakerFilter ? "var(--brand)" : "var(--gray-11)",
+									border: "none",
+									borderRadius: "6px",
+									cursor: "pointer",
+									whiteSpace: "nowrap",
+								}}
+							>
+								{speakerFilter ?? t("speakerFilter")}
+								<svg
+									aria-hidden="true"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									style={{ width: "12px", height: "12px" }}
+								>
+									<polyline points="6 9 12 15 18 9" />
+								</svg>
+							</button>
+							{speakerMenuOpen && (
+								<div
+									role="listbox"
+									style={{
+										position: "absolute",
+										top: "calc(100% + 4px)",
+										left: 0,
+										zIndex: 10,
+										minWidth: "160px",
+										background: "var(--gray-1)",
+										border: "1px solid var(--gray-4)",
+										borderRadius: "8px",
+										boxShadow: "0 4px 12px rgba(15,23,42,.12)",
+										padding: "4px",
+										display: "flex",
+										flexDirection: "column",
+										gap: "1px",
+									}}
+								>
+									<button
+										type="button"
+										role="option"
+										aria-selected={speakerFilter === null}
+										onClick={() => {
+											setSpeakerFilter(null);
+											setSpeakerMenuOpen(false);
+										}}
+										style={{
+											display: "flex",
+											alignItems: "center",
+											justifyContent: "space-between",
+											gap: "6px",
+											padding: "6px 8px",
+											fontSize: "12.5px",
+											fontWeight: 500,
+											textAlign: "left",
+											background:
+												speakerFilter === null ? "var(--brand-wash)" : "transparent",
+											color: speakerFilter === null ? "var(--brand)" : "var(--gray-12)",
+											border: "none",
+											borderRadius: "6px",
+											cursor: "pointer",
+										}}
+									>
+										{t("allSpeakers")}
+										{speakerFilter === null && <span aria-hidden="true">✓</span>}
+									</button>
+									{distinctSpeakers.map((speaker) => (
+										<button
+											key={speaker}
+											type="button"
+											role="option"
+											aria-selected={speakerFilter === speaker}
+											onClick={() => {
+												setSpeakerFilter(speaker);
+												setSpeakerMenuOpen(false);
+											}}
+											style={{
+												display: "flex",
+												alignItems: "center",
+												justifyContent: "space-between",
+												gap: "6px",
+												padding: "6px 8px",
+												fontSize: "12.5px",
+												fontWeight: 500,
+												textAlign: "left",
+												background:
+													speakerFilter === speaker ? "var(--brand-wash)" : "transparent",
+												color:
+													speakerFilter === speaker ? "var(--brand)" : "var(--gray-12)",
+												border: "none",
+												borderRadius: "6px",
+												cursor: "pointer",
+											}}
+										>
+											{speaker}
+											{speakerFilter === speaker && <span aria-hidden="true">✓</span>}
+										</button>
+									))}
+								</div>
+							)}
+						</div>
+					)}
+
+					{trimmedQuery && (
+						<span
+							style={{
+								fontSize: "12px",
+								color: "var(--gray-10)",
+								flex: 1,
+							}}
+						>
+							{t("resultCount", { count: filteredCues.length })}
+						</span>
+					)}
+					{!trimmedQuery && <span style={{ flex: 1 }} />}
+
+					{/* Copy button */}
+					<button
+						type="button"
+						onClick={handleCopy}
+						title={copied ? t("copied") : t("copyTranscript")}
+						onMouseEnter={(e) => {
+							e.currentTarget.style.background = "var(--blue-3)";
+							e.currentTarget.style.color = "var(--blue-11)";
+						}}
+						onMouseLeave={(e) => {
+							e.currentTarget.style.background = "var(--gray-3)";
+							e.currentTarget.style.color = "var(--gray-11)";
+						}}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: "4px",
+							padding: "5px 10px",
+							fontSize: "12px",
+							fontWeight: 500,
+							background: "var(--gray-3)",
+							color: "var(--gray-11)",
+							border: "none",
+							borderRadius: "6px",
+							cursor: "pointer",
+							transition: "background 150ms, color 150ms",
+							whiteSpace: "nowrap",
+						}}
+					>
+						{copied ? (
+							<>
+								<svg
+									aria-hidden="true"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2.5"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									style={{ width: "12px", height: "12px" }}
+								>
+									<polyline points="20 6 9 17 4 12" />
+								</svg>
+								{t("copied")}
+							</>
+						) : (
+							<>
+								<svg
+									aria-hidden="true"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									style={{ width: "12px", height: "12px" }}
+								>
+									<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+									<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+								</svg>
+								{t("copyTranscript")}
+							</>
+						)}
+					</button>
+
+					{/* Download TXT */}
+					<button
+						type="button"
+						onClick={() => handleDownload("txt")}
+						title={t("downloadTxt")}
+						onMouseEnter={(e) => {
+							e.currentTarget.style.background = "var(--blue-3)";
+							e.currentTarget.style.color = "var(--blue-11)";
+						}}
+						onMouseLeave={(e) => {
+							e.currentTarget.style.background = "var(--gray-3)";
+							e.currentTarget.style.color = "var(--gray-11)";
+						}}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: "4px",
+							padding: "5px 10px",
+							fontSize: "12px",
+							fontWeight: 500,
+							background: "var(--gray-3)",
+							color: "var(--gray-11)",
+							border: "none",
+							borderRadius: "6px",
+							cursor: "pointer",
+							transition: "background 150ms, color 150ms",
+							whiteSpace: "nowrap",
+						}}
+					>
+						<svg
+							aria-hidden="true"
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							style={{ width: "12px", height: "12px" }}
+						>
+							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+							<polyline points="7 10 12 15 17 10" />
+							<line x1="12" y1="15" x2="12" y2="3" />
+						</svg>
+						TXT
+					</button>
+
+					{/* Download SRT */}
+					<button
+						type="button"
+						onClick={() => handleDownload("srt")}
+						title={t("downloadSrt")}
+						onMouseEnter={(e) => {
+							e.currentTarget.style.background = "var(--blue-3)";
+							e.currentTarget.style.color = "var(--blue-11)";
+						}}
+						onMouseLeave={(e) => {
+							e.currentTarget.style.background = "var(--gray-3)";
+							e.currentTarget.style.color = "var(--gray-11)";
+						}}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: "4px",
+							padding: "5px 10px",
+							fontSize: "12px",
+							fontWeight: 500,
+							background: "var(--gray-3)",
+							color: "var(--gray-11)",
+							border: "none",
+							borderRadius: "6px",
+							cursor: "pointer",
+							transition: "background 150ms, color 150ms",
+							whiteSpace: "nowrap",
+						}}
+					>
+						<svg
+							aria-hidden="true"
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							style={{ width: "12px", height: "12px" }}
+						>
+							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+							<polyline points="7 10 12 15 17 10" />
+							<line x1="12" y1="15" x2="12" y2="3" />
+						</svg>
+						SRT
+					</button>
+				</div>
 			</div>
 		);
 	}
 
+	if (!transcriptContent || cues.length === 0) {
+		return (
+			<div className="flex flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+				<svg
+					aria-hidden="true"
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="#94a3b8"
+					strokeWidth="1.5"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					className="size-8"
+				>
+					<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+				</svg>
+				<p className="text-sm font-medium text-gray-12">
+					{t("noTranscript")}
+				</p>
+				<p className="text-xs text-gray-10">
+					{t("transcriptProcessing")}
+				</p>
+			</div>
+		);
+	}
+
+	// Flat conversation row: TIME | SPEAKER (only when it changes) | TEXT.
+	// The speaker cell keeps its width even when blank so text stays aligned.
+	// Active-card highlighting lives on the card wrapper (see below), not here.
+	function renderRow(cue: Cue, prevSpeaker: string | null) {
+		const matches =
+			!!trimmedQuery && cue.text.toLowerCase().includes(trimmedQuery.toLowerCase());
+		const showSpeaker = hasAnySpeaker && cue.speaker !== prevSpeaker;
+
+		return (
+			<div
+				key={`row-${cue.id}`}
+				style={{
+					display: "flex",
+					gap: "12px",
+					padding: "10px 2px",
+					borderBottom: "1px solid var(--ds-border, var(--gray-4))",
+					alignItems: "baseline",
+				}}
+			>
+				<button
+					type="button"
+					onClick={() => handleCueSeek(cue.startSeconds)}
+					title={t("jumpToTime", { time: cue.timestamp })}
+					aria-label={t("jumpToTime", { time: cue.timestamp })}
+					style={{
+						flexShrink: 0,
+						minWidth: "44px",
+						fontSize: "11.5px",
+						fontVariantNumeric: "tabular-nums",
+						fontFamily:
+							"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+						color: "var(--brand)",
+						background: "none",
+						border: "none",
+						padding: 0,
+						textAlign: "left",
+						cursor: "pointer",
+					}}
+				>
+					{cue.timestamp}
+				</button>
+
+				{hasAnySpeaker && (
+					<span
+						style={{
+							flexShrink: 0,
+							minWidth: "56px",
+							fontSize: "12.5px",
+							fontWeight: 600,
+							color: "var(--gray-12)",
+						}}
+					>
+						{showSpeaker ? cue.speaker : ""}
+					</span>
+				)}
+
+				<span
+					className="break-words"
+					style={{
+						flex: 1,
+						fontSize: "13px",
+						lineHeight: 1.5,
+						color: "var(--gray-11)",
+					}}
+				>
+					{matches
+						? highlightMatch(cue.text, trimmedQuery)
+						: renderMarkdownBold(cue.text)}
+				</span>
+			</div>
+		);
+	}
+
+	// Cards render as one wrapper per speaker block, so the active highlight
+	// reads as a single compact lit block rather than several separately-lit
+	// rows. Chapters are grouped in the Summary tab, not here.
 	return (
-		<div ref={containerRef} className="flex flex-col gap-1 overflow-y-auto p-4">
-			{groups.map((group, gi) => {
-				const hue = speakerHue(group.speaker);
-				const initials = speakerInitials(group.speaker);
-				const avatarBg = `hsl(${hue},55%,55%)`;
-
+		<div ref={containerRef} className="flex flex-col p-4">
+			{renderHeader()}
+			{cards.map((card, cardIndex) => {
+				const active = cardIndex === activeCardIndex;
 				return (
-					<div key={`${group.speaker}-${gi}`} className="flex flex-col gap-0.5">
-						{group.cues.map((cue) => {
-							const active = cue.id === activeCueId;
-							return (
-								<div
-									key={cue.id}
-									ref={active ? activeRef : undefined}
-									className={`grid items-start rounded-lg px-2 py-2 transition-colors group ${
-										active
-											? "border-l-2 border-purple-600 bg-purple-50 pl-3"
-											: "border-l-2 border-transparent hover:bg-gray-50"
-									}`}
-									style={{ gridTemplateColumns: "42px 1fr 34px" }}
-								>
-									<div className="flex flex-col items-center gap-1 pt-0.5">
-										<div
-											className="flex size-7 items-center justify-center rounded-full text-[10px] font-semibold text-white shrink-0"
-											style={{ backgroundColor: avatarBg }}
-											title={group.speaker}
-										>
-											{initials}
-										</div>
-										<span className="text-[10px] font-medium text-gray-400 tabular-nums">
-											{cue.timestamp}
-										</span>
-									</div>
-
-									<p className="min-w-0 px-2 pt-1 text-sm leading-relaxed text-gray-800 break-words">
-										{renderRichText(cue.text)}
-									</p>
-
-									<div className="flex items-start justify-end pt-1">
-										<button
-											type="button"
-											onClick={() => onVideoJump?.(cue.startSeconds)}
-											aria-label={`Jump to ${cue.timestamp}`}
-											className="flex size-6 items-center justify-center rounded-full bg-gray-100 text-gray-500 opacity-0 transition-all duration-150 group-hover:opacity-100 hover:scale-110 hover:bg-purple-100 hover:text-purple-600"
-										>
-											<svg
-												aria-hidden="true"
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 24 24"
-												fill="currentColor"
-												className="size-3"
-											>
-												<path d="M8 5v14l11-7z" />
-											</svg>
-										</button>
-									</div>
-								</div>
-							);
-						})}
+					<div
+						key={`card-${card.cues[0]?.id ?? cardIndex}`}
+						ref={active ? activeRef : undefined}
+						style={{
+							background: active ? "var(--brand-wash)" : undefined,
+							borderRadius: active ? "8px" : undefined,
+							padding: active ? "2px 4px" : undefined,
+						}}
+					>
+						{card.cues.map((cue, i) =>
+							renderRow(cue, i > 0 ? (card.cues[i - 1]?.speaker ?? null) : null),
+						)}
 					</div>
 				);
 			})}

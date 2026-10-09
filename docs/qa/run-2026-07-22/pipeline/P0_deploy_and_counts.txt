@@ -1,0 +1,41 @@
+Precondition check (plan header: "Run every [MACHINE] test ONLY AFTER the deploy lands"), 2026-07-22
+
+1) Liveness: curl -s https://data365.duckdns.org/api/health
+   -> {"status":"ok","checks":{"db":"ok","storage":"ok"},"time":1784713331940}
+
+2) Deployed image tag (SSH root@169.58.12.255, docker inspect):
+   docker inspect pokroz1qrj8wfc82bl63ns2c-090927310642 --format '{{.Config.Image}}'
+   -> pokroz1qrj8wfc82bl63ns2c:201165f4f04b5b8ec18421c3f2600102145d17a2
+   Matches the plan's target commit 201165f. Deploy confirmed landed -- Flow P proceeds.
+
+3) P0 -- survivorship-bias count (read-only, capdb via docker exec over SSH):
+   SELECT transcriptionStatus, COUNT(*) AS total,
+          SUM(CASE WHEN JSON_EXTRACT(metadata,'$.aiSummary') IS NULL THEN 1 ELSE 0 END) AS null_summary
+   FROM videos WHERE deletedAt IS NULL GROUP BY transcriptionStatus;
+
+   transcriptionStatus   total   null_summary
+   NULL                  12      12   (never had AI generation kicked off -- not a miss/ERROR,
+                                        just not-yet-processed videos; admin starts AI manually
+                                        per get-status.ts comment)
+   COMPLETE              8       0    (every COMPLETE video has a non-null aiSummary)
+   (no ERROR rows present at all)
+
+   Total videos = 20. Of the ones that WERE run through the pipeline (8 COMPLETE + 0 ERROR = 8),
+   miss rate (null/placeholder summary) = 0/8 = 0%. ERROR rate = 0/8 = 0%.
+
+4) Spot-checked all 8 COMPLETE videos' overview text directly (see
+   P0_overview_preview_raw.txt) -- none show the failure placeholder
+   ("The AI was unable to generate a proper summary" or similar); all 8 are real,
+   substantive, on-topic Uzbek overviews.
+
+VERDICT: P0 PASS -- no survivorship bias detected; the 3-video P1-P4 sample is
+representative of a genuinely low miss/ERROR population (0% miss, 0% ERROR of 8/8
+processed videos), not cherry-picked out of a mostly-broken pipeline.
+
+SEPARATE OBSERVATION (not a P0 criterion, flagging for the aggregator): 7 of these 8
+COMPLETE videos have metadata.storageMissing = true (video file gone from storage;
+see P0_storageMissing_all8.txt) -- meaning the underlying recording is not
+watchable even though its AI results are intact. This is Flow A/E territory
+(G1/G2/E6), not a P0 pipeline-success criterion, but worth surfacing: essentially the
+entire current "COMPLETE" population on prod is AI-results-only, no playable video,
+except t91bnh582gnhgy8.

@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui";
 import { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
+import { useTranslations } from "next-intl";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -23,6 +24,7 @@ export const Toolbar = ({
 	onCommentSuccess,
 	disableComments,
 }: ToolbarProps) => {
+	const t = useTranslations("share");
 	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
@@ -128,7 +130,7 @@ export const Toolbar = ({
 		<>
 			<motion.div
 				layout
-				className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full border border-gray-5 md:max-w-fit"
+				className="flex overflow-hidden p-2 mx-auto max-w-full bg-gray-1 rounded-full border border-gray-4 md:max-w-fit"
 			>
 				<AnimatePresence initial={false} mode="popLayout">
 					{commentBoxOpen ? (
@@ -145,7 +147,7 @@ export const Toolbar = ({
 								type="text"
 								value={comment}
 								onChange={(e) => setComment(e.target.value)}
-								placeholder="Add a comment"
+								placeholder={t("addAComment")}
 								className="flex-grow px-3 h-full outline-none"
 								maxLength={255}
 								onKeyDown={(e) => {
@@ -172,7 +174,7 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									Comment
+									{t("comment")}
 								</MotionButton>
 								<MotionButton
 									variant="gray"
@@ -183,7 +185,7 @@ export const Toolbar = ({
 										setComment("");
 									}}
 								>
-									Cancel
+									{t("cancel")}
 								</MotionButton>
 							</motion.div>
 						</motion.div>
@@ -204,7 +206,7 @@ export const Toolbar = ({
 								kbd="c"
 								size="sm"
 							>
-								Comment
+								{t("comment")}
 							</MotionButton>
 						</motion.div>
 					)}

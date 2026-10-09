@@ -342,7 +342,7 @@ export const adminSendMessengerMessage = async ({
 export const adminSyncMessengerKnowledge = async () => {
 	assertMessengerEnabled();
 	const viewer = await requireAdminViewer();
-	const result = await syncCapKnowledgeBase(viewer.user.email);
+	const result = await syncCapKnowledgeBase(viewer.isAdmin);
 	revalidatePath("/admin");
 	return result;
 };

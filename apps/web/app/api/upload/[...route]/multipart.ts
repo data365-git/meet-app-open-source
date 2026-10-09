@@ -17,12 +17,14 @@ import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
+import { checkUploadQuota } from "@/lib/storage-quota";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import {
 	getMultipartFileKey,
 	getSubpath,
 	isRawRecorderUpload,
+	isSequentialPartList,
 } from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
@@ -30,6 +32,41 @@ export const app = new Hono().use(withAuth);
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
+
+/**
+ * (H3) True when a storage failure means the multipart upload no longer
+ * exists. S3/R2 answer NoSuchUpload for an upload that was aborted AND for one
+ * that already completed — and "already completed" is exactly what a lost
+ * completion response leaves behind. Errors arrive wrapped (StorageError ->
+ * S3Error -> the AWS error), so walk the cause chain.
+ */
+function isMissingMultipartUploadError(error: unknown): boolean {
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+
+	while (current && typeof current === "object" && !seen.has(current)) {
+		seen.add(current);
+		const candidate = current as {
+			name?: unknown;
+			Code?: unknown;
+			message?: unknown;
+			cause?: unknown;
+		};
+
+		if (
+			candidate.name === "NoSuchUpload" ||
+			candidate.Code === "NoSuchUpload" ||
+			(typeof candidate.message === "string" &&
+				candidate.message.includes("NoSuchUpload"))
+		) {
+			return true;
+		}
+
+		current = candidate.cause;
+	}
+
+	return false;
+}
 
 const abortRequestSchema = z
 	.object({
@@ -107,6 +144,11 @@ app.post(
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
+				// An ownership/policy denial is a 403, not a server error. Surfacing it as
+				// a 500 made auth denials look like crashes to callers and monitoring (a
+				// non-owner initiating an upload used to get "Error initiating…" 500).
+				if (e._tag === "PolicyDenied")
+					return Effect.succeed<Response>(c.text("Forbidden", 403));
 
 				return Effect.succeed<Response>(
 					c.json({ error: "Error initiating multipart upload" }, 500),
@@ -278,13 +320,18 @@ app.post(
 		z
 			.object({
 				uploadId: z.string(),
-				parts: z.array(
-					z.object({
-						partNumber: z.number(),
-						etag: z.string(),
-						size: z.number(),
-					}),
-				),
+				parts: z
+					.array(
+						z.object({
+							partNumber: z.number(),
+							etag: z.string(),
+							size: z.number(),
+						}),
+					)
+					// A completed multipart upload MUST have >=1 part; an empty array
+					// is forwarded to S3 as a malformed completion and yields a broken
+					// 0-byte object. Reject it cleanly instead (C8).
+					.min(1, "A completed upload must include at least one part"),
 				durationInSecs: stringOrNumberOptional,
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
@@ -326,6 +373,35 @@ app.post(
 
 			return yield* Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(video);
+				const incomingBytes = parts.reduce((acc, part) => acc + part.size, 0);
+				const quotaCheck = yield* Effect.promise(() =>
+					checkUploadQuota({
+						orgId: video.orgId,
+						userId: video.ownerId,
+						incomingBytes,
+					}),
+				);
+				if (!quotaCheck.ok) {
+					return c.json(
+						{
+							error: quotaCheck.message,
+							reason: quotaCheck.reason,
+						},
+						413,
+					);
+				}
+
+				// Last line of defence against a gapped part list (e.g. a mis-built
+				// client retry path): reject before completeMultipart, which would
+				// otherwise fail or assemble a corrupt object (P3.3).
+				if (!isSequentialPartList(parts)) {
+					return c.json(
+						{
+							error: "Part numbers are not sequential",
+						},
+						400,
+					);
+				}
 
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
@@ -338,16 +414,6 @@ app.post(
 					const sortedParts = [...parts].sort(
 						(a, b) => a.partNumber - b.partNumber,
 					);
-
-					const sequentialCheck = sortedParts.every(
-						(part, index) => part.partNumber === index + 1,
-					);
-
-					if (!sequentialCheck) {
-						console.warn(
-							"WARNING: Part numbers are not sequential! This may cause issues with the assembled file.",
-						);
-					}
 
 					const needsEtagResolution = sortedParts.some(
 						(p) => !p.etag || p.etag === "RESOLVE_SERVER_SIDE",
@@ -435,7 +501,44 @@ app.post(
 					);
 
 					return { result, formattedParts };
-				});
+				}).pipe(
+					Effect.catchAll((completeError) => {
+						// (H3) Completion must be idempotent. Storage can assemble the
+						// object and still lose the response (network drop, gateway
+						// timeout); the client then retries with the same uploadId and
+						// gets NoSuchUpload — from listParts on the extension's
+						// placeholder-ETag path, or from complete itself. Reporting 500
+						// forever makes EVERY retry fail until the client dead-letters a
+						// meeting whose bytes are all safely in storage: the worst
+						// failure this product has. So probe for the finished object
+						// under this user-scoped key and, if it is there with real
+						// content, carry on down the success path — which also runs the
+						// DB and processing side-effects the lost response skipped.
+						// Anything else (including a still-open upload that merely
+						// erred) keeps failing, so the client retries against a live
+						// multipart instead of being told a lie.
+						if (!isMissingMultipartUploadError(completeError))
+							return Effect.fail(completeError);
+
+						return bucket.headObject(fileKey).pipe(
+							Effect.flatMap((head) =>
+								(head.ContentLength ?? 0) > 0
+									? Effect.logWarning(
+											`Multipart upload ${uploadId} no longer exists, but ${fileKey} is already assembled (ContentLength=${head.ContentLength}) — reconciling as an already-completed upload.`,
+										)
+									: Effect.fail(completeError),
+							),
+							Effect.map(() => ({
+								result: { Location: undefined },
+								formattedParts: parts.map((part) => ({
+									PartNumber: part.partNumber,
+									ETag: part.etag,
+								})),
+							})),
+							Effect.catchAll(() => Effect.fail(completeError)),
+						);
+					}),
+				);
 
 				return yield* Effect.gen(function* () {
 					console.log(
@@ -445,7 +548,11 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
-					yield* bucket.headObject(fileKey).pipe(
+					// D3a: if we still can't verify the S3 object after retries, fail the
+					// request instead of proceeding — otherwise we'd mark the upload
+					// complete in the DB while the underlying file may not exist
+					// (a DB-row-without-file / "NoSuchKey" bug).
+					const headResult = yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((headResult) =>
 							Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
@@ -455,30 +562,63 @@ app.post(
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
 						}),
-						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+						Effect.tapError((headError) =>
+							Effect.logError(`Unable to verify object: ${headError}`),
 						),
 					);
 
+					// (H5) Storage is the only trustworthy source of the stored size.
+					// The browser extension declares size: 0 for every part, so the
+					// client sum records 0 bytes of usage and makes the quota
+					// unenforceable. The object is already assembled by this point, so
+					// a mismatch is logged rather than rejected — failing here would
+					// throw away a recording that is safely stored, which is never the
+					// right trade.
+					const storedBytes = headResult.ContentLength ?? incomingBytes;
+					if (
+						headResult.ContentLength !== undefined &&
+						incomingBytes > 0 &&
+						headResult.ContentLength !== incomingBytes
+					) {
+						yield* Effect.logWarning(
+							`Client declared ${incomingBytes} bytes for ${fileKey} but storage holds ${headResult.ContentLength} — recording the storage value.`,
+						);
+					}
+
 					if (isRawRecorderUpload(subpath)) {
 						yield* db.use((db) =>
-							db
-								.update(Db.videos)
-								.set({
-									duration: updateIfDefined(
-										body.durationInSecs,
-										Db.videos.duration,
-									),
-									width: updateIfDefined(body.width, Db.videos.width),
-									height: updateIfDefined(body.height, Db.videos.height),
-									fps: updateIfDefined(body.fps, Db.videos.fps),
-								})
-								.where(
-									and(
-										eq(Db.videos.id, Video.VideoId.make(videoId)),
-										eq(Db.videos.ownerId, user.id),
-									),
-								),
+							// Real transaction: the updates run on the tx's own
+							// connection (sequential awaits — mysql2 serializes one
+							// connection), so video dims + stored size commit atomically.
+							db.transaction(async (tx) => {
+								await tx
+									.update(Db.videos)
+									.set({
+										duration: updateIfDefined(
+											body.durationInSecs,
+											Db.videos.duration,
+										),
+										width: updateIfDefined(body.width, Db.videos.width),
+										height: updateIfDefined(body.height, Db.videos.height),
+										fps: updateIfDefined(body.fps, Db.videos.fps),
+									})
+									.where(
+										and(
+											eq(Db.videos.id, Video.VideoId.make(videoId)),
+											eq(Db.videos.ownerId, user.id),
+										),
+									);
+								await tx
+									.update(Db.videoUploads)
+									.set({
+										uploaded: storedBytes,
+										total: storedBytes,
+										updatedAt: new Date(),
+									})
+									.where(
+										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									);
+							}),
 						);
 
 						const processingStarted = yield* Effect.tryPromise(() =>
@@ -496,7 +636,7 @@ app.post(
 							Effect.map(() => true),
 							Effect.catchAll((error) =>
 								Effect.logError(
-									"Failed to start video processing workflow after raw upload completion",
+									`Failed to start video processing workflow after raw upload completion for video ${videoId}`,
 									error,
 								).pipe(Effect.map(() => false)),
 							),
@@ -538,40 +678,86 @@ app.post(
 					}
 
 					yield* db.use((db) =>
-						db.transaction(() =>
-							Promise.all([
-								db
-									.update(Db.videos)
-									.set({
-										duration: updateIfDefined(
-											body.durationInSecs,
-											Db.videos.duration,
-										),
-										width: updateIfDefined(body.width, Db.videos.width),
-										height: updateIfDefined(body.height, Db.videos.height),
-										fps: updateIfDefined(body.fps, Db.videos.fps),
-									})
-									.where(
-										and(
-											eq(Db.videos.id, Video.VideoId.make(videoId)),
-											eq(Db.videos.ownerId, user.id),
-										),
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.videos)
+								.set({
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
 									),
-								db
-									.delete(Db.videoUploads)
-									.where(
-										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, Video.VideoId.make(videoId)),
+										eq(Db.videos.ownerId, user.id),
 									),
-							]),
-						),
+								);
+							// (H5) This branch also covers the extension's "result.mp4"
+							// upload, which declares size:0 for every part. Without this,
+							// videoUploads.total/uploaded was never corrected to the real
+							// storage size for that path — the row sat at 0 (or the
+							// forged declared sum) until it was deleted at the end of
+							// processing, so the upload's real bytes never counted toward
+							// the quota. Persist the storage-verified size here too, same
+							// as the raw-recorder branch above.
+							await tx
+								.update(Db.videoUploads)
+								.set({
+									uploaded: storedBytes,
+									total: storedBytes,
+									updatedAt: new Date(),
+								})
+								.where(
+									eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+								);
+						}),
 					);
 
-					// P6.3: Faststart remux via media server removed — browsers produce seekable MP4 with H.264 codec
+					// This is the extension (subpath "result.mp4") and import finalize
+					// path — the raw file just landed directly at the "result.mp4" key
+					// with no server-side optimization yet. Route it through the same
+					// processing workflow as the raw-recorder branch above (instead of
+					// deleting the videoUploads row directly) so:
+					//  1) processVideoWorkflow actually remuxes/re-encodes it (fixes
+					//     iPhone/VP9 playback, sets a real duration) before the row is
+					//     cleared, and
+					//  2) mode:"multipart" makes the videoUploads row's "processing"
+					//     phase block a manual AI-analysis click for the whole remux
+					//     window, regardless of whether the upload that got us here was
+					//     truly multipart — see lib/transcribe.ts's isUploadInProgress,
+					//     which otherwise treats a byte-complete "singlepart" row as NOT
+					//     in progress even while phase="processing" (the escape a manual
+					//     "AI tahlil" click could race through mid-overwrite).
+					const processingStarted = yield* Effect.tryPromise(() =>
+						startVideoProcessingWorkflow({
+							videoId: Video.VideoId.make(videoId),
+							userId: user.id,
+							rawFileKey: fileKey,
+							bucketId: Option.getOrNull(video.bucketId),
+							processingMessage: "Starting video processing...",
+							startFailureMessage:
+								"Video uploaded, but processing could not start.",
+							mode: "multipart",
+						}),
+					).pipe(
+						Effect.map(() => true),
+						Effect.catchAll((error) =>
+							Effect.logError(
+								`Failed to start video processing workflow after multipart completion for video ${videoId}`,
+								error,
+							).pipe(Effect.map(() => false)),
+						),
+					);
 
 					return c.json({
 						location: result.Location,
 						success: true,
 						fileKey,
+						processingStarted,
 					});
 				}).pipe(
 					Effect.catchAllCause((completeError) => {

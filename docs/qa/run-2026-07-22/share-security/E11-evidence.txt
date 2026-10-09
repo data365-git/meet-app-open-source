@@ -1,0 +1,58 @@
+FLOW E - E11 EVIDENCE - 2026-07-22 (password gate) -- CODE READ, fixture empty
+
+fixtures.passwordVideoId is empty. Re-verified fresh, read-only:
+  SELECT COUNT(*) FROM videos WHERE password IS NOT NULL AND deletedAt IS NULL;
+  -> 0
+
+No password-protected video exists on prod right now to hit live. Per task
+instructions, reporting as flag with code-read evidence of what a live test
+would confirm.
+
+CODE READ:
+apps/web/app/s/[videoId]/page.tsx :437-442:
+  .pipe(
+    Effect.flatten,
+    Effect.map((video) => ({ needsPassword: false, video }) as const),
+    Effect.catchTag("VerifyVideoPasswordError", () =>
+      Effect.succeed({ needsPassword: true } as const),
+    ),
+    ...
+  )
+:443-450:
+  Effect.map((data) => (
+    <div ...>
+      <PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
+      {!data.needsPassword && (
+        <AuthorizedContent video={data.video} searchParams={searchParams} />
+      )}
+    </div>
+  ))
+
+When the password check fails, the branch that resolves is `{ needsPassword:
+true }` ONLY -- there is no `video` field in this branch at all (TypeScript
+discriminated union: the `false` branch carries `video`, the `true` branch
+does not). `AuthorizedContent` (the component that server-fetches and
+renders the transcript/summary/tasks/player/AI-chat data) is gated by
+`{!data.needsPassword && ...}` -- a server-side conditional in a React
+Server Component, meaning when a password is required, `AuthorizedContent`
+is simply never invoked, and NONE of its data (transcript, summary, tasks,
+signed media URL) is fetched or serialized into the HTML sent to the
+browser. This is genuine server-side absence, not CSS `display:none` --
+confirmed by reading apps/web/app/s/[videoId]/_components/PasswordOverlay.tsx
+too: that component only takes `{isOpen, videoId}` as props, no video
+content of any kind, so even the overlay itself carries zero leaked data.
+
+Password verification itself (actions/videos/password.ts, referenced by
+PasswordOverlay's `verifyVideoPassword` mutation) runs a fresh server
+action and calls `router.refresh()` on success, which re-runs the page's
+server-side data fetch (now passing the password check via
+`Video.verifyPasswordCandidates` inside buildCanView, VideosPolicy.ts :130)
+-- so content only ever appears in the HTML AFTER a correct password is
+supplied, never before.
+
+STATUS: flag (not pass) -- code confirms the intended behavior exactly
+matches E11's requirement (content genuinely absent pre-password, not
+CSS-hidden; overlay shown), but there is no live password-protected video on
+prod to exercise this end-to-end today. Recommend the team create ONE
+throwaway QA-owned password-protected video (sanctioned write, needs owner
+sign-off) to close this gap with a fully live E11 run.
