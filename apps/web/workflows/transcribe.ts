@@ -641,7 +641,61 @@ async function markError(
 	}
 }
 
-async function extractAudio(
+/**
+ * Looser than the optimize guard on purpose: `videos.duration` may come from
+ * the CLIENT (extension/desktop/multipart complete), whose timer can differ
+ * from the media by a few percent. Only a gap this large means truncated
+ * media (prod z89zsr2jz1q4eym: 151 s vs 2095.68 s); a smaller one is a client
+ * estimate the probe should still correct.
+ */
+export function isMediaTruncatedVsStored(
+	storedSec: number | null,
+	probedSec: number | null,
+): boolean {
+	if (storedSec == null || probedSec == null || storedSec <= 0) return false;
+	return probedSec < storedSec - Math.max(30, storedSec * 0.1);
+}
+
+/**
+ * The honest terminal error for a video whose available media is shorter
+ * than its known duration (a truncated optimized result.mp4, prod
+ * 2026-10-09): transcription is refused rather than run on partial media,
+ * because a "COMPLETE" 2.5-minute transcript of a 35-minute meeting is a
+ * silent lie. Shown to the owner via metadata.transcriptionError.message.
+ */
+export const INCOMPLETE_VIDEO_TRANSCRIPTION_ERROR =
+	"Video fayli to'liq emas — transkript qilinmadi. Videoni qayta yuklang.";
+
+/** Returns a signed URL for the first existing raw-upload.{mp4,webm} object,
+ * or null when neither exists — the full-fidelity fallback when the chosen
+ * (result.mp4) source probes dramatically shorter than the stored duration. */
+async function resolveExistingRawUploadUrl(
+	video: typeof videos.$inferSelect,
+	videoId: string,
+): Promise<string | null> {
+	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
+	const candidateKeys = [
+		`${video.ownerId}/${videoId}/raw-upload.mp4`,
+		`${video.ownerId}/${videoId}/raw-upload.webm`,
+	];
+
+	for (const key of candidateKeys) {
+		const url = await bucket
+			.getInternalSignedObjectUrl(key)
+			.pipe(runPromise);
+		const response = await fetch(url, {
+			method: "GET",
+			headers: { range: "bytes=0-0" },
+		});
+		if (response.ok) {
+			return url;
+		}
+	}
+
+	return null;
+}
+
+export async function extractAudio(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
@@ -659,14 +713,42 @@ async function extractAudio(
 
 	const [bucket] = await getStorageAccessForVideo(video).pipe(runPromise);
 
-	const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
+	const storedDurationSec = video.duration ?? null;
+
+	let videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
 
 	// Media server removed — single-file MP4, no server-side processing
-	const probe = await checkHasAudioTrack(videoUrl);
+	let probe = await checkHasAudioTrack(videoUrl);
 	console.log(
 		`[transcribe] Local ffmpeg audio check for ${videoId}: hasAudio=${probe.hasAudio}, durationSec=${probe.durationSec}`,
 	);
 
+	// A chosen source dramatically SHORTER than the stored duration is a
+	// truncated optimized file (prod z89zsr2jz1q4eym: result.mp4 151 s vs
+	// stored 2095.68 s). Never transcribe partial media: fall back to the raw
+	// upload when one exists, otherwise fail with an honest error instead of
+	// minting a COMPLETE transcript of a fraction of the recording.
+	if (isMediaTruncatedVsStored(storedDurationSec, probe.durationSec)) {
+		const rawUploadUrl = await resolveExistingRawUploadUrl(video, videoId);
+
+		if (rawUploadUrl) {
+			console.warn(
+				`[transcribe] Source for ${videoId} is shorter than the stored duration (stored=${storedDurationSec}s probed=${probe.durationSec}s) — retrying with the raw upload`,
+			);
+			videoUrl = rawUploadUrl;
+			probe = await checkHasAudioTrack(videoUrl);
+			console.log(
+				`[transcribe] Raw-upload audio check for ${videoId}: hasAudio=${probe.hasAudio}, durationSec=${probe.durationSec}`,
+			);
+		}
+
+		if (isMediaTruncatedVsStored(storedDurationSec, probe.durationSec)) {
+			throw new Error(INCOMPLETE_VIDEO_TRANSCRIPTION_ERROR);
+		}
+	}
+
+	// A too-short probe already threw above, so this write can only correct a
+	// client-estimated duration by a small margin (or fill a missing one).
 	if (probe.durationSec != null) {
 		await db()
 			.update(videos)

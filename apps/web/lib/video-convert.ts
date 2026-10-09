@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { createWriteStream, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable, Transform } from "node:stream";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
+import { pipeline } from "node:stream/promises";
 import { getFfmpegPath } from "@/lib/audio-extract";
 
 export interface VideoConversionResult {
@@ -80,6 +83,44 @@ export class FfmpegTimeoutError extends Error {
 		super(message);
 		this.name = "FfmpegTimeoutError";
 	}
+}
+
+/**
+ * ffmpeg reading an HTTP source treats a dropped connection as input EOF and
+ * exits 0 — prod 2026-10-09 (video z89zsr2jz1q4eym): a 34:55 recording was
+ * "successfully" encoded into a 151 s result.mp4. Thrown by
+ * optimizeRemoteVideoToMp4 when the finished output is shorter than the
+ * probed input beyond tolerance, so the caller's existing catch keeps the
+ * raw upload playable instead of publishing the truncated file.
+ */
+export class TruncatedOutputError extends Error {
+	constructor(inputDurationSec: number, outputDurationSec: number) {
+		super(
+			`Truncated output: input ${inputDurationSec}s but output only ${outputDurationSec}s`,
+		);
+		this.name = "TruncatedOutputError";
+	}
+}
+
+/** How much shorter than `referenceSec` a probed duration may be before the
+ * difference is treated as truncation: max(2 s, 1 % of the reference). */
+function durationShortenToleranceSec(referenceSec: number): number {
+	return Math.max(2, referenceSec * 0.01);
+}
+
+/**
+ * True when `candidateSec` is shorter than `referenceSec` by more than
+ * max(2 s, 1 %) — the optimize output guard's "this output is shorter than
+ * its input" decision (transcribe.ts uses its own looser check). Unknown
+ * (null) or non-positive values never count as shortened.
+ */
+export function isDurationShortenedBeyondTolerance(
+	referenceSec: number | null,
+	candidateSec: number | null,
+): boolean {
+	if (referenceSec == null || candidateSec == null) return false;
+	if (referenceSec <= 0) return false;
+	return candidateSec < referenceSec - durationShortenToleranceSec(referenceSec);
 }
 
 /**
@@ -482,6 +523,58 @@ async function materializeStreamingInput(
 	return videoUrl;
 }
 
+/**
+ * Streams a plain http(s) video URL to a temp file inside `dirPath` (so the
+ * caller's existing recursive dir cleanup removes it on success AND failure),
+ * verifying the byte count against Content-Length when present. Downloading
+ * BEFORE any ffmpeg run is what keeps a transient network drop from ending
+ * the encode early: ffmpeg reading HTTP directly treats a dropped connection
+ * as input EOF and exits 0, producing a truncated result.mp4 that looks like
+ * a success (prod 2026-10-09, 34:55 in -> 151 s out). A failure here throws
+ * and the caller's catch keeps the raw upload playable.
+ */
+async function downloadRemoteInputToDir(
+	videoUrl: string,
+	dirPath: string,
+): Promise<string> {
+	const response = await fetch(videoUrl);
+	if (!response.ok || !response.body) {
+		throw new Error(
+			`Failed to download the video input: ${response.status} ${response.statusText}`,
+		);
+	}
+
+	const pathname = new URL(videoUrl).pathname;
+	const extension = pathname.match(/\.[A-Za-z0-9]{1,5}$/)?.[0] ?? ".mp4";
+	const filePath = join(dirPath, `input-${randomUUID()}${extension}`);
+
+	const contentLengthHeader = response.headers.get("content-length");
+	const expectedBytes =
+		contentLengthHeader != null && Number.isFinite(Number(contentLengthHeader))
+			? Number(contentLengthHeader)
+			: null;
+
+	let bytesWritten = 0;
+	await pipeline(
+		Readable.fromWeb(response.body as unknown as NodeWebReadableStream),
+		new Transform({
+			transform(chunk: Buffer, _encoding, callback) {
+				bytesWritten += chunk.length;
+				callback(null, chunk);
+			},
+		}),
+		createWriteStream(filePath),
+	);
+
+	if (expectedBytes != null && bytesWritten !== expectedBytes) {
+		throw new Error(
+			`Incomplete video input download: got ${bytesWritten} of ${expectedBytes} bytes`,
+		);
+	}
+
+	return filePath;
+}
+
 function logOptimizeOutcome(
 	strategy: VideoOptimizationStrategy,
 	durationSec: number | null,
@@ -679,7 +772,19 @@ export async function optimizeRemoteVideoToMp4(
 	const filePath = join(dirPath, `video-${randomUUID()}.mp4`);
 
 	try {
-		const inputPath = await materializeStreamingInput(videoUrl, dirPath);
+		const materializedPath = await materializeStreamingInput(videoUrl, dirPath);
+		// Download-first for a plain http(s) input (HLS/MPD already materialize
+		// to a local playlist above): ffmpeg reading the remote URL directly
+		// treats a dropped connection as input EOF and exits 0, which is how a
+		// fully-uploaded 34:55 recording became a 151 s result.mp4 (prod
+		// 2026-10-09). With the bytes local, a network drop can only fail the
+		// DOWNLOAD — loudly, before any slow encode is spent.
+		const inputPath =
+			materializedPath !== videoUrl
+				? materializedPath
+				: /^https?:/i.test(videoUrl)
+					? await downloadRemoteInputToDir(videoUrl, dirPath)
+					: videoUrl;
 		const metadata = await probeRemoteVideo(inputPath);
 		const strategy = chooseVideoOptimizationStrategy(metadata);
 		await optimizeRemoteVideoToMp4FileInternal(
@@ -689,6 +794,31 @@ export async function optimizeRemoteVideoToMp4(
 			metadata.durationSec,
 			options,
 		);
+		// The downloaded input is no longer needed: free its disk now instead of
+		// holding input + output until the caller's cleanup after the upload.
+		if (inputPath !== videoUrl && inputPath !== materializedPath) {
+			await fs.rm(inputPath, { force: true }).catch(() => {});
+		}
+
+		// Output-duration guard (copy and compress paths both land here):
+		// ffmpeg's exit 0 proves nothing about completeness — see
+		// TruncatedOutputError. The trim path (trimRemoteVideoToMp4) is
+		// deliberately NOT guarded: its output is legitimately shorter.
+		const outputMetadata = await probeRemoteVideo(filePath);
+		if (
+			isDurationShortenedBeyondTolerance(
+				metadata.durationSec,
+				outputMetadata.durationSec,
+			)
+		) {
+			console.log(
+				`[video-convert] optimize truncated: in=${metadata.durationSec} out=${outputMetadata.durationSec}`,
+			);
+			throw new TruncatedOutputError(
+				metadata.durationSec as number,
+				outputMetadata.durationSec as number,
+			);
+		}
 
 		return {
 			filePath,
