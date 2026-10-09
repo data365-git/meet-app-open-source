@@ -11,7 +11,10 @@ import { toast } from "sonner";
 import { cancelUpload } from "@/actions/video/cancel-upload";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { markUploadFailed } from "@/actions/video/mark-upload-failed";
-import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
+import {
+	isVideoDeleted,
+	triggerVideoProcessing,
+} from "@/actions/video/trigger-processing";
 import { saveVideoEdits } from "@/actions/videos/save-edits";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
@@ -101,6 +104,20 @@ function isAudioFile(file: File) {
 		file.type.startsWith("audio/") ||
 		/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(file.name)
 	);
+}
+
+/**
+ * True only on a POSITIVE "removed" answer from the server. Every failure
+ * (network, DB, no session) reads as "not deleted", so a healthy upload is
+ * never told it was cancelled.
+ */
+async function wasDeletedDuringUpload(videoId: Video.VideoId) {
+	try {
+		return (await isVideoDeleted(videoId)) === true;
+	} catch (err) {
+		console.warn("isVideoDeleted check failed:", err);
+		return false;
+	}
 }
 
 async function uploadVideoForServerProcessing(
@@ -355,11 +372,27 @@ async function uploadVideoForServerProcessing(
 					bucketId: videoData.bucketId,
 				});
 			} catch (triggerError) {
+				// The row may have been removed while the upload finished; the
+				// server action's own message is stripped in production, so ask
+				// for the positive signal instead of matching the error text.
+				if (await wasDeletedDuringUpload(uploadId)) {
+					toast.info(cancelMessages.cancelled);
+					setUploadStatus(undefined);
+					return null;
+				}
 				console.error("Failed to trigger processing:", triggerError);
 				toast.error("Failed to start video processing. Please try again.");
 				setUploadStatus(undefined);
 				return null;
 			}
+		}
+
+		// Owner removed the card while the upload was finishing: the video is in
+		// Trash, so no "uploaded" toast and no post-upload trim.
+		if (await wasDeletedDuringUpload(uploadId)) {
+			toast.info(cancelMessages.cancelled);
+			setUploadStatus(undefined);
+			return null;
 		}
 
 		setUploadStatus(undefined);
@@ -402,6 +435,14 @@ async function uploadVideoForServerProcessing(
 			} else {
 				toast.error(cancelMessages.cancelFailed);
 			}
+			setUploadStatus(undefined);
+			return null;
+		}
+
+		// Multipart twin: the owner deleted the video mid-upload, so /complete
+		// rejects (deleted rows are filtered). That is a cancel, not a failure.
+		if (createdVideoId && (await wasDeletedDuringUpload(createdVideoId))) {
+			toast.info(cancelMessages.cancelled);
 			setUploadStatus(undefined);
 			return null;
 		}

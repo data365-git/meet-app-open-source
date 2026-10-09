@@ -68,3 +68,29 @@ export async function triggerVideoProcessing({
 
 	return { success: true };
 }
+
+/**
+ * Positive "this video was removed" signal for the uploader. True ONLY when
+ * the caller's own row exists and is soft-deleted; false for everything
+ * else, including a missing row (not a deletion signal, and answering true
+ * would let any user probe which ids exist), any error, no session or
+ * someone else's video — so a healthy upload is never told it was cancelled
+ * because a lookup hiccuped.
+ */
+export async function isVideoDeleted(videoId: Video.VideoId): Promise<boolean> {
+	try {
+		const user = await getCurrentUser();
+		if (!user) return false;
+
+		const [video] = await db()
+			.select({ ownerId: videos.ownerId, deletedAt: videos.deletedAt })
+			.from(videos)
+			.where(eq(videos.id, videoId));
+
+		if (!video) return false;
+		if (video.ownerId !== user.id) return false;
+		return video.deletedAt != null;
+	} catch {
+		return false;
+	}
+}
